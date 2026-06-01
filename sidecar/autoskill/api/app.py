@@ -23,6 +23,7 @@ from autoskill.services.broker import (
     build_context_hint,
 )
 from autoskill.services.embedding_generation import generate_pending_embeddings
+from autoskill.services.worker import WorkerRunResult, WorkerStores, run_worker_once
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi import status as http_status
 from pydantic import BaseModel
@@ -92,6 +93,20 @@ class SchedulerTickResponse(BaseModel):
     due: int
     enqueued: int
     jobs: list[dict[str, object]]
+
+
+class WorkerRunOnceRequest(BaseModel):
+    worker_id: str
+    pool: str = "maintenance"
+    lease_seconds: int = 300
+
+
+class WorkerRunOnceResponse(BaseModel):
+    claimed: bool
+    job: dict[str, object] | None
+    status: str
+    output: dict[str, object] | None = None
+    error: str | None = None
 
 
 class EvidenceDeriveRequest(BaseModel):
@@ -424,6 +439,25 @@ def create_app(
             enqueued=result.enqueued,
             jobs=[job.to_json() for job in result.jobs],
         )
+
+    @app.post("/v1/workers/run-once", response_model=WorkerRunOnceResponse)
+    async def worker_run_once(
+        request: WorkerRunOnceRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> WorkerRunOnceResponse:
+        _require_control_auth(authorization)
+        if request.pool not in {"scheduler", "maintenance", "mutation"}:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="pool must be scheduler, maintenance, or mutation",
+            )
+        result: WorkerRunResult = await run_worker_once(
+            WorkerStores(jobs=jobs, scheduler=scheduler, evidence=evidence, embeddings=embeddings),
+            worker_id=request.worker_id,
+            pool=request.pool,
+            lease_seconds=max(1, min(request.lease_seconds, 3600)),
+        )
+        return WorkerRunOnceResponse(**result.to_json())
 
     @app.get("/v1/evidence")
     async def list_evidence(

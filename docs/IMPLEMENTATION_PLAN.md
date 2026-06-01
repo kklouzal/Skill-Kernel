@@ -58,13 +58,14 @@ Deliverables:
 
 - sidecar-owned schedules;
 - jobs, attempts, leases, idempotency keys;
-- worker pools.
+- worker pools; implemented as explicit scheduler/maintenance/mutation run-once dispatch.
 
 Acceptance:
 
 - jobs survive restart;
 - duplicate ticks do not duplicate jobs; implemented with schedule-run idempotency keys;
-- stuck leases recover; implemented for expired leases with remaining attempts.
+- stuck leases recover; implemented for expired leases with remaining attempts;
+- maintenance worker can claim and complete deterministic evidence/embedding jobs.
 
 ## Phase 4 - Evidence, Embeddings, Retrieval
 

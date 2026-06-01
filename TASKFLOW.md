@@ -44,14 +44,16 @@ Phase 0/1 bootstrap.
 - Real local Postgres embedding-generation validation passed via compose: migration applied, raw event ingested, evidence derived, one pending evidence source embedded, second generation pass skipped it, and pgvector search found the stored evidence embedding.
 - Runtime context broker primitive is implemented: disabled-by-default config gate, retrieval-backed hint building, first-class abstain/defer decisions, scanned body-document filtering, duplicate skill suppression, composed-context scan, and compact set-aware hints.
 - Real local Postgres broker validation passed via compose: seeded a scanned body-index document, broker retrieval logged the decision, and a bounded `skill_hint` returned for the matching intent.
+- Sidecar worker dispatch primitive is implemented: explicit `scheduler`, `maintenance`, and `mutation` pools, `/v1/workers/run-once`, deterministic handlers for `scheduler.tick`, `evidence.derive`, and `embeddings.generate`, plus unsupported-job failure handling.
+- Real local Postgres worker validation passed via compose: enqueued `evidence.derive` and `embeddings.generate` jobs, worker claimed them from the maintenance pool, derived one evidence item, generated one embedding, and completed both jobs successfully.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
-2. Add worker loop dispatch with risk/cost pool separation.
-3. Add retry backoff and terminal failure policy for jobs.
-4. Add exact rerank, graph expansion, and active/archive matching around broker candidates.
+2. Add retry backoff and terminal failure policy for jobs.
+3. Add exact rerank, graph expansion, and active/archive matching around broker candidates.
+4. Add cache layer and shadowing telemetry for runtime context hints.
 5. Replace the deterministic development embedder with the configured production embedding provider when provider routing is wired.
 
 ## Known Risks
@@ -61,6 +63,7 @@ Phase 0/1 bootstrap.
 - Message hook event aliases remain intentionally broad until live OpenClaw installed-plugin validation confirms current names.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
 - Job completion currently records terminal success/failure; retry backoff policy beyond expired-lease recovery is still pending.
+- Worker dispatch is run-once only; durable daemon loop, pool concurrency limits, and graceful shutdown are still pending.
 - Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive/intervention evidence still needs aggregation logic.
 - Embedding generation currently uses a deterministic local hash embedder as a development-safe provider stand-in; production embedding provider routing is still pending.
 - Runtime context broker is a conservative first pass: lexical retrieval-backed, scanned body docs only, no vector fusion, graph expansion, exact rerank, cache layer, or shadowing telemetry yet.
