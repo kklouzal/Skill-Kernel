@@ -477,6 +477,74 @@ CREATE TABLE IF NOT EXISTS autoskill.audit_records (
   details jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.skill_utility_rollups (
+  skill_utility_rollup_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_id uuid NOT NULL REFERENCES autoskill.skills(skill_id),
+  helped_count integer NOT NULL DEFAULT 0,
+  hurt_count integer NOT NULL DEFAULT 0,
+  shadow_count integer NOT NULL DEFAULT 0,
+  retrieval_count integer NOT NULL DEFAULT 0,
+  canary_failure_count integer NOT NULL DEFAULT 0,
+  utility_score numeric NOT NULL DEFAULT 0,
+  features jsonb NOT NULL DEFAULT '{}'::jsonb,
+  computed_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(workspace_id, skill_id)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.curation_actions (
+  curation_action_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_id uuid REFERENCES autoskill.skills(skill_id),
+  action text NOT NULL,
+  status text NOT NULL,
+  reason text NOT NULL,
+  features jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_by_job_id uuid REFERENCES autoskill.jobs(job_id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS skill_utility_rollups_score_idx
+  ON autoskill.skill_utility_rollups(workspace_id, utility_score);
+
+CREATE INDEX IF NOT EXISTS curation_actions_workspace_time_idx
+  ON autoskill.curation_actions(workspace_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.environment_contracts (
+  environment_contract_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_id uuid NOT NULL REFERENCES autoskill.skills(skill_id),
+  skill_version_id uuid NOT NULL REFERENCES autoskill.skill_versions(skill_version_id),
+  contract_type text NOT NULL,
+  name text NOT NULL,
+  expectation text NOT NULL,
+  validation_method text NOT NULL DEFAULT 'manual',
+  status text NOT NULL DEFAULT 'unknown',
+  severity text NOT NULL DEFAULT 'medium',
+  last_checked_at timestamptz,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(workspace_id, skill_version_id, name, expectation)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.drift_events (
+  drift_event_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  environment_contract_id uuid NOT NULL REFERENCES autoskill.environment_contracts(environment_contract_id),
+  skill_id uuid NOT NULL REFERENCES autoskill.skills(skill_id),
+  skill_version_id uuid NOT NULL REFERENCES autoskill.skill_versions(skill_version_id),
+  status text NOT NULL,
+  reason text NOT NULL,
+  repair_candidate jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS environment_contracts_status_idx
+  ON autoskill.environment_contracts(workspace_id, status);
+
+CREATE INDEX IF NOT EXISTS drift_events_workspace_time_idx
+  ON autoskill.drift_events(workspace_id, created_at DESC);
+
 CREATE INDEX IF NOT EXISTS raw_events_workspace_time_idx
   ON autoskill.raw_events(workspace_id, occurred_at DESC);
 

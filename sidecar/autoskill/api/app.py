@@ -14,7 +14,9 @@ from autoskill.core.config import get_settings
 from autoskill.core.events import IngestRequest, IngestResult
 from autoskill.core.hashing import sha256_text
 from autoskill.db.attribution import AsyncpgAttributionStore, AttributionStore, NullAttributionStore
+from autoskill.db.audit import AsyncpgAuditStore, AuditStore, NullAuditStore
 from autoskill.db.candidates import AsyncpgCandidateStore, CandidateStore, NullCandidateStore
+from autoskill.db.contracts import AsyncpgContractStore, ContractStore, NullContractStore
 from autoskill.db.embeddings import AsyncpgEmbeddingStore, EmbeddingStore, NullEmbeddingStore
 from autoskill.db.evaluations import AsyncpgEvaluationStore, EvaluationStore, NullEvaluationStore
 from autoskill.db.events import AsyncpgEventStore, EventStore, NullEventStore
@@ -24,6 +26,8 @@ from autoskill.db.jobs import AsyncpgJobStore, JobStore, NullJobStore
 from autoskill.db.lifecycle import AsyncpgLifecycleStore, LifecycleStore, NullLifecycleStore
 from autoskill.db.retrieval import AsyncpgRetrievalStore, NullRetrievalStore, RetrievalStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore, NullSchedulerStore, SchedulerStore
+from autoskill.db.skills import AsyncpgSkillStore, NullSkillStore, SkillStore
+from autoskill.db.utility import AsyncpgUtilityStore, NullUtilityStore, UtilityStore
 from autoskill.services.broker import (
     ContextHintCache,
     ContextHintRequest,
@@ -142,6 +146,15 @@ class WorkerHealthResponse(BaseModel):
     jobs_by_pool: dict[str, dict[str, int]]
 
 
+class SkillListResponse(BaseModel):
+    skills: list[dict[str, object]]
+
+
+class AuditRecentResponse(BaseModel):
+    audit: list[dict[str, object]]
+    chain_valid: bool
+
+
 class EvidenceDeriveRequest(BaseModel):
     workspace_id: str | None = None
     limit: int = 100
@@ -194,6 +207,51 @@ class EvaluationRunResponse(BaseModel):
     needs_intervention: int
     passed: int
     evaluations: list[dict[str, object]]
+
+
+class UtilityRollupRequest(BaseModel):
+    workspace_id: str
+    limit: int = 250
+
+
+class UtilityRollupResponse(BaseModel):
+    scanned: int
+    rollups: list[dict[str, object]]
+
+
+class CurationRunRequest(BaseModel):
+    workspace_id: str
+    archive_threshold: float = -1.0
+    max_archive: int = 5
+
+
+class CurationRunResponse(BaseModel):
+    scanned: int
+    archived: int
+    actions: list[dict[str, object]]
+
+
+class ContractExtractRequest(BaseModel):
+    workspace_id: str
+    limit: int = 250
+
+
+class ContractExtractResponse(BaseModel):
+    scanned_versions: int
+    extracted: int
+
+
+class DriftCheckRequest(BaseModel):
+    workspace_id: str
+    limit: int = 250
+
+
+class DriftCheckResponse(BaseModel):
+    scanned: int
+    valid: int
+    violated: int
+    unknown: int
+    events: list[dict[str, object]]
 
 
 class EvolutionTransactionStartRequest(BaseModel):
@@ -515,6 +573,26 @@ def _build_retrieval_store() -> RetrievalStore:
     return NullRetrievalStore()
 
 
+def _build_skill_store() -> SkillStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgSkillStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullSkillStore()
+
+
+def _build_audit_store() -> AuditStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgAuditStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullAuditStore()
+
+
 def _build_embedding_store() -> EmbeddingStore:
     settings = get_settings()
     if settings.database_url:
@@ -553,6 +631,26 @@ def _build_evaluation_store() -> EvaluationStore:
             statement_timeout_ms=settings.statement_timeout_ms,
         )
     return NullEvaluationStore()
+
+
+def _build_utility_store() -> UtilityStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgUtilityStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullUtilityStore()
+
+
+def _build_contract_store() -> ContractStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgContractStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullContractStore()
 
 
 def _build_governance_store() -> GovernanceStore:
@@ -639,6 +737,8 @@ def _worker_stores(
     retrieval: RetrievalStore,
     evaluations: EvaluationStore,
     governance: GovernanceStore,
+    utility: UtilityStore,
+    contracts: ContractStore,
     writer_workspace_root: Path | None = None,
 ) -> WorkerStores:
     workspace_root, _staging_root, archive_root = _writer_roots(writer_workspace_root)
@@ -650,6 +750,8 @@ def _worker_stores(
         retrieval=retrieval,
         evaluations=evaluations,
         governance=governance,
+        utility=utility,
+        contracts=contracts,
         workspace_root=workspace_root,
         archive_root=archive_root,
     )
@@ -661,10 +763,14 @@ def create_app(
     scheduler_store: SchedulerStore | None = None,
     evidence_store: EvidenceStore | None = None,
     retrieval_store: RetrievalStore | None = None,
+    skill_store: SkillStore | None = None,
     embedding_store: EmbeddingStore | None = None,
+    audit_store: AuditStore | None = None,
     attribution_store: AttributionStore | None = None,
     candidate_store: CandidateStore | None = None,
     evaluation_store: EvaluationStore | None = None,
+    utility_store: UtilityStore | None = None,
+    contract_store: ContractStore | None = None,
     governance_store: GovernanceStore | None = None,
     lifecycle_store: LifecycleStore | None = None,
     writer_workspace_root: Path | None = None,
@@ -674,10 +780,14 @@ def create_app(
     scheduler = scheduler_store or _build_scheduler_store()
     evidence = evidence_store or _build_evidence_store()
     retrieval = retrieval_store or _build_retrieval_store()
+    skills = skill_store or _build_skill_store()
     embeddings = embedding_store or _build_embedding_store()
+    audit = audit_store or _build_audit_store()
     attribution = attribution_store or _build_attribution_store()
     candidates = candidate_store or _build_candidate_store()
     evaluations = evaluation_store or _build_evaluation_store()
+    utility = utility_store or _build_utility_store()
+    contracts = contract_store or _build_contract_store()
     governance = governance_store or _build_governance_store()
     lifecycle = lifecycle_store or _build_lifecycle_store(governance)
     broker_cache = ContextHintCache()
@@ -693,10 +803,14 @@ def create_app(
                 scheduler,
                 evidence,
                 retrieval,
+                skills,
                 embeddings,
+                audit,
                 attribution,
                 candidates,
                 evaluations,
+                utility,
+                contracts,
                 governance,
                 lifecycle,
             ):
@@ -760,9 +874,20 @@ def create_app(
             return bootstrap_context_hint(request)
         return await build_context_hint(retrieval, request, cache=broker_cache)
 
-    @app.get("/v1/skills")
-    async def list_skills() -> dict[str, list[object]]:
-        return {"skills": []}
+    @app.get("/v1/skills", response_model=SkillListResponse)
+    async def list_skills(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str | None = None,
+        lifecycle_state: str | None = None,
+        limit: int = 100,
+    ) -> SkillListResponse:
+        _require_control_auth(authorization)
+        listed = await skills.list_skills(
+            workspace_key=workspace_id,
+            lifecycle_state=lifecycle_state,
+            limit=max(1, min(limit, 500)),
+        )
+        return SkillListResponse(skills=[skill.to_json() for skill in listed])
 
     @app.get("/v1/jobs")
     async def list_jobs(
@@ -885,6 +1010,8 @@ def create_app(
                 retrieval=retrieval,
                 evaluations=evaluations,
                 governance=governance,
+                utility=utility,
+                contracts=contracts,
                 writer_workspace_root=writer_workspace_root,
             ),
             worker_id=request.worker_id,
@@ -1031,6 +1158,55 @@ def create_app(
             limit=max(1, min(request.limit, 250)),
         )
         return EvaluationRunResponse(**result.to_json())
+
+    @app.post("/v1/utility/rollup", response_model=UtilityRollupResponse)
+    async def utility_rollup(
+        request: UtilityRollupRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> UtilityRollupResponse:
+        _require_control_auth(authorization)
+        result = await utility.run_utility_rollup(
+            workspace_key=request.workspace_id,
+            limit=max(1, min(request.limit, 1000)),
+        )
+        return UtilityRollupResponse(**result.to_json())
+
+    @app.post("/v1/curation/run", response_model=CurationRunResponse)
+    async def run_curation(
+        request: CurationRunRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> CurationRunResponse:
+        _require_control_auth(authorization)
+        result = await utility.run_curation(
+            workspace_key=request.workspace_id,
+            archive_threshold=request.archive_threshold,
+            max_archive=max(0, min(request.max_archive, 100)),
+        )
+        return CurationRunResponse(**result.to_json())
+
+    @app.post("/v1/contracts/extract", response_model=ContractExtractResponse)
+    async def extract_contracts(
+        request: ContractExtractRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ContractExtractResponse:
+        _require_control_auth(authorization)
+        result = await contracts.extract_contracts(
+            workspace_key=request.workspace_id,
+            limit=max(1, min(request.limit, 1000)),
+        )
+        return ContractExtractResponse(**result.to_json())
+
+    @app.post("/v1/drift/check", response_model=DriftCheckResponse)
+    async def check_drift(
+        request: DriftCheckRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> DriftCheckResponse:
+        _require_control_auth(authorization)
+        result = await contracts.run_drift_checks(
+            workspace_key=request.workspace_id,
+            limit=max(1, min(request.limit, 1000)),
+        )
+        return DriftCheckResponse(**result.to_json())
 
     @app.post("/v1/evolution/transactions/start", response_model=EvolutionTransactionStartResponse)
     async def start_evolution_transaction(
@@ -1386,8 +1562,18 @@ def create_app(
         )
         return EmbeddingGenerateResponse(**result.to_json())
 
-    @app.get("/v1/audit/recent")
-    async def recent_audit() -> dict[str, list[object]]:
-        return {"audit": []}
+    @app.get("/v1/audit/recent", response_model=AuditRecentResponse)
+    async def recent_audit(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str | None = None,
+        limit: int = 100,
+    ) -> AuditRecentResponse:
+        _require_control_auth(authorization)
+        bounded_limit = max(1, min(limit, 1000))
+        records = await audit.list_recent(workspace_key=workspace_id, limit=bounded_limit)
+        return AuditRecentResponse(
+            audit=[record.model_dump(mode="json") for record in records],
+            chain_valid=await audit.verify_chain(workspace_key=workspace_id, limit=bounded_limit),
+        )
 
     return app

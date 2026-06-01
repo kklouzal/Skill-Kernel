@@ -9,6 +9,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from autoskill.core.hashing import sha256_json
+from autoskill.db.contracts import ContractStore
 from autoskill.db.embeddings import EmbeddingStore
 from autoskill.db.evaluations import EvaluationStore
 from autoskill.db.evidence import EvidenceStore
@@ -16,6 +17,7 @@ from autoskill.db.governance import GovernanceStore, RevocationRequestRecord
 from autoskill.db.jobs import JobRecord, JobStore
 from autoskill.db.retrieval import RetrievalStore
 from autoskill.db.scheduler import SchedulerStore
+from autoskill.db.utility import UtilityStore
 from autoskill.services.embedding_generation import TextEmbedder, generate_pending_embeddings
 from autoskill.services.opportunity import mine_opportunities
 from autoskill.services.writer import rollback_active_skill_with_governance
@@ -110,6 +112,8 @@ class WorkerStores:
     retrieval: RetrievalStore | None = None
     evaluations: EvaluationStore | None = None
     governance: GovernanceStore | None = None
+    utility: UtilityStore | None = None
+    contracts: ContractStore | None = None
     embedder: TextEmbedder | None = None
     workspace_root: Path | None = None
     archive_root: Path | None = None
@@ -324,6 +328,59 @@ async def _run_evaluation_proposal_gates(
     return result.to_json()
 
 
+async def _run_utility_rollup(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
+    if stores.utility is None:
+        raise ValueError("utility store is required for utility rollups")
+    workspace = _payload_workspace(job)
+    if workspace is None:
+        raise ValueError("utility rollup requires workspace_id")
+    result = await stores.utility.run_utility_rollup(
+        workspace_key=workspace,
+        limit=_payload_int(job.payload, "limit", default=250, minimum=1, maximum=1000),
+    )
+    return result.to_json()
+
+
+async def _run_curation(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
+    if stores.utility is None:
+        raise ValueError("utility store is required for curation")
+    workspace = _payload_workspace(job)
+    if workspace is None:
+        raise ValueError("curation requires workspace_id")
+    result = await stores.utility.run_curation(
+        workspace_key=workspace,
+        archive_threshold=float(job.payload.get("archive_threshold", -1.0)),
+        max_archive=_payload_int(job.payload, "max_archive", default=5, minimum=0, maximum=100),
+    )
+    return result.to_json()
+
+
+async def _run_contract_extraction(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
+    if stores.contracts is None:
+        raise ValueError("contract store is required for contract extraction")
+    workspace = _payload_workspace(job)
+    if workspace is None:
+        raise ValueError("contract extraction requires workspace_id")
+    result = await stores.contracts.extract_contracts(
+        workspace_key=workspace,
+        limit=_payload_int(job.payload, "limit", default=250, minimum=1, maximum=1000),
+    )
+    return result.to_json()
+
+
+async def _run_drift_checks(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
+    if stores.contracts is None:
+        raise ValueError("contract store is required for drift checks")
+    workspace = _payload_workspace(job)
+    if workspace is None:
+        raise ValueError("drift checks require workspace_id")
+    result = await stores.contracts.run_drift_checks(
+        workspace_key=workspace,
+        limit=_payload_int(job.payload, "limit", default=250, minimum=1, maximum=1000),
+    )
+    return result.to_json()
+
+
 async def _run_revocations_rollback(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
     if stores.governance is None:
         raise ValueError("governance store is required for rollback revocations")
@@ -418,11 +475,13 @@ async def _execute_rollback_revocation(
         archive_root=stores.archive_root,
         archive_manifest_relative_path=archive_manifest_relative_path,
     )
+    invalidation = await _invalidate_revoked_objects(stores, request)
     summary = request.traversal_summary | {
         "status": "completed",
         "rollback_transaction_id": str(started.transaction.evolution_transaction_id),
         "archive_manifest_relative_path": archive_manifest_relative_path,
         "artifact": artifact.to_json(),
+        "invalidation": invalidation,
     }
     await stores.governance.complete_revocation_request(
         revocation_request_id=request.revocation_request_id,
@@ -434,6 +493,7 @@ async def _execute_rollback_revocation(
         "status": "completed",
         "rollback_transaction_id": str(started.transaction.evolution_transaction_id),
         "active_relative_path": artifact.active_relative_path,
+        "invalidation": invalidation,
     }
 
 
@@ -453,6 +513,60 @@ async def _rollback_action_for_transaction(
         if operation:
             return item.rollback_action
     raise ValueError("no active compiled skill rollback action found")
+
+
+async def _invalidate_revoked_objects(
+    stores: WorkerStores,
+    request: RevocationRequestRecord,
+) -> dict[str, int]:
+    objects = _revocation_impacted_objects(request)
+    body_index_deleted = 0
+    embeddings_deleted = 0
+    if request.workspace_key is None or not objects:
+        return {
+            "objects": len(objects),
+            "body_index_documents_deleted": body_index_deleted,
+            "embeddings_deleted": embeddings_deleted,
+        }
+    if stores.retrieval is not None:
+        invalidate = getattr(stores.retrieval, "invalidate_objects", None)
+        if invalidate is not None:
+            body_index_deleted = await invalidate(
+                workspace_key=request.workspace_key,
+                objects=objects,
+            )
+    invalidate_embeddings = getattr(stores.embeddings, "invalidate_objects", None)
+    if invalidate_embeddings is not None:
+        embeddings_deleted = await invalidate_embeddings(
+            workspace_key=request.workspace_key,
+            objects=objects,
+        )
+    return {
+        "objects": len(objects),
+        "body_index_documents_deleted": body_index_deleted,
+        "embeddings_deleted": embeddings_deleted,
+    }
+
+
+def _revocation_impacted_objects(request: RevocationRequestRecord) -> list[dict[str, str]]:
+    objects = request.traversal_summary.get("impacted_objects")
+    if not isinstance(objects, list):
+        return [
+            {
+                "object_type": request.root_object_type,
+                "object_id": str(request.root_object_id),
+            }
+        ]
+    valid: list[dict[str, str]] = []
+    for item in objects:
+        if not isinstance(item, dict):
+            continue
+        object_type = item.get("object_type")
+        object_id = item.get("object_id")
+        if object_type is None or object_id is None:
+            continue
+        valid.append({"object_type": str(object_type), "object_id": str(object_id)})
+    return valid
 
 
 def _job_kinds_for_pool(pool: WorkerPool) -> list[str]:
@@ -507,6 +621,26 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "evaluations.run",
         "maintenance",
         _run_evaluation_proposal_gates,
+    ),
+    "utility.rollup": JobDefinition(
+        "utility.rollup",
+        "maintenance",
+        _run_utility_rollup,
+    ),
+    "curation.run": JobDefinition(
+        "curation.run",
+        "maintenance",
+        _run_curation,
+    ),
+    "contracts.extract": JobDefinition(
+        "contracts.extract",
+        "maintenance",
+        _run_contract_extraction,
+    ),
+    "drift.check": JobDefinition(
+        "drift.check",
+        "maintenance",
+        _run_drift_checks,
     ),
     "revocations.rollback": JobDefinition(
         "revocations.rollback",

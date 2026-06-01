@@ -88,6 +88,12 @@ Phase 6/7 control-plane buildout.
 - Real local Postgres canary/freeze validation passed via compose: migration applied, an active skill received a transaction-scoped critical canary result, the skill moved to `frozen`, the freeze reason was recorded, a `canary_result` transaction item was written with `activation_state='frozen'`, and a rollback revocation request was queued against the originating evolution transaction.
 - Mutation-worker rollback revocation execution is implemented: queued rollback `revocation_requests` can be claimed by the mutation pool, mapped back to the originating evolution transaction's active compiled-file rollback action, executed through the transaction-aware deterministic writer rollback path, and completed with rollback transaction/artifact evidence.
 - Real local Postgres rollback-revocation validation passed via compose: migration applied, a staged manifest replaced an active `SKILL.md`, a rollback revocation was queued for the apply transaction, `revocations.rollback` ran in the mutation pool, the prior active `SKILL.md` was restored from the archive manifest, and compose was cleaned down afterward.
+- Rollback revocation invalidation is implemented for provenance traversal impacted objects: mutation-worker rollback completion now calls retrieval and embedding invalidation hooks, records deletion counts in the revocation summary, and focused worker coverage validates per-object invalidation.
+- Operator/admin read surfaces are no longer stubs: `/v1/skills` lists persisted skill/version lifecycle metadata and `/v1/audit/recent` returns recent DB audit records plus bounded hash-chain verification.
+- Phase 8 utility/curation primitives are implemented as a deterministic first pass: skill utility rollups combine attribution, retrieval rendering, shadowing, harm, and canary failure features; `curation.run` archives active skills below a configured utility threshold and logs curation actions.
+- Real local Postgres utility/curation/audit validation passed via compose: migration applied, a low-utility active skill was archived, archived skill listing found it, an audit record was appended, and the audit chain verified.
+- Phase 9 contract/drift primitives are implemented as a deterministic first pass: SkillIR `environment_contracts` persist into DB contract rows, `contracts.extract` and `drift.check` worker jobs/API endpoints are wired, static path-existence probes update contract status, and violated contracts create drift events with repair-candidate metadata.
+- Real local Postgres contract/drift validation passed via compose: migration applied, a SkillIR path contract was extracted, the missing path was marked violated, and a drift event was recorded.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
@@ -97,9 +103,10 @@ Phase 6/7 control-plane buildout.
 3. Add persistent worker heartbeat/lease renewal records if long-running jobs start exceeding one lease interval.
 4. Add contrastive induction and future intervention replay so no-skill-control probes can graduate from `needs_intervention` to pass/fail.
 5. Add shadow-edge/probe generation from repeated attribution events after deduplication policy is defined.
-6. Add active-cache/embedding invalidation handlers for frozen/rolled-back skills and transaction-derived artifacts.
-7. Add mutation-worker apply orchestration only after provenance invalidation gates are ready.
-8. Add rollback support for initial-create transactions whose rollback action is active-path deletion rather than archive restoration.
+6. Add active-cache invalidation and expanded derived-state revoke handlers for frozen skills, initial-create rollbacks, and non-body-index transaction-derived artifacts.
+7. Add mutation-worker apply orchestration only after autonomous apply policy and intervention replay gates are ready.
+8. Extend Phase 8 beyond low-utility archive: archived promotion, duplicate merge/split, active-bank budget optimization, and guarded improvement planning.
+9. Expand Phase 9 beyond static path checks: CLI/package/API/schema/service probes, false-positive controls, drift probes, and localized repair proposal generation.
 
 ## Known Risks
 
@@ -113,4 +120,6 @@ Phase 6/7 control-plane buildout.
 - Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and shadow-edge/probe generation from attribution events are still pending.
 - Candidate evaluator execution is deterministic and conservative; no-skill-control probes remain `needs_intervention` until real intervention/counterfactual replay exists, and this must pass before any staged writer/activation path is added.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints, but mutation-worker orchestration still needs end-to-end caller wiring before autonomous apply is allowed.
-- Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks, while per-object invalidation/revoke handlers and active-path deletion rollbacks are still pending.
+- Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and invalidates body-index/embedding objects from traversal summaries; active-path deletion rollbacks and broader revoke handlers are still pending.
+- Utility rollups are deterministic v1 scoring, not full marginal-value/intervention scoring yet; curation archives low-utility active skills but promotion, merge/split, and budget optimization remain pending.
+- Contract/drift checks are deterministic v1 path probes only; broader contract types and repair execution remain pending.

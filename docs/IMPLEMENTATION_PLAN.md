@@ -144,6 +144,8 @@ Deliverables:
 - mutation-worker rollback revocation execution; implemented for queued rollback revocation
   requests whose originating transaction recorded an archive-backed compiled-file rollback
   action.
+- rollback-derived invalidation; implemented for traversal-summary impacted objects by deleting
+  matching body-index documents and embeddings during mutation-worker rollback completion.
 
 Acceptance:
 
@@ -162,7 +164,7 @@ Acceptance:
 - valid skill appears under active root;
 - invalid paths are rejected;
 - rollback restores the previous effective state;
-- canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, and archive-backed mutation-worker rollback execution are implemented, while per-object invalidation and active-path deletion rollbacks remain pending.
+- canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed mutation-worker rollback execution, and body-index/embedding invalidation are implemented, while active-cache invalidation, broader per-object revoke handlers, and active-path deletion rollbacks remain pending.
 
 ## Phase 8 - Autonomous Improvement and Curation
 
@@ -171,12 +173,12 @@ Deliverables:
 - `autonomous_guarded` apply;
 - improvement engine;
 - archive/promote/merge/split;
-- utility rollups;
+- utility rollups; implemented as deterministic v1 rollups from attribution events, rendered retrieval counts, shadowing/hurt outcomes, and canary failures;
 - attribution ledger.
 
 Acceptance:
 
-- low-utility skills archive;
+- low-utility skills archive; implemented for active skills below a configurable utility threshold with curation action logging;
 - archived skills promote when demand recurs;
 - duplicates merge only after probes pass;
 - active bank budget is enforced.
@@ -185,8 +187,8 @@ Acceptance:
 
 Deliverables:
 
-- contract extraction;
-- drift checks;
+- contract extraction; implemented for SkillIR `environment_contracts` into DB-backed environment contract rows;
+- drift checks; implemented as a deterministic first pass for static path-existence probes with drift event creation;
 - localized repair;
 - skill graph maintenance;
 - audit and retrieval policy reviews;
@@ -194,6 +196,6 @@ Deliverables:
 
 Acceptance:
 
-- drift violations trigger targeted repair;
+- drift violations trigger targeted repair; implemented as drift-event repair-candidate metadata, with actual repair planning still pending;
 - curation logs features/actions/outcomes;
 - audit integrity verifies.

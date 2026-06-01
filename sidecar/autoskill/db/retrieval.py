@@ -86,6 +86,14 @@ class RetrievalStore(Protocol):
     ) -> None:
         """Attach broker rendering telemetry to a retrieval log."""
 
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        """Remove retrieval body-index documents derived from revoked objects."""
+
 
 class NullRetrievalStore:
     async def lexical_query(
@@ -119,6 +127,14 @@ class NullRetrievalStore:
         reason_codes: list[str],
     ) -> None:
         return None
+
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        return 0
 
 
 class AsyncpgRetrievalStore(AsyncpgPoolOwner):
@@ -327,6 +343,44 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
                 ),
             )
 
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        object_keys = _object_keys(objects)
+        if not object_keys:
+            return 0
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                WITH targets AS (
+                  SELECT *
+                  FROM unnest($2::text[], $3::uuid[]) AS target(object_type, object_id)
+                )
+                DELETE FROM autoskill.body_index_documents d
+                USING autoskill.workspaces w, targets t
+                WHERE d.workspace_id = w.workspace_id
+                  AND w.external_key = $1
+                  AND (
+                    (t.object_type = 'body_index_document'
+                      AND d.body_index_document_id = t.object_id)
+                    OR (t.object_type = 'skill_version'
+                      AND d.skill_version_id = t.object_id)
+                    OR (t.object_type = 'skill'
+                      AND d.skill_id = t.object_id)
+                    OR (t.object_type = 'compiled_skill_file'
+                      AND d.skill_version_id = t.object_id)
+                  )
+                """,
+                workspace_key,
+                [object_type for object_type, _object_id in object_keys],
+                [object_id for _object_type, object_id in object_keys],
+            )
+            return _command_count(result)
+
 
 async def _insert_retrieval_log(
     conn: asyncpg.Connection,
@@ -386,3 +440,24 @@ def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:
         return row[key]
     except KeyError:
         return None
+
+
+def _object_keys(objects: list[dict[str, str]]) -> list[tuple[str, UUID]]:
+    keys: list[tuple[str, UUID]] = []
+    for item in objects:
+        object_type = str(item.get("object_type") or "")
+        object_id = item.get("object_id")
+        if not object_type or object_id is None:
+            continue
+        try:
+            keys.append((object_type, UUID(str(object_id))))
+        except ValueError:
+            continue
+    return keys
+
+
+def _command_count(command_tag: str) -> int:
+    try:
+        return int(command_tag.rsplit(" ", 1)[1])
+    except (IndexError, ValueError):
+        return 0

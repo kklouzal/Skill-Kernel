@@ -139,6 +139,14 @@ class EmbeddingStore(Protocol):
     ) -> list[EmbeddingSearchCandidate]:
         """Search nearest embeddings with exact pgvector distance."""
 
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        """Remove embeddings derived from revoked objects."""
+
 
 class NullEmbeddingStore:
     async def list_unembedded_sources(
@@ -188,6 +196,14 @@ class NullEmbeddingStore:
     ) -> list[EmbeddingSearchCandidate]:
         _validate_embedding(embedding)
         return []
+
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        return 0
 
 
 class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
@@ -338,6 +354,52 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                 for row in rows
             ]
 
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        object_keys = _object_keys(objects)
+        if not object_keys:
+            return 0
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                WITH targets AS (
+                  SELECT *
+                  FROM unnest($2::text[], $3::uuid[]) AS target(object_type, object_id)
+                )
+                DELETE FROM autoskill.embeddings e
+                USING autoskill.workspaces w, targets t
+                WHERE e.workspace_id = w.workspace_id
+                  AND w.external_key = $1
+                  AND (
+                    (e.object_type = t.object_type AND e.object_id = t.object_id)
+                    OR (t.object_type = 'skill' AND e.skill_id = t.object_id)
+                    OR (t.object_type = 'skill_version'
+                      AND EXISTS (
+                        SELECT 1
+                        FROM autoskill.body_index_documents d
+                        WHERE d.body_index_document_id = e.object_id
+                          AND d.skill_version_id = t.object_id
+                      ))
+                    OR (t.object_type = 'compiled_skill_file'
+                      AND EXISTS (
+                        SELECT 1
+                        FROM autoskill.body_index_documents d
+                        WHERE d.body_index_document_id = e.object_id
+                          AND d.skill_version_id = t.object_id
+                      ))
+                  )
+                """,
+                workspace_key,
+                [object_type for object_type, _object_id in object_keys],
+                [object_id for _object_type, object_id in object_keys],
+            )
+            return _command_count(result)
+
 
 def _validate_embedding(embedding: list[float]) -> None:
     if len(embedding) != EMBEDDING_DIM:
@@ -359,3 +421,24 @@ def _row_get(row: asyncpg.Record | dict[str, object], key: str) -> object:
         return row[key]
     except KeyError:
         return None
+
+
+def _object_keys(objects: list[dict[str, str]]) -> list[tuple[str, UUID]]:
+    keys: list[tuple[str, UUID]] = []
+    for item in objects:
+        object_type = str(item.get("object_type") or "")
+        object_id = item.get("object_id")
+        if not object_type or object_id is None:
+            continue
+        try:
+            keys.append((object_type, UUID(str(object_id))))
+        except ValueError:
+            continue
+    return keys
+
+
+def _command_count(command_tag: str) -> int:
+    try:
+        return int(command_tag.rsplit(" ", 1)[1])
+    except (IndexError, ValueError):
+        return 0

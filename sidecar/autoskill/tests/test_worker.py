@@ -3,9 +3,11 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from autoskill.api.app import WorkerRunOnceRequest, create_app
+from autoskill.db.contracts import ContractExtractResult, DriftCheckResult
 from autoskill.db.evaluations import EvaluationRunResult
 from autoskill.db.evidence import EvidenceDeriveResult
 from autoskill.db.scheduler import SchedulerTickResult
+from autoskill.db.utility import CurationRunResult, UtilityRollupResult
 from autoskill.services.worker import (
     WorkerLoopConfig,
     WorkerStores,
@@ -67,6 +69,75 @@ class MemoryEvaluationWorkerStore:
             passed=0,
             evaluations=[],
         )
+
+
+class MemoryInvalidationStore:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        self.calls.append({"workspace_key": workspace_key, "objects": objects})
+        return len(objects)
+
+
+class MemoryUtilityWorkerStore:
+    def __init__(self) -> None:
+        self.rollup_calls: list[dict[str, object]] = []
+        self.curation_calls: list[dict[str, object]] = []
+
+    async def run_utility_rollup(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 250,
+    ) -> UtilityRollupResult:
+        self.rollup_calls.append({"workspace_key": workspace_key, "limit": limit})
+        return UtilityRollupResult(scanned=1, rollups=[])
+
+    async def run_curation(
+        self,
+        *,
+        workspace_key: str,
+        archive_threshold: float = -1.0,
+        max_archive: int = 5,
+    ) -> CurationRunResult:
+        self.curation_calls.append(
+            {
+                "workspace_key": workspace_key,
+                "archive_threshold": archive_threshold,
+                "max_archive": max_archive,
+            }
+        )
+        return CurationRunResult(scanned=2, archived=1, actions=[])
+
+
+class MemoryContractWorkerStore:
+    def __init__(self) -> None:
+        self.extract_calls: list[dict[str, object]] = []
+        self.drift_calls: list[dict[str, object]] = []
+
+    async def extract_contracts(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 250,
+    ) -> ContractExtractResult:
+        self.extract_calls.append({"workspace_key": workspace_key, "limit": limit})
+        return ContractExtractResult(scanned_versions=1, extracted=2)
+
+    async def run_drift_checks(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 250,
+    ) -> DriftCheckResult:
+        self.drift_calls.append({"workspace_key": workspace_key, "limit": limit})
+        return DriftCheckResult(scanned=2, valid=1, violated=1, unknown=0, events=[])
 
 
 @dataclass
@@ -266,6 +337,8 @@ def test_worker_health_reports_pool_concurrency_and_job_counts() -> None:
 def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
     jobs = MemoryJobStore()
     governance = MemoryGovernanceStore()
+    retrieval = MemoryInvalidationStore()
+    embeddings = MemoryInvalidationStore()
     workspace_root = tmp_path / "workspace"
     staging_root = workspace_root / ".autoskill" / "staging"
     archive_root = workspace_root / ".autoskill" / "archive"
@@ -300,7 +373,15 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
             request_kind="rollback",
             root_object_type="evolution_transaction",
             root_object_id=apply_transaction.transaction.evolution_transaction_id,
-            traversal_summary={"source": "critical_canary"},
+            traversal_summary={
+                "source": "critical_canary",
+                "impacted_objects": [
+                    {
+                        "object_type": "skill_version",
+                        "object_id": str(staged.skill_version_id),
+                    }
+                ],
+            },
         )
         await jobs.enqueue_job(
             workspace_key="dev-01",
@@ -313,7 +394,8 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
                 jobs=jobs,
                 scheduler=MemorySchedulerWorkerStore(),
                 evidence=MemoryEvidenceWorkerStore(),
-                embeddings=MemoryPendingEmbeddingStore(),
+                embeddings=embeddings,
+                retrieval=retrieval,
                 governance=governance,
                 workspace_root=workspace_root,
                 archive_root=archive_root,
@@ -338,6 +420,13 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
     assert completed.status == "completed"
     assert completed.traversal_summary["source"] == "critical_canary"
     assert "rollback_transaction_id" in completed.traversal_summary
+    assert completed.traversal_summary["invalidation"] == {
+        "objects": 1,
+        "body_index_documents_deleted": 1,
+        "embeddings_deleted": 1,
+    }
+    assert retrieval.calls == embeddings.calls
+    assert retrieval.calls[0]["workspace_key"] == "dev-01"
 
 
 def test_worker_run_once_dispatches_evaluation_job() -> None:
@@ -399,3 +488,81 @@ def test_worker_health_api_uses_configured_pool_concurrency(monkeypatch) -> None
     assert maintenance["concurrency"] == 5
     assert response.jobs_by_pool["maintenance"] == {"queued": 2}
     get_settings.cache_clear()
+
+
+def test_worker_dispatches_utility_and_curation_jobs() -> None:
+    jobs = MemoryJobStore()
+    utility = MemoryUtilityWorkerStore()
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="utility.rollup",
+            idempotency_key="utility:one",
+            payload={"workspace_id": "dev-01", "limit": 17},
+        )
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="curation.run",
+            idempotency_key="curation:one",
+            payload={"workspace_id": "dev-01", "archive_threshold": -2.5, "max_archive": 3},
+        )
+        stores = WorkerStores(
+            jobs=jobs,
+            scheduler=MemorySchedulerWorkerStore(),
+            evidence=MemoryEvidenceWorkerStore(),
+            embeddings=MemoryPendingEmbeddingStore(),
+            utility=utility,
+        )
+        first = await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
+        second = await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
+        return first, second
+
+    first, second = asyncio.run(run())
+
+    assert first.status == "succeeded"
+    assert first.output["scanned"] == 1
+    assert second.status == "succeeded"
+    assert second.output["archived"] == 1
+    assert utility.rollup_calls == [{"workspace_key": "dev-01", "limit": 17}]
+    assert utility.curation_calls == [
+        {"workspace_key": "dev-01", "archive_threshold": -2.5, "max_archive": 3}
+    ]
+
+
+def test_worker_dispatches_contract_and_drift_jobs() -> None:
+    jobs = MemoryJobStore()
+    contracts = MemoryContractWorkerStore()
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="contracts.extract",
+            idempotency_key="contracts:one",
+            payload={"workspace_id": "dev-01", "limit": 11},
+        )
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="drift.check",
+            idempotency_key="drift:one",
+            payload={"workspace_id": "dev-01", "limit": 13},
+        )
+        stores = WorkerStores(
+            jobs=jobs,
+            scheduler=MemorySchedulerWorkerStore(),
+            evidence=MemoryEvidenceWorkerStore(),
+            embeddings=MemoryPendingEmbeddingStore(),
+            contracts=contracts,
+        )
+        first = await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
+        second = await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
+        return first, second
+
+    first, second = asyncio.run(run())
+
+    assert first.status == "succeeded"
+    assert first.output == {"scanned_versions": 1, "extracted": 2}
+    assert second.status == "succeeded"
+    assert second.output["violated"] == 1
+    assert contracts.extract_calls == [{"workspace_key": "dev-01", "limit": 11}]
+    assert contracts.drift_calls == [{"workspace_key": "dev-01", "limit": 13}]
