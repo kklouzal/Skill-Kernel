@@ -103,6 +103,7 @@ class CurationRunResult:
     archived: int
     promoted: int
     merged: int
+    planned: int
     actions: list[CurationActionRecord]
 
     def to_json(self) -> dict[str, Any]:
@@ -111,6 +112,7 @@ class CurationRunResult:
             "archived": self.archived,
             "promoted": self.promoted,
             "merged": self.merged,
+            "planned": self.planned,
             "actions": [action.to_json() for action in self.actions],
         }
 
@@ -158,7 +160,7 @@ class NullUtilityStore:
         active_budget: int | None = None,
         max_merge: int = 5,
     ) -> CurationRunResult:
-        return CurationRunResult(scanned=0, archived=0, promoted=0, merged=0, actions=[])
+        return CurationRunResult(scanned=0, archived=0, promoted=0, merged=0, planned=0, actions=[])
 
 
 class AsyncpgUtilityStore(AsyncpgPoolOwner):
@@ -297,11 +299,19 @@ class AsyncpgUtilityStore(AsyncpgPoolOwner):
                 )
                 actions.extend(budget_actions)
                 archived += len(budget_actions)
+            planning_actions = await _plan_improvements_and_splits(
+                conn,
+                workspace_id=workspace_id,
+                rollups=rollups.rollups,
+                max_actions=max(0, max_archive + max_promote - len(actions)),
+            )
+            actions.extend(planning_actions)
         return CurationRunResult(
             scanned=rollups.scanned,
             archived=archived,
             promoted=promoted,
             merged=merged,
+            planned=sum(1 for action in actions if action.status == "planned"),
             actions=actions,
         )
 
@@ -505,6 +515,60 @@ async def _enforce_active_budget(
             )
         )
     return actions
+
+
+async def _plan_improvements_and_splits(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    rollups: list[SkillUtilityRollupRecord],
+    max_actions: int,
+) -> list[CurationActionRecord]:
+    if max_actions <= 0:
+        return []
+    actions: list[CurationActionRecord] = []
+    for rollup in sorted(rollups, key=_planning_priority, reverse=True):
+        if len(actions) >= max_actions:
+            break
+        if rollup.lifecycle_state not in {"active", "candidate"}:
+            continue
+        action, reason = _planning_action_for_rollup(rollup)
+        if action is None:
+            continue
+        actions.append(
+            await _insert_curation_action(
+                conn,
+                workspace_id=workspace_id,
+                skill_id=rollup.skill_id,
+                action=action,
+                status="planned",
+                reason=reason,
+                features={
+                    **rollup.features.to_json(),
+                    "utility_score": rollup.utility_score,
+                    "planner": "deterministic-curation.v1",
+                },
+            )
+        )
+    return actions
+
+
+def _planning_priority(rollup: SkillUtilityRollupRecord) -> tuple[int, int, float]:
+    return (
+        rollup.features.shadow_count,
+        rollup.features.hurt_count,
+        -rollup.utility_score,
+    )
+
+
+def _planning_action_for_rollup(rollup: SkillUtilityRollupRecord) -> tuple[str | None, str]:
+    if rollup.features.shadow_count >= 2 and rollup.features.hurt_count >= 1:
+        return "plan_split", "shadowing plus harm suggests unstable skill boundaries"
+    if rollup.features.shadow_count >= 2:
+        return "plan_disambiguation_repair", "repeated shadowing requires boundary repair"
+    if rollup.features.hurt_count >= 2:
+        return "plan_improvement", "repeated harmful outcomes require guarded improvement"
+    return None, ""
 
 
 async def _set_lifecycle_state(

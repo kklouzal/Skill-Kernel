@@ -1,3 +1,8 @@
+import asyncio
+from datetime import datetime
+from uuid import uuid4
+
+from autoskill.db.utility import SkillUtilityRollupRecord, _plan_improvements_and_splits
 from autoskill.services.utility import SkillUtilityFeatures, compute_utility_score
 
 
@@ -11,3 +16,59 @@ def test_compute_utility_score_rewards_help_and_penalizes_harm() -> None:
     )
 
     assert compute_utility_score(features) == -4.5
+
+
+def test_curation_plans_split_and_improvement_actions() -> None:
+    class FakeConn:
+        def __init__(self) -> None:
+            self.rows = []
+
+        async def fetchrow(self, _query, *_args):
+            self.rows.append(_args)
+            return {
+                "curation_action_id": uuid4(),
+                "skill_id": _args[1],
+                "action": _args[2],
+                "status": _args[3],
+                "reason": _args[4],
+                "features": _args[5],
+                "created_at": datetime.now().astimezone(),
+            }
+
+    conn = FakeConn()
+    split_skill = uuid4()
+    improve_skill = uuid4()
+
+    async def run():
+        return await _plan_improvements_and_splits(
+            conn,
+            workspace_id=uuid4(),
+            rollups=[
+                SkillUtilityRollupRecord(
+                    skill_id=split_skill,
+                    workspace_id=None,
+                    workspace_key="dev-01",
+                    slug="broad-skill",
+                    lifecycle_state="active",
+                    utility_score=-1.0,
+                    features=SkillUtilityFeatures(hurt_count=1, shadow_count=2),
+                    computed_at=datetime.now().astimezone(),
+                ),
+                SkillUtilityRollupRecord(
+                    skill_id=improve_skill,
+                    workspace_id=None,
+                    workspace_key="dev-01",
+                    slug="harmful-skill",
+                    lifecycle_state="active",
+                    utility_score=-2.0,
+                    features=SkillUtilityFeatures(hurt_count=2),
+                    computed_at=datetime.now().astimezone(),
+                ),
+            ],
+            max_actions=5,
+        )
+
+    actions = asyncio.run(run())
+
+    assert [action.action for action in actions] == ["plan_split", "plan_improvement"]
+    assert {action.status for action in actions} == {"planned"}

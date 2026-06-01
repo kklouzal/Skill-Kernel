@@ -67,11 +67,13 @@ def _extract_outcome(
 ) -> dict[str, Any] | None:
     payload = _dict(record.get("payload"))
     redacted = _dict(payload.get("redacted_payload"))
-    outcome = _dict(redacted.get("autoskill_replay"))
+    outcome = _explicit_replay_outcome(payload, redacted)
     if not outcome:
-        outcome = _dict(redacted.get("contrastive_replay"))
+        outcome = _attribution_outcome(payload, redacted)
     if not outcome:
-        outcome = _dict(payload.get("contrastive_replay"))
+        outcome = _canary_outcome(payload, redacted)
+    if not outcome:
+        outcome = _broker_outcome(payload, redacted)
     if not outcome:
         return None
 
@@ -91,6 +93,112 @@ def _extract_outcome(
         "retries": _optional_float(outcome.get("retries")),
         "latency_ms": _optional_float(outcome.get("latency_ms")),
         "candidate_slug": str(outcome_slug) if outcome_slug else None,
+    }
+
+
+def _explicit_replay_outcome(payload: dict[str, Any], redacted: dict[str, Any]) -> dict[str, Any]:
+    for key in ("autoskill_replay", "contrastive_replay"):
+        outcome = _dict(redacted.get(key))
+        if outcome:
+            return outcome
+    return _dict(payload.get("contrastive_replay"))
+
+
+def _attribution_outcome(payload: dict[str, Any], redacted: dict[str, Any]) -> dict[str, Any]:
+    outcome = _dict(redacted.get("attribution_outcome")) or _dict(
+        payload.get("attribution_outcome")
+    )
+    if not outcome:
+        return {}
+    status = str(outcome.get("outcome") or outcome.get("status") or "")
+    mode = str(outcome.get("mode") or "")
+    success = _outcome_success(status)
+    if success is None:
+        return {}
+    if not mode:
+        mode = "no_skill" if status in _NO_SKILL_OUTCOMES else "skill_visible"
+    return _outcome_payload(outcome, mode=mode, success=success)
+
+
+def _canary_outcome(payload: dict[str, Any], redacted: dict[str, Any]) -> dict[str, Any]:
+    outcome = _dict(redacted.get("canary_result")) or _dict(payload.get("canary_result"))
+    if not outcome:
+        return {}
+    status = str(outcome.get("status") or "")
+    if status not in {"passed", "failed", "critical"}:
+        return {}
+    return _outcome_payload(
+        outcome,
+        mode=str(outcome.get("mode") or "skill_visible"),
+        success=status == "passed",
+    )
+
+
+def _broker_outcome(payload: dict[str, Any], redacted: dict[str, Any]) -> dict[str, Any]:
+    outcome = _dict(redacted.get("broker_outcome")) or _dict(payload.get("broker_outcome"))
+    if not outcome:
+        return {}
+    status = str(outcome.get("outcome") or outcome.get("status") or "")
+    success = _outcome_success(status)
+    if success is None and "success" in outcome:
+        success = bool(outcome.get("success"))
+    if success is None:
+        return {}
+    mode = str(outcome.get("mode") or "")
+    if not mode:
+        mode = "no_skill" if bool(outcome.get("no_skill_control")) else "skill_visible"
+    return _outcome_payload(outcome, mode=mode, success=success)
+
+
+_SUCCESS_OUTCOMES = {
+    "skill_helped",
+    "helped",
+    "success",
+    "succeeded",
+    "passed",
+    "agent_solved_independently",
+    "no_skill_helped",
+    "no_skill_success",
+}
+_FAILURE_OUTCOMES = {
+    "skill_hurt",
+    "hurt",
+    "failed",
+    "failure",
+    "critical",
+    "skill_shadowed",
+    "shadowed",
+    "wrong_skill",
+    "missing_skill",
+    "skill_missing",
+    "no_skill_failed",
+}
+_NO_SKILL_OUTCOMES = {
+    "agent_solved_independently",
+    "no_skill_helped",
+    "no_skill_success",
+    "missing_skill",
+    "skill_missing",
+    "no_skill_failed",
+}
+
+
+def _outcome_success(status: str) -> bool | None:
+    normalized = status.strip().lower()
+    if normalized in _SUCCESS_OUTCOMES:
+        return True
+    if normalized in _FAILURE_OUTCOMES:
+        return False
+    return None
+
+
+def _outcome_payload(outcome: dict[str, Any], *, mode: str, success: bool) -> dict[str, Any]:
+    return {
+        "candidate_slug": outcome.get("candidate_slug") or outcome.get("slug"),
+        "mode": mode,
+        "success": success,
+        "retries": outcome.get("retries"),
+        "latency_ms": outcome.get("latency_ms"),
     }
 
 

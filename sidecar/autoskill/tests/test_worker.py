@@ -124,7 +124,14 @@ class MemoryUtilityWorkerStore:
                 "max_merge": max_merge,
             }
         )
-        return CurationRunResult(scanned=2, archived=1, promoted=1, merged=0, actions=[])
+        return CurationRunResult(
+            scanned=2,
+            archived=1,
+            promoted=1,
+            merged=0,
+            planned=0,
+            actions=[],
+        )
 
 
 class MemoryContractWorkerStore:
@@ -564,6 +571,93 @@ def test_mutation_worker_deletes_initial_create_on_rollback(tmp_path) -> None:
         "body_index_documents_deleted": 1,
         "embeddings_deleted": 1,
     }
+
+
+def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) -> None:
+    jobs = MemoryJobStore()
+    governance = MemoryGovernanceStore()
+    workspace_root = tmp_path / "workspace"
+    staging_root = workspace_root / ".autoskill" / "staging"
+    archive_root = workspace_root / ".autoskill" / "archive"
+    active_root = workspace_root / "skills" / "autoskill" / "approved-skill"
+
+    async def run():
+        transaction = await governance.start_transaction(
+            workspace_key="dev-01",
+            transaction_kind="compile",
+            idempotency_key="apply:approved-skill",
+            plan_hash="apply-plan",
+        )
+        staged = stage_compiled_skill(
+            staging_root,
+            staging_id=uuid4(),
+            skill_version_id=uuid4(),
+            slug="approved-skill",
+            compiled_skill_md="WHEN approved\nDO safe behavior\n",
+        )
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="writer.apply",
+            idempotency_key="writer-apply:approved-skill",
+            payload={
+                "policy_approved": True,
+                "evolution_transaction_id": str(transaction.transaction.evolution_transaction_id),
+                "manifest_relative_path": staged.manifest_relative_path,
+            },
+        )
+        return await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=MemoryPendingEmbeddingStore(),
+                governance=governance,
+                workspace_root=workspace_root,
+                archive_root=archive_root,
+            ),
+            worker_id="mutation-worker",
+            pool="mutation",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["policy_approved"] is True
+    assert result.output["artifact"]["active_relative_path"] == "skills/autoskill/approved-skill"
+    assert (active_root / "SKILL.md").read_text(encoding="utf-8") == (
+        "WHEN approved\nDO safe behavior\n"
+    )
+
+
+def test_mutation_worker_apply_fails_closed_without_policy_approval(tmp_path) -> None:
+    jobs = MemoryJobStore()
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="writer.apply",
+            idempotency_key="writer-apply:blocked",
+            payload={},
+            max_attempts=1,
+        )
+        return await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=MemoryPendingEmbeddingStore(),
+                governance=MemoryGovernanceStore(),
+                workspace_root=tmp_path / "workspace",
+                archive_root=tmp_path / "workspace" / ".autoskill" / "archive",
+            ),
+            worker_id="mutation-worker",
+            pool="mutation",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "failed"
+    assert "policy_approved=true" in result.error
 
 
 def test_worker_run_once_dispatches_evaluation_job() -> None:

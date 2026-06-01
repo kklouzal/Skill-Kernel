@@ -21,6 +21,7 @@ from autoskill.db.utility import UtilityStore
 from autoskill.services.embedding_generation import TextEmbedder, generate_pending_embeddings
 from autoskill.services.opportunity import mine_opportunities
 from autoskill.services.writer import (
+    apply_staged_manifest_with_governance,
     delete_active_skill_with_governance,
     rollback_active_skill_with_governance,
 )
@@ -511,6 +512,34 @@ async def _run_revocations_rollback(stores: WorkerStores, job: JobRecord) -> dic
     }
 
 
+async def _run_writer_apply(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
+    if stores.governance is None:
+        raise ValueError("governance store is required for writer apply")
+    if stores.workspace_root is None or stores.archive_root is None:
+        raise ValueError("writer roots are required for writer apply")
+    if not bool(job.payload.get("policy_approved")):
+        raise ValueError("writer apply requires explicit policy_approved=true")
+    transaction_id = _payload_uuid(job.payload, "evolution_transaction_id")
+    manifest_relative_path = _payload_str(job.payload, "manifest_relative_path")
+    if transaction_id is None or not manifest_relative_path:
+        raise ValueError(
+            "writer apply requires evolution_transaction_id and manifest_relative_path"
+        )
+    staging_root = stores.workspace_root / ".autoskill" / "staging"
+    artifact = await apply_staged_manifest_with_governance(
+        stores.governance,
+        evolution_transaction_id=transaction_id,
+        staging_root=staging_root,
+        workspace_root=stores.workspace_root,
+        archive_root=stores.archive_root,
+        manifest_relative_path=manifest_relative_path,
+    )
+    return {
+        "artifact": artifact.to_json(),
+        "policy_approved": True,
+    }
+
+
 async def _execute_rollback_revocation(
     stores: WorkerStores,
     request: RevocationRequestRecord,
@@ -701,6 +730,18 @@ def _payload_int(
     return max(minimum, min(parsed, maximum))
 
 
+def _payload_uuid(payload: dict[str, Any], key: str) -> UUID | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value))
+    except ValueError:
+        return None
+
+
 JOB_DEFINITIONS: dict[str, JobDefinition] = {
     "scheduler.tick": JobDefinition("scheduler.tick", "scheduler", _run_scheduler_tick),
     "evidence.derive": JobDefinition("evidence.derive", "maintenance", _run_evidence_derive),
@@ -743,5 +784,10 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "revocations.rollback",
         "mutation",
         _run_revocations_rollback,
+    ),
+    "writer.apply": JobDefinition(
+        "writer.apply",
+        "mutation",
+        _run_writer_apply,
     ),
 }

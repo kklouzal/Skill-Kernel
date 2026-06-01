@@ -107,21 +107,25 @@ Phase 6/7 control-plane buildout.
 - Shadowing control materialization is implemented: repeated selected-vs-expected shadowing evidence records medium-risk attribution events, creates a `shadow` skill graph edge, and activates a contrastive `shadowing` probe for broker/evaluator use.
 - Proposal-gate intervention replay is implemented: no-skill-control probes with recorded `no_skill` and `skill_visible` replay outcomes deterministically pass or fail instead of staying `needs_intervention`, and passed proposal gates record `intervention_validated` maturity for the skill version and cited evidence.
 - Contrastive replay induction is implemented for proposal gates: redacted evidence rows carrying paired `autoskill_replay`/`contrastive_replay` outcomes are clustered by planned no-skill probe evidence IDs, attached to the probe as deterministic `intervention_replay`, persisted with `maturity='contrastive'`, and then evaluated through the existing proposal gate.
+- Contrastive replay induction now also accepts normalized attribution, canary, and broker outcome schemas, so `missing_skill`/`skill_helped`, canary pass/fail, and broker no-skill control outcomes can produce deterministic no-skill versus skill-visible intervention replay evidence.
 - Phase 9 deterministic drift probes now cover static path existence, bare executable availability, required environment presence, Python package availability, JSON schema loadability, and bounded TCP reachability without arbitrary shell execution.
+- Drift checks now create active drift probes for violated contracts, retire contract-scoped drift probes when a contract returns to valid, and attach localized repair-plan metadata to drift events without mutating runtime skills.
 - Runtime context cache invalidation is implemented: the in-process broker cache can evict by workspace and skill IDs, exposes a control endpoint, and freeze/critical-canary paths invalidate affected skill hints immediately.
 - Promotion/duplicate curation now has evaluator gates: archived promotion and duplicate merge/archive record blocked curation actions unless the latest skill versions have passed evaluator status.
+- Phase 8 guarded curation planning is implemented: repeated harmful outcomes and shadowing patterns create planned `plan_improvement`, `plan_disambiguation_repair`, or `plan_split` curation actions instead of directly mutating skill text.
+- Mutation-worker apply orchestration is implemented as fail-closed `writer.apply`: the mutation pool can apply a staged manifest through the transaction-aware writer only when the job payload explicitly sets `policy_approved=true`.
+- Durable worker entrypoint wiring now includes utility and contract stores, so long-lived maintenance workers can actually execute `curation.run`, `contracts.extract`, and `drift.check` jobs rather than only the in-process API test path.
 - Real local Postgres contrastive-replay validation passed via compose: a fresh candidate evaluation consumed redacted no-skill failure and skill-visible success evidence, persisted the no-skill probe as `contrastive`, passed the proposal gate, and recorded intervention-validated maturity rows for the skill version plus both evidence items.
+- Real local Postgres drift/curation/writer validation passed via compose: one SkillIR env contract was extracted, the missing env var created one drift event and one active drift probe, repeated harmful attribution produced one planned improvement action, attribution/canary contrastive evidence produced a replay, and a policy-approved mutation-worker `writer.apply` job activated a staged autoskill artifact.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
 2. Add production embedding provider live validation once credentials/provider endpoint are configured.
-3. Expand contrastive induction beyond explicit redacted replay evidence into additional success/failure outcome schemas from attribution, canary, and broker telemetry.
-4. Add expanded derived-state revoke handlers for frozen skills and non-body-index transaction-derived artifacts.
-5. Add mutation-worker apply orchestration only after autonomous apply policy and intervention replay gates are ready.
-6. Extend Phase 8 beyond deterministic promotion/archive/merge/budget curation: split support, guarded improvement planning, merge probe planning, and active-bank optimization beyond utility ordering.
-7. Expand Phase 9 beyond deterministic drift checks: false-positive controls, drift probe lifecycle, localized repair proposal generation, and API/schema/service probes that require live endpoint contracts.
+3. Add expanded derived-state revoke handlers for frozen skills and non-body-index transaction-derived artifacts.
+4. Extend Phase 8 from planned curation actions into proposal generation for splits, disambiguation repairs, guarded improvements, and merge probes.
+5. Expand Phase 9 beyond deterministic drift checks into false-positive review flows, repair proposal generation from drift events, and API/schema/service probes that require live endpoint contracts.
 
 ## Known Risks
 
@@ -133,8 +137,8 @@ Phase 6/7 control-plane buildout.
 - Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive evidence still needs aggregation logic beyond evaluator replay maturity records.
 - Embedding generation defaults to deterministic local hash embeddings until production provider settings are configured and live-validated.
 - Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and broader shadow-edge policy tuning remain pending.
-- Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded or induced redacted intervention replay, but automatic replay currently requires explicit paired outcome fields and should be expanded before any staged writer/activation path is added.
-- Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints, but mutation-worker orchestration still needs end-to-end caller wiring before autonomous apply is allowed.
+- Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded or induced redacted intervention replay from explicit replay, attribution, canary, or broker outcome evidence.
+- Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints; mutation-worker apply exists but fails closed unless the queued job is explicitly policy-approved.
 - Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, invalidates body-index/embedding objects from traversal summaries, and freeze/critical-canary paths evict affected broker cache entries; broader revoke handlers are still pending.
-- Utility rollups are deterministic v1 scoring, not full marginal-value/intervention scoring yet; curation now handles archived promotion, explicit duplicate merge/archive, low-utility archive, active-budget overflow, and evaluator blocking for promotion/duplicate merge, while split support and guarded improvement planning remain pending.
-- Contract/drift checks are deterministic v1 path/command/env/package/schema/TCP probes only; false-positive controls, probe lifecycle, live API contract probes, and repair execution remain pending.
+- Utility rollups are deterministic v1 scoring, not full marginal-value/intervention scoring yet; curation now handles archived promotion, explicit duplicate merge/archive, low-utility archive, active-budget overflow, evaluator blocking, and planned split/improvement/disambiguation actions, while actual repair proposal generation remains pending.
+- Contract/drift checks are deterministic v1 path/command/env/package/schema/TCP probes only; drift probe creation/retirement and localized repair metadata are implemented, while false-positive controls, live API contract probes, and repair execution remain pending.

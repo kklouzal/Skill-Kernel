@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 import asyncpg
 
+from autoskill.core.hashing import sha256_json
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 
@@ -31,6 +32,8 @@ class DriftCheckResult:
     violated: int
     unknown: int
     events: list[dict[str, Any]]
+    probes_created: int = 0
+    probes_retired: int = 0
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -38,6 +41,8 @@ class DriftCheckResult:
             "valid": self.valid,
             "violated": self.violated,
             "unknown": self.unknown,
+            "probes_created": self.probes_created,
+            "probes_retired": self.probes_retired,
             "events": self.events,
         }
 
@@ -75,7 +80,15 @@ class NullContractStore:
         workspace_key: str,
         limit: int = 250,
     ) -> DriftCheckResult:
-        return DriftCheckResult(scanned=0, valid=0, violated=0, unknown=0, events=[])
+        return DriftCheckResult(
+            scanned=0,
+            valid=0,
+            violated=0,
+            unknown=0,
+            probes_created=0,
+            probes_retired=0,
+            events=[],
+        )
 
 
 class AsyncpgContractStore(AsyncpgPoolOwner):
@@ -153,6 +166,8 @@ class AsyncpgContractStore(AsyncpgPoolOwner):
         pool = await self._get_pool()
         events: list[dict[str, Any]] = []
         valid = violated = unknown = 0
+        probes_created = 0
+        probes_retired = 0
         async with pool.acquire() as conn, conn.transaction():
             workspace_id = await ensure_workspace(conn, workspace_key)
             rows = await conn.fetch(
@@ -170,6 +185,11 @@ class AsyncpgContractStore(AsyncpgPoolOwner):
                 status, reason = _check_contract(row)
                 if status == "valid":
                     valid += 1
+                    probes_retired += await _retire_resolved_drift_probes(
+                        conn,
+                        workspace_id=workspace_id,
+                        contract_id=row["environment_contract_id"],
+                    )
                 elif status == "violated":
                     violated += 1
                 else:
@@ -187,6 +207,13 @@ class AsyncpgContractStore(AsyncpgPoolOwner):
                     _json({"last_reason": reason}),
                 )
                 if status == "violated":
+                    probe_hash, probe_created = await _upsert_drift_probe(
+                        conn,
+                        workspace_id=workspace_id,
+                        contract=row,
+                        reason=reason,
+                    )
+                    probes_created += int(probe_created)
                     event = await conn.fetchrow(
                         """
                         INSERT INTO autoskill.drift_events (
@@ -212,6 +239,11 @@ class AsyncpgContractStore(AsyncpgPoolOwner):
                                 "kind": "contract_repair",
                                 "contract_name": row["name"],
                                 "contract_type": row["contract_type"],
+                                "contract_expectation": row["expectation"],
+                                "validation_method": row["validation_method"],
+                                "drift_probe_hash": probe_hash,
+                                "repair_plan": _repair_plan_for_contract(row, reason),
+                                "activation_gate": "proposal_only",
                             }
                         ),
                     )
@@ -221,6 +253,8 @@ class AsyncpgContractStore(AsyncpgPoolOwner):
                             "environment_contract_id": str(row["environment_contract_id"]),
                             "skill_id": str(row["skill_id"]),
                             "reason": reason,
+                            "drift_probe_hash": probe_hash,
+                            "probe_created": probe_created,
                         }
                     )
         return DriftCheckResult(
@@ -228,8 +262,94 @@ class AsyncpgContractStore(AsyncpgPoolOwner):
             valid=valid,
             violated=violated,
             unknown=unknown,
+            probes_created=probes_created,
+            probes_retired=probes_retired,
             events=events,
         )
+
+
+async def _upsert_drift_probe(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: Any,
+    contract: asyncpg.Record,
+    reason: str,
+) -> tuple[str, bool]:
+    spec = {
+        "schema": "autoskill.probe.v1",
+        "kind": "drift",
+        "environment_contract_id": str(contract["environment_contract_id"]),
+        "skill_id": str(contract["skill_id"]),
+        "skill_version_id": str(contract["skill_version_id"]),
+        "contract_name": contract["name"],
+        "contract_type": contract["contract_type"],
+        "expectation": contract["expectation"],
+        "validation_method": contract["validation_method"],
+        "reason": reason,
+        "probe": _json_dict(contract["metadata"]).get("probe"),
+    }
+    expected = {
+        "status": "valid",
+        "repair_must_clear_violation": True,
+    }
+    probe_hash = sha256_json({"spec": spec, "expected": expected})
+    row = await conn.fetchrow(
+        """
+        INSERT INTO autoskill.probes (
+          probe_id, workspace_id, probe_hash, kind, maturity, spec, expected, active
+        )
+        VALUES (gen_random_uuid(), $1, $2, 'drift', 'observed', $3::jsonb, $4::jsonb, true)
+        ON CONFLICT (workspace_id, probe_hash) DO UPDATE
+        SET active = true,
+            retired_at = NULL,
+            spec = EXCLUDED.spec,
+            expected = EXCLUDED.expected
+        RETURNING (xmax = 0) AS created
+        """,
+        workspace_id,
+        probe_hash,
+        _json(spec),
+        _json(expected),
+    )
+    return probe_hash, bool(row["created"]) if row is not None else False
+
+
+async def _retire_resolved_drift_probes(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: Any,
+    contract_id: Any,
+) -> int:
+    command = await conn.execute(
+        """
+        UPDATE autoskill.probes
+        SET active = false,
+            retired_at = now()
+        WHERE workspace_id = $1
+          AND kind = 'drift'
+          AND active
+          AND spec->>'environment_contract_id' = $2
+        """,
+        workspace_id,
+        str(contract_id),
+    )
+    return _command_count(command)
+
+
+def _repair_plan_for_contract(contract: asyncpg.Record, reason: str) -> dict[str, Any]:
+    return {
+        "kind": "localized_contract_repair",
+        "source": "drift.check",
+        "contract_name": contract["name"],
+        "contract_type": contract["contract_type"],
+        "validation_method": contract["validation_method"],
+        "reason": reason,
+        "required_actions": [
+            "inspect the current SkillIR environment contract",
+            "propose a scoped SkillIR contract or procedure update",
+            "run the generated drift probe and existing regression probes",
+        ],
+    }
 
 
 def _contracts_from_skill_ir(skill_ir: dict[str, Any]) -> list[dict[str, Any]]:
@@ -360,3 +480,10 @@ def _json_dict(value: object) -> dict[str, Any]:
 
 def _json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _command_count(command_tag: str) -> int:
+    try:
+        return int(command_tag.rsplit(" ", 1)[1])
+    except (IndexError, ValueError):
+        return 0

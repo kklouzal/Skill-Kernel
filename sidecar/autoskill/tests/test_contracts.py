@@ -1,4 +1,12 @@
-from autoskill.db.contracts import _check_contract, _contracts_from_skill_ir
+import asyncio
+from uuid import uuid4
+
+from autoskill.db.contracts import (
+    _check_contract,
+    _contracts_from_skill_ir,
+    _retire_resolved_drift_probes,
+    _upsert_drift_probe,
+)
 
 
 def test_contract_extraction_classifies_static_probe_methods() -> None:
@@ -112,3 +120,55 @@ def test_drift_check_handles_schema_and_service_probes(tmp_path, monkeypatch) ->
         "unknown",
         "tcp service probe must be host:port",
     )
+
+
+def test_drift_probe_upsert_and_retire_are_contract_scoped() -> None:
+    contract_id = uuid4()
+    skill_id = uuid4()
+    version_id = uuid4()
+
+    class FakeConn:
+        def __init__(self) -> None:
+            self.upserts = []
+            self.retire_args = None
+
+        async def fetchrow(self, _query, *_args):
+            self.upserts.append(_args)
+            return {"created": True}
+
+        async def execute(self, _query, *_args):
+            self.retire_args = _args
+            return "UPDATE 1"
+
+    conn = FakeConn()
+
+    async def run():
+        probe_hash, created = await _upsert_drift_probe(
+            conn,
+            workspace_id=uuid4(),
+            contract={
+                "environment_contract_id": contract_id,
+                "skill_id": skill_id,
+                "skill_version_id": version_id,
+                "name": "schema",
+                "contract_type": "schema",
+                "expectation": "schema loads",
+                "validation_method": "static_json_schema_loadable",
+                "metadata": {"probe": "static:json-schema:/tmp/missing"},
+            },
+            reason="json schema path missing: /tmp/missing",
+        )
+        retired = await _retire_resolved_drift_probes(
+            conn,
+            workspace_id=uuid4(),
+            contract_id=contract_id,
+        )
+        return probe_hash, created, retired
+
+    probe_hash, created, retired = asyncio.run(run())
+
+    assert probe_hash
+    assert created is True
+    assert retired == 1
+    assert f'"environment_contract_id":"{contract_id}"' in conn.upserts[0][2]
+    assert conn.retire_args[1] == str(contract_id)

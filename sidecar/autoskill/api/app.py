@@ -249,6 +249,7 @@ class CurationRunResponse(BaseModel):
     archived: int
     promoted: int
     merged: int
+    planned: int = 0
     actions: list[dict[str, object]]
 
 
@@ -272,6 +273,8 @@ class DriftCheckResponse(BaseModel):
     valid: int
     violated: int
     unknown: int
+    probes_created: int = 0
+    probes_retired: int = 0
     events: list[dict[str, object]]
 
 

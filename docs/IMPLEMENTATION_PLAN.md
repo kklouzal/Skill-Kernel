@@ -167,16 +167,16 @@ Acceptance:
 - valid skill appears under active root;
 - invalid paths are rejected;
 - rollback restores the previous effective state;
-- canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed mutation-worker rollback execution, initial-create active-path deletion rollback, body-index/embedding invalidation, and active broker-cache invalidation are implemented, while broader per-object revoke handlers remain pending.
+- canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed mutation-worker rollback execution, initial-create active-path deletion rollback, body-index/embedding invalidation, active broker-cache invalidation, and fail-closed policy-approved mutation-worker writer apply orchestration are implemented, while broader per-object revoke handlers remain pending.
 - long-running job leases renew while handlers are still running; implemented in the job store, worker execution wrapper, and control API with focused tests.
 
 ## Phase 8 - Autonomous Improvement and Curation
 
 Deliverables:
 
-- `autonomous_guarded` apply;
+- `autonomous_guarded` apply; implemented as fail-closed mutation-worker `writer.apply` orchestration that only applies a staged manifest when the queued job carries explicit `policy_approved=true`;
 - improvement engine;
-- archive/promote/merge/split; archive, evaluator-gated archived promotion, evaluator-gated explicit duplicate merge/archive, and active-bank budget overflow are implemented as deterministic lifecycle-state curation actions; split remains pending;
+- archive/promote/merge/split; archive, evaluator-gated archived promotion, evaluator-gated explicit duplicate merge/archive, active-bank budget overflow, and planned split/improvement/disambiguation curation actions are implemented as deterministic lifecycle-state or planning actions;
 - utility rollups; implemented as deterministic v1 rollups from attribution events, rendered retrieval counts, shadowing/hurt outcomes, and canary failures;
 - attribution ledger.
 
@@ -184,7 +184,7 @@ Acceptance:
 
 - low-utility skills archive; implemented for active skills below a configurable utility threshold with curation action logging;
 - archived skills promote when demand recurs; implemented for archived skills with repeated retrieval demand, no harm/canary failures, and latest evaluator pass;
-- duplicates merge only after probes pass; implemented for explicit duplicate graph edges as lower-utility duplicate archiving only when both latest skill versions have evaluator pass, with dedicated merge probe planning still pending;
+- duplicates merge only after probes pass; implemented for explicit duplicate graph edges as lower-utility duplicate archiving only when both latest skill versions have evaluator pass, with repair/split planning now logged for harmful or shadowing patterns and dedicated merge probe planning still pending;
 - active bank budget is enforced; implemented by archiving lowest-utility overflow active skills.
 
 ## Phase 9 - Drift and Advanced Governance
@@ -202,6 +202,6 @@ Deliverables:
 
 Acceptance:
 
-- drift violations trigger targeted repair; implemented as drift-event repair-candidate metadata, with actual repair planning and false-positive lifecycle still pending;
+- drift violations trigger targeted repair; implemented as drift-event repair-candidate metadata with localized repair plans and active drift probes that retire when contracts return valid, with actual repair proposal execution and false-positive lifecycle still pending;
 - curation logs features/actions/outcomes;
 - audit integrity verifies.

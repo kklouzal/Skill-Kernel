@@ -78,3 +78,79 @@ def test_contrastive_replay_rejects_unimproved_or_mismatched_pairs() -> None:
 
     assert unimproved is None
     assert mismatched is None
+
+
+def test_contrastive_replay_derives_from_attribution_outcomes() -> None:
+    replay = derive_contrastive_replay(
+        [
+            {
+                "evidence_id": "missing-skill",
+                "payload": {
+                    "redacted_payload": {
+                        "attribution_outcome": {
+                            "candidate_slug": "demo",
+                            "outcome": "missing_skill",
+                            "latency_ms": 1200,
+                        }
+                    }
+                },
+            },
+            {
+                "evidence_id": "skill-helped",
+                "payload": {
+                    "redacted_payload": {
+                        "attribution_outcome": {
+                            "candidate_slug": "demo",
+                            "outcome": "skill_helped",
+                            "latency_ms": 800,
+                        }
+                    }
+                },
+            },
+        ],
+        candidate_slug="demo",
+    )
+
+    assert replay is not None
+    payload = replay.to_json()
+    assert payload["no_skill"]["success"] is False
+    assert payload["skill_visible"]["success"] is True
+    assert payload["basis"]["outcome_count"] == 2
+
+
+def test_contrastive_replay_derives_from_canary_and_broker_outcomes() -> None:
+    replay = derive_contrastive_replay(
+        [
+            {
+                "evidence_id": "broker-no-skill",
+                "payload": {
+                    "redacted_payload": {
+                        "broker_outcome": {
+                            "candidate_slug": "demo",
+                            "no_skill_control": True,
+                            "status": "failed",
+                            "retries": 3,
+                        }
+                    }
+                },
+            },
+            {
+                "evidence_id": "canary-visible",
+                "payload": {
+                    "redacted_payload": {
+                        "canary_result": {
+                            "candidate_slug": "demo",
+                            "status": "passed",
+                            "retries": 1,
+                        }
+                    }
+                },
+            },
+        ],
+        candidate_slug="demo",
+    )
+
+    assert replay is not None
+    payload = replay.to_json()
+    assert payload["no_skill"]["retries"] == 3.0
+    assert payload["skill_visible"]["retries"] == 1.0
