@@ -713,7 +713,7 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
     }
     assert retrieval.calls == embeddings.calls
     assert retrieval.calls[0]["workspace_key"] == "dev-01"
-    assert [span.operation_kind for span in observability.started] == ["job", "revocation"]
+    assert [span.operation_kind for span in observability.started] == ["job", "rollback"]
     revocation_span = observability.started[1]
     assert revocation_span.trace_id == trace_id
     assert revocation_span.parent_span_id == span_id

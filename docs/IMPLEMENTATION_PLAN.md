@@ -193,6 +193,10 @@ Deliverables:
 - mutation-worker rollback revocation execution; implemented for queued rollback revocation
   requests whose originating transaction recorded an archive-backed compiled-file rollback
   action or an initial-create active-path deletion rollback action.
+- rollback revocation trace spans; implemented as content-safe mutation-worker `rollback`
+  operation spans that close with bounded counts and job/revocation-request refs, while
+  DB-backed observability tolerates missing caller parent spans instead of failing rollback
+  workers.
 - rollback-derived invalidation; implemented for traversal-summary impacted objects by deleting
   matching body-index documents and embeddings, marking retrieval/context/topology/evaluator
   derived state revoked or rolled back, revoking matching attribution records, marking
@@ -213,7 +217,8 @@ Acceptance:
 - runtime context hint cache can be invalidated by workspace/skill ID through a control endpoint, and freeze/critical-canary paths evict affected skill hints immediately;
 - writer apply/rollback transaction items are discoverable by provenance traversal from their evolution transaction root; implemented and validated with focused writer/governance tests plus compose/Postgres smoke coverage;
 - canary critical failures record canary evidence, mark the skill `frozen`, store the freeze reason, record a transaction item, and queue a rollback revocation request when the canary is transaction-scoped; implemented and validated with focused tests plus compose/Postgres smoke coverage;
-- mutation-pool `revocations.rollback` jobs claim queued rollback revocation requests, start an idempotent `rollback_skill` transaction, restore the recorded archive manifest through the transaction-aware writer rollback path, and complete the revocation request with rollback artifact evidence; implemented and validated with focused worker tests plus compose/Postgres smoke coverage;
+- mutation-pool `revocations.rollback` jobs claim queued rollback revocation requests, start an idempotent `rollback_skill` transaction, restore the recorded archive manifest through the transaction-aware writer rollback path, complete the revocation request with rollback artifact evidence, and persist a content-safe `rollback` trace span for the worker operation; implemented and validated with focused worker tests plus compose/Postgres smoke coverage;
+- accepted SkillGraphIR topology operations record deterministic downstream orchestration actions in `trial_summary.downstream_orchestration`, so apply produces auditable follow-on plans for activation, supersession/routing, decomposition, and graph-edge materialization instead of only flipping operation state;
 - valid skill appears under active root;
 - invalid paths are rejected;
 - rollback restores the previous effective state;

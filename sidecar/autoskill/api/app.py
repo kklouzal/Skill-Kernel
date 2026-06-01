@@ -421,6 +421,7 @@ class TopologyApplyResponse(BaseModel):
     allowed: bool
     operation: dict[str, object] | None = None
     blockers: list[str]
+    downstream_actions: list[dict[str, object]] = []
 
 
 class ContextCacheInvalidateRequest(BaseModel):

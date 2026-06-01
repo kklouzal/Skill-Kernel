@@ -141,12 +141,14 @@ class TopologyApplyResult:
     allowed: bool
     operation: SkillGraphOperationRecord | None
     blockers: list[str]
+    downstream_actions: list[dict[str, Any]] | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
             "allowed": self.allowed,
             "operation": self.operation.to_json() if self.operation else None,
             "blockers": self.blockers,
+            "downstream_actions": self.downstream_actions or [],
         }
 
 
@@ -346,6 +348,7 @@ class NullTopologyStore:
         if blockers:
             return TopologyApplyResult(allowed=False, operation=operation, blockers=blockers)
         now = datetime.now(UTC)
+        downstream_actions = _topology_downstream_actions(operation)
         updated = SkillGraphOperationRecord(
             **{
                 **operation.__dict__,
@@ -354,6 +357,11 @@ class NullTopologyStore:
                     **operation.trial_summary,
                     "applied_by": applied_by,
                     "applied_at": now.isoformat(),
+                    "downstream_orchestration": {
+                        "status": "planned",
+                        "actions": downstream_actions,
+                        "action_count": len(downstream_actions),
+                    },
                 },
                 "updated_at": now,
             }
@@ -362,7 +370,12 @@ class NullTopologyStore:
             updated if item.skill_graph_operation_id == skill_graph_operation_id else item
             for item in self.operations
         ]
-        return TopologyApplyResult(allowed=True, operation=updated, blockers=[])
+        return TopologyApplyResult(
+            allowed=True,
+            operation=updated,
+            blockers=[],
+            downstream_actions=downstream_actions,
+        )
 
 
 class AsyncpgTopologyStore(AsyncpgPoolOwner):
@@ -557,6 +570,7 @@ class AsyncpgTopologyStore(AsyncpgPoolOwner):
                     operation=operation,
                     blockers=blockers,
                 )
+            downstream_actions = _topology_downstream_actions(operation)
             row = await conn.fetchrow(
                 """
                 UPDATE autoskill.skill_graph_operations o
@@ -575,6 +589,11 @@ class AsyncpgTopologyStore(AsyncpgPoolOwner):
                     {
                         "applied_by": applied_by,
                         "applied_at": datetime.now(UTC).isoformat(),
+                        "downstream_orchestration": {
+                            "status": "planned",
+                            "actions": downstream_actions,
+                            "action_count": len(downstream_actions),
+                        },
                     }
                 ),
             )
@@ -582,6 +601,7 @@ class AsyncpgTopologyStore(AsyncpgPoolOwner):
                 allowed=True,
                 operation=SkillGraphOperationRecord.from_row(row),
                 blockers=[],
+                downstream_actions=downstream_actions,
             )
 
 
@@ -639,3 +659,99 @@ def _topology_apply_blockers(
                 f"topology trial {trial.planned_topology_trial_id} is {trial.status}"
             )
     return blockers
+
+
+def _topology_downstream_actions(operation: SkillGraphOperationRecord) -> list[dict[str, Any]]:
+    subject_ids = [str(item) for item in operation.subject_skill_ids]
+    output_ids = [str(item) for item in operation.output_skill_ids]
+    edge_kinds = _graph_edge_kinds(operation.skill_graph_ir)
+    actions: list[dict[str, Any]] = [
+        {
+            "operation": "record_topology_operation_applied",
+            "status": "ready",
+            "skill_graph_operation_id": str(operation.skill_graph_operation_id),
+            "operation_kind": operation.operation_kind,
+        }
+    ]
+    if edge_kinds:
+        actions.append(
+            {
+                "operation": "materialize_skill_graph_edges",
+                "status": "planned",
+                "edge_kinds": edge_kinds,
+                "edge_count": len(operation.skill_graph_ir.get("edges", [])),
+            }
+        )
+
+    if operation.operation_kind == "improve":
+        actions.extend(
+            [
+                {
+                    "operation": "activate_successor_skill",
+                    "status": "planned" if output_ids else "waiting_for_output_skill",
+                    "skill_ids": output_ids,
+                },
+                {
+                    "operation": "supersede_subject_skill",
+                    "status": "planned" if subject_ids and output_ids else "waiting_for_skill_ids",
+                    "subject_skill_ids": subject_ids,
+                    "successor_skill_ids": output_ids,
+                },
+            ]
+        )
+    elif operation.operation_kind == "compose":
+        actions.extend(
+            [
+                {
+                    "operation": "activate_composed_skill",
+                    "status": "planned" if output_ids else "waiting_for_output_skill",
+                    "skill_ids": output_ids,
+                },
+                {
+                    "operation": "route_components_to_composed_skill",
+                    "status": "planned" if subject_ids and output_ids else "waiting_for_skill_ids",
+                    "component_skill_ids": subject_ids,
+                    "composed_skill_ids": output_ids,
+                },
+            ]
+        )
+    elif operation.operation_kind == "decompose":
+        actions.extend(
+            [
+                {
+                    "operation": "activate_successor_skills",
+                    "status": "planned" if output_ids else "waiting_for_output_skill",
+                    "skill_ids": output_ids,
+                },
+                {
+                    "operation": "retire_or_demote_subject_skill",
+                    "status": "planned" if subject_ids and output_ids else "waiting_for_skill_ids",
+                    "subject_skill_ids": subject_ids,
+                    "successor_skill_ids": output_ids,
+                },
+                {
+                    "operation": "route_subject_intents_to_successors",
+                    "status": "planned" if subject_ids and output_ids else "waiting_for_skill_ids",
+                    "subject_skill_ids": subject_ids,
+                    "successor_skill_ids": output_ids,
+                },
+            ]
+        )
+    else:
+        actions.append(
+            {
+                "operation": "dispatch_topology_mutation",
+                "status": "manual_review",
+                "operation_kind": operation.operation_kind,
+            }
+        )
+    return actions
+
+
+def _graph_edge_kinds(skill_graph_ir: dict[str, Any]) -> list[str]:
+    edge_kinds = {
+        str(edge.get("edge_kind"))
+        for edge in skill_graph_ir.get("edges", [])
+        if isinstance(edge, dict) and edge.get("edge_kind")
+    }
+    return sorted(edge_kinds)

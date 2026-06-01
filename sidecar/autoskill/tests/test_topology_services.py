@@ -309,6 +309,7 @@ def test_topology_apply_requires_passed_trials() -> None:
                 ),
             ],
             composed_output=TopologySkill(
+                skill_id=uuid4(),
                 slug="inspect-and-repair",
                 effects=EffectSignature(outputs=["diagnostic", "patch"]),
             ),
@@ -345,6 +346,19 @@ def test_topology_apply_requires_passed_trials() -> None:
     assert applied.operation is not None
     assert applied.operation.status == "applied"
     assert applied.operation.trial_summary["applied_by"] == "test"
+    orchestration = applied.operation.trial_summary["downstream_orchestration"]
+    assert orchestration["status"] == "planned"
+    assert orchestration["action_count"] == len(applied.downstream_actions)
+    assert {action["operation"] for action in applied.downstream_actions or []} == {
+        "activate_composed_skill",
+        "materialize_skill_graph_edges",
+        "record_topology_operation_applied",
+        "route_components_to_composed_skill",
+    }
+    assert all(
+        action["status"] in {"planned", "ready"}
+        for action in applied.downstream_actions or []
+    )
 
 
 def test_topology_apply_api_activation_gate_blocks_state_change() -> None:

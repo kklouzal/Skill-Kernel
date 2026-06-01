@@ -589,7 +589,7 @@ async def _run_revocations_rollback(stores: WorkerStores, job: JobRecord) -> dic
         trace_id=job.trace_id,
         parent_span_id=job.span_id or job.parent_span_id,
         operation_name="revocations.rollback",
-        operation_kind="revocation",
+        operation_kind="rollback",
         safe_attributes={
             "source": "worker",
             "job_id": str(job.job_id),

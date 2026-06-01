@@ -196,7 +196,11 @@ class AsyncpgObservabilityStore(AsyncpgPoolOwner):
                 VALUES (
                   COALESCE($1, gen_random_uuid()),
                   gen_random_uuid(),
-                  $2,
+                  (
+                    SELECT span_id
+                    FROM autoskill.trace_spans
+                    WHERE span_id = $2
+                  ),
                   $3,
                   $4,
                   $5,
