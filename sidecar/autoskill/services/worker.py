@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -28,6 +30,36 @@ class WorkerRunResult:
             "status": self.status,
             "output": self.output,
             "error": self.error,
+        }
+
+
+@dataclass(frozen=True)
+class WorkerLoopConfig:
+    worker_id: str
+    pool: WorkerPool = "maintenance"
+    concurrency: int = 1
+    lease_seconds: int = 300
+    idle_sleep_seconds: float = 1.0
+    max_iterations: int | None = None
+
+
+@dataclass(frozen=True)
+class WorkerLoopSummary:
+    iterations: int
+    claimed: int
+    succeeded: int
+    failed: int
+    idle: int
+    stopped: bool
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "iterations": self.iterations,
+            "claimed": self.claimed,
+            "succeeded": self.succeeded,
+            "failed": self.failed,
+            "idle": self.idle,
+            "stopped": self.stopped,
         }
 
 
@@ -95,6 +127,57 @@ async def run_worker_once(
         job=completed or job,
         status="succeeded",
         output=output,
+    )
+
+
+async def run_worker_loop(
+    stores: WorkerStores,
+    config: WorkerLoopConfig,
+    *,
+    stop_event: asyncio.Event | None = None,
+) -> WorkerLoopSummary:
+    concurrency = max(1, min(config.concurrency, 32))
+    iterations = 0
+    claimed = 0
+    succeeded = 0
+    failed = 0
+    idle = 0
+
+    while stop_event is None or not stop_event.is_set():
+        if config.max_iterations is not None and iterations >= config.max_iterations:
+            break
+        iterations += 1
+        results = await asyncio.gather(
+            *[
+                run_worker_once(
+                    stores,
+                    worker_id=f"{config.worker_id}-{index + 1}",
+                    pool=config.pool,
+                    lease_seconds=config.lease_seconds,
+                )
+                for index in range(concurrency)
+            ]
+        )
+        claimed_now = [result for result in results if result.claimed]
+        claimed += len(claimed_now)
+        succeeded += sum(1 for result in claimed_now if result.status == "succeeded")
+        failed += sum(1 for result in claimed_now if result.status == "failed")
+
+        if not claimed_now:
+            idle += 1
+            if stop_event is None:
+                await asyncio.sleep(config.idle_sleep_seconds)
+            else:
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(stop_event.wait(), timeout=config.idle_sleep_seconds)
+
+    return WorkerLoopSummary(
+        iterations=iterations,
+        claimed=claimed,
+        succeeded=succeeded,
+        failed=failed,
+        idle=idle,
+        stopped=bool(stop_event and stop_event.is_set()),
     )
 
 

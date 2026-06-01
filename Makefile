@@ -1,4 +1,4 @@
-.PHONY: test lint compile plugin-check
+.PHONY: test lint compile plugin-check worker-maintenance worker-scheduler
 
 test:
 	uv run pytest
@@ -12,3 +12,8 @@ compile:
 plugin-check:
 	cd plugin/autoskill && npm run check
 
+worker-maintenance:
+	PYTHONPATH=sidecar uv run python -m autoskill.worker_main --pool maintenance
+
+worker-scheduler:
+	PYTHONPATH=sidecar uv run python -m autoskill.worker_main --pool scheduler

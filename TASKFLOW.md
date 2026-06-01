@@ -52,15 +52,17 @@ Phase 0/1 bootstrap.
 - Real local Postgres broker graph validation passed via compose: seeded active, archived, and prerequisite-linked skills; matching intent returned the active skill and prerequisite hint, suppressed the archived skill as a promotion candidate, and logged exact-rerank/graph-expanded reason codes.
 - Runtime context hint cache and broker telemetry are implemented: enabled broker calls use a short in-process cache, rendered skill IDs/no-skill controls/suppression reasons/reason codes are attached back to retrieval logs, and cache hits avoid duplicate retrieval.
 - Real local Postgres broker telemetry validation passed via compose: rendered hint updated `retrieval_logs.rendered_skill_ids`, `decision`, `no_skill_control`, and metadata reason fields; repeated request hit the broker cache.
+- Durable worker loop primitive is implemented: bounded async concurrency, idle sleep, max-iteration test hook, graceful `SIGINT`/`SIGTERM` shutdown through `autoskill.worker_main`, and `make worker-maintenance` / `make worker-scheduler` entrypoints.
+- Real local Postgres worker-loop validation passed via compose: queued `worker-loop:derive` and `worker-loop:embed`, ran the maintenance loop with concurrency 2, and verified both jobs reached `succeeded` with one attempt.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
-2. Add durable daemon loop, pool concurrency limits, and graceful shutdown for workers.
-3. Replace the deterministic development embedder with the configured production embedding provider when provider routing is wired.
-4. Add active/archive duplicate matching and opportunity-miner integration before new skill creation.
-5. Add explicit shadowing event detection from outcomes/corrections, beyond current broker suppression telemetry.
+2. Replace the deterministic development embedder with the configured production embedding provider when provider routing is wired.
+3. Add active/archive duplicate matching and opportunity-miner integration before new skill creation.
+4. Add explicit shadowing event detection from outcomes/corrections, beyond current broker suppression telemetry.
+5. Add worker observability/health counters and pool-specific concurrency settings from config.
 
 ## Known Risks
 
@@ -68,7 +70,7 @@ Phase 0/1 bootstrap.
 - Spool replay is best-effort from capture hooks and still needs a live gateway smoke test under actual hook concurrency.
 - Message hook event aliases remain intentionally broad until live OpenClaw installed-plugin validation confirms current names.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
-- Worker dispatch is run-once only; durable daemon loop, pool concurrency limits, and graceful shutdown are still pending.
+- Worker loop is implemented, but pool concurrency is CLI/config-by-invocation only; persistent runtime config and health counters are still pending.
 - Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive/intervention evidence still needs aggregation logic.
 - Embedding generation currently uses a deterministic local hash embedder as a development-safe provider stand-in; production embedding provider routing is still pending.
 - Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and explicit outcome-based shadowing detection are still pending.

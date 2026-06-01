@@ -4,7 +4,12 @@ from dataclasses import dataclass
 from autoskill.api.app import WorkerRunOnceRequest, create_app
 from autoskill.db.evidence import EvidenceDeriveResult
 from autoskill.db.scheduler import SchedulerTickResult
-from autoskill.services.worker import WorkerStores, run_worker_once
+from autoskill.services.worker import (
+    WorkerLoopConfig,
+    WorkerStores,
+    run_worker_loop,
+    run_worker_once,
+)
 from autoskill.tests.test_embedding_generation import MemoryPendingEmbeddingStore
 from autoskill.tests.test_jobs_api import MemoryJobStore
 
@@ -131,3 +136,65 @@ def test_worker_run_once_api_uses_configured_stores() -> None:
     assert response.claimed is True
     assert response.status == "succeeded"
     assert response.output["created"] == 1
+
+
+def test_worker_loop_runs_bounded_concurrent_iterations() -> None:
+    stores = WorkerTestStores(
+        jobs=MemoryJobStore(),
+        scheduler=MemorySchedulerWorkerStore(),
+        evidence=MemoryEvidenceWorkerStore(),
+        embeddings=MemoryPendingEmbeddingStore(),
+    )
+
+    async def run():
+        await stores.jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="evidence.derive",
+            idempotency_key="derive:loop-1",
+        )
+        await stores.jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="evidence.derive",
+            idempotency_key="derive:loop-2",
+        )
+        return await run_worker_loop(
+            stores.as_worker_stores(),
+            WorkerLoopConfig(
+                worker_id="loop-worker",
+                pool="maintenance",
+                concurrency=2,
+                idle_sleep_seconds=0,
+                max_iterations=2,
+            ),
+        )
+
+    summary = asyncio.run(run())
+
+    assert summary.iterations == 2
+    assert summary.claimed == 2
+    assert summary.succeeded == 2
+    assert summary.failed == 0
+    assert summary.idle == 1
+
+
+def test_worker_loop_stops_on_event_while_idle() -> None:
+    stores = WorkerTestStores(
+        jobs=MemoryJobStore(),
+        scheduler=MemorySchedulerWorkerStore(),
+        evidence=MemoryEvidenceWorkerStore(),
+        embeddings=MemoryPendingEmbeddingStore(),
+    )
+
+    async def run():
+        stop_event = asyncio.Event()
+        stop_event.set()
+        return await run_worker_loop(
+            stores.as_worker_stores(),
+            WorkerLoopConfig(worker_id="loop-worker", idle_sleep_seconds=0),
+            stop_event=stop_event,
+        )
+
+    summary = asyncio.run(run())
+
+    assert summary.iterations == 0
+    assert summary.stopped is True
