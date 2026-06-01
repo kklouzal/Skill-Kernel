@@ -78,9 +78,30 @@ class ExternalSkillMatch:
     slug: str | None
     score: float
     summary: str
+    collision_risk: str
+    recommendation: str
+    reason_codes: list[str]
 
     @classmethod
-    def from_candidate(cls, candidate: RetrievalCandidate, score: float) -> ExternalSkillMatch:
+    def from_candidate(
+        cls,
+        candidate: RetrievalCandidate,
+        score: float,
+        candidate_slug: str,
+    ) -> ExternalSkillMatch:
+        slug = (
+            str(candidate.metadata["slug"])
+            if candidate.metadata.get("slug") is not None
+            else None
+        )
+        status = str(candidate.metadata.get("status", "unknown"))
+        reason_codes = _external_collision_reason_codes(
+            slug=slug,
+            candidate_slug=candidate_slug,
+            status=status,
+            score=score,
+        )
+        collision_risk = _external_collision_risk(reason_codes)
         return cls(
             external_skill_id=str(candidate.object_id),
             source=(
@@ -88,14 +109,13 @@ class ExternalSkillMatch:
                 if candidate.metadata.get("source") is not None
                 else None
             ),
-            status=str(candidate.metadata.get("status", "unknown")),
-            slug=(
-                str(candidate.metadata["slug"])
-                if candidate.metadata.get("slug") is not None
-                else None
-            ),
+            status=status,
+            slug=slug,
             score=score,
             summary=candidate.summary,
+            collision_risk=collision_risk,
+            recommendation=_external_collision_recommendation(collision_risk, status),
+            reason_codes=reason_codes,
         )
 
     def to_json(self) -> dict[str, object]:
@@ -106,6 +126,9 @@ class ExternalSkillMatch:
             "slug": self.slug,
             "score": self.score,
             "summary": self.summary,
+            "collision_risk": self.collision_risk,
+            "recommendation": self.recommendation,
+            "reason_codes": self.reason_codes,
         }
 
 
@@ -148,6 +171,7 @@ async def match_existing_skills(
                 ExternalSkillMatch.from_candidate(
                     candidate,
                     _score(candidate, query_terms, request.candidate_slug),
+                    request.candidate_slug,
                 )
             )
             continue
@@ -215,6 +239,45 @@ def _decision(
     if external and external[0].score >= 0.45:
         return "external_collision_review"
     return "create_candidate"
+
+
+def _external_collision_reason_codes(
+    *,
+    slug: str | None,
+    candidate_slug: str,
+    status: str,
+    score: float,
+) -> list[str]:
+    reasons: list[str] = []
+    if slug == candidate_slug:
+        reasons.append("exact_slug_collision")
+    if score >= 0.75:
+        reasons.append("high_similarity")
+    elif score >= 0.45:
+        reasons.append("moderate_similarity")
+    if status == "changed":
+        reasons.append("external_skill_changed")
+    if status == "visible":
+        reasons.append("external_skill_visible")
+    return reasons
+
+
+def _external_collision_risk(reason_codes: list[str]) -> str:
+    if "exact_slug_collision" in reason_codes or "high_similarity" in reason_codes:
+        return "high"
+    if "moderate_similarity" in reason_codes or "external_skill_changed" in reason_codes:
+        return "medium"
+    return "low"
+
+
+def _external_collision_recommendation(collision_risk: str, status: str) -> str:
+    if status == "changed":
+        return "review_changed_external_skill_before_candidate_creation"
+    if collision_risk == "high":
+        return "operator_review_import_or_reuse_external_skill"
+    if collision_risk == "medium":
+        return "review_external_collision_before_candidate_creation"
+    return "record_external_overlap_signal"
 
 
 def _terms(text: str) -> set[str]:

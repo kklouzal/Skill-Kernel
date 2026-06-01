@@ -138,6 +138,50 @@ def test_skill_match_surfaces_external_collision_without_reuse() -> None:
     assert result.archived_matches == []
     assert result.external_matches[0].external_skill_id == str(external_skill_id)
     assert result.external_matches[0].source == "workspace-skill-root"
+    assert result.external_matches[0].collision_risk == "high"
+    assert result.external_matches[0].recommendation == (
+        "operator_review_import_or_reuse_external_skill"
+    )
+    assert "high_similarity" in result.external_matches[0].reason_codes
+
+
+def test_skill_match_flags_changed_external_skill_for_review() -> None:
+    store = MemorySkillMatchRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="external_skill",
+                object_id=uuid4(),
+                skill_id=None,
+                summary="PDF table cleanup: external workflow for repairing malformed cells.",
+                rank=0.4,
+                metadata={
+                    "ownership": "external",
+                    "source": "workspace-skill-root",
+                    "status": "changed",
+                    "slug": "pdf-table-cleanup",
+                },
+            )
+        ]
+    )
+
+    async def run():
+        return await match_existing_skills(
+            store,
+            SkillMatchRequest(
+                workspace_key="dev-01",
+                candidate_slug="pdf-table-repair",
+                candidate_description="Repair malformed PDF table extraction boundaries.",
+            ),
+        )
+
+    result = asyncio.run(run())
+
+    assert result.decision == "external_collision_review"
+    assert result.external_matches[0].status == "changed"
+    assert result.external_matches[0].recommendation == (
+        "review_changed_external_skill_before_candidate_creation"
+    )
+    assert "external_skill_changed" in result.external_matches[0].reason_codes
 
 
 def test_skill_match_api_uses_retrieval_store() -> None:
