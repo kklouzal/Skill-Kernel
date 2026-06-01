@@ -16,6 +16,7 @@ from autoskill.db.embeddings import AsyncpgEmbeddingStore, EmbeddingStore, NullE
 from autoskill.db.evaluations import AsyncpgEvaluationStore, EvaluationStore, NullEvaluationStore
 from autoskill.db.events import AsyncpgEventStore, EventStore, NullEventStore
 from autoskill.db.evidence import AsyncpgEvidenceStore, EvidenceStore, NullEvidenceStore
+from autoskill.db.governance import AsyncpgGovernanceStore, GovernanceStore, NullGovernanceStore
 from autoskill.db.jobs import AsyncpgJobStore, JobStore, NullJobStore
 from autoskill.db.retrieval import AsyncpgRetrievalStore, NullRetrievalStore, RetrievalStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore, NullSchedulerStore, SchedulerStore
@@ -184,6 +185,60 @@ class EvaluationRunResponse(BaseModel):
     needs_intervention: int
     passed: int
     evaluations: list[dict[str, object]]
+
+
+class EvolutionTransactionStartRequest(BaseModel):
+    workspace_id: str
+    transaction_kind: str
+    idempotency_key: str
+    plan_hash: str
+    actor: str = "autoskill-sidecar"
+    cause: dict[str, object] = {}
+    source_evidence_ids: list[UUID] = []
+    source_memory_ids: list[UUID] = []
+    policy_snapshot: dict[str, object] = {}
+    rollback_of_transaction_id: UUID | None = None
+
+
+class EvolutionTransactionStartResponse(BaseModel):
+    created: bool
+    transaction: dict[str, object]
+
+
+class EvolutionTransactionStatusRequest(BaseModel):
+    status: str
+    metrics: dict[str, object] = {}
+
+
+class EvolutionTransactionStatusResponse(BaseModel):
+    transaction: dict[str, object] | None
+
+
+class EvolutionTransactionItemRequest(BaseModel):
+    item_kind: str
+    activation_state: str
+    item_id: UUID | None = None
+    relative_path: str | None = None
+    before_hash: str | None = None
+    after_hash: str | None = None
+    rollback_action: dict[str, object] = {}
+
+
+class EvolutionTransactionItemResponse(BaseModel):
+    item: dict[str, object]
+
+
+class RevocationRequestCreateRequest(BaseModel):
+    workspace_id: str
+    request_kind: str
+    root_object_type: str
+    root_object_id: UUID
+    traversal_summary: dict[str, object] = {}
+    created_by_job_id: UUID | None = None
+
+
+class RevocationRequestCreateResponse(BaseModel):
+    revocation: dict[str, object]
 
 
 class ShadowingDetectRequest(BaseModel):
@@ -358,6 +413,16 @@ def _build_evaluation_store() -> EvaluationStore:
     return NullEvaluationStore()
 
 
+def _build_governance_store() -> GovernanceStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgGovernanceStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullGovernanceStore()
+
+
 def _require_ingest_auth(authorization: str | None) -> None:
     settings = get_settings()
     if not settings.ingest_token:
@@ -394,6 +459,7 @@ def create_app(
     attribution_store: AttributionStore | None = None,
     candidate_store: CandidateStore | None = None,
     evaluation_store: EvaluationStore | None = None,
+    governance_store: GovernanceStore | None = None,
 ) -> FastAPI:
     store = event_store or _build_event_store()
     jobs = job_store or _build_job_store()
@@ -404,6 +470,7 @@ def create_app(
     attribution = attribution_store or _build_attribution_store()
     candidates = candidate_store or _build_candidate_store()
     evaluations = evaluation_store or _build_evaluation_store()
+    governance = governance_store or _build_governance_store()
     broker_cache = ContextHintCache()
 
     @asynccontextmanager
@@ -421,6 +488,7 @@ def create_app(
                 attribution,
                 candidates,
                 evaluations,
+                governance,
             ):
                 close = getattr(closeable, "close", None)
                 if close is not None:
@@ -708,6 +776,83 @@ def create_app(
             limit=max(1, min(request.limit, 250)),
         )
         return EvaluationRunResponse(**result.to_json())
+
+    @app.post("/v1/evolution/transactions/start", response_model=EvolutionTransactionStartResponse)
+    async def start_evolution_transaction(
+        request: EvolutionTransactionStartRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> EvolutionTransactionStartResponse:
+        _require_control_auth(authorization)
+        result = await governance.start_transaction(
+            workspace_key=request.workspace_id,
+            transaction_kind=request.transaction_kind,
+            idempotency_key=request.idempotency_key,
+            plan_hash=request.plan_hash,
+            actor=request.actor,
+            cause=request.cause,
+            source_evidence_ids=request.source_evidence_ids,
+            source_memory_ids=request.source_memory_ids,
+            policy_snapshot=request.policy_snapshot,
+            rollback_of_transaction_id=request.rollback_of_transaction_id,
+        )
+        return EvolutionTransactionStartResponse(**result.to_json())
+
+    @app.post(
+        "/v1/evolution/transactions/{transaction_id}/status",
+        response_model=EvolutionTransactionStatusResponse,
+    )
+    async def update_evolution_transaction_status(
+        transaction_id: UUID,
+        request: EvolutionTransactionStatusRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> EvolutionTransactionStatusResponse:
+        _require_control_auth(authorization)
+        transaction = await governance.update_transaction_status(
+            evolution_transaction_id=transaction_id,
+            status=request.status,
+            metrics=request.metrics,
+        )
+        return EvolutionTransactionStatusResponse(
+            transaction=transaction.to_json() if transaction else None,
+        )
+
+    @app.post(
+        "/v1/evolution/transactions/{transaction_id}/items",
+        response_model=EvolutionTransactionItemResponse,
+    )
+    async def record_evolution_transaction_item(
+        transaction_id: UUID,
+        request: EvolutionTransactionItemRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> EvolutionTransactionItemResponse:
+        _require_control_auth(authorization)
+        item = await governance.record_transaction_item(
+            evolution_transaction_id=transaction_id,
+            item_kind=request.item_kind,
+            activation_state=request.activation_state,
+            item_id=request.item_id,
+            relative_path=request.relative_path,
+            before_hash=request.before_hash,
+            after_hash=request.after_hash,
+            rollback_action=request.rollback_action,
+        )
+        return EvolutionTransactionItemResponse(item=item.to_json())
+
+    @app.post("/v1/revocations/request", response_model=RevocationRequestCreateResponse)
+    async def request_revocation(
+        request: RevocationRequestCreateRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> RevocationRequestCreateResponse:
+        _require_control_auth(authorization)
+        revocation = await governance.request_revocation(
+            workspace_key=request.workspace_id,
+            request_kind=request.request_kind,
+            root_object_type=request.root_object_type,
+            root_object_id=request.root_object_id,
+            traversal_summary=request.traversal_summary,
+            created_by_job_id=request.created_by_job_id,
+        )
+        return RevocationRequestCreateResponse(revocation=revocation.to_json())
 
     @app.post("/v1/shadowing/detect", response_model=ShadowingDetectResponse)
     async def detect_shadowing(

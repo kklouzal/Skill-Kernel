@@ -262,6 +262,67 @@ CREATE TABLE IF NOT EXISTS autoskill.evolution_transactions (
   rolled_back_at timestamptz
 );
 
+ALTER TABLE autoskill.evolution_transactions
+  ADD COLUMN IF NOT EXISTS transaction_kind text;
+
+UPDATE autoskill.evolution_transactions
+SET transaction_kind = action
+WHERE transaction_kind IS NULL;
+
+ALTER TABLE autoskill.evolution_transactions
+  ALTER COLUMN transaction_kind SET NOT NULL;
+
+ALTER TABLE autoskill.evolution_transactions
+  ADD COLUMN IF NOT EXISTS idempotency_key text;
+
+UPDATE autoskill.evolution_transactions
+SET idempotency_key = evolution_transaction_id::text
+WHERE idempotency_key IS NULL;
+
+ALTER TABLE autoskill.evolution_transactions
+  ALTER COLUMN idempotency_key SET NOT NULL;
+
+ALTER TABLE autoskill.evolution_transactions
+  ADD COLUMN IF NOT EXISTS plan_hash text;
+
+UPDATE autoskill.evolution_transactions
+SET plan_hash = encode(digest(cause::text, 'sha256'), 'hex')
+WHERE plan_hash IS NULL;
+
+ALTER TABLE autoskill.evolution_transactions
+  ALTER COLUMN plan_hash SET NOT NULL;
+
+ALTER TABLE autoskill.evolution_transactions
+  ADD COLUMN IF NOT EXISTS source_evidence_ids uuid[] NOT NULL DEFAULT '{}';
+
+ALTER TABLE autoskill.evolution_transactions
+  ADD COLUMN IF NOT EXISTS source_memory_ids uuid[] NOT NULL DEFAULT '{}';
+
+ALTER TABLE autoskill.evolution_transactions
+  ADD COLUMN IF NOT EXISTS created_by_job_id uuid REFERENCES autoskill.jobs(job_id);
+
+ALTER TABLE autoskill.evolution_transactions
+  ADD COLUMN IF NOT EXISTS policy_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE autoskill.evolution_transactions
+  ADD COLUMN IF NOT EXISTS metrics jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE UNIQUE INDEX IF NOT EXISTS evolution_transactions_workspace_idempotency_idx
+  ON autoskill.evolution_transactions(workspace_id, idempotency_key);
+
+CREATE TABLE IF NOT EXISTS autoskill.evolution_transaction_items (
+  transaction_item_id uuid PRIMARY KEY,
+  evolution_transaction_id uuid NOT NULL REFERENCES autoskill.evolution_transactions(evolution_transaction_id),
+  item_kind text NOT NULL,
+  item_id uuid,
+  relative_path text,
+  before_hash text,
+  after_hash text,
+  activation_state text NOT NULL,
+  rollback_action jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS autoskill.transaction_artifacts (
   transaction_artifact_id uuid PRIMARY KEY,
   evolution_transaction_id uuid NOT NULL REFERENCES autoskill.evolution_transactions(evolution_transaction_id),
@@ -291,6 +352,37 @@ CREATE INDEX IF NOT EXISTS provenance_source_idx
 CREATE INDEX IF NOT EXISTS provenance_derived_idx
   ON autoskill.provenance_edges(workspace_id, derived_kind, derived_id);
 
+CREATE TABLE IF NOT EXISTS autoskill.evidence_maturity (
+  evidence_maturity_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  object_type text NOT NULL,
+  object_id uuid NOT NULL,
+  maturity text NOT NULL,
+  basis jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_by_transaction_id uuid REFERENCES autoskill.evolution_transactions(evolution_transaction_id),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, object_type, object_id)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.action_attribution_checks (
+  action_attribution_check_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  session_id text,
+  turn_id text,
+  tool_call_id text,
+  action_kind text NOT NULL,
+  risk_tier text NOT NULL,
+  user_intent_hash text,
+  contributing_skill_ids uuid[] NOT NULL DEFAULT '{}',
+  contributing_memory_ids uuid[] NOT NULL DEFAULT '{}',
+  contributing_evidence_ids uuid[] NOT NULL DEFAULT '{}',
+  broker_policy_version_id uuid REFERENCES autoskill.broker_policy_versions(broker_policy_version_id),
+  counterfactual_kind text,
+  verdict text NOT NULL,
+  metrics jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS autoskill.attribution_events (
   attribution_event_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
@@ -306,6 +398,32 @@ CREATE TABLE IF NOT EXISTS autoskill.attribution_events (
   outcome text,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.control_flow_events (
+  control_flow_event_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  influence_kind text NOT NULL,
+  influenced_object_type text NOT NULL,
+  influenced_object_id uuid,
+  source_object_type text,
+  source_object_id uuid,
+  broker_policy_version_id uuid REFERENCES autoskill.broker_policy_versions(broker_policy_version_id),
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.revocation_requests (
+  revocation_request_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  request_kind text NOT NULL,
+  root_object_type text NOT NULL,
+  root_object_id uuid NOT NULL,
+  status text NOT NULL DEFAULT 'queued',
+  traversal_summary jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_by_job_id uuid REFERENCES autoskill.jobs(job_id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz
 );
 
 CREATE TABLE IF NOT EXISTS autoskill.audit_records (

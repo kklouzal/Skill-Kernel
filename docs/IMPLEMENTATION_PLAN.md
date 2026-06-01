@@ -127,6 +127,8 @@ Acceptance:
 
 Deliverables:
 
+- v9 transaction/provenance/revocation schema; implemented for idempotent evolution transactions, transaction items, evidence maturity, action-attribution checks, control-flow events, and revocation requests;
+- transaction control APIs; implemented for starting idempotent transactions, updating transaction status/metrics, recording rollback-aware transaction items, and queuing revocation requests;
 - staged writer;
 - manifests and hashes;
 - atomic apply;
@@ -135,6 +137,9 @@ Deliverables:
 
 Acceptance:
 
+- transaction start is idempotent by workspace/idempotency key; implemented and validated against local Postgres;
+- rollback-relevant transaction items can be recorded with activation state and rollback metadata; implemented and validated against local Postgres;
+- revocation requests can be queued for rollback/traversal roots; implemented and validated against local Postgres;
 - valid skill appears under active root;
 - invalid paths are rejected;
 - rollback restores the previous effective state;
@@ -165,7 +170,8 @@ Deliverables:
 - drift checks;
 - localized repair;
 - skill graph maintenance;
-- audit and retrieval policy reviews.
+- audit and retrieval policy reviews;
+- evidence maturity, action-attribution check, control-flow event, and revocation request storage; implemented as v9 governance schema foundations.
 
 Acceptance:
 
