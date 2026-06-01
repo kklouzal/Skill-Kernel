@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from hmac import compare_digest
 from typing import Annotated
 from uuid import UUID
@@ -11,6 +12,7 @@ from autoskill.core.config import get_settings
 from autoskill.core.events import IngestRequest, IngestResult
 from autoskill.db.events import AsyncpgEventStore, EventStore, NullEventStore
 from autoskill.db.jobs import AsyncpgJobStore, JobStore, NullJobStore
+from autoskill.db.scheduler import AsyncpgSchedulerStore, NullSchedulerStore, SchedulerStore
 from autoskill.services.broker import (
     ContextHintRequest,
     ContextHintResponse,
@@ -65,6 +67,27 @@ class JobCompleteRequest(BaseModel):
     error: str | None = None
 
 
+class ScheduleUpsertRequest(BaseModel):
+    workspace_id: str
+    name: str
+    job_kind: str
+    interval_seconds: int
+    next_run_at: str
+    payload: dict[str, object] = {}
+    enabled: bool = True
+
+
+class ScheduleUpsertResponse(BaseModel):
+    created: bool
+    schedule: dict[str, object]
+
+
+class SchedulerTickResponse(BaseModel):
+    due: int
+    enqueued: int
+    jobs: list[dict[str, object]]
+
+
 def _build_event_store() -> EventStore:
     settings = get_settings()
     if settings.database_url:
@@ -83,6 +106,16 @@ def _build_job_store() -> JobStore:
             statement_timeout_ms=settings.statement_timeout_ms,
         )
     return NullJobStore()
+
+
+def _build_scheduler_store() -> SchedulerStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgSchedulerStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullSchedulerStore()
 
 
 def _require_ingest_auth(authorization: str | None) -> None:
@@ -114,16 +147,18 @@ def _require_control_auth(authorization: str | None) -> None:
 def create_app(
     event_store: EventStore | None = None,
     job_store: JobStore | None = None,
+    scheduler_store: SchedulerStore | None = None,
 ) -> FastAPI:
     store = event_store or _build_event_store()
     jobs = job_store or _build_job_store()
+    scheduler = scheduler_store or _build_scheduler_store()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:
-            for closeable in (store, jobs):
+            for closeable in (store, jobs, scheduler):
                 close = getattr(closeable, "close", None)
                 if close is not None:
                     await close()
@@ -234,6 +269,48 @@ def create_app(
             error=request.error,
         )
         return {"job": job.to_json() if job else None}
+
+    @app.get("/v1/schedules")
+    async def list_schedules(
+        authorization: Annotated[str | None, Header()] = None,
+        limit: int = 50,
+    ) -> dict[str, list[dict[str, object]]]:
+        _require_control_auth(authorization)
+        schedules = await scheduler.list_schedules(limit=max(1, min(limit, 250)))
+        return {"schedules": [schedule.to_json() for schedule in schedules]}
+
+    @app.post("/v1/schedules/upsert", response_model=ScheduleUpsertResponse)
+    async def upsert_schedule(
+        request: ScheduleUpsertRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ScheduleUpsertResponse:
+        _require_control_auth(authorization)
+        result = await scheduler.upsert_schedule(
+            workspace_key=request.workspace_id,
+            name=request.name,
+            job_kind=request.job_kind,
+            interval_seconds=request.interval_seconds,
+            next_run_at=datetime.fromisoformat(request.next_run_at),
+            payload=request.payload,
+            enabled=request.enabled,
+        )
+        return ScheduleUpsertResponse(
+            created=result.created,
+            schedule=result.schedule.to_json(),
+        )
+
+    @app.post("/v1/scheduler/tick", response_model=SchedulerTickResponse)
+    async def scheduler_tick(
+        authorization: Annotated[str | None, Header()] = None,
+        limit: int = 25,
+    ) -> SchedulerTickResponse:
+        _require_control_auth(authorization)
+        result = await scheduler.run_due_schedules(limit=max(1, min(limit, 250)))
+        return SchedulerTickResponse(
+            due=result.due,
+            enqueued=result.enqueued,
+            jobs=[job.to_json() for job in result.jobs],
+        )
 
     @app.get("/v1/audit/recent")
     async def recent_audit() -> dict[str, list[object]]:

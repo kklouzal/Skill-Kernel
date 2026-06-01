@@ -31,15 +31,17 @@ Phase 0/1 bootstrap.
 - Plugin diagnostics report sidecar reachability/status and spool file/byte counts.
 - Sidecar job queue primitives are implemented: idempotent enqueue, lease claim, completion, status counts, and expired-lease recovery.
 - Real local Postgres job validation passed via compose: duplicate enqueue returned existing job, claim leased a job, completion marked success, expired lease was recovered and reclaimed.
+- Sidecar scheduler tick primitive is implemented: due schedules enqueue idempotent jobs and advance `next_run_at`.
+- Real local Postgres scheduler validation passed via compose: first tick enqueued one due job, second tick produced no duplicate, and the schedule advanced.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
-2. Add scheduler tick primitives that create jobs from due schedules.
-3. Add evidence-item derivation from captured events.
-4. Add retrieval policy and context-broker data access.
-5. Add worker loop dispatch with risk/cost pool separation.
+2. Add evidence-item derivation from captured events.
+3. Add retrieval policy and context-broker data access.
+4. Add worker loop dispatch with risk/cost pool separation.
+5. Add retry backoff and terminal failure policy for jobs.
 
 ## Known Risks
 

@@ -63,7 +63,7 @@ Deliverables:
 Acceptance:
 
 - jobs survive restart;
-- duplicate ticks do not duplicate jobs;
+- duplicate ticks do not duplicate jobs; implemented with schedule-run idempotency keys;
 - stuck leases recover; implemented for expired leases with remaining attempts.
 
 ## Phase 4 - Evidence, Embeddings, Retrieval
