@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from autoskill.core.hashing import sha256_text
 from autoskill.db.external_skills import ExternalSkillInput, ExternalSkillStore
+from autoskill.db.scheduler import SchedulerStore, ScheduleUpsertResult
 from autoskill.services.scanner import has_blocking_findings, scan_text
 
 SAFE_SLUG = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$")
+DEFAULT_EXTERNAL_SKILL_SCAN_INTERVAL_SECONDS = 6 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,35 @@ async def scan_external_skill_roots(
         created=result.created,
         updated=result.updated,
         skills=[skill.to_json() for skill in result.skills],
+    )
+
+
+async def ensure_external_skill_scan_schedule(
+    scheduler: SchedulerStore,
+    *,
+    workspace_key: str,
+    external_skill_roots: list[Path],
+    interval_seconds: int = DEFAULT_EXTERNAL_SKILL_SCAN_INTERVAL_SECONDS,
+    source: str = "workspace-skill-root",
+    limit: int = 250,
+    enabled: bool = True,
+) -> ScheduleUpsertResult | None:
+    """Register durable scan cadence without persisting raw external root paths."""
+
+    if not external_skill_roots:
+        return None
+    return await scheduler.upsert_schedule(
+        workspace_key=workspace_key,
+        name="external-skills.scan",
+        job_kind="external_skills.scan",
+        interval_seconds=max(300, interval_seconds),
+        next_run_at=datetime.now(UTC),
+        payload={
+            "workspace_id": workspace_key,
+            "source": source,
+            "limit": max(1, min(limit, 1000)),
+        },
+        enabled=enabled,
     )
 
 

@@ -22,6 +22,7 @@ from autoskill.db.scheduler import AsyncpgSchedulerStore
 from autoskill.db.topology import AsyncpgTopologyStore
 from autoskill.db.utility import AsyncpgUtilityStore
 from autoskill.services.embedding_generation import build_text_embedder_from_settings
+from autoskill.services.external_inventory import ensure_external_skill_scan_schedule
 from autoskill.services.worker import WorkerLoopConfig, WorkerPool, WorkerStores, run_worker_loop
 
 
@@ -97,6 +98,13 @@ async def run_worker(args: argparse.Namespace) -> int:
 
     try:
         workspace_root, archive_root = _writer_worker_roots(settings, args.workspace_root)
+        await ensure_external_skill_scan_schedule(
+            scheduler,
+            workspace_key=args.workspace_id,
+            external_skill_roots=args.external_skill_root,
+            interval_seconds=args.external_skill_scan_interval_seconds,
+            source=args.external_skill_source,
+        )
         summary = await run_worker_loop(
             WorkerStores(
                 jobs=jobs,
@@ -151,6 +159,7 @@ async def run_worker(args: argparse.Namespace) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run SkillKernel sidecar worker loop")
     parser.add_argument("--worker-id", default="autoskill-worker")
+    parser.add_argument("--workspace-id", default="default")
     parser.add_argument(
         "--pool",
         choices=["scheduler", "maintenance", "mutation"],
@@ -166,6 +175,17 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=[],
         help="Read-only skill root to inventory for external-skill collision awareness.",
+    )
+    parser.add_argument(
+        "--external-skill-scan-interval-seconds",
+        type=int,
+        default=6 * 60 * 60,
+        help="Default durable scan cadence for configured external skill roots.",
+    )
+    parser.add_argument(
+        "--external-skill-source",
+        default="workspace-skill-root",
+        help="Public source label for external skill inventory records.",
     )
     return parser.parse_args()
 

@@ -13,7 +13,51 @@ from autoskill.db.external_skills import (
     ExternalSkillRecord,
     ExternalSkillUpsertResult,
 )
-from autoskill.services.external_inventory import scan_external_skill_roots
+from autoskill.db.scheduler import ScheduleRecord, ScheduleUpsertResult
+from autoskill.services.external_inventory import (
+    ensure_external_skill_scan_schedule,
+    scan_external_skill_roots,
+)
+
+
+class MemoryScheduleStore:
+    def __init__(self) -> None:
+        self.upserts: list[dict[str, object]] = []
+
+    async def upsert_schedule(
+        self,
+        *,
+        workspace_key: str,
+        name: str,
+        job_kind: str,
+        interval_seconds: int,
+        next_run_at: datetime,
+        payload: dict[str, object] | None = None,
+        enabled: bool = True,
+    ) -> ScheduleUpsertResult:
+        self.upserts.append(
+            {
+                "workspace_key": workspace_key,
+                "name": name,
+                "job_kind": job_kind,
+                "interval_seconds": interval_seconds,
+                "payload": payload or {},
+                "enabled": enabled,
+            }
+        )
+        return ScheduleUpsertResult(
+            schedule=ScheduleRecord(
+                schedule_id=uuid4(),
+                workspace_key=workspace_key,
+                name=name,
+                job_kind=job_kind,
+                enabled=enabled,
+                interval_seconds=interval_seconds,
+                next_run_at=next_run_at,
+                payload=payload or {},
+            ),
+            created=True,
+        )
 
 
 class MemoryExternalSkillStore:
@@ -161,3 +205,30 @@ def test_external_skill_scanner_quarantines_blocking_findings(tmp_path: Path) ->
     assert result.discovered == 1
     assert store.records[0].status == "quarantined"
     assert store.records[0].risk_summary["scanner_status"] == "blocked"
+
+
+def test_external_skill_schedule_default_does_not_store_raw_roots(tmp_path: Path) -> None:
+    root = tmp_path / "external-skills"
+    scheduler = MemoryScheduleStore()
+
+    async def run():
+        return await ensure_external_skill_scan_schedule(
+            scheduler,
+            workspace_key="dev-01",
+            external_skill_roots=[root],
+            interval_seconds=60,
+            source="test-root",
+        )
+
+    result = asyncio.run(run())
+
+    assert result is not None
+    assert scheduler.upserts[0]["name"] == "external-skills.scan"
+    assert scheduler.upserts[0]["job_kind"] == "external_skills.scan"
+    assert scheduler.upserts[0]["interval_seconds"] == 300
+    assert scheduler.upserts[0]["payload"] == {
+        "workspace_id": "dev-01",
+        "source": "test-root",
+        "limit": 250,
+    }
+    assert str(root) not in str(scheduler.upserts[0])
