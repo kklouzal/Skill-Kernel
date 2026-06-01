@@ -59,6 +59,8 @@ from autoskill.services.broker import (
 )
 from autoskill.services.candidates import propose_candidate_skills
 from autoskill.services.embedding_generation import (
+    HashingTextEmbedder,
+    OpenAICompatibleTextEmbedder,
     build_text_embedder_from_settings,
     generate_pending_embeddings,
 )
@@ -737,6 +739,7 @@ class EmbeddingRecallAuditResponse(BaseModel):
 
 class EmbeddingGenerateRequest(BaseModel):
     workspace_id: str | None = None
+    embedding_profile_key: str | None = None
     embedding_model: str | None = None
     limit: int = 100
 
@@ -1003,6 +1006,45 @@ def _writer_roots(workspace_root: Path | None = None) -> tuple[Path, Path, Path]
     staging_root = _resolve_workspace_child(root, settings.staging_root)
     archive_root = _resolve_workspace_child(root, settings.archive_root)
     return root, staging_root, archive_root
+
+
+def _embedder_from_profile(profile: object, settings: object):
+    if getattr(profile, "status", None) != "qualified":
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="embedding profile is not qualified",
+        )
+    if getattr(profile, "embedding_dim", None) != 1536:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="embedding profile dimension must be 1536",
+        )
+    route_kind = str(getattr(profile, "route_kind", ""))
+    model = str(profile.model)
+    if route_kind == "hash":
+        return HashingTextEmbedder(model=model)
+    if route_kind == "openai_compatible":
+        base_url = getattr(profile, "endpoint_ref", None) or getattr(
+            settings,
+            "embedding_api_base_url",
+            None,
+        )
+        api_key = getattr(settings, "embedding_api_key", None)
+        if not base_url or not api_key:
+            raise HTTPException(
+                status_code=http_status.HTTP_409_CONFLICT,
+                detail="qualified openai_compatible profile requires endpoint and API key",
+            )
+        return OpenAICompatibleTextEmbedder(
+            base_url=str(base_url),
+            api_key=str(api_key),
+            model=model,
+            timeout_seconds=float(getattr(profile, "timeout_seconds", 30.0)),
+        )
+    raise HTTPException(
+        status_code=http_status.HTTP_409_CONFLICT,
+        detail=f"embedding profile route_kind is not supported for generation: {route_kind}",
+    )
 
 
 def _worker_stores(
@@ -2171,18 +2213,37 @@ def create_app(
     ) -> EmbeddingGenerateResponse:
         _require_control_auth(authorization)
         settings = get_settings()
-        try:
-            embedder = build_text_embedder_from_settings(settings)
-        except ValueError as error:
-            raise HTTPException(
-                status_code=http_status.HTTP_400_BAD_REQUEST,
-                detail=str(error),
-            ) from error
+        if request.embedding_profile_key:
+            if not request.workspace_id:
+                raise HTTPException(
+                    status_code=http_status.HTTP_400_BAD_REQUEST,
+                    detail="workspace_id is required with embedding_profile_key",
+                )
+            profile = await profiles.get_embedding_profile(
+                workspace_key=request.workspace_id,
+                profile_key=request.embedding_profile_key,
+            )
+            if profile is None:
+                raise HTTPException(
+                    status_code=http_status.HTTP_404_NOT_FOUND,
+                    detail="embedding profile not found",
+                )
+            embedder = _embedder_from_profile(profile, settings)
+            embedding_model = profile.model
+        else:
+            try:
+                embedder = build_text_embedder_from_settings(settings)
+            except ValueError as error:
+                raise HTTPException(
+                    status_code=http_status.HTTP_400_BAD_REQUEST,
+                    detail=str(error),
+                ) from error
+            embedding_model = request.embedding_model
         result = await generate_pending_embeddings(
             embeddings,
             embedder=embedder,
             workspace_key=request.workspace_id,
-            embedding_model=request.embedding_model,
+            embedding_model=embedding_model,
             limit=max(1, min(request.limit, 500)),
         )
         return EmbeddingGenerateResponse(**result.to_json())

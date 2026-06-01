@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from autoskill.api.app import EmbeddingGenerateRequest, create_app
 from autoskill.db.embeddings import (
     EMBEDDING_DIM,
@@ -18,6 +19,7 @@ from autoskill.services.embedding_generation import (
     build_text_embedder_from_settings,
     generate_pending_embeddings,
 )
+from fastapi import HTTPException
 
 
 class MemoryPendingEmbeddingStore:
@@ -94,6 +96,16 @@ class MemoryPendingEmbeddingStore:
 
     async def search_embeddings(self, **_kwargs):
         return []
+
+
+class MemoryEmbeddingProfileStore:
+    def __init__(self, *, profile=None) -> None:
+        self.profile = profile
+        self.calls: list[dict[str, object]] = []
+
+    async def get_embedding_profile(self, *, workspace_key: str, profile_key: str):
+        self.calls.append({"workspace_key": workspace_key, "profile_key": profile_key})
+        return self.profile
 
 
 def test_hashing_text_embedder_is_deterministic_and_normalized() -> None:
@@ -186,3 +198,67 @@ def test_generate_embeddings_api_runs_control_primitive() -> None:
     assert response.generated == 1
     assert response.embedding_model == DEFAULT_EMBEDDING_MODEL
     assert response.sources[0]["object_type"] == "evidence_item"
+
+
+def test_generate_embeddings_api_uses_qualified_embedding_profile() -> None:
+    store = MemoryPendingEmbeddingStore()
+    profile_store = MemoryEmbeddingProfileStore(
+        profile=SimpleNamespace(
+            status="qualified",
+            embedding_dim=1536,
+            route_kind="hash",
+            model="qualified-hash-profile",
+            timeout_seconds=30.0,
+        )
+    )
+    app = create_app(embedding_store=store, profile_store=profile_store)
+    route = next(route for route in app.routes if route.path == "/v1/embeddings/generate")
+
+    async def run():
+        return await route.endpoint(
+            request=EmbeddingGenerateRequest(
+                workspace_id="dev-01",
+                embedding_profile_key="embedding-default",
+                limit=1,
+            ),
+        )
+
+    response = asyncio.run(run())
+
+    assert response.generated == 1
+    assert response.embedding_model == "qualified-hash-profile"
+    assert store.upserts[0]["embedding_model"] == "qualified-hash-profile"
+    assert profile_store.calls == [
+        {"workspace_key": "dev-01", "profile_key": "embedding-default"}
+    ]
+
+
+def test_generate_embeddings_api_rejects_unqualified_embedding_profile() -> None:
+    profile_store = MemoryEmbeddingProfileStore(
+        profile=SimpleNamespace(
+            status="candidate",
+            embedding_dim=1536,
+            route_kind="hash",
+            model="candidate-hash-profile",
+            timeout_seconds=30.0,
+        )
+    )
+    app = create_app(
+        embedding_store=MemoryPendingEmbeddingStore(),
+        profile_store=profile_store,
+    )
+    route = next(route for route in app.routes if route.path == "/v1/embeddings/generate")
+
+    async def run():
+        return await route.endpoint(
+            request=EmbeddingGenerateRequest(
+                workspace_id="dev-01",
+                embedding_profile_key="embedding-default",
+            ),
+        )
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(run())
+
+    assert error.value.status_code == 409
+    assert error.value.detail == "embedding profile is not qualified"

@@ -206,6 +206,14 @@ class ProfileStore(Protocol):
     ) -> ModelProfileRecord:
         """Create or update the configured embedding access profile."""
 
+    async def get_embedding_profile(
+        self,
+        *,
+        workspace_key: str,
+        profile_key: str,
+    ) -> ModelProfileRecord | None:
+        """Fetch one embedding profile for provider-qualified runtime use."""
+
 
 class NullProfileStore:
     async def upsert_executor_profile(
@@ -321,6 +329,14 @@ class NullProfileStore:
             created_at=now,
             updated_at=now,
         )
+
+    async def get_embedding_profile(
+        self,
+        *,
+        workspace_key: str,
+        profile_key: str,
+    ) -> ModelProfileRecord | None:
+        return None
 
 
 class AsyncpgProfileStore(AsyncpgPoolOwner):
@@ -528,6 +544,28 @@ class AsyncpgProfileStore(AsyncpgPoolOwner):
                 workspace_key,
             )
         return ModelProfileRecord.from_embedding_row(row)
+
+    async def get_embedding_profile(
+        self,
+        *,
+        workspace_key: str,
+        profile_key: str,
+    ) -> ModelProfileRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                SELECT *, $3::text AS workspace_key
+                FROM autoskill.embedding_profiles
+                WHERE workspace_id = $1
+                  AND profile_key = $2
+                """,
+                workspace_id,
+                profile_key,
+                workspace_key,
+            )
+        return ModelProfileRecord.from_embedding_row(row) if row else None
 
 
 def _json(value: object) -> str:
