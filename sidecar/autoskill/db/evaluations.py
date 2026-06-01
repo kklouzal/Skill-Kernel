@@ -62,6 +62,14 @@ class EvaluationStore(Protocol):
     ) -> EvaluationRunResult:
         """Execute deterministic proposal-gate evaluations."""
 
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        """Retire probes and revoke evaluations derived from revoked objects."""
+
 
 class NullEvaluationStore:
     async def run_pending_proposal_gates(
@@ -82,6 +90,14 @@ class NullEvaluationStore:
             passed=0,
             evaluations=[],
         )
+
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        return 0
 
 
 class AsyncpgEvaluationStore(AsyncpgPoolOwner):
@@ -157,6 +173,88 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
             passed=sum(1 for item in items if item.status == "passed"),
             evaluations=items,
         )
+
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        object_keys = _object_keys(objects)
+        if not object_keys:
+            return 0
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            result = await conn.fetchval(
+                """
+                WITH targets AS (
+                  SELECT *
+                  FROM unnest($2::text[], $3::uuid[]) AS target(object_type, object_id)
+                ),
+                version_targets AS (
+                  SELECT object_id AS skill_version_id
+                  FROM targets
+                  WHERE object_type = 'skill_version'
+                  UNION
+                  SELECT sv.skill_version_id
+                  FROM autoskill.skill_versions sv
+                  JOIN targets t ON t.object_type = 'skill'
+                    AND t.object_id = sv.skill_id
+                ),
+                retired_probes AS (
+                  UPDATE autoskill.probes p
+                  SET active = false,
+                      retired_at = COALESCE(retired_at, now()),
+                      spec = p.spec || jsonb_build_object(
+                        'revoked', true,
+                        'revoked_at', now(),
+                        'revocation_reason', 'derived_object_revoked'
+                      )
+                  FROM autoskill.workspaces w
+                  WHERE p.workspace_id = w.workspace_id
+                    AND w.external_key = $1
+                    AND p.retired_at IS NULL
+                    AND (
+                      p.probe_id IN (
+                        SELECT object_id FROM targets WHERE object_type = 'probe'
+                      )
+                      OR p.spec->>'skill_version_id' IN (
+                        SELECT skill_version_id::text FROM version_targets
+                      )
+                    )
+                  RETURNING p.probe_id
+                ),
+                revoked_evaluations AS (
+                  UPDATE autoskill.evaluations ev
+                  SET status = 'revoked',
+                      result = ev.result || jsonb_build_object(
+                        'revoked', true,
+                        'revoked_at', now(),
+                        'revocation_reason', 'derived_object_revoked'
+                      )
+                  FROM autoskill.workspaces w
+                  WHERE ev.workspace_id = w.workspace_id
+                    AND w.external_key = $1
+                    AND ev.status <> 'revoked'
+                    AND (
+                      ev.evaluation_id IN (
+                        SELECT object_id FROM targets WHERE object_type = 'evaluation'
+                      )
+                      OR ev.skill_version_id IN (
+                        SELECT skill_version_id FROM version_targets
+                      )
+                    )
+                  RETURNING ev.evaluation_id
+                )
+                SELECT
+                  (SELECT count(*) FROM retired_probes)
+                  + (SELECT count(*) FROM revoked_evaluations) AS invalidated
+                """,
+                workspace_key,
+                [object_type for object_type, _object_id in object_keys],
+                [object_id for _object_type, object_id in object_keys],
+            )
+        return int(result or 0)
 
 
 async def _claim_planned_evaluations(
@@ -460,6 +558,20 @@ def _uuid_list(value: object) -> list[UUID]:
         except ValueError:
             continue
     return parsed
+
+
+def _object_keys(objects: list[dict[str, str]]) -> list[tuple[str, UUID]]:
+    keys: list[tuple[str, UUID]] = []
+    for item in objects:
+        object_type = item.get("object_type")
+        object_id = item.get("object_id")
+        if not object_type or not object_id:
+            continue
+        try:
+            keys.append((str(object_type), UUID(str(object_id))))
+        except ValueError:
+            continue
+    return keys
 
 
 def _json(payload: dict[str, Any]) -> str:

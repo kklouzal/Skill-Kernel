@@ -759,6 +759,7 @@ async def _invalidate_revoked_objects(
     retrieval_logs_invalidated = 0
     context_records_invalidated = 0
     topology_records_invalidated = 0
+    evaluation_records_invalidated = 0
     if request.workspace_key is None or not objects:
         return {
             "objects": len(objects),
@@ -767,6 +768,7 @@ async def _invalidate_revoked_objects(
             "retrieval_logs_invalidated": retrieval_logs_invalidated,
             "context_records_invalidated": context_records_invalidated,
             "topology_records_invalidated": topology_records_invalidated,
+            "evaluation_records_invalidated": evaluation_records_invalidated,
         }
     if stores.retrieval is not None:
         invalidate = getattr(stores.retrieval, "invalidate_objects", None)
@@ -801,6 +803,13 @@ async def _invalidate_revoked_objects(
                 workspace_key=request.workspace_key,
                 objects=objects,
             )
+    if stores.evaluations is not None:
+        invalidate_evaluations = getattr(stores.evaluations, "invalidate_objects", None)
+        if invalidate_evaluations is not None:
+            evaluation_records_invalidated = await invalidate_evaluations(
+                workspace_key=request.workspace_key,
+                objects=objects,
+            )
     return {
         "objects": len(objects),
         "body_index_documents_deleted": body_index_deleted,
@@ -808,6 +817,7 @@ async def _invalidate_revoked_objects(
         "retrieval_logs_invalidated": retrieval_logs_invalidated,
         "context_records_invalidated": context_records_invalidated,
         "topology_records_invalidated": topology_records_invalidated,
+        "evaluation_records_invalidated": evaluation_records_invalidated,
     }
 
 
