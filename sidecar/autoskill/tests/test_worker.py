@@ -9,6 +9,7 @@ from autoskill.db.evaluations import EvaluationRunResult
 from autoskill.db.evidence import EvidenceDeriveResult
 from autoskill.db.observability import TraceSpanRecord
 from autoskill.db.scheduler import SchedulerTickResult
+from autoskill.db.topology import NullTopologyStore
 from autoskill.db.utility import CurationRunResult, UtilityRollupResult
 from autoskill.services.worker import (
     WorkerLoopConfig,
@@ -937,6 +938,100 @@ def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path
     assert topology.calls[0]["workspace_key"] == "dev-01"
     assert evaluations.calls[0]["operation"] == "invalidate_objects"
     assert attribution.calls[0]["workspace_key"] == "dev-01"
+
+
+def test_mutation_worker_applies_topology_downstream_actions() -> None:
+    jobs = MemoryJobStore()
+    topology = NullTopologyStore()
+    retrieval = MemoryRetrievalInvalidationStore()
+    embeddings = MemoryInvalidationStore()
+    context = MemoryInvalidationStore()
+    subject_id = uuid4()
+    successor_id = uuid4()
+
+    async def run():
+        operation = await topology.record_operation(
+            workspace_key="dev-01",
+            operation_kind="improve",
+            status="applied",
+            subject_skill_ids=[subject_id],
+            output_skill_ids=[successor_id],
+            skill_graph_ir={
+                "nodes": [
+                    {
+                        "slug": "repair-python-tests",
+                        "skill_id": str(subject_id),
+                        "operation_role": "subject",
+                    },
+                    {
+                        "slug": "repair-python-tests-v2",
+                        "skill_id": str(successor_id),
+                        "operation_role": "successor",
+                    },
+                ],
+                "edges": [
+                    {
+                        "from_slug": "repair-python-tests",
+                        "to_slug": "repair-python-tests-v2",
+                        "edge_kind": "supersedes",
+                    }
+                ],
+            },
+            trial_summary={
+                "downstream_orchestration": {
+                    "status": "planned",
+                    "actions": [],
+                    "action_count": 0,
+                }
+            },
+        )
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="topology.apply_downstream",
+            idempotency_key="topology-downstream:one",
+            payload={
+                "workspace_id": "dev-01",
+                "skill_graph_operation_id": str(operation.skill_graph_operation_id),
+            },
+        )
+        result = await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=embeddings,
+                retrieval=retrieval,
+                context_governance=context,
+                topology=topology,
+            ),
+            worker_id="mutation-worker",
+            pool="mutation",
+        )
+        return result, operation.skill_graph_operation_id
+
+    result, operation_id = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["lifecycle_updates"] == 2
+    assert result.output["edges_materialized"] == 1
+    assert result.output["runtime_invalidation"] == {
+        "objects": 3,
+        "retrieval_logs_invalidated": 3,
+        "context_records_invalidated": 3,
+        "embeddings_deleted": 3,
+    }
+    operation = topology.operations[0]
+    orchestration = operation.trial_summary["downstream_orchestration"]
+    assert orchestration["status"] == "applied"
+    assert orchestration["lifecycle_updates"] == 2
+    assert orchestration["edges_materialized"] == 1
+    assert retrieval.log_calls[0]["objects"] == [
+        {"object_type": "skill_graph_operation", "object_id": str(operation_id)},
+        *[
+            {"object_type": "skill", "object_id": str(skill_id)}
+            for skill_id in sorted({subject_id, successor_id}, key=str)
+        ],
+    ]
 
 
 def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) -> None:

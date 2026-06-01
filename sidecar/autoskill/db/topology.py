@@ -152,6 +152,26 @@ class TopologyApplyResult:
         }
 
 
+@dataclass(frozen=True)
+class TopologyDownstreamApplyResult:
+    allowed: bool
+    operation: SkillGraphOperationRecord | None
+    blockers: list[str]
+    actions: list[dict[str, Any]]
+    lifecycle_updates: int = 0
+    edges_materialized: int = 0
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "allowed": self.allowed,
+            "operation": self.operation.to_json() if self.operation else None,
+            "blockers": self.blockers,
+            "actions": self.actions,
+            "lifecycle_updates": self.lifecycle_updates,
+            "edges_materialized": self.edges_materialized,
+        }
+
+
 class TopologyStore(Protocol):
     async def record_operation(
         self,
@@ -199,6 +219,15 @@ class TopologyStore(Protocol):
         applied_by: str = "autoskill-sidecar",
     ) -> TopologyApplyResult:
         """Mark a topology operation applied after deterministic trial gates pass."""
+
+    async def apply_downstream_actions(
+        self,
+        *,
+        workspace_key: str,
+        skill_graph_operation_id: UUID,
+        applied_by: str = "autoskill-worker",
+    ) -> TopologyDownstreamApplyResult:
+        """Apply lifecycle and graph-edge effects for an accepted topology operation."""
 
 
 class NullTopologyStore:
@@ -375,6 +404,63 @@ class NullTopologyStore:
             operation=updated,
             blockers=[],
             downstream_actions=downstream_actions,
+        )
+
+    async def apply_downstream_actions(
+        self,
+        *,
+        workspace_key: str,
+        skill_graph_operation_id: UUID,
+        applied_by: str = "autoskill-worker",
+    ) -> TopologyDownstreamApplyResult:
+        operation = next(
+            (
+                item
+                for item in self.operations
+                if item.skill_graph_operation_id == skill_graph_operation_id
+            ),
+            None,
+        )
+        if operation is None:
+            return TopologyDownstreamApplyResult(
+                allowed=False,
+                operation=None,
+                blockers=["topology operation not found"],
+                actions=[],
+            )
+        blockers = _topology_downstream_blockers(operation)
+        if blockers:
+            return TopologyDownstreamApplyResult(
+                allowed=False,
+                operation=operation,
+                blockers=blockers,
+                actions=[],
+            )
+        outcome = _plan_downstream_execution(operation)
+        now = datetime.now(UTC)
+        updated = SkillGraphOperationRecord(
+            **{
+                **operation.__dict__,
+                "trial_summary": _with_downstream_execution(
+                    operation.trial_summary,
+                    applied_by=applied_by,
+                    applied_at=now,
+                    outcome=outcome,
+                ),
+                "updated_at": now,
+            }
+        )
+        self.operations = [
+            updated if item.skill_graph_operation_id == skill_graph_operation_id else item
+            for item in self.operations
+        ]
+        return TopologyDownstreamApplyResult(
+            allowed=True,
+            operation=updated,
+            blockers=[],
+            actions=outcome["actions"],
+            lifecycle_updates=outcome["lifecycle_updates"],
+            edges_materialized=outcome["edges_materialized"],
         )
 
 
@@ -604,6 +690,91 @@ class AsyncpgTopologyStore(AsyncpgPoolOwner):
                 downstream_actions=downstream_actions,
             )
 
+    async def apply_downstream_actions(
+        self,
+        *,
+        workspace_key: str,
+        skill_graph_operation_id: UUID,
+        applied_by: str = "autoskill-worker",
+    ) -> TopologyDownstreamApplyResult:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            operation_row = await conn.fetchrow(
+                """
+                SELECT o.*, w.external_key AS workspace_key
+                FROM autoskill.skill_graph_operations o
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE o.workspace_id = $1
+                  AND o.skill_graph_operation_id = $2
+                FOR UPDATE
+                """,
+                workspace_id,
+                skill_graph_operation_id,
+            )
+            if operation_row is None:
+                return TopologyDownstreamApplyResult(
+                    allowed=False,
+                    operation=None,
+                    blockers=["topology operation not found"],
+                    actions=[],
+                )
+            operation = SkillGraphOperationRecord.from_row(operation_row)
+            blockers = _topology_downstream_blockers(operation)
+            if blockers:
+                return TopologyDownstreamApplyResult(
+                    allowed=False,
+                    operation=operation,
+                    blockers=blockers,
+                    actions=[],
+                )
+            outcome = _plan_downstream_execution(operation)
+            lifecycle_updates = await _apply_lifecycle_updates(
+                conn,
+                workspace_id=workspace_id,
+                updates=outcome["lifecycle_updates_by_skill"],
+            )
+            edges_materialized = await _materialize_graph_edges(
+                conn,
+                workspace_id=workspace_id,
+                edges=outcome["edges"],
+            )
+            outcome = {
+                **outcome,
+                "lifecycle_updates": lifecycle_updates,
+                "edges_materialized": edges_materialized,
+            }
+            row = await conn.fetchrow(
+                """
+                UPDATE autoskill.skill_graph_operations o
+                SET trial_summary = $3::jsonb,
+                    updated_at = now()
+                FROM autoskill.workspaces w
+                WHERE o.workspace_id = w.workspace_id
+                  AND o.workspace_id = $1
+                  AND o.skill_graph_operation_id = $2
+                RETURNING o.*, w.external_key AS workspace_key
+                """,
+                workspace_id,
+                skill_graph_operation_id,
+                _json(
+                    _with_downstream_execution(
+                        operation.trial_summary,
+                        applied_by=applied_by,
+                        applied_at=datetime.now(UTC),
+                        outcome=outcome,
+                    )
+                ),
+            )
+            return TopologyDownstreamApplyResult(
+                allowed=True,
+                operation=SkillGraphOperationRecord.from_row(row),
+                blockers=[],
+                actions=outcome["actions"],
+                lifecycle_updates=lifecycle_updates,
+                edges_materialized=edges_materialized,
+            )
+
 
 def _json(value: dict[str, Any] | list[Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
@@ -748,6 +919,177 @@ def _topology_downstream_actions(operation: SkillGraphOperationRecord) -> list[d
     return actions
 
 
+def _topology_downstream_blockers(operation: SkillGraphOperationRecord) -> list[str]:
+    blockers: list[str] = []
+    if operation.status != "applied":
+        blockers.append(
+            "topology operation must be applied before downstream execution: "
+            f"{operation.status}"
+        )
+    orchestration = operation.trial_summary.get("downstream_orchestration")
+    if not isinstance(orchestration, dict):
+        blockers.append("topology operation has no downstream orchestration plan")
+    elif orchestration.get("status") == "applied":
+        blockers.append("topology downstream actions already applied")
+    return blockers
+
+
+def _plan_downstream_execution(operation: SkillGraphOperationRecord) -> dict[str, Any]:
+    lifecycle_updates: dict[UUID, str] = {}
+    if operation.operation_kind in {"improve", "compose", "decompose"}:
+        for skill_id in operation.output_skill_ids:
+            lifecycle_updates[skill_id] = "active"
+    if operation.operation_kind in {"improve", "decompose"}:
+        for skill_id in operation.subject_skill_ids:
+            lifecycle_updates[skill_id] = "archived"
+
+    edges = _graph_edges_with_ids(operation.skill_graph_ir)
+    actions = []
+    for action in _topology_downstream_actions(operation):
+        action_status = "applied"
+        if action.get("status") not in {"planned", "ready"}:
+            action_status = str(action.get("status"))
+        if action["operation"] == "materialize_skill_graph_edges":
+            action = {
+                **action,
+                "status": "applied" if edges else "skipped_missing_skill_ids",
+                "materialized_edge_count": len(edges),
+            }
+        elif action["operation"] in {
+            "activate_successor_skill",
+            "activate_composed_skill",
+            "activate_successor_skills",
+        }:
+            action = {
+                **action,
+                "status": "applied" if operation.output_skill_ids else "skipped_missing_skill_ids",
+            }
+        elif action["operation"] in {
+            "supersede_subject_skill",
+            "retire_or_demote_subject_skill",
+        }:
+            action = {
+                **action,
+                "status": "applied" if operation.subject_skill_ids else "skipped_missing_skill_ids",
+            }
+        else:
+            action = {**action, "status": action_status}
+        actions.append(action)
+
+    return {
+        "actions": actions,
+        "edges": edges,
+        "lifecycle_updates_by_skill": lifecycle_updates,
+        "lifecycle_updates": len(lifecycle_updates),
+        "edges_materialized": len(edges),
+    }
+
+
+def _with_downstream_execution(
+    trial_summary: dict[str, Any],
+    *,
+    applied_by: str,
+    applied_at: datetime,
+    outcome: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        **trial_summary,
+        "downstream_orchestration": {
+            **_json_dict(trial_summary.get("downstream_orchestration", {})),
+            "status": "applied",
+            "applied_by": applied_by,
+            "applied_at": applied_at.isoformat(),
+            "actions": outcome["actions"],
+            "action_count": len(outcome["actions"]),
+            "lifecycle_updates": outcome["lifecycle_updates"],
+            "edges_materialized": outcome["edges_materialized"],
+        },
+    }
+
+
+def _graph_edges_with_ids(skill_graph_ir: dict[str, Any]) -> list[dict[str, Any]]:
+    slug_to_id: dict[str, UUID] = {}
+    for node in skill_graph_ir.get("nodes", []):
+        if not isinstance(node, dict):
+            continue
+        slug = str(node.get("slug") or "")
+        skill_id = _uuid_or_none(node.get("skill_id"))
+        if slug and skill_id is not None:
+            slug_to_id[slug] = skill_id
+
+    edges: list[dict[str, Any]] = []
+    for edge in skill_graph_ir.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        from_skill_id = slug_to_id.get(str(edge.get("from_slug") or ""))
+        to_skill_id = slug_to_id.get(str(edge.get("to_slug") or ""))
+        edge_kind = str(edge.get("edge_kind") or "")
+        if from_skill_id is None or to_skill_id is None or not edge_kind:
+            continue
+        edges.append(
+            {
+                "from_skill_id": from_skill_id,
+                "to_skill_id": to_skill_id,
+                "edge_kind": edge_kind,
+            }
+        )
+    return edges
+
+
+async def _apply_lifecycle_updates(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    updates: dict[UUID, str],
+) -> int:
+    changed = 0
+    for skill_id, lifecycle_state in updates.items():
+        result = await conn.execute(
+            """
+            UPDATE autoskill.skills
+            SET lifecycle_state = $3,
+                updated_at = now()
+            WHERE workspace_id = $1
+              AND skill_id = $2
+              AND lifecycle_state NOT IN ('deleted', 'frozen', 'revoked')
+              AND lifecycle_state <> $3
+            """,
+            workspace_id,
+            skill_id,
+            lifecycle_state,
+        )
+        changed += _command_count(result)
+    return changed
+
+
+async def _materialize_graph_edges(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    edges: list[dict[str, Any]],
+) -> int:
+    changed = 0
+    for edge in edges:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO autoskill.skill_edges (
+              edge_id, workspace_id, from_skill_id, to_skill_id, edge_kind
+            )
+            VALUES (gen_random_uuid(), $1, $2, $3, $4)
+            ON CONFLICT (from_skill_id, to_skill_id, edge_kind) DO UPDATE
+            SET revoked_at = NULL,
+                revocation_metadata = '{}'::jsonb
+            RETURNING edge_id
+            """,
+            workspace_id,
+            edge["from_skill_id"],
+            edge["to_skill_id"],
+            edge["edge_kind"],
+        )
+        changed += 1 if row is not None else 0
+    return changed
+
+
 def _graph_edge_kinds(skill_graph_ir: dict[str, Any]) -> list[str]:
     edge_kinds = {
         str(edge.get("edge_kind"))
@@ -755,3 +1097,19 @@ def _graph_edge_kinds(skill_graph_ir: dict[str, Any]) -> list[str]:
         if isinstance(edge, dict) and edge.get("edge_kind")
     }
     return sorted(edge_kinds)
+
+
+def _uuid_or_none(value: object) -> UUID | None:
+    if value in {None, ""}:
+        return None
+    try:
+        return UUID(str(value))
+    except ValueError:
+        return None
+
+
+def _command_count(status: str) -> int:
+    try:
+        return int(status.rsplit(" ", 1)[-1])
+    except (IndexError, ValueError):
+        return 0

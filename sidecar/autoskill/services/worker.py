@@ -575,6 +575,44 @@ async def _run_external_skill_scan(stores: WorkerStores, job: JobRecord) -> dict
     return result.to_json()
 
 
+async def _run_topology_apply_downstream(
+    stores: WorkerStores,
+    job: JobRecord,
+) -> dict[str, Any]:
+    if stores.topology is None:
+        raise ValueError("topology store is required for topology downstream apply")
+    workspace = _payload_workspace(job)
+    if workspace is None:
+        raise ValueError("topology downstream apply requires workspace_id")
+    operation_id = _payload_uuid(job.payload, "skill_graph_operation_id")
+    if operation_id is None:
+        raise ValueError("topology downstream apply requires skill_graph_operation_id")
+
+    result = await stores.topology.apply_downstream_actions(
+        workspace_key=workspace,
+        skill_graph_operation_id=operation_id,
+        applied_by=job.lease_owner or "autoskill-worker",
+    )
+    if not result.allowed:
+        raise ValueError("; ".join(result.blockers) or "topology downstream apply blocked")
+
+    operation = result.operation
+    invalidation = await _invalidate_topology_runtime_objects(
+        stores,
+        workspace_key=workspace,
+        operation_id=operation_id,
+        skill_ids=(
+            [*operation.subject_skill_ids, *operation.output_skill_ids]
+            if operation is not None
+            else []
+        ),
+    )
+    return {
+        **result.to_json(),
+        "runtime_invalidation": invalidation,
+    }
+
+
 async def _run_revocations_rollback(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
     if stores.governance is None:
         raise ValueError("governance store is required for rollback revocations")
@@ -862,6 +900,51 @@ async def _execute_rollback_revocation(
     }
 
 
+async def _invalidate_topology_runtime_objects(
+    stores: WorkerStores,
+    *,
+    workspace_key: str,
+    operation_id: UUID,
+    skill_ids: list[UUID],
+) -> dict[str, int]:
+    objects = [
+        {"object_type": "skill_graph_operation", "object_id": str(operation_id)},
+        *[
+            {"object_type": "skill", "object_id": str(skill_id)}
+            for skill_id in sorted(set(skill_ids), key=str)
+        ],
+    ]
+    retrieval_logs_invalidated = 0
+    context_records_invalidated = 0
+    embeddings_deleted = 0
+    if stores.retrieval is not None:
+        invalidate_logs = getattr(stores.retrieval, "invalidate_logs", None)
+        if invalidate_logs is not None:
+            retrieval_logs_invalidated = await invalidate_logs(
+                workspace_key=workspace_key,
+                objects=objects,
+            )
+    if stores.context_governance is not None:
+        invalidate_context = getattr(stores.context_governance, "invalidate_objects", None)
+        if invalidate_context is not None:
+            context_records_invalidated = await invalidate_context(
+                workspace_key=workspace_key,
+                objects=objects,
+            )
+    invalidate_embeddings = getattr(stores.embeddings, "invalidate_objects", None)
+    if invalidate_embeddings is not None:
+        embeddings_deleted = await invalidate_embeddings(
+            workspace_key=workspace_key,
+            objects=objects,
+        )
+    return {
+        "objects": len(objects),
+        "retrieval_logs_invalidated": retrieval_logs_invalidated,
+        "context_records_invalidated": context_records_invalidated,
+        "embeddings_deleted": embeddings_deleted,
+    }
+
+
 async def _rollback_action_for_transaction(
     governance: GovernanceStore,
     evolution_transaction_id: UUID,
@@ -1081,6 +1164,11 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "external_skills.scan",
         "maintenance",
         _run_external_skill_scan,
+    ),
+    "topology.apply_downstream": JobDefinition(
+        "topology.apply_downstream",
+        "mutation",
+        _run_topology_apply_downstream,
     ),
     "revocations.rollback": JobDefinition(
         "revocations.rollback",

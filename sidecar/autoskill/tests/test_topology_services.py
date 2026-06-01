@@ -361,6 +361,76 @@ def test_topology_apply_requires_passed_trials() -> None:
     )
 
 
+def test_topology_downstream_apply_records_lifecycle_and_edge_execution() -> None:
+    topology = NullTopologyStore()
+    governance = NullGovernanceStore()
+    component_a = uuid4()
+    component_b = uuid4()
+    composed_id = uuid4()
+    result = propose_composition(
+        ComposeTopologyRequest(
+            components=[
+                TopologySkill(
+                    skill_id=component_a,
+                    slug="inspect-failure",
+                    effects=EffectSignature(outputs=["diagnostic"]),
+                ),
+                TopologySkill(
+                    skill_id=component_b,
+                    slug="repair-failure",
+                    effects=EffectSignature(outputs=["patch"]),
+                ),
+            ],
+            composed_output=TopologySkill(
+                skill_id=composed_id,
+                slug="inspect-and-repair",
+                effects=EffectSignature(outputs=["diagnostic", "patch"]),
+            ),
+            evidence_ids=[str(uuid4())],
+        )
+    )
+    persisted = asyncio.run(
+        persist_topology_proposal(
+            topology,
+            governance,
+            workspace_key="dev-01",
+            proposal=result,
+        )
+    )
+    topology.trials = [replace(trial, status="passed") for trial in topology.trials]
+    applied = asyncio.run(
+        topology.apply_operation(
+            workspace_key="dev-01",
+            skill_graph_operation_id=persisted.operation.skill_graph_operation_id,
+        )
+    )
+
+    downstream = asyncio.run(
+        topology.apply_downstream_actions(
+            workspace_key="dev-01",
+            skill_graph_operation_id=persisted.operation.skill_graph_operation_id,
+            applied_by="test-worker",
+        )
+    )
+
+    assert applied.allowed
+    assert downstream.allowed
+    assert downstream.lifecycle_updates == 1
+    assert downstream.edges_materialized == 2
+    assert downstream.operation is not None
+    orchestration = downstream.operation.trial_summary["downstream_orchestration"]
+    assert orchestration["status"] == "applied"
+    assert orchestration["applied_by"] == "test-worker"
+    assert orchestration["lifecycle_updates"] == 1
+    assert orchestration["edges_materialized"] == 2
+    assert {action["operation"] for action in orchestration["actions"]} == {
+        "activate_composed_skill",
+        "materialize_skill_graph_edges",
+        "record_topology_operation_applied",
+        "route_components_to_composed_skill",
+    }
+
+
 def test_topology_apply_api_activation_gate_blocks_state_change() -> None:
     topology = NullTopologyStore()
     operation = asyncio.run(
