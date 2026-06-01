@@ -61,6 +61,7 @@ Phase 0/1 bootstrap.
 - Deterministic opportunity-miner primitive is implemented: groups repeated observed evidence, builds candidate descriptions with trigger terms, calls duplicate matching before recommending action, exposes `/v1/opportunities/mine`, and adds `opportunities.mine` as a maintenance job kind.
 - Real local Postgres opportunity-miner validation passed via compose: two repeated `message_received` evidence records were grouped into one opportunity, an active body-index skill was matched, and the recommendation was `reuse_active` instead of creating a duplicate candidate.
 - Worker observability/configured concurrency primitive is implemented: settings now define scheduler/maintenance/mutation pool concurrency, worker loops default to those settings unless overridden, `/v1/status` includes worker health, and `/v1/workers/health` reports pool job kinds plus job counts by status, kind, and pool.
+- Propose-only candidate SkillIR scaffolding is implemented: `/v1/candidates/propose` mines repeated opportunities, skips active/archive matches according to opportunity recommendations, and returns scanner-checked SkillIR previews with cited evidence IDs without writing runtime skill files.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
@@ -68,8 +69,8 @@ Phase 0/1 bootstrap.
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
 2. Add explicit shadowing event detection from outcomes/corrections, beyond current broker suppression telemetry.
 3. Add production embedding provider live validation once credentials/provider endpoint are configured.
-4. Add candidate SkillIR proposal scaffolding in propose-only mode, gated by opportunity recommendations.
-5. Add persistent worker heartbeat/lease renewal records if long-running jobs start exceeding one lease interval.
+4. Add persistent worker heartbeat/lease renewal records if long-running jobs start exceeding one lease interval.
+5. Add candidate persistence/evaluation/probe planning after propose-only previews are reviewed.
 
 ## Known Risks
 

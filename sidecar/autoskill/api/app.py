@@ -23,6 +23,7 @@ from autoskill.services.broker import (
     bootstrap_context_hint,
     build_context_hint,
 )
+from autoskill.services.candidates import propose_candidate_skills
 from autoskill.services.embedding_generation import (
     build_text_embedder_from_settings,
     generate_pending_embeddings,
@@ -149,6 +150,19 @@ class OpportunityMineRequest(BaseModel):
 class OpportunityMineResponse(BaseModel):
     scanned: int
     candidates: list[dict[str, object]]
+
+
+class CandidateProposalRequest(BaseModel):
+    workspace_id: str
+    limit: int = 100
+    min_support: int = 2
+
+
+class CandidateProposalResponse(BaseModel):
+    scanned: int
+    proposed: int
+    skipped: int
+    proposals: list[dict[str, object]]
 
 
 class RetrievalQueryRequest(BaseModel):
@@ -580,6 +594,22 @@ def create_app(
             min_support=max(2, min(request.min_support, 25)),
         )
         return OpportunityMineResponse(**result.to_json())
+
+    @app.post("/v1/candidates/propose", response_model=CandidateProposalResponse)
+    async def propose_candidates(
+        request: CandidateProposalRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> CandidateProposalResponse:
+        _require_control_auth(authorization)
+        opportunities = await mine_opportunities(
+            evidence,
+            retrieval,
+            workspace_key=request.workspace_id,
+            limit=max(1, min(request.limit, 500)),
+            min_support=max(2, min(request.min_support, 25)),
+        )
+        result = propose_candidate_skills(opportunities)
+        return CandidateProposalResponse(**result.to_json())
 
     @app.post("/v1/retrieval/query", response_model=RetrievalQueryResponse)
     async def retrieval_query(

@@ -110,14 +110,14 @@ Deliverables:
 - duplicate matching before candidate generation; implemented in deterministic opportunity miner;
 - contrastive induction;
 - typed LLM operation wrappers;
-- SkillIR compiler;
+- SkillIR compiler and deterministic propose-only candidate scaffolding from gated opportunities;
 - scanner;
 - probe generator;
 - evaluator.
 
 Acceptance:
 
-- candidates require grounded evidence;
+- candidates require grounded evidence; proposal scaffolds carry cited evidence IDs and skip active/archive duplicates;
 - self-feedback-only changes fail;
 - malicious artifacts are rejected;
 - evaluator reports target, regression, and no-skill results.
