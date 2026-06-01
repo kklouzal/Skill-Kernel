@@ -170,6 +170,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Validation passed for writer activation gating: focused worker/writer tests passed 38 tests and focused ruff checks passed, covering allowed activation, fail-closed blocked activation, and API blocking before active files or governance status changes are written.
 - Validation passed for marginal-value token-ledger outcome updates: focused admin/context tests passed, focused ruff checks passed, and a real compose Postgres smoke updated one ledger outcome plus linked artifact `semantic_density_score`.
 - Validation passed for semantic LLM trace spans: focused LLM/profile/admin tests passed 11 tests, `uv run ruff check sidecar`, `uv run pytest` with 138 tests, `uv run python -m compileall -q sidecar`, and `git diff --check` passed; a real compose Postgres smoke persisted one LLM invocation joined to a closed `llm_call` span with safe metadata only, then compose was cleaned down.
+- Validation passed for external-skill embedding sources: focused embedding/external-skill tests passed 14 tests, focused ruff checks passed, and a real compose Postgres smoke generated one `external_skill` embedding for visible inventory while excluding a quarantined external skill and keeping raw root paths out of embedded text.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
@@ -178,7 +179,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 2. Continue trace propagation through writer, rollback, revocation, and any queued semantic jobs that bypass the typed LLM client.
 3. Extend activation gating into topology apply semantics; writer apply now supports scanner/evaluator/executor compatibility gates for staged skill versions.
 4. Add production embedding provider live validation once credentials/provider endpoint are configured.
-5. Add external-skill scan scheduling defaults, embedding generation for external summaries, collision recommendations, and broader shadow-risk scoring without mutating external-owned files.
+5. Add external-skill scan scheduling defaults, collision recommendations, and broader shadow-risk scoring without mutating external-owned files. External summaries now feed embedding generation for visible/changed inventory only.
 
 ## Known Risks
 

@@ -309,6 +309,34 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                   FROM autoskill.body_index_documents d
                   JOIN autoskill.workspaces w USING (workspace_id)
                   WHERE ($1::text IS NULL OR w.external_key = $1)
+                  UNION ALL
+                  SELECT
+                    'external_skill'::text AS object_type,
+                    e.external_skill_id AS object_id,
+                    w.external_key AS workspace_key,
+                    NULL::uuid AS skill_id,
+                    source_text.text,
+                    encode(digest(source_text.text, 'sha256'), 'hex') AS text_hash,
+                    e.updated_at AS created_at
+                  FROM autoskill.external_skill_inventory e
+                  JOIN autoskill.workspaces w USING (workspace_id)
+                  CROSS JOIN LATERAL (
+                    SELECT trim(concat_ws(
+                      E'\n',
+                      'External skill: ' || e.slug,
+                      CASE
+                        WHEN coalesce(trim(e.name), '') = '' THEN NULL
+                        ELSE 'Name: ' || trim(e.name)
+                      END,
+                      CASE
+                        WHEN coalesce(trim(e.description), '') = '' THEN NULL
+                        ELSE 'Description: ' || trim(e.description)
+                      END
+                    )) AS text
+                  ) source_text
+                  WHERE e.status IN ('visible', 'changed')
+                    AND source_text.text <> ''
+                    AND ($1::text IS NULL OR w.external_key = $1)
                 )
                 SELECT s.*
                 FROM sources s
