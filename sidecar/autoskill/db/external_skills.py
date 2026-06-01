@@ -12,6 +12,8 @@ from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 
 EXTERNAL_SKILL_STATUSES = {"visible", "missing", "changed", "ignored", "quarantined"}
+EXTERNAL_SKILL_REVIEW_ACTIONS = {"reuse", "import", "ignore", "quarantine"}
+EXTERNAL_SKILL_REVIEW_STATUSES = {"requested", "approved", "rejected", "completed"}
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,52 @@ class ExternalSkillUpsertResult:
         }
 
 
+@dataclass(frozen=True)
+class ExternalSkillReviewActionRecord:
+    external_skill_review_action_id: UUID
+    workspace_id: UUID | None
+    workspace_key: str | None
+    external_skill_id: UUID
+    action: str
+    status: str
+    operator_id: str | None
+    rationale: str | None
+    metadata: dict[str, Any]
+    created_at: datetime
+
+    @classmethod
+    def from_row(
+        cls,
+        row: asyncpg.Record | dict[str, Any],
+    ) -> ExternalSkillReviewActionRecord:
+        return cls(
+            external_skill_review_action_id=row["external_skill_review_action_id"],
+            workspace_id=_row_get(row, "workspace_id"),
+            workspace_key=_row_get(row, "workspace_key"),
+            external_skill_id=row["external_skill_id"],
+            action=row["action"],
+            status=row["status"],
+            operator_id=_row_get(row, "operator_id"),
+            rationale=_row_get(row, "rationale"),
+            metadata=_json_dict(_row_get(row, "metadata")),
+            created_at=row["created_at"],
+        )
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "external_skill_review_action_id": str(self.external_skill_review_action_id),
+            "workspace_id": str(self.workspace_id) if self.workspace_id else None,
+            "workspace_key": self.workspace_key,
+            "external_skill_id": str(self.external_skill_id),
+            "action": self.action,
+            "status": self.status,
+            "operator_id": self.operator_id,
+            "rationale": self.rationale,
+            "metadata": self.metadata,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
 class ExternalSkillStore(Protocol):
     async def upsert_external_skills(
         self,
@@ -117,8 +165,24 @@ class ExternalSkillStore(Protocol):
     ) -> list[ExternalSkillRecord]:
         """List external skill inventory records."""
 
+    async def record_review_action(
+        self,
+        *,
+        workspace_key: str,
+        external_skill_id: UUID,
+        action: str,
+        status: str = "requested",
+        operator_id: str | None = None,
+        rationale: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ExternalSkillReviewActionRecord:
+        """Record an explicit operator decision for external skill reuse/import review."""
+
 
 class NullExternalSkillStore:
+    def __init__(self) -> None:
+        self.review_actions: list[ExternalSkillReviewActionRecord] = []
+
     async def upsert_external_skills(
         self,
         *,
@@ -135,6 +199,37 @@ class NullExternalSkillStore:
         limit: int = 100,
     ) -> list[ExternalSkillRecord]:
         return []
+
+    async def record_review_action(
+        self,
+        *,
+        workspace_key: str,
+        external_skill_id: UUID,
+        action: str,
+        status: str = "requested",
+        operator_id: str | None = None,
+        rationale: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ExternalSkillReviewActionRecord:
+        _validate_review(action=action, status=status)
+        from datetime import UTC
+        from uuid import uuid4
+
+        now = datetime.now(UTC)
+        record = ExternalSkillReviewActionRecord(
+            external_skill_review_action_id=uuid4(),
+            workspace_id=None,
+            workspace_key=workspace_key,
+            external_skill_id=external_skill_id,
+            action=action,
+            status=status,
+            operator_id=operator_id,
+            rationale=rationale,
+            metadata=metadata or {},
+            created_at=now,
+        )
+        self.review_actions.append(record)
+        return record
 
 
 class AsyncpgExternalSkillStore(AsyncpgPoolOwner):
@@ -239,6 +334,65 @@ class AsyncpgExternalSkillStore(AsyncpgPoolOwner):
             )
         return [ExternalSkillRecord.from_row(row) for row in rows]
 
+    async def record_review_action(
+        self,
+        *,
+        workspace_key: str,
+        external_skill_id: UUID,
+        action: str,
+        status: str = "requested",
+        operator_id: str | None = None,
+        rationale: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ExternalSkillReviewActionRecord:
+        _validate_review(action=action, status=status)
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                INSERT INTO autoskill.external_skill_review_actions (
+                  external_skill_review_action_id,
+                  workspace_id,
+                  external_skill_id,
+                  action,
+                  status,
+                  operator_id,
+                  rationale,
+                  metadata
+                )
+                SELECT gen_random_uuid(), $1, e.external_skill_id, $3, $4, $5, $6, $7::jsonb
+                FROM autoskill.external_skill_inventory e
+                WHERE e.workspace_id = $1
+                  AND e.external_skill_id = $2
+                RETURNING *, $8::text AS workspace_key
+                """,
+                workspace_id,
+                external_skill_id,
+                action,
+                status,
+                operator_id,
+                rationale,
+                _json(metadata or {}),
+                workspace_key,
+            )
+            if row is None:
+                raise ValueError("external skill not found in workspace")
+            if status in {"approved", "completed"} and action in {"ignore", "quarantine"}:
+                await conn.execute(
+                    """
+                    UPDATE autoskill.external_skill_inventory
+                    SET status = $3,
+                        updated_at = now()
+                    WHERE workspace_id = $1
+                      AND external_skill_id = $2
+                    """,
+                    workspace_id,
+                    external_skill_id,
+                    "ignored" if action == "ignore" else "quarantined",
+                )
+        return ExternalSkillReviewActionRecord.from_row(row)
+
 
 def _validate_inputs(skills: list[ExternalSkillInput]) -> None:
     for skill in skills:
@@ -252,6 +406,13 @@ def _validate_inputs(skills: list[ExternalSkillInput]) -> None:
             raise ValueError("slug is required")
         if not skill.file_hash.strip():
             raise ValueError("file_hash is required")
+
+
+def _validate_review(*, action: str, status: str) -> None:
+    if action not in EXTERNAL_SKILL_REVIEW_ACTIONS:
+        raise ValueError(f"action must be one of {sorted(EXTERNAL_SKILL_REVIEW_ACTIONS)}")
+    if status not in EXTERNAL_SKILL_REVIEW_STATUSES:
+        raise ValueError(f"status must be one of {sorted(EXTERNAL_SKILL_REVIEW_STATUSES)}")
 
 
 def _json(value: dict[str, Any]) -> str:

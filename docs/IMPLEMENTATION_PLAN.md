@@ -233,6 +233,7 @@ Deliverables:
 - `autonomous_guarded` apply; implemented as fail-closed mutation-worker `writer.apply` orchestration that only applies a staged manifest when the queued job carries explicit `policy_approved=true`;
 - improvement engine;
 - archive/promote/merge/split; archive, evaluator-gated archived promotion, evaluator-gated explicit duplicate merge/archive, active-bank budget overflow, and planned split/improvement/disambiguation curation actions are implemented as deterministic lifecycle-state or planning actions;
+- external-skill review actions; implemented as a control-authenticated operator decision ledger for reuse/import/ignore/quarantine, with no autonomous mutation of external-owned files;
 - utility rollups; implemented as deterministic v1 rollups from attribution events, rendered retrieval counts, shadowing/hurt outcomes, and canary failures;
 - attribution ledger.
 

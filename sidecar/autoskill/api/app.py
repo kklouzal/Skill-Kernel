@@ -464,6 +464,20 @@ class ExternalSkillInventoryListResponse(BaseModel):
     skills: list[dict[str, object]]
 
 
+class ExternalSkillReviewActionRequest(BaseModel):
+    workspace_id: str
+    external_skill_id: UUID
+    action: str
+    status: str = "requested"
+    operator_id: str | None = None
+    rationale: str | None = None
+    metadata: dict[str, object] = {}
+
+
+class ExternalSkillReviewActionResponse(BaseModel):
+    review_action: dict[str, object]
+
+
 class AuditRecentResponse(BaseModel):
     audit: list[dict[str, object]]
     chain_valid: bool
@@ -1649,6 +1663,32 @@ def create_app(
                 detail=str(error),
             ) from error
         return ExternalSkillInventoryUpsertResponse(**result.to_json())
+
+    @app.post(
+        "/v1/external-skills/review-actions",
+        response_model=ExternalSkillReviewActionResponse,
+    )
+    async def record_external_skill_review_action(
+        request: ExternalSkillReviewActionRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ExternalSkillReviewActionResponse:
+        _require_control_auth(authorization)
+        try:
+            review_action = await external_skills.record_review_action(
+                workspace_key=request.workspace_id,
+                external_skill_id=request.external_skill_id,
+                action=request.action,
+                status=request.status,
+                operator_id=request.operator_id,
+                rationale=request.rationale,
+                metadata=request.metadata,
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return ExternalSkillReviewActionResponse(review_action=review_action.to_json())
 
     @app.get("/v1/jobs")
     async def list_jobs(

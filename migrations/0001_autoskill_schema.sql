@@ -486,6 +486,18 @@ CREATE TABLE IF NOT EXISTS autoskill.external_skill_inventory (
   UNIQUE (workspace_id, source, root_path_hash, slug)
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.external_skill_review_actions (
+  external_skill_review_action_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  external_skill_id uuid NOT NULL REFERENCES autoskill.external_skill_inventory(external_skill_id),
+  action text NOT NULL CHECK (action IN ('reuse','import','ignore','quarantine')),
+  status text NOT NULL CHECK (status IN ('requested','approved','rejected','completed')),
+  operator_id text,
+  rationale text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS autoskill.embeddings (
   embedding_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
@@ -1087,6 +1099,9 @@ CREATE INDEX IF NOT EXISTS external_skill_inventory_lexical_idx
 
 CREATE INDEX IF NOT EXISTS external_skill_inventory_status_idx
   ON autoskill.external_skill_inventory(workspace_id, status, last_seen_at DESC);
+
+CREATE INDEX IF NOT EXISTS external_skill_review_actions_external_idx
+  ON autoskill.external_skill_review_actions(external_skill_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS embeddings_hnsw_cosine_idx
   ON autoskill.embeddings
