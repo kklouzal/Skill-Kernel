@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from autoskill.api.app import WorkerRunOnceRequest, create_app
+from autoskill.db.activation import ActivationReadiness
 from autoskill.db.contracts import ContractExtractResult, DriftCheckResult
 from autoskill.db.evaluations import EvaluationRunResult
 from autoskill.db.evidence import EvidenceDeriveResult
@@ -129,6 +130,38 @@ class MemoryRetrievalInvalidationStore(MemoryInvalidationStore):
     ) -> int:
         self.log_calls.append({"workspace_key": workspace_key, "objects": objects})
         return len(objects)
+
+
+class MemoryActivationGateStore:
+    def __init__(self, *, allowed: bool = True, blockers: list[str] | None = None) -> None:
+        self.allowed = allowed
+        self.blockers = blockers or []
+        self.calls: list[dict[str, object]] = []
+
+    async def check_activation_readiness(
+        self,
+        *,
+        workspace_key: str,
+        skill_version_id,
+        executor_profile_id=None,
+    ) -> ActivationReadiness:
+        self.calls.append(
+            {
+                "workspace_key": workspace_key,
+                "skill_version_id": skill_version_id,
+                "executor_profile_id": executor_profile_id,
+            }
+        )
+        return ActivationReadiness(
+            allowed=self.allowed,
+            skill_version_id=skill_version_id,
+            executor_profile_id=executor_profile_id,
+            scanner_status="passed" if self.allowed else "blocked",
+            evaluator_status="passed" if self.allowed else "failed",
+            latest_evaluation_status="passed" if self.allowed else "failed",
+            compatibility_status="compatible" if self.allowed else "blocked",
+            blockers=list(self.blockers),
+        )
 
 
 class MemoryObservabilityStore:
@@ -880,10 +913,13 @@ def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path
 def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) -> None:
     jobs = MemoryJobStore()
     governance = MemoryGovernanceStore()
+    activation_gate = MemoryActivationGateStore()
     workspace_root = tmp_path / "workspace"
     staging_root = workspace_root / ".autoskill" / "staging"
     archive_root = workspace_root / ".autoskill" / "archive"
     active_root = workspace_root / "skills" / "autoskill" / "approved-skill"
+    skill_version_id = uuid4()
+    executor_profile_id = uuid4()
 
     async def run():
         transaction = await governance.start_transaction(
@@ -895,7 +931,7 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
         staged = stage_compiled_skill(
             staging_root,
             staging_id=uuid4(),
-            skill_version_id=uuid4(),
+            skill_version_id=skill_version_id,
             slug="approved-skill",
             compiled_skill_md="WHEN approved\nDO safe behavior\n",
         )
@@ -905,6 +941,8 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
             idempotency_key="writer-apply:approved-skill",
             payload={
                 "policy_approved": True,
+                "activation_gate_required": True,
+                "executor_profile_id": str(executor_profile_id),
                 "evolution_transaction_id": str(transaction.transaction.evolution_transaction_id),
                 "manifest_relative_path": staged.manifest_relative_path,
             },
@@ -916,6 +954,7 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
                 evidence=MemoryEvidenceWorkerStore(),
                 embeddings=MemoryPendingEmbeddingStore(),
                 governance=governance,
+                activation_gate=activation_gate,
                 workspace_root=workspace_root,
                 archive_root=archive_root,
             ),
@@ -927,10 +966,78 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
 
     assert result.status == "succeeded"
     assert result.output["policy_approved"] is True
+    assert result.output["activation_gate"]["allowed"] is True
     assert result.output["artifact"]["active_relative_path"] == "skills/autoskill/approved-skill"
     assert (active_root / "SKILL.md").read_text(encoding="utf-8") == (
         "WHEN approved\nDO safe behavior\n"
     )
+    assert activation_gate.calls == [
+        {
+            "workspace_key": "dev-01",
+            "skill_version_id": skill_version_id,
+            "executor_profile_id": executor_profile_id,
+        }
+    ]
+
+
+def test_mutation_worker_apply_fails_closed_when_activation_gate_blocks(tmp_path) -> None:
+    jobs = MemoryJobStore()
+    governance = MemoryGovernanceStore()
+    activation_gate = MemoryActivationGateStore(
+        allowed=False,
+        blockers=["proposal-gate-not-passed", "executor-profile-not-compatible"],
+    )
+    workspace_root = tmp_path / "workspace"
+    staging_root = workspace_root / ".autoskill" / "staging"
+    archive_root = workspace_root / ".autoskill" / "archive"
+
+    async def run():
+        transaction = await governance.start_transaction(
+            workspace_key="dev-01",
+            transaction_kind="compile",
+            idempotency_key="apply:blocked-skill",
+            plan_hash="apply-plan-blocked",
+        )
+        staged = stage_compiled_skill(
+            staging_root,
+            staging_id=uuid4(),
+            skill_version_id=uuid4(),
+            slug="blocked-skill",
+            compiled_skill_md="WHEN blocked\nDO safe behavior\n",
+        )
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="writer.apply",
+            idempotency_key="writer-apply:blocked-skill",
+            payload={
+                "policy_approved": True,
+                "activation_gate_required": True,
+                "evolution_transaction_id": str(transaction.transaction.evolution_transaction_id),
+                "manifest_relative_path": staged.manifest_relative_path,
+            },
+            max_attempts=1,
+        )
+        return await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=MemoryPendingEmbeddingStore(),
+                governance=governance,
+                activation_gate=activation_gate,
+                workspace_root=workspace_root,
+                archive_root=archive_root,
+            ),
+            worker_id="mutation-worker",
+            pool="mutation",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "failed"
+    assert "activation gate blocked" in result.error
+    assert "proposal-gate-not-passed" in result.error
+    assert not (workspace_root / "skills" / "autoskill" / "blocked-skill").exists()
 
 
 def test_mutation_worker_apply_fails_closed_without_policy_approval(tmp_path) -> None:

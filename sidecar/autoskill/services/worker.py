@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from autoskill.core.hashing import sha256_json
+from autoskill.db.activation import ActivationGateStore
 from autoskill.db.attribution import AttributionStore
 from autoskill.db.context import ContextGovernanceStore
 from autoskill.db.contracts import ContractStore
@@ -30,6 +32,7 @@ from autoskill.services.opportunity import mine_opportunities
 from autoskill.services.writer import (
     apply_staged_manifest_with_governance,
     delete_active_skill_with_governance,
+    resolve_contained,
     rollback_active_skill_with_governance,
 )
 
@@ -132,6 +135,7 @@ class WorkerStores:
     topology: TopologyStore | None = None
     observability: ObservabilityStore | None = None
     attribution: AttributionStore | None = None
+    activation_gate: ActivationGateStore | None = None
     embedder: TextEmbedder | None = None
     workspace_root: Path | None = None
     archive_root: Path | None = None
@@ -636,6 +640,12 @@ async def _run_writer_apply(stores: WorkerStores, job: JobRecord) -> dict[str, A
             "writer apply requires evolution_transaction_id and manifest_relative_path"
         )
     staging_root = stores.workspace_root / ".autoskill" / "staging"
+    activation_readiness = await _check_writer_activation_gate(
+        stores,
+        job,
+        staging_root=staging_root,
+        manifest_relative_path=manifest_relative_path,
+    )
     artifact = await apply_staged_manifest_with_governance(
         stores.governance,
         evolution_transaction_id=transaction_id,
@@ -647,7 +657,41 @@ async def _run_writer_apply(stores: WorkerStores, job: JobRecord) -> dict[str, A
     return {
         "artifact": artifact.to_json(),
         "policy_approved": True,
+        "activation_gate": (
+            activation_readiness.to_json() if activation_readiness is not None else None
+        ),
     }
+
+
+async def _check_writer_activation_gate(
+    stores: WorkerStores,
+    job: JobRecord,
+    *,
+    staging_root: Path,
+    manifest_relative_path: str,
+):
+    if not bool(job.payload.get("activation_gate_required")):
+        return None
+    if stores.activation_gate is None:
+        raise ValueError("writer apply activation gate requires activation_gate store")
+    workspace = _payload_workspace(job)
+    if workspace is None:
+        raise ValueError("writer apply activation gate requires workspace_id")
+    manifest_path = resolve_contained(staging_root, manifest_relative_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    skill_version_id = _payload_uuid(manifest, "skill_version_id")
+    if skill_version_id is None:
+        raise ValueError("writer apply activation gate requires manifest skill_version_id")
+    readiness = await stores.activation_gate.check_activation_readiness(
+        workspace_key=workspace,
+        skill_version_id=skill_version_id,
+        executor_profile_id=_payload_uuid(job.payload, "executor_profile_id"),
+    )
+    if not readiness.allowed:
+        raise ValueError(
+            "writer apply activation gate blocked: " + ", ".join(readiness.blockers)
+        )
+    return readiness
 
 
 async def _execute_rollback_revocation(

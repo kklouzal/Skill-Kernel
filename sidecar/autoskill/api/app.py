@@ -14,6 +14,11 @@ from autoskill.core.config import get_settings
 from autoskill.core.events import IngestRequest, IngestResult
 from autoskill.core.hashing import sha256_text
 from autoskill.core.skillir import EffectSignature
+from autoskill.db.activation import (
+    ActivationGateStore,
+    AsyncpgActivationGateStore,
+    NullActivationGateStore,
+)
 from autoskill.db.attribution import AsyncpgAttributionStore, AttributionStore, NullAttributionStore
 from autoskill.db.audit import AsyncpgAuditStore, AuditStore, NullAuditStore
 from autoskill.db.candidates import AsyncpgCandidateStore, CandidateStore, NullCandidateStore
@@ -109,6 +114,7 @@ from autoskill.services.worker import (
 )
 from autoskill.services.writer import (
     apply_staged_manifest_with_governance,
+    resolve_contained,
     rollback_active_skill_with_governance,
 )
 from fastapi import FastAPI, Header, HTTPException, Query
@@ -591,6 +597,9 @@ class EvolutionTransactionItemResponse(BaseModel):
 class WriterApplyRequest(BaseModel):
     evolution_transaction_id: UUID
     manifest_relative_path: str
+    workspace_id: str | None = None
+    activation_gate_required: bool = False
+    executor_profile_id: UUID | None = None
 
 
 class WriterRollbackRequest(BaseModel):
@@ -1075,6 +1084,16 @@ def _build_topology_store() -> TopologyStore:
     return NullTopologyStore()
 
 
+def _build_activation_gate_store() -> ActivationGateStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgActivationGateStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullActivationGateStore()
+
+
 def _build_lifecycle_store(governance: GovernanceStore) -> LifecycleStore:
     settings = get_settings()
     if settings.database_url:
@@ -1197,6 +1216,7 @@ def _worker_stores(
     observability: ObservabilityStore,
     context_governance: ContextGovernanceStore,
     topology: TopologyStore,
+    activation_gate: ActivationGateStore,
     writer_workspace_root: Path | None = None,
     external_skill_roots: list[Path] | None = None,
 ) -> WorkerStores:
@@ -1215,6 +1235,7 @@ def _worker_stores(
         attribution=attribution,
         context_governance=context_governance,
         topology=topology,
+        activation_gate=activation_gate,
         observability=observability,
         workspace_root=workspace_root,
         archive_root=archive_root,
@@ -1279,6 +1300,43 @@ def _build_topology_proposal(request: TopologyProposalRequest):
     )
 
 
+async def _check_writer_activation_gate_for_api(
+    activation_gate: ActivationGateStore,
+    *,
+    request: WriterApplyRequest,
+    staging_root: Path,
+) -> None:
+    if not request.activation_gate_required:
+        return
+    if not request.workspace_id:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="activation gate requires workspace_id",
+        )
+    try:
+        manifest_path = resolve_contained(staging_root, request.manifest_relative_path)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        skill_version_id = UUID(str(manifest["skill_version_id"]))
+    except (KeyError, ValueError, FileNotFoundError, OSError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=f"activation gate could not read staged manifest: {error}",
+        ) from error
+    readiness = await activation_gate.check_activation_readiness(
+        workspace_key=request.workspace_id,
+        skill_version_id=skill_version_id,
+        executor_profile_id=request.executor_profile_id,
+    )
+    if not readiness.allowed:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail={
+                "message": "activation gate blocked writer apply",
+                "readiness": readiness.to_json(),
+            },
+        )
+
+
 def create_app(
     event_store: EventStore | None = None,
     job_store: JobStore | None = None,
@@ -1305,6 +1363,7 @@ def create_app(
     compatibility_store: CompatibilityStore | None = None,
     context_governance_store: ContextGovernanceStore | None = None,
     topology_store: TopologyStore | None = None,
+    activation_gate_store: ActivationGateStore | None = None,
     writer_workspace_root: Path | None = None,
     external_skill_roots: list[Path] | None = None,
 ) -> FastAPI:
@@ -1340,6 +1399,7 @@ def create_app(
     compatibility = compatibility_store or _build_compatibility_store()
     context_governance = context_governance_store or _build_context_governance_store()
     topology = topology_store or _build_topology_store()
+    activation_gate = activation_gate_store or _build_activation_gate_store()
     broker_cache = ContextHintCache()
 
     @asynccontextmanager
@@ -1372,6 +1432,7 @@ def create_app(
                 compatibility,
                 context_governance,
                 topology,
+                activation_gate,
             ):
                 close = getattr(closeable, "close", None)
                 if close is not None:
@@ -1669,6 +1730,7 @@ def create_app(
                 observability=observability,
                 context_governance=context_governance,
                 topology=topology,
+                activation_gate=activation_gate,
                 writer_workspace_root=writer_workspace_root,
                 external_skill_roots=external_skill_roots,
             ),
@@ -2241,6 +2303,11 @@ def create_app(
         _require_control_auth(authorization)
         workspace_root, staging_root, archive_root = _writer_roots(writer_workspace_root)
         try:
+            await _check_writer_activation_gate_for_api(
+                activation_gate,
+                request=request,
+                staging_root=staging_root,
+            )
             artifact = await apply_staged_manifest_with_governance(
                 governance,
                 evolution_transaction_id=request.evolution_transaction_id,

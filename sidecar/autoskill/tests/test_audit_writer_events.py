@@ -8,6 +8,7 @@ from autoskill.api.app import WriterApplyRequest, WriterRollbackRequest, create_
 from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope
+from autoskill.db.activation import ActivationReadiness
 from autoskill.services.writer import (
     PathContainmentError,
     WriterPolicyError,
@@ -414,6 +415,44 @@ def test_writer_api_applies_and_rolls_back_with_workspace_roots(tmp_path: Path) 
     ]
 
 
+def test_writer_apply_api_blocks_when_activation_gate_fails(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    staging_root = workspace_root / ".autoskill" / "staging"
+    staged = stage_compiled_skill(
+        staging_root,
+        staging_id=uuid4(),
+        skill_version_id=uuid4(),
+        slug="blocked-api-skill",
+        compiled_skill_md="# Blocked\n\n## WHEN\n- Blocked.\n",
+    )
+    governance = MemoryWriterGovernance()
+    activation_gate = MemoryActivationGate(allowed=False)
+    app = create_app(
+        governance_store=governance,
+        activation_gate_store=activation_gate,
+        writer_workspace_root=workspace_root,
+    )
+    apply_route = next(route for route in app.routes if route.path == "/v1/writer/apply")
+
+    async def run():
+        return await apply_route.endpoint(
+            request=WriterApplyRequest(
+                evolution_transaction_id=uuid4(),
+                manifest_relative_path=staged.manifest_relative_path,
+                workspace_id="dev-01",
+                activation_gate_required=True,
+            )
+        )
+
+    with pytest.raises(Exception) as raised:
+        asyncio.run(run())
+
+    assert getattr(raised.value, "status_code", None) == 409
+    assert activation_gate.calls[0]["skill_version_id"] == staged.skill_version_id
+    assert not (workspace_root / "skills" / "autoskill" / "blocked-api-skill").exists()
+    assert governance.statuses == []
+
+
 def test_writer_rejects_manifest_target_outside_active_root(tmp_path: Path) -> None:
     staging_root = tmp_path / "staging"
     workspace_root = tmp_path / "workspace"
@@ -536,3 +575,34 @@ class MemoryWriterGovernance:
         }
         self.edges.append(edge)
         return {"created": True, "edge": edge}
+
+
+class MemoryActivationGate:
+    def __init__(self, *, allowed: bool) -> None:
+        self.allowed = allowed
+        self.calls: list[dict[str, object]] = []
+
+    async def check_activation_readiness(
+        self,
+        *,
+        workspace_key,
+        skill_version_id,
+        executor_profile_id=None,
+    ):
+        self.calls.append(
+            {
+                "workspace_key": workspace_key,
+                "skill_version_id": skill_version_id,
+                "executor_profile_id": executor_profile_id,
+            }
+        )
+        return ActivationReadiness(
+            allowed=self.allowed,
+            skill_version_id=skill_version_id,
+            executor_profile_id=executor_profile_id,
+            scanner_status="passed" if self.allowed else "blocked",
+            evaluator_status="passed" if self.allowed else "failed",
+            latest_evaluation_status="passed" if self.allowed else "failed",
+            compatibility_status="compatible" if self.allowed else "blocked",
+            blockers=[] if self.allowed else ["proposal-gate-not-passed"],
+        )

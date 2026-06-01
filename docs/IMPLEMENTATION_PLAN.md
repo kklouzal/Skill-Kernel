@@ -166,6 +166,7 @@ Deliverables:
 - staged writer; implemented for scanner-gated compiled `SKILL.md` staging under a bounded staging root without active-root mutation;
 - manifests and hashes; implemented for writer manifests with staged file hash verification;
 - atomic apply; implemented as a deterministic same-root active skill directory replacement from verified writer manifests;
+- activation gate; implemented for queued mutation-worker apply and direct writer apply when requested, requiring the staged manifest skill version to have passed scanner/evaluator/proposal-gate checks and requiring any supplied executor profile to be compatible before active-root exposure;
 - archive snapshots; implemented as manifest-and-hash verified snapshots of previous active `skills/autoskill/<slug>` directories;
 - rollback; implemented as deterministic active-root restore from verified archive snapshots;
 - transaction-aware writer service wrappers; implemented for apply/rollback transaction status updates, active compiled-file and archive-snapshot transaction items, rollback metadata, and fail-closed filesystem recovery when governance recording fails after apply;
