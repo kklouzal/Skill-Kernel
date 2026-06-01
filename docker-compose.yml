@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: autoskill
+      POSTGRES_USER: autoskill
+      POSTGRES_PASSWORD: autoskill-dev
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - autoskill-postgres:/var/lib/postgresql/data
+
+  sidecar:
+    build: .
+    environment:
+      AUTOSKILL_DATABASE_URL: postgresql://autoskill:autoskill-dev@postgres:5432/autoskill
+    ports:
+      - "127.0.0.1:8765:8765"
+    depends_on:
+      - postgres
+
+volumes:
+  autoskill-postgres:
+

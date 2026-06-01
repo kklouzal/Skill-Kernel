@@ -1,0 +1,11 @@
+{
+  "name": "@openclaw/skillkernel-autoskill-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenClaw AutoSkill Manager capture plugin for SkillKernel",
+  "scripts": {
+    "check": "node --check src/index.js && find hooks -name handler.js -print0 | xargs -0 -n1 node --check"
+  }
+}
+

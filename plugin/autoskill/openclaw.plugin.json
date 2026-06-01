@@ -1,0 +1,31 @@
+{
+  "id": "autoskill",
+  "name": "AutoSkill Manager",
+  "description": "Captures redacted OpenClaw events, spools them locally, forwards to the SkillKernel sidecar, and optionally injects cached runtime skill-context hints.",
+  "activation": {
+    "onStartup": true
+  },
+  "hooks": "hooks",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "sidecarUrl": { "type": "string" },
+      "spoolDir": { "type": "string" },
+      "workspaceId": { "type": "string" },
+      "captureRawConversation": { "type": "boolean" },
+      "runtimeContextBroker": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "timeoutMs": { "type": "integer", "minimum": 25, "maximum": 1000 },
+          "maxTokens": { "type": "integer", "minimum": 50, "maximum": 1000 },
+          "failSoft": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}
+

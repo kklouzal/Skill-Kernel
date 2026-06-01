@@ -1,0 +1,41 @@
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from autoskill.core.enums import AutonomyMode
+
+
+class Settings(BaseSettings):
+    """Sidecar settings.
+
+    Environment variables use the AUTOSKILL_ prefix. The defaults intentionally
+    match the v9 handoff's local-first development posture.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="AUTOSKILL_", env_file=".env", extra="ignore")
+
+    mode: AutonomyMode = AutonomyMode.AUTONOMOUS_GUARDED
+    host: str = "127.0.0.1"
+    port: int = 8765
+    database_url: str | None = Field(default=None, alias="AUTOSKILL_DATABASE_URL")
+    schema_name: str = "autoskill"
+    statement_timeout_ms: int = 30_000
+    active_root: Path = Path("skills/autoskill")
+    archive_root: Path = Path(".autoskill/archive")
+    staging_root: Path = Path(".autoskill/staging")
+    runtime_context_timeout_ms: int = 150
+    max_context_hint_tokens: int = 800
+    allow_support_scripts: bool = True
+    allow_network_in_generated_skills: bool = False
+    allow_shell_in_generated_skills: bool = False
+    forbid_hidden_markdown: bool = True
+    redact_before_store: bool = True
+    redact_before_embed: bool = True
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()
+
