@@ -75,7 +75,46 @@ class EmbeddingSearchCandidate:
         return payload
 
 
+@dataclass(frozen=True)
+class EmbeddingSourceText:
+    object_type: str
+    object_id: UUID
+    workspace_key: str
+    skill_id: UUID | None
+    text: str
+    text_hash: str
+
+    @classmethod
+    def from_row(cls, row: asyncpg.Record | dict[str, object]) -> EmbeddingSourceText:
+        return cls(
+            object_type=row["object_type"],
+            object_id=row["object_id"],
+            workspace_key=row["workspace_key"],
+            skill_id=_row_get(row, "skill_id"),
+            text=row["text"],
+            text_hash=row["text_hash"],
+        )
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "object_type": self.object_type,
+            "object_id": str(self.object_id),
+            "workspace_key": self.workspace_key,
+            "skill_id": str(self.skill_id) if self.skill_id else None,
+            "text_hash": self.text_hash,
+        }
+
+
 class EmbeddingStore(Protocol):
+    async def list_unembedded_sources(
+        self,
+        *,
+        embedding_model: str,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[EmbeddingSourceText]:
+        """List evidence/body text that does not yet have this model embedding."""
+
     async def upsert_embedding(
         self,
         *,
@@ -102,6 +141,15 @@ class EmbeddingStore(Protocol):
 
 
 class NullEmbeddingStore:
+    async def list_unembedded_sources(
+        self,
+        *,
+        embedding_model: str,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[EmbeddingSourceText]:
+        return []
+
     async def upsert_embedding(
         self,
         *,
@@ -145,6 +193,60 @@ class NullEmbeddingStore:
 class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
     def __init__(self, database_url: str, *, statement_timeout_ms: int = 30_000) -> None:
         super().__init__(database_url, statement_timeout_ms=statement_timeout_ms)
+
+    async def list_unembedded_sources(
+        self,
+        *,
+        embedding_model: str,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[EmbeddingSourceText]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                WITH sources AS (
+                  SELECT
+                    'evidence_item'::text AS object_type,
+                    e.evidence_id AS object_id,
+                    w.external_key AS workspace_key,
+                    NULL::uuid AS skill_id,
+                    e.summary AS text,
+                    encode(digest(e.summary, 'sha256'), 'hex') AS text_hash,
+                    e.created_at
+                  FROM autoskill.evidence_items e
+                  JOIN autoskill.workspaces w USING (workspace_id)
+                  WHERE e.revoked_at IS NULL
+                    AND ($1::text IS NULL OR w.external_key = $1)
+                  UNION ALL
+                  SELECT
+                    'body_index_document'::text AS object_type,
+                    d.body_index_document_id AS object_id,
+                    w.external_key AS workspace_key,
+                    d.skill_id,
+                    d.text_content AS text,
+                    d.text_hash,
+                    d.created_at
+                  FROM autoskill.body_index_documents d
+                  JOIN autoskill.workspaces w USING (workspace_id)
+                  WHERE ($1::text IS NULL OR w.external_key = $1)
+                )
+                SELECT s.*
+                FROM sources s
+                LEFT JOIN autoskill.embeddings existing
+                  ON existing.object_type = s.object_type
+                 AND existing.object_id = s.object_id
+                 AND existing.embedding_model = $2
+                 AND existing.text_hash = s.text_hash
+                WHERE existing.embedding_id IS NULL
+                ORDER BY s.created_at ASC, s.object_type ASC
+                LIMIT $3
+                """,
+                workspace_key,
+                embedding_model,
+                limit,
+            )
+            return [EmbeddingSourceText.from_row(row) for row in rows]
 
     async def upsert_embedding(
         self,

@@ -21,6 +21,7 @@ from autoskill.services.broker import (
     ContextHintResponse,
     bootstrap_context_hint,
 )
+from autoskill.services.embedding_generation import generate_pending_embeddings
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi import status as http_status
 from pydantic import BaseModel
@@ -143,6 +144,21 @@ class EmbeddingSearchRequest(BaseModel):
 
 class EmbeddingSearchResponse(BaseModel):
     candidates: list[dict[str, object]]
+
+
+class EmbeddingGenerateRequest(BaseModel):
+    workspace_id: str | None = None
+    embedding_model: str | None = None
+    limit: int = 100
+
+
+class EmbeddingGenerateResponse(BaseModel):
+    scanned: int
+    generated: int
+    created: int
+    updated: int
+    embedding_model: str
+    sources: list[dict[str, object]]
 
 
 def _build_event_store() -> EventStore:
@@ -502,6 +518,20 @@ def create_app(
         return EmbeddingSearchResponse(
             candidates=[candidate.to_json() for candidate in candidates],
         )
+
+    @app.post("/v1/embeddings/generate", response_model=EmbeddingGenerateResponse)
+    async def generate_embeddings(
+        request: EmbeddingGenerateRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> EmbeddingGenerateResponse:
+        _require_control_auth(authorization)
+        result = await generate_pending_embeddings(
+            embeddings,
+            workspace_key=request.workspace_id,
+            embedding_model=request.embedding_model,
+            limit=max(1, min(request.limit, 500)),
+        )
+        return EmbeddingGenerateResponse(**result.to_json())
 
     @app.get("/v1/audit/recent")
     async def recent_audit() -> dict[str, list[object]]:
