@@ -178,6 +178,21 @@ class ContextGovernanceStore(Protocol):
     ) -> TokenLedgerRecord:
         """Record marginal context visibility accounting."""
 
+    async def record_token_ledger_outcome(
+        self,
+        *,
+        workspace_key: str,
+        context_token_ledger_id: UUID,
+        outcome: str,
+        utility_delta: float = 0.0,
+        task_success: bool | None = None,
+        token_savings: int | None = None,
+        latency_delta_ms: float | None = None,
+        tool_call_delta: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> TokenLedgerRecord:
+        """Update a visibility ledger row with observed marginal-value outcome."""
+
     async def invalidate_objects(
         self,
         *,
@@ -270,6 +285,59 @@ class NullContextGovernanceStore:
         objects: list[dict[str, str]],
     ) -> int:
         return 0
+
+    async def record_token_ledger_outcome(
+        self,
+        *,
+        workspace_key: str,
+        context_token_ledger_id: UUID,
+        outcome: str,
+        utility_delta: float = 0.0,
+        task_success: bool | None = None,
+        token_savings: int | None = None,
+        latency_delta_ms: float | None = None,
+        tool_call_delta: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> TokenLedgerRecord:
+        from uuid import uuid4
+
+        token_count = int((metadata or {}).get("token_count", 1))
+        value = _marginal_value_score(
+            token_count=token_count,
+            utility_delta=utility_delta,
+            task_success=task_success,
+            token_savings=token_savings,
+            latency_delta_ms=latency_delta_ms,
+            tool_call_delta=tool_call_delta,
+        )
+        marginal = {
+            "utility_delta": utility_delta,
+            "task_success": task_success,
+            "token_savings": token_savings,
+            "latency_delta_ms": latency_delta_ms,
+            "tool_call_delta": tool_call_delta,
+            "marginal_value": value,
+            "context_value_per_token": value / max(token_count, 1),
+        }
+        return TokenLedgerRecord(
+            context_token_ledger_id=context_token_ledger_id or uuid4(),
+            workspace_id=None,
+            workspace_key=workspace_key,
+            context_artifact_id=None,
+            skill_id=None,
+            skill_version_id=None,
+            broker_policy_version_id=None,
+            session_id=None,
+            turn_id=None,
+            visibility_state="skill_visible",
+            token_count=token_count,
+            outcome=outcome,
+            metadata={
+                **(metadata or {}),
+                "marginal_value": marginal,
+            },
+            created_at=datetime.now(),
+        )
 
 
 class AsyncpgContextGovernanceStore(AsyncpgPoolOwner):
@@ -498,6 +566,84 @@ class AsyncpgContextGovernanceStore(AsyncpgPoolOwner):
             )
         return int(result or 0)
 
+    async def record_token_ledger_outcome(
+        self,
+        *,
+        workspace_key: str,
+        context_token_ledger_id: UUID,
+        outcome: str,
+        utility_delta: float = 0.0,
+        task_success: bool | None = None,
+        token_savings: int | None = None,
+        latency_delta_ms: float | None = None,
+        tool_call_delta: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> TokenLedgerRecord:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            existing = await conn.fetchrow(
+                """
+                SELECT ctl.*, $3::text AS workspace_key
+                FROM autoskill.context_token_ledgers ctl
+                WHERE ctl.workspace_id = $1
+                  AND ctl.context_token_ledger_id = $2
+                FOR UPDATE
+                """,
+                workspace_id,
+                context_token_ledger_id,
+                workspace_key,
+            )
+            if existing is None:
+                raise ValueError("context token ledger row not found")
+            token_count = int(existing["token_count"])
+            value = _marginal_value_score(
+                token_count=token_count,
+                utility_delta=utility_delta,
+                task_success=task_success,
+                token_savings=token_savings,
+                latency_delta_ms=latency_delta_ms,
+                tool_call_delta=tool_call_delta,
+            )
+            marginal = {
+                "utility_delta": utility_delta,
+                "task_success": task_success,
+                "token_savings": token_savings,
+                "latency_delta_ms": latency_delta_ms,
+                "tool_call_delta": tool_call_delta,
+                "marginal_value": value,
+                "context_value_per_token": value / max(token_count, 1),
+            }
+            merged_metadata = {
+                **_json_dict(existing["metadata"]),
+                **(metadata or {}),
+                "marginal_value": marginal,
+            }
+            row = await conn.fetchrow(
+                """
+                UPDATE autoskill.context_token_ledgers
+                SET outcome = $3,
+                    metadata = $4::jsonb
+                WHERE workspace_id = $1
+                  AND context_token_ledger_id = $2
+                RETURNING *, $5::text AS workspace_key
+                """,
+                workspace_id,
+                context_token_ledger_id,
+                outcome,
+                _json(merged_metadata),
+                workspace_key,
+            )
+            if existing["context_artifact_id"] is not None:
+                await _update_context_artifact_marginal_value(
+                    conn,
+                    workspace_id=workspace_id,
+                    context_artifact_id=existing["context_artifact_id"],
+                    outcome=outcome,
+                    marginal=marginal,
+                )
+        return TokenLedgerRecord.from_row(row)
+
 
 def _estimate_tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
@@ -505,6 +651,57 @@ def _estimate_tokens(text: str) -> int:
 
 def _budget_status(token_count: int, max_tokens: int) -> str:
     return "passed" if token_count <= max_tokens else "over_budget"
+
+
+async def _update_context_artifact_marginal_value(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    context_artifact_id: UUID,
+    outcome: str,
+    marginal: dict[str, Any],
+) -> None:
+    await conn.execute(
+        """
+        UPDATE autoskill.context_artifacts
+        SET semantic_density_score = $4::double precision,
+            metadata = metadata || jsonb_build_object(
+              'last_marginal_outcome', $3::text,
+              'last_marginal_value', $5::jsonb,
+              'last_context_value_per_token', $4::double precision
+            )
+        WHERE workspace_id = $1
+          AND context_artifact_id = $2
+        """,
+        workspace_id,
+        context_artifact_id,
+        outcome,
+        float(marginal["context_value_per_token"]),
+        _json(marginal),
+    )
+
+
+def _marginal_value_score(
+    *,
+    token_count: int,
+    utility_delta: float,
+    task_success: bool | None,
+    token_savings: int | None,
+    latency_delta_ms: float | None,
+    tool_call_delta: int | None,
+) -> float:
+    score = float(utility_delta)
+    if task_success is True:
+        score += 1.0
+    elif task_success is False:
+        score -= 1.0
+    if token_savings is not None:
+        score += min(1.0, max(-1.0, float(token_savings) / max(token_count, 1)))
+    if latency_delta_ms is not None:
+        score += min(0.5, max(-0.5, float(latency_delta_ms) / 10_000.0))
+    if tool_call_delta is not None:
+        score += min(0.5, max(-0.5, float(tool_call_delta) * 0.1))
+    return score
 
 
 def _json(value: object) -> str:

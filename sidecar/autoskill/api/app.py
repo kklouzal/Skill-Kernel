@@ -371,6 +371,17 @@ class ContextTokenLedgerResponse(BaseModel):
     ledger: dict[str, object]
 
 
+class ContextTokenLedgerOutcomeRequest(BaseModel):
+    workspace_id: str
+    outcome: str
+    utility_delta: float = 0.0
+    task_success: bool | None = None
+    token_savings: int | None = None
+    latency_delta_ms: float | None = None
+    tool_call_delta: int | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
 class TopologySkillPayload(BaseModel):
     slug: str
     skill_id: UUID | None = None
@@ -2028,6 +2039,35 @@ def create_app(
             outcome=request.outcome,
             metadata=request.metadata,
         )
+        return ContextTokenLedgerResponse(ledger=ledger.to_json())
+
+    @app.post(
+        "/v1/context/token-ledger/{ledger_id}/outcome",
+        response_model=ContextTokenLedgerResponse,
+    )
+    async def record_context_token_ledger_outcome(
+        ledger_id: UUID,
+        request: ContextTokenLedgerOutcomeRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ContextTokenLedgerResponse:
+        _require_control_auth(authorization)
+        try:
+            ledger = await context_governance.record_token_ledger_outcome(
+                workspace_key=request.workspace_id,
+                context_token_ledger_id=ledger_id,
+                outcome=request.outcome,
+                utility_delta=request.utility_delta,
+                task_success=request.task_success,
+                token_savings=request.token_savings,
+                latency_delta_ms=request.latency_delta_ms,
+                tool_call_delta=request.tool_call_delta,
+                metadata=request.metadata,
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail=str(error),
+            ) from error
         return ContextTokenLedgerResponse(ledger=ledger.to_json())
 
     @app.post("/v1/topology/propose", response_model=TopologyProposalResponse)

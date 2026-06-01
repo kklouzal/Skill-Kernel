@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from autoskill.api.app import (
     ContextArtifactRecordRequest,
+    ContextTokenLedgerOutcomeRequest,
     ContextTokenLedgerRequest,
     DiagnosticSignalRequest,
     EmbeddingProfileUpsertRequest,
@@ -209,9 +210,21 @@ def test_v14_trace_diagnostics_profiles_and_context_surfaces() -> None:
                 token_count=artifact.artifact["token_count"],
             )
         )
-        return trace, profile, model, embedding, momentum, artifact, ledger
+        outcome = await routes[
+            ("/v1/context/token-ledger/{ledger_id}/outcome", "POST")
+        ].endpoint(
+            ledger_id=ledger.ledger["context_token_ledger_id"],
+            request=ContextTokenLedgerOutcomeRequest(
+                workspace_id="dev-01",
+                outcome="helped",
+                utility_delta=0.25,
+                task_success=True,
+                token_savings=10,
+            ),
+        )
+        return trace, profile, model, embedding, momentum, artifact, ledger, outcome
 
-    trace, profile, model, embedding, momentum, artifact, ledger = asyncio.run(run())
+    trace, profile, model, embedding, momentum, artifact, ledger, outcome = asyncio.run(run())
 
     assert trace.span["operation_kind"] == "ingest"
     assert profile.profile["profile_key"] == "codex-dev"
@@ -220,6 +233,8 @@ def test_v14_trace_diagnostics_profiles_and_context_surfaces() -> None:
     assert momentum.momentum["status"] == "ready_for_probe"
     assert artifact.artifact["budget_status"] == "passed"
     assert ledger.ledger["visibility_state"] == "skill_visible"
+    assert outcome.ledger["outcome"] == "helped"
+    assert "marginal_value" in outcome.ledger["metadata"]
 
 
 def test_topology_proposal_endpoint_persists_propose_only_operation() -> None:

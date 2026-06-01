@@ -175,6 +175,10 @@ Deliverables:
 - canary states; implemented as canary-result storage plus deterministic freeze/unfreeze
   control APIs that suppress frozen skills through the existing broker lifecycle filter and
   queue rollback revocation requests for transaction-scoped critical canary failures.
+- marginal context value updates; implemented for context token ledgers by updating observed
+  outcomes with utility delta, task success, token savings, latency/tool-call deltas, derived
+  marginal value, and context-value-per-token, and by stamping linked context artifacts with the
+  latest marginal outcome plus semantic density score.
 - mutation-worker rollback revocation execution; implemented for queued rollback revocation
   requests whose originating transaction recorded an archive-backed compiled-file rollback
   action or an initial-create active-path deletion rollback action.

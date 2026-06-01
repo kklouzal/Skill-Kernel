@@ -130,6 +130,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Evaluator trace propagation is implemented: API-triggered and worker-triggered proposal-gate evaluation runs open content-safe `evaluator` spans, preserve caller/job trace roots, and close spans with safe counts/status/object refs instead of SkillIR or probe payloads.
 - Semantic model-call trace propagation is implemented for the typed LLM client: each completion attempt opens a content-safe `llm_call` span under the caller/job span, records the LLM invocation against that span, closes successful calls with safe token/finish metadata, and closes unsupported routes as denied without storing prompt or response text in span attributes.
 - Broker context governance recording is implemented: rendered broker hints persist as `broker_hint` context artifacts, and broker decisions write token-ledger rows for `skill_visible`, `skill_hidden`, and `no_skill` visibility states.
+- Marginal-value outcome updates are implemented for context token ledgers: observed outcomes can update existing ledger rows with task success, utility delta, token savings, latency/tool-call deltas, derived marginal-value score, and context-value-per-token, while linked context artifacts receive the latest marginal outcome and semantic density score.
 - SkillGraphIR validation is implemented for topology operation graphs, including missing-node checks, compose effect-gap blocking, and decompose effect coverage requirements.
 - Propose-only topology operation planners are implemented for `improve`, `compose`, and `decompose`: planners validate effect compatibility, emit deterministic SkillGraphIR only when gates pass, produce stable plan hashes/idempotency keys, include rollback-aware transaction metadata, and create planned trial metadata without DB writes or runtime file activation.
 - Topology proposal persistence is implemented: `/v1/topology/propose` records propose-only `improve`/`compose`/`decompose` plans into `skill_graph_operations`, starts an idempotent evolution transaction, records rollback-aware transaction items, writes `planned_topology_trials`, and links evidence/transactions/operations/trials through provenance without activating runtime files.
@@ -167,6 +168,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Validation passed for executor-profile broker compatibility routing: focused broker/compatibility tests passed 12 tests, focused ruff checks passed, migrations applied idempotently in compose Postgres, and a real broker smoke suppressed a blocked skill version for one executor profile while rendering the same skill when no executor profile was supplied.
 - Validation passed for evaluator-derived executor compatibility: focused evaluator/broker/compatibility tests passed 19 tests and focused ruff checks passed, proving evaluator completion writes executor compatibility evidence that the broker can later consume.
 - Validation passed for writer activation gating: focused worker/writer tests passed 38 tests and focused ruff checks passed, covering allowed activation, fail-closed blocked activation, and API blocking before active files or governance status changes are written.
+- Validation passed for marginal-value token-ledger outcome updates: focused admin/context tests passed, focused ruff checks passed, and a real compose Postgres smoke updated one ledger outcome plus linked artifact `semantic_density_score`.
 - Validation passed for semantic LLM trace spans: focused LLM/profile/admin tests passed 11 tests, `uv run ruff check sidecar`, `uv run pytest` with 138 tests, `uv run python -m compileall -q sidecar`, and `git diff --check` passed; a real compose Postgres smoke persisted one LLM invocation joined to a closed `llm_call` span with safe metadata only, then compose was cleaned down.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
@@ -175,9 +177,8 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
 2. Continue trace propagation through writer, rollback, revocation, and any queued semantic jobs that bypass the typed LLM client.
 3. Extend activation gating into topology apply semantics; writer apply now supports scanner/evaluator/executor compatibility gates for staged skill versions.
-4. Add marginal-value outcome update paths for token-ledger trials.
-5. Add production embedding provider live validation once credentials/provider endpoint are configured.
-6. Add external-skill scan scheduling defaults, embedding generation for external summaries, collision recommendations, and broader shadow-risk scoring without mutating external-owned files.
+4. Add production embedding provider live validation once credentials/provider endpoint are configured.
+5. Add external-skill scan scheduling defaults, embedding generation for external summaries, collision recommendations, and broader shadow-risk scoring without mutating external-owned files.
 
 ## Known Risks
 
