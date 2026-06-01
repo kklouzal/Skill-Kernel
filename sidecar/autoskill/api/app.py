@@ -23,7 +23,10 @@ from autoskill.services.broker import (
     bootstrap_context_hint,
     build_context_hint,
 )
-from autoskill.services.embedding_generation import generate_pending_embeddings
+from autoskill.services.embedding_generation import (
+    build_text_embedder_from_settings,
+    generate_pending_embeddings,
+)
 from autoskill.services.worker import WorkerRunResult, WorkerStores, run_worker_once
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi import status as http_status
@@ -565,8 +568,17 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
     ) -> EmbeddingGenerateResponse:
         _require_control_auth(authorization)
+        settings = get_settings()
+        try:
+            embedder = build_text_embedder_from_settings(settings)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
         result = await generate_pending_embeddings(
             embeddings,
+            embedder=embedder,
             workspace_key=request.workspace_id,
             embedding_model=request.embedding_model,
             limit=max(1, min(request.limit, 500)),

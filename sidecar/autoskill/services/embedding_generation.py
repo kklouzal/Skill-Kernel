@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from hashlib import sha256
 from math import sqrt
 from typing import Protocol
+from urllib import request
 
 from autoskill.db.embeddings import EMBEDDING_DIM, EmbeddingStore
 
@@ -18,7 +20,8 @@ class TextEmbedder(Protocol):
 
 
 class HashingTextEmbedder:
-    model = DEFAULT_EMBEDDING_MODEL
+    def __init__(self, *, model: str = DEFAULT_EMBEDDING_MODEL) -> None:
+        self.model = model
 
     def embed(self, text: str) -> list[float]:
         values: list[float] = []
@@ -33,6 +36,62 @@ class HashingTextEmbedder:
             values[0] = 1.0
             return values
         return [value / magnitude for value in values]
+
+
+class OpenAICompatibleTextEmbedder:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout_seconds: float = 30.0,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.model = model
+        self.timeout_seconds = timeout_seconds
+
+    def embed(self, text: str) -> list[float]:
+        payload = json.dumps({"model": self.model, "input": text}).encode("utf-8")
+        http_request = request.Request(
+            f"{self.base_url}/embeddings",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with request.urlopen(http_request, timeout=self.timeout_seconds) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        embedding = body["data"][0]["embedding"]
+        if len(embedding) != EMBEDDING_DIM:
+            raise ValueError(
+                f"embedding provider returned {len(embedding)} dimensions; expected {EMBEDDING_DIM}"
+            )
+        return [float(value) for value in embedding]
+
+
+def build_text_embedder_from_settings(settings: object) -> TextEmbedder:
+    provider = str(getattr(settings, "embedding_provider", "hash"))
+    model = str(getattr(settings, "embedding_model", DEFAULT_EMBEDDING_MODEL))
+    if provider == "hash":
+        return HashingTextEmbedder(model=model)
+    if provider == "openai_compatible":
+        base_url = getattr(settings, "embedding_api_base_url", None)
+        api_key = getattr(settings, "embedding_api_key", None)
+        if not base_url or not api_key:
+            raise ValueError(
+                "embedding_api_base_url and embedding_api_key are required for openai_compatible"
+            )
+        return OpenAICompatibleTextEmbedder(
+            base_url=str(base_url),
+            api_key=str(api_key),
+            model=model,
+            timeout_seconds=float(getattr(settings, "embedding_timeout_seconds", 30.0)),
+        )
+    raise ValueError(f"unsupported embedding provider: {provider}")
 
 
 @dataclass(frozen=True)

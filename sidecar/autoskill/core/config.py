@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     runtime_context_broker_enabled: bool = False
     runtime_context_timeout_ms: int = 150
     max_context_hint_tokens: int = 800
+    embedding_provider: str = "hash"
+    embedding_model: str = "autoskill-hash-embedding.v1"
+    embedding_api_base_url: str | None = None
+    embedding_api_key: str | None = None
+    embedding_timeout_seconds: float = 30.0
     allow_support_scripts: bool = True
     allow_network_in_generated_skills: bool = False
     allow_shell_in_generated_skills: bool = False

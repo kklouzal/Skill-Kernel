@@ -9,6 +9,7 @@ from autoskill.db.embeddings import AsyncpgEmbeddingStore
 from autoskill.db.evidence import AsyncpgEvidenceStore
 from autoskill.db.jobs import AsyncpgJobStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore
+from autoskill.services.embedding_generation import build_text_embedder_from_settings
 from autoskill.services.worker import WorkerLoopConfig, WorkerStores, run_worker_loop
 
 
@@ -40,7 +41,13 @@ async def run_worker(args: argparse.Namespace) -> int:
 
     try:
         summary = await run_worker_loop(
-            WorkerStores(jobs=jobs, scheduler=scheduler, evidence=evidence, embeddings=embeddings),
+            WorkerStores(
+                jobs=jobs,
+                scheduler=scheduler,
+                evidence=evidence,
+                embeddings=embeddings,
+                embedder=build_text_embedder_from_settings(settings),
+            ),
             WorkerLoopConfig(
                 worker_id=args.worker_id,
                 pool=args.pool,

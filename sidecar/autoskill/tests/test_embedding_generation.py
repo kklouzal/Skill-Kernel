@@ -1,5 +1,7 @@
 import asyncio
+import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 from autoskill.api.app import EmbeddingGenerateRequest, create_app
@@ -12,6 +14,8 @@ from autoskill.db.embeddings import (
 from autoskill.services.embedding_generation import (
     DEFAULT_EMBEDDING_MODEL,
     HashingTextEmbedder,
+    OpenAICompatibleTextEmbedder,
+    build_text_embedder_from_settings,
     generate_pending_embeddings,
 )
 
@@ -45,7 +49,7 @@ class MemoryPendingEmbeddingStore:
         workspace_key: str | None = None,
         limit: int = 100,
     ) -> list[EmbeddingSourceText]:
-        assert embedding_model == DEFAULT_EMBEDDING_MODEL
+        assert embedding_model
         assert workspace_key in {None, "dev-01"}
         return self.sources[:limit]
 
@@ -103,6 +107,54 @@ def test_hashing_text_embedder_is_deterministic_and_normalized() -> None:
     assert first != different
     assert len(first) == EMBEDDING_DIM
     assert 0.99 < sum(value * value for value in first) < 1.01
+
+
+def test_embedder_factory_uses_hash_provider() -> None:
+    embedder = build_text_embedder_from_settings(
+        SimpleNamespace(embedding_provider="hash", embedding_model="custom-hash-model")
+    )
+
+    assert isinstance(embedder, HashingTextEmbedder)
+    assert embedder.model == "custom-hash-model"
+
+
+def test_openai_compatible_embedder_posts_embedding_request(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"data": [{"embedding": [1.0] + [0.0] * 1535}]}).encode()
+
+    def fake_urlopen(http_request, timeout):
+        captured["url"] = http_request.full_url
+        captured["timeout"] = timeout
+        captured["authorization"] = http_request.headers["Authorization"]
+        captured["payload"] = json.loads(http_request.data.decode())
+        return FakeResponse()
+
+    monkeypatch.setattr("autoskill.services.embedding_generation.request.urlopen", fake_urlopen)
+    embedder = OpenAICompatibleTextEmbedder(
+        base_url="http://127.0.0.1:9999/v1/",
+        api_key="test-key",
+        model="text-embedding-3-small",
+        timeout_seconds=12.5,
+    )
+
+    embedding = embedder.embed("redacted text")
+
+    assert len(embedding) == 1536
+    assert captured == {
+        "url": "http://127.0.0.1:9999/v1/embeddings",
+        "timeout": 12.5,
+        "authorization": "Bearer test-key",
+        "payload": {"model": "text-embedding-3-small", "input": "redacted text"},
+    }
 
 
 def test_generate_pending_embeddings_upserts_all_sources() -> None:

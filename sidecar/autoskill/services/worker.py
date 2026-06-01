@@ -10,7 +10,7 @@ from autoskill.db.embeddings import EmbeddingStore
 from autoskill.db.evidence import EvidenceStore
 from autoskill.db.jobs import JobRecord, JobStore
 from autoskill.db.scheduler import SchedulerStore
-from autoskill.services.embedding_generation import generate_pending_embeddings
+from autoskill.services.embedding_generation import TextEmbedder, generate_pending_embeddings
 
 WorkerPool = Literal["scheduler", "maintenance", "mutation"]
 
@@ -69,6 +69,7 @@ class WorkerStores:
     scheduler: SchedulerStore
     evidence: EvidenceStore
     embeddings: EmbeddingStore
+    embedder: TextEmbedder | None = None
 
 
 @dataclass(frozen=True)
@@ -209,6 +210,7 @@ async def _run_embedding_generate(stores: WorkerStores, job: JobRecord) -> dict[
     limit = _payload_int(job.payload, "limit", default=100, minimum=1, maximum=500)
     result = await generate_pending_embeddings(
         stores.embeddings,
+        embedder=stores.embedder,
         workspace_key=_payload_workspace(job),
         embedding_model=_payload_str(job.payload, "embedding_model"),
         limit=limit,
