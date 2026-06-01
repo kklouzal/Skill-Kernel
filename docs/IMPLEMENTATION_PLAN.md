@@ -31,7 +31,7 @@ Deliverables:
 
 Acceptance:
 
-- events insert idempotently;
+- events insert idempotently; implemented with `workspaces.external_key` upsert and `raw_events.event_id` conflict handling;
 - schema can migrate up/down in dev;
 - audit hash chain verifies.
 
@@ -49,7 +49,7 @@ Acceptance:
 
 - sidecar outage does not block OpenClaw;
 - only redacted payloads are persisted;
-- spool replay is idempotent.
+- spool replay is idempotent; implemented as accepted-or-duplicate deletion from bounded JSONL spool.
 
 ## Phase 3 - Scheduler and Job Queue
 
@@ -164,4 +164,3 @@ Acceptance:
 - drift violations trigger targeted repair;
 - curation logs features/actions/outcomes;
 - audit integrity verifies.
-

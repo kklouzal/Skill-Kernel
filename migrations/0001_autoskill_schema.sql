@@ -2,6 +2,7 @@
 -- v1 uses one database and one autoskill schema. Do not create per-skill schemas.
 
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE SCHEMA IF NOT EXISTS autoskill;
 
 CREATE TABLE IF NOT EXISTS autoskill.workspaces (
@@ -287,4 +288,3 @@ CREATE INDEX IF NOT EXISTS raw_events_workspace_time_idx
 
 CREATE INDEX IF NOT EXISTS jobs_ready_idx
   ON autoskill.jobs(status, available_at, priority);
-

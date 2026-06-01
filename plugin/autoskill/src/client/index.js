@@ -1,10 +1,14 @@
-export async function postJson(url, payload, { timeoutMs = 150 } = {}) {
+export async function postJson(url, payload, { timeoutMs = 150, authToken } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const headers = { "content-type": "application/json" };
+  if (authToken) {
+    headers.authorization = `Bearer ${authToken}`;
+  }
   try {
     const response = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers,
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
@@ -18,10 +22,13 @@ export async function postJson(url, payload, { timeoutMs = 150 } = {}) {
 }
 
 export async function forwardEvent(sidecarUrl, event, options = {}) {
-  return postJson(`${sidecarUrl.replace(/\/$/, "")}/v1/ingest/events`, { events: [event] }, options);
+  return forwardEvents(sidecarUrl, [event], options);
+}
+
+export async function forwardEvents(sidecarUrl, events, options = {}) {
+  return postJson(`${sidecarUrl.replace(/\/$/, "")}/v1/ingest/events`, { events }, options);
 }
 
 export async function fetchContextHint(sidecarUrl, request, options = {}) {
   return postJson(`${sidecarUrl.replace(/\/$/, "")}/v1/runtime/context-hint`, request, options);
 }
-

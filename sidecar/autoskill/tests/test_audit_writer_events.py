@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-
 from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope

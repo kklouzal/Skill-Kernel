@@ -22,10 +22,12 @@ Implemented now:
 
 - project structure and durable local instructions;
 - sidecar API skeleton with health/status/ingest/context-hint endpoints;
+- DB-backed idempotent ingest for redacted event envelopes;
+- optional bearer-token auth for event ingest;
 - typed event envelope, SkillIR, scanner, compiler, redaction, audit hash, and path-contained writer primitives;
 - initial Postgres migration covering the core v9 control-plane tables;
-- OpenClaw plugin/hook package skeleton with local redaction/spool/forwarding utilities;
-- focused Python tests for deterministic primitives.
+- OpenClaw plugin/hook package skeleton with local redaction, bounded spool, forwarding, and replay utilities;
+- focused Python and Node tests for deterministic primitives.
 
 Not implemented yet:
 
@@ -56,7 +58,9 @@ uv run uvicorn autoskill.main:app --app-dir sidecar --host 127.0.0.1 --port 8765
 Validate the OpenClaw plugin skeleton:
 
 ```bash
-node --check plugin/autoskill/src/index.js
+cd /Warehouse/SkillKernel/plugin/autoskill
+npm run check
+npm test
 ```
 
 ## Non-Negotiables
@@ -68,4 +72,3 @@ node --check plugin/autoskill/src/index.js
 - No LLM-controlled SQL, paths, file writes, shell commands, scheduler state, policy decisions, or rollback.
 - No raw secrets or private user facts in SkillIR, `SKILL.md`, support files, probes, embeddings, or logs.
 - Core infrastructure is not autonomously self-rewritten in v1.
-

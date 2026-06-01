@@ -71,7 +71,7 @@ class SkillIR(BaseModel):
         return value.strip()
 
     @model_validator(mode="after")
-    def required_runtime_sections(self) -> "SkillIR":
+    def required_runtime_sections(self) -> SkillIR:
         required_lists = {
             "applicability": self.applicability,
             "steps": self.steps,

@@ -6,8 +6,11 @@ export function resolveConfig(ctx = {}) {
   return {
     enabled: cfg.enabled !== false,
     sidecarUrl: cfg.sidecarUrl ?? "http://127.0.0.1:8765",
+    ingestToken: cfg.ingestToken ?? null,
     workspaceId: cfg.workspaceId ?? "auto",
     spoolDir: cfg.spoolDir ?? path.join(workspaceDir, ".autoskill", "spool"),
+    replayBatchSize: cfg.replayBatchSize ?? 25,
+    maxSpoolBytes: cfg.maxSpoolBytes ?? 10 * 1024 * 1024,
     captureRawConversation: cfg.captureRawConversation === true,
     runtimeContextBroker: {
       enabled: cfg.runtimeContextBroker?.enabled === true,
@@ -17,4 +20,3 @@ export function resolveConfig(ctx = {}) {
     },
   };
 }
-

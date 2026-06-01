@@ -4,11 +4,10 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, field_validator
-
 from autoskill.core.enums import RedactionState, TrustClass
 from autoskill.core.hashing import sha256_json
 from autoskill.core.redaction import redact_payload
+from pydantic import BaseModel, Field, field_validator
 
 
 class EventEnvelope(BaseModel):
@@ -36,7 +35,7 @@ class EventEnvelope(BaseModel):
             raise ValueError("event_type must be non-empty")
         return value
 
-    def redacted(self) -> "EventEnvelope":
+    def redacted(self) -> EventEnvelope:
         payload = redact_payload(self.payload)
         return self.model_copy(
             update={

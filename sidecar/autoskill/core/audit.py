@@ -4,9 +4,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
-
 from autoskill.core.hashing import sha256_json
+from pydantic import BaseModel, Field
 
 
 class AuditRecord(BaseModel):
@@ -20,7 +19,7 @@ class AuditRecord(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
     audit_hash: str | None = None
 
-    def sealed(self) -> "AuditRecord":
+    def sealed(self) -> AuditRecord:
         data = self.model_dump(mode="json", exclude={"audit_hash"})
         return self.model_copy(update={"audit_hash": sha256_json(data)})
 

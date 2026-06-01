@@ -1,10 +1,9 @@
 from functools import lru_cache
 from pathlib import Path
 
+from autoskill.core.enums import AutonomyMode
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-from autoskill.core.enums import AutonomyMode
 
 
 class Settings(BaseSettings):
@@ -22,6 +21,7 @@ class Settings(BaseSettings):
     database_url: str | None = Field(default=None, alias="AUTOSKILL_DATABASE_URL")
     schema_name: str = "autoskill"
     statement_timeout_ms: int = 30_000
+    ingest_token: str | None = None
     active_root: Path = Path("skills/autoskill")
     archive_root: Path = Path(".autoskill/archive")
     staging_root: Path = Path(".autoskill/staging")
@@ -38,4 +38,3 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-
