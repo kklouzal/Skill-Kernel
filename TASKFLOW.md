@@ -173,6 +173,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Validation passed for external-skill embedding sources: focused embedding/external-skill tests passed 14 tests, focused ruff checks passed, and a real compose Postgres smoke generated one `external_skill` embedding for visible inventory while excluding a quarantined external skill and keeping raw root paths out of embedded text.
 - Validation passed for external-skill scan scheduling defaults: focused external-skill/worker tests passed, full sidecar tests passed with 141 tests, plugin tests passed with 7 tests, and a real compose Postgres smoke upserted an `external-skills.scan` schedule plus queued `external_skills.scan` job without persisting raw external root paths.
 - Validation passed for external-skill collision recommendations: focused matching/opportunity/candidate tests passed, full sidecar tests passed with 142 tests, plugin tests passed with 7 tests, and a real compose Postgres smoke returned `external_collision_review` with high collision risk plus `review_changed_external_skill_before_candidate_creation` for a changed external skill.
+- Validation passed for broker external shadow-risk metadata: focused broker tests passed, full sidecar tests passed with 142 tests, plugin tests passed with 7 tests, and a real compose Postgres smoke deferred a changed external skill while recording high external shadow risk and `review_changed_external_skill_before_runtime_hint` metadata.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
@@ -181,7 +182,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 2. Continue trace propagation through writer, rollback, revocation, and any queued semantic jobs that bypass the typed LLM client.
 3. Extend activation gating into topology apply semantics; writer apply now supports scanner/evaluator/executor compatibility gates for staged skill versions.
 4. Add production embedding provider live validation once credentials/provider endpoint are configured.
-5. Add broader external-skill shadow-risk scoring without mutating external-owned files. External summaries now feed embedding generation for visible/changed inventory only, workers launched with read-only external roots auto-register a durable scan schedule without storing raw roots, and duplicate matching now returns deterministic collision-risk/recommendation metadata.
+5. External-skill collision awareness now covers scan scheduling, profile-safe embeddings, duplicate-match recommendations, and broker shadow-risk telemetry without mutating external-owned files. Next external-skill work is explicit operator import/reuse review flows, not autonomous mutation.
 
 ## Known Risks
 

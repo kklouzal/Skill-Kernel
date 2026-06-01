@@ -295,12 +295,45 @@ def _compact(text: str, limit: int) -> str:
 
 
 def _suppressed(candidate: RetrievalCandidate, reason: str) -> dict[str, object]:
-    return {
+    payload = {
         "object_type": candidate.object_type,
         "object_id": str(candidate.object_id),
         "skill_id": str(candidate.skill_id) if candidate.skill_id else None,
         "rank": candidate.rank,
         "reason": reason,
+    }
+    if candidate.object_type == "external_skill":
+        payload["external_shadow_risk"] = _external_shadow_risk(candidate)
+    return payload
+
+
+def _external_shadow_risk(candidate: RetrievalCandidate) -> dict[str, object]:
+    status = str(candidate.metadata.get("status", "unknown"))
+    rank = max(0.0, min(float(candidate.rank), 1.0))
+    score = min(1.0, rank + (0.2 if status == "changed" else 0.0))
+    if score >= 0.75:
+        risk = "high"
+    elif score >= 0.45:
+        risk = "medium"
+    else:
+        risk = "low"
+    reason_codes = ["external_skill_collision"]
+    if status == "changed":
+        reason_codes.append("external_skill_changed")
+    if rank >= 0.75:
+        reason_codes.append("high_retrieval_rank")
+    return {
+        "risk": risk,
+        "score": round(score, 4),
+        "status": status,
+        "source": candidate.metadata.get("source"),
+        "slug": candidate.metadata.get("slug"),
+        "recommendation": (
+            "review_changed_external_skill_before_runtime_hint"
+            if status == "changed"
+            else "suppress_external_skill_and_review_collision"
+        ),
+        "reason_codes": reason_codes,
     }
 
 

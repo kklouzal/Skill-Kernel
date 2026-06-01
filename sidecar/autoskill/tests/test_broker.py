@@ -442,6 +442,15 @@ def test_context_broker_suppresses_external_skill_collisions() -> None:
     assert response.decision == "defer_skill"
     assert response.skill_ids == []
     assert response.suppressed[0]["reason"] == "external-skill-collision"
+    assert response.suppressed[0]["external_shadow_risk"] == {
+        "risk": "high",
+        "score": 0.9,
+        "status": "visible",
+        "source": "workspace-skill-root",
+        "slug": "pdf-table-cleanup",
+        "recommendation": "suppress_external_skill_and_review_collision",
+        "reason_codes": ["external_skill_collision", "high_retrieval_rank"],
+    }
     assert "external-skill-collision" in response.reason_codes
 
 
