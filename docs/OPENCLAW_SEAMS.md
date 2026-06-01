@@ -84,3 +84,10 @@ context hints from `before_prompt_build` are blocked.
 `defineToolPlugin` metadata. The AutoSkill bootstrap plugin is a runtime hook
 plugin, not a simple tool plugin, so use `plugins inspect --runtime` and focused
 Node hook tests for Phase 0 validation.
+
+For generated skill loading, the active runtime root is the workspace skill root:
+`<workspaceDir>/skills/autoskill/<slug>/SKILL.md`. A dev-profile smoke proved a
+fixture there appears as `source='openclaw-workspace'`, `eligible=true`, and
+`modelVisible=true`. A paired fixture under `<workspaceDir>/.autoskill/archive`
+did not appear in normal or `--eligible` skill discovery, so the archive root is
+outside OpenClaw's runtime skill loader.
