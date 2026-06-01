@@ -225,6 +225,14 @@ def test_writer_apply_records_governance_items(tmp_path: Path) -> None:
     assert governance.items[0]["relative_path"] == "skills/autoskill/autoskill-example"
     assert governance.items[0]["rollback_action"]["operation"] == "restore_archive_manifest"
     assert governance.items[1]["activation_state"] == "archived"
+    assert [edge["relation"] for edge in governance.edges] == [
+        "derived_from",
+        "derived_from",
+    ]
+    assert {edge["derived_id"] for edge in governance.edges} == {
+        governance.items[0]["transaction_item_id"],
+        governance.items[1]["transaction_item_id"],
+    }
 
 
 def test_writer_apply_restores_previous_active_if_governance_recording_fails(
@@ -302,6 +310,16 @@ def test_writer_rollback_records_governance_item(tmp_path: Path) -> None:
     assert governance.statuses[-1]["status"] == "rolled_back"
     assert governance.items[0]["activation_state"] == "rolled_back"
     assert governance.items[0]["rollback_action"]["operation"] == "operator_review"
+    assert governance.edges == [
+        {
+            "workspace_key": "dev-01",
+            "source_kind": "evolution_transaction",
+            "source_id": governance.items[0]["evolution_transaction_id"],
+            "derived_kind": "transaction_item",
+            "derived_id": governance.items[0]["transaction_item_id"],
+            "relation": "rolled_back_by",
+        }
+    ]
 
 
 def test_writer_api_applies_and_rolls_back_with_workspace_roots(tmp_path: Path) -> None:
@@ -357,6 +375,11 @@ def test_writer_api_applies_and_rolls_back_with_workspace_roots(tmp_path: Path) 
         "active",
         "archived",
         "rolled_back",
+    ]
+    assert [edge["relation"] for edge in governance.edges] == [
+        "derived_from",
+        "derived_from",
+        "rolled_back_by",
     ]
 
 
@@ -416,6 +439,7 @@ class MemoryWriterGovernance:
         self.fail_record_item = fail_record_item
         self.statuses: list[dict[str, object]] = []
         self.items: list[dict[str, object]] = []
+        self.edges: list[dict[str, object]] = []
 
     async def update_transaction_status(
         self,
@@ -431,6 +455,7 @@ class MemoryWriterGovernance:
                 "metrics": metrics or {},
             }
         )
+        return {"workspace_key": "dev-01"}
 
     async def record_transaction_item(
         self,
@@ -446,15 +471,37 @@ class MemoryWriterGovernance:
     ):
         if self.fail_record_item:
             raise RuntimeError("governance unavailable")
-        self.items.append(
-            {
-                "evolution_transaction_id": evolution_transaction_id,
-                "item_kind": item_kind,
-                "activation_state": activation_state,
-                "item_id": item_id,
-                "relative_path": relative_path,
-                "before_hash": before_hash,
-                "after_hash": after_hash,
-                "rollback_action": rollback_action or {},
-            }
-        )
+        item = {
+            "transaction_item_id": uuid4(),
+            "evolution_transaction_id": evolution_transaction_id,
+            "item_kind": item_kind,
+            "activation_state": activation_state,
+            "item_id": item_id,
+            "relative_path": relative_path,
+            "before_hash": before_hash,
+            "after_hash": after_hash,
+            "rollback_action": rollback_action or {},
+        }
+        self.items.append(item)
+        return item
+
+    async def record_provenance_edge(
+        self,
+        *,
+        workspace_key,
+        source_kind,
+        source_id,
+        derived_kind,
+        derived_id,
+        relation,
+    ):
+        edge = {
+            "workspace_key": workspace_key,
+            "source_kind": source_kind,
+            "source_id": source_id,
+            "derived_kind": derived_kind,
+            "derived_id": derived_id,
+            "relation": relation,
+        }
+        self.edges.append(edge)
+        return {"created": True, "edge": edge}

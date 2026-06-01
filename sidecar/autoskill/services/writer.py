@@ -440,11 +440,12 @@ async def apply_staged_manifest_with_governance(
     existed, so apply is fail-closed instead of leaving untracked exposure.
     """
 
-    await governance.update_transaction_status(
+    applying_transaction = await governance.update_transaction_status(
         evolution_transaction_id=evolution_transaction_id,
         status="applying",
         metrics={"manifest_relative_path": manifest_relative_path},
     )
+    workspace_key = _transaction_workspace_key(applying_transaction)
     applied = apply_staged_manifest(
         staging_root,
         workspace_root,
@@ -452,10 +453,17 @@ async def apply_staged_manifest_with_governance(
         manifest_relative_path,
     )
     try:
-        await _record_apply_transaction_items(
+        items = await _record_apply_transaction_items(
             governance,
             evolution_transaction_id=evolution_transaction_id,
             applied=applied,
+        )
+        await _record_writer_item_provenance(
+            governance,
+            workspace_key=workspace_key,
+            evolution_transaction_id=evolution_transaction_id,
+            items=items,
+            relation="derived_from",
         )
         await governance.update_transaction_status(
             evolution_transaction_id=evolution_transaction_id,
@@ -490,17 +498,18 @@ async def rollback_active_skill_with_governance(
 ) -> AppliedSkillArtifact:
     """Restore an archive snapshot and record the rollback transaction item."""
 
-    await governance.update_transaction_status(
+    rolling_back_transaction = await governance.update_transaction_status(
         evolution_transaction_id=evolution_transaction_id,
         status="rolling_back",
         metrics={"archive_manifest_relative_path": archive_manifest_relative_path},
     )
+    workspace_key = _transaction_workspace_key(rolling_back_transaction)
     rolled_back = rollback_active_skill(
         workspace_root,
         archive_root,
         archive_manifest_relative_path=archive_manifest_relative_path,
     )
-    await governance.record_transaction_item(
+    item = await governance.record_transaction_item(
         evolution_transaction_id=evolution_transaction_id,
         item_kind="compiled_skill_file",
         activation_state="rolled_back",
@@ -511,6 +520,13 @@ async def rollback_active_skill_with_governance(
             "operation": "operator_review",
             "reason": "rollback transaction restored this archive snapshot",
         },
+    )
+    await _record_writer_item_provenance(
+        governance,
+        workspace_key=workspace_key,
+        evolution_transaction_id=evolution_transaction_id,
+        items=[item],
+        relation="rolled_back_by",
     )
     await governance.update_transaction_status(
         evolution_transaction_id=evolution_transaction_id,
@@ -627,8 +643,9 @@ async def _record_apply_transaction_items(
     *,
     evolution_transaction_id: UUID,
     applied: AppliedSkillArtifact,
-) -> None:
-    await governance.record_transaction_item(
+) -> list[Any]:
+    items: list[Any] = []
+    active_item = await governance.record_transaction_item(
         evolution_transaction_id=evolution_transaction_id,
         item_kind="compiled_skill_file",
         activation_state="active",
@@ -639,8 +656,9 @@ async def _record_apply_transaction_items(
         after_hash=applied.manifest_sha256,
         rollback_action=_apply_rollback_action(applied),
     )
+    items.append(active_item)
     if applied.previous_snapshot is not None:
-        await governance.record_transaction_item(
+        archive_item = await governance.record_transaction_item(
             evolution_transaction_id=evolution_transaction_id,
             item_kind="archive_snapshot",
             activation_state="archived",
@@ -654,6 +672,55 @@ async def _record_apply_transaction_items(
                 "reason": "archive snapshot is required for rollback traversal",
             },
         )
+        items.append(archive_item)
+    return items
+
+
+async def _record_writer_item_provenance(
+    governance: Any,
+    *,
+    workspace_key: str | None,
+    evolution_transaction_id: UUID,
+    items: list[Any],
+    relation: str,
+) -> None:
+    if workspace_key is None:
+        return
+    record_edge = getattr(governance, "record_provenance_edge", None)
+    if record_edge is None:
+        return
+    for item in items:
+        item_id = _transaction_item_id(item)
+        if item_id is None:
+            continue
+        await record_edge(
+            workspace_key=workspace_key,
+            source_kind="evolution_transaction",
+            source_id=evolution_transaction_id,
+            derived_kind="transaction_item",
+            derived_id=item_id,
+            relation=relation,
+        )
+
+
+def _transaction_workspace_key(transaction: Any) -> str | None:
+    if transaction is None:
+        return None
+    if isinstance(transaction, dict):
+        value = transaction.get("workspace_key")
+    else:
+        value = getattr(transaction, "workspace_key", None)
+    return value if isinstance(value, str) and value else None
+
+
+def _transaction_item_id(item: Any) -> UUID | None:
+    if item is None:
+        return None
+    if isinstance(item, dict):
+        value = item.get("transaction_item_id")
+    else:
+        value = getattr(item, "transaction_item_id", None)
+    return value if isinstance(value, UUID) else None
 
 
 def _apply_rollback_action(applied: AppliedSkillArtifact) -> dict[str, object]:
