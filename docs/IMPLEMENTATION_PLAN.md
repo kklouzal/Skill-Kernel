@@ -89,6 +89,7 @@ Acceptance:
 - ANN recall audit exists; implemented and validated against local Postgres;
 - retrieval decisions are logged.
 - same-object/same-model embeddings from different qualified profiles remain separate; implemented with `embedding_profile_id` storage, profile-scoped uniqueness, API propagation, and local Postgres smoke validation.
+- model/embedding qualification run tables and profile status stamping are implemented for auditable qualification gates.
 
 ## Phase 4.5 - Text Model Access and Invocation Audit
 
@@ -98,14 +99,16 @@ Deliverables:
 - model profile thinking-level and fallback policy; implemented on profile storage/API and recorded on invocation audit rows;
 - OpenAI-compatible `/chat/completions` route; implemented with bounded timeout and safe endpoint/API-key resolution;
 - OpenClaw text route; intentionally fail-closed as `unsupported` until a stable seam is available;
-- LLM invocation audit; implemented as content-safe `llm_invocations` rows with purpose, model/profile, route, trace/span, token estimates, status, error, and non-secret audit metadata.
+- LLM invocation audit; implemented as content-safe `llm_invocations` rows with purpose, model/profile, route, trace/span, token estimates, status, error, and non-secret audit metadata;
+- text-model qualification runs; implemented as control-authenticated probes through the typed LLM client, with dedicated run records and latest-verdict profile status stamping.
 
 Acceptance:
 
 - LLM calls are proposal-engine calls only, with deterministic code owning policy/application;
 - unsupported OpenClaw text routing is audited and blocked instead of silently falling through;
 - API keys are never persisted in invocation audit metadata;
-- focused LLM client tests pass, full sidecar tests pass, and local Postgres smoke can persist an invocation audit row.
+- focused LLM client tests pass, full sidecar tests pass, and local Postgres smoke can persist an invocation audit row;
+- model and embedding qualification runs persist dedicated audit rows and stamp the latest verdict onto profile records.
 
 ## Phase 5 - Runtime Context Broker
 

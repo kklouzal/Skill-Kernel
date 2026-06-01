@@ -271,6 +271,34 @@ CREATE TABLE IF NOT EXISTS autoskill.llm_invocations (
 CREATE INDEX IF NOT EXISTS llm_invocations_workspace_created_idx
   ON autoskill.llm_invocations(workspace_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS autoskill.model_profile_qualification_runs (
+  model_profile_qualification_run_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  model_profile_id uuid REFERENCES autoskill.model_profiles(model_profile_id),
+  profile_key text NOT NULL,
+  route_kind text NOT NULL CHECK (route_kind IN ('openclaw','openai_compatible')),
+  provider text NOT NULL,
+  model text NOT NULL,
+  thinking_level text,
+  probe_set_version text NOT NULL,
+  verdict text NOT NULL
+    CHECK (
+      verdict IN (
+        'qualified_autonomous',
+        'qualified_propose_only',
+        'qualified_classify',
+        'failed',
+        'expired'
+      )
+    ),
+  probe_results jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS model_profile_qualification_runs_profile_created_idx
+  ON autoskill.model_profile_qualification_runs(workspace_id, profile_key, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS autoskill.embedding_profiles (
   embedding_profile_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
@@ -288,6 +316,26 @@ CREATE TABLE IF NOT EXISTS autoskill.embedding_profiles (
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(workspace_id, profile_key)
 );
+
+CREATE TABLE IF NOT EXISTS autoskill.embedding_profile_qualification_runs (
+  embedding_profile_qualification_run_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  embedding_profile_id uuid REFERENCES autoskill.embedding_profiles(embedding_profile_id),
+  profile_key text NOT NULL,
+  route_kind text NOT NULL CHECK (route_kind IN ('hash','openclaw','openai_compatible')),
+  provider text NOT NULL,
+  model text NOT NULL,
+  embedding_dim integer NOT NULL,
+  distance_metric text NOT NULL DEFAULT 'cosine',
+  probe_set_version text NOT NULL,
+  verdict text NOT NULL CHECK (verdict IN ('qualified','failed','expired')),
+  probe_results jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS embedding_profile_qualification_runs_profile_created_idx
+  ON autoskill.embedding_profile_qualification_runs(workspace_id, profile_key, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS autoskill.evaluations (
   evaluation_id uuid PRIMARY KEY,

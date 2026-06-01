@@ -41,10 +41,20 @@ from autoskill.db.external_skills import (
 from autoskill.db.governance import AsyncpgGovernanceStore, GovernanceStore, NullGovernanceStore
 from autoskill.db.jobs import AsyncpgJobStore, JobStore, NullJobStore
 from autoskill.db.lifecycle import AsyncpgLifecycleStore, LifecycleStore, NullLifecycleStore
+from autoskill.db.llm_invocations import (
+    AsyncpgLLMInvocationStore,
+    LLMInvocationStore,
+    NullLLMInvocationStore,
+)
 from autoskill.db.observability import (
     AsyncpgObservabilityStore,
     NullObservabilityStore,
     ObservabilityStore,
+)
+from autoskill.db.profile_qualifications import (
+    AsyncpgProfileQualificationStore,
+    NullProfileQualificationStore,
+    ProfileQualificationStore,
 )
 from autoskill.db.profiles import AsyncpgProfileStore, NullProfileStore, ProfileStore
 from autoskill.db.retrieval import AsyncpgRetrievalStore, NullRetrievalStore, RetrievalStore
@@ -67,8 +77,14 @@ from autoskill.services.embedding_generation import (
     generate_pending_embeddings,
 )
 from autoskill.services.evaluation_runner import run_pending_proposal_gates_with_trace
+from autoskill.services.llm import LLMClient
 from autoskill.services.matching import SkillMatchRequest, match_existing_skills
 from autoskill.services.opportunity import mine_opportunities
+from autoskill.services.profile_qualification import (
+    ProfileQualificationError,
+    qualify_embedding_profile,
+    qualify_text_profile,
+)
 from autoskill.services.shadowing import detect_shadowing_events
 from autoskill.services.topology import (
     ComposeTopologyRequest,
@@ -282,6 +298,16 @@ class EmbeddingProfileUpsertRequest(ModelProfileUpsertRequest):
 
 class ModelProfileResponse(BaseModel):
     profile: dict[str, object]
+
+
+class ProfileQualificationRunRequest(BaseModel):
+    workspace_id: str
+    profile_key: str
+    probe_set_version: str | None = None
+
+
+class ProfileQualificationRunResponse(BaseModel):
+    run: dict[str, object]
 
 
 class ContextArtifactRecordRequest(BaseModel):
@@ -982,6 +1008,26 @@ def _build_profile_store() -> ProfileStore:
     return NullProfileStore()
 
 
+def _build_llm_invocation_store() -> LLMInvocationStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgLLMInvocationStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullLLMInvocationStore()
+
+
+def _build_profile_qualification_store() -> ProfileQualificationStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgProfileQualificationStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullProfileQualificationStore()
+
+
 def _build_context_governance_store() -> ContextGovernanceStore:
     settings = get_settings()
     if settings.database_url:
@@ -1226,6 +1272,9 @@ def create_app(
     observability_store: ObservabilityStore | None = None,
     diagnostic_store: DiagnosticMomentumStore | None = None,
     profile_store: ProfileStore | None = None,
+    llm_invocation_store: LLMInvocationStore | None = None,
+    profile_qualification_store: ProfileQualificationStore | None = None,
+    llm_client: LLMClient | None = None,
     context_governance_store: ContextGovernanceStore | None = None,
     topology_store: TopologyStore | None = None,
     writer_workspace_root: Path | None = None,
@@ -1250,6 +1299,15 @@ def create_app(
     observability = observability_store or _build_observability_store()
     diagnostics = diagnostic_store or _build_diagnostic_store()
     profiles = profile_store or _build_profile_store()
+    llm_invocations = llm_invocation_store or _build_llm_invocation_store()
+    profile_qualifications = (
+        profile_qualification_store or _build_profile_qualification_store()
+    )
+    text_llm = llm_client or LLMClient(
+        profiles=profiles,
+        invocations=llm_invocations,
+        settings=get_settings(),
+    )
     context_governance = context_governance_store or _build_context_governance_store()
     topology = topology_store or _build_topology_store()
     broker_cache = ContextHintCache()
@@ -1279,6 +1337,8 @@ def create_app(
                 observability,
                 diagnostics,
                 profiles,
+                llm_invocations,
+                profile_qualifications,
                 context_governance,
                 topology,
             ):
@@ -1762,6 +1822,57 @@ def create_app(
             qualification=request.qualification,
         )
         return ModelProfileResponse(profile=profile.to_json())
+
+    @app.post(
+        "/v1/profiles/models/qualify",
+        response_model=ProfileQualificationRunResponse,
+    )
+    async def run_model_profile_qualification(
+        request: ProfileQualificationRunRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ProfileQualificationRunResponse:
+        _require_control_auth(authorization)
+        try:
+            result = await qualify_text_profile(
+                profiles=profiles,
+                qualifications=profile_qualifications,
+                llm_client=text_llm,
+                workspace_key=request.workspace_id,
+                profile_key=request.profile_key,
+                probe_set_version=request.probe_set_version
+                or "autoskill-text-profile-probes.v1",
+            )
+        except ProfileQualificationError as exc:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        return ProfileQualificationRunResponse(run=result.to_json())
+
+    @app.post(
+        "/v1/profiles/embeddings/qualify",
+        response_model=ProfileQualificationRunResponse,
+    )
+    async def run_embedding_profile_qualification(
+        request: ProfileQualificationRunRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ProfileQualificationRunResponse:
+        _require_control_auth(authorization)
+        try:
+            result = await qualify_embedding_profile(
+                profiles=profiles,
+                qualifications=profile_qualifications,
+                workspace_key=request.workspace_id,
+                profile_key=request.profile_key,
+                probe_set_version=request.probe_set_version
+                or "autoskill-embedding-profile-probes.v1",
+            )
+        except ProfileQualificationError as exc:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        return ProfileQualificationRunResponse(run=result.to_json())
 
     @app.post("/v1/context/artifacts", response_model=ContextArtifactResponse)
     async def record_context_artifact(
