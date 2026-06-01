@@ -7,7 +7,7 @@ from autoskill.db.retrieval import RetrievalCandidate, RetrievalResult
 
 class MemoryRetrievalStore:
     def __init__(self) -> None:
-        self.queries: list[str] = []
+        self.queries: list[dict[str, object]] = []
         self.closed = False
 
     async def close(self) -> None:
@@ -18,11 +18,21 @@ class MemoryRetrievalStore:
         *,
         workspace_key: str,
         query: str,
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
         session_id: str | None = None,
         turn_id: str | None = None,
         limit: int = 10,
     ) -> RetrievalResult:
-        self.queries.append(query)
+        self.queries.append(
+            {
+                "query": query,
+                "trace_id": trace_id,
+                "span_id": span_id,
+                "parent_span_id": parent_span_id,
+            }
+        )
         if not query.strip():
             return RetrievalResult(
                 retrieval_log_id=None,
@@ -69,12 +79,16 @@ def test_retrieval_query_api_returns_candidates() -> None:
     store = MemoryRetrievalStore()
     app = create_app(retrieval_store=store)
     route = next(route for route in app.routes if route.path == "/v1/retrieval/query")
+    trace_id = uuid4()
+    span_id = uuid4()
 
     async def run() -> object:
         return await route.endpoint(
             request=RetrievalQueryRequest(
                 workspace_id="dev-01",
                 query="tool call",
+                trace_id=trace_id,
+                span_id=span_id,
                 session_id="session-1",
                 turn_id="turn-1",
             )
@@ -86,7 +100,14 @@ def test_retrieval_query_api_returns_candidates() -> None:
     assert result.retrieval_log_id is not None
     assert result.candidates[0]["object_type"] == "evidence_item"
     assert result.candidates[0]["metadata"]["maturity"] == "observed"
-    assert store.queries == ["tool call"]
+    assert store.queries == [
+        {
+            "query": "tool call",
+            "trace_id": trace_id,
+            "span_id": span_id,
+            "parent_span_id": None,
+        }
+    ]
 
 
 def test_retrieval_query_api_handles_empty_queries() -> None:

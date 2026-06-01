@@ -604,6 +604,9 @@ class ShadowingDetectResponse(BaseModel):
 class RetrievalQueryRequest(BaseModel):
     workspace_id: str
     query: str
+    trace_id: UUID | None = None
+    span_id: UUID | None = None
+    parent_span_id: UUID | None = None
     session_id: str | None = None
     turn_id: str | None = None
     limit: int = 10
@@ -1013,6 +1016,7 @@ def _worker_stores(
     governance: GovernanceStore,
     utility: UtilityStore,
     contracts: ContractStore,
+    observability: ObservabilityStore,
     writer_workspace_root: Path | None = None,
 ) -> WorkerStores:
     workspace_root, _staging_root, archive_root = _writer_roots(writer_workspace_root)
@@ -1026,6 +1030,7 @@ def _worker_stores(
         governance=governance,
         utility=utility,
         contracts=contracts,
+        observability=observability,
         workspace_root=workspace_root,
         archive_root=archive_root,
     )
@@ -1161,7 +1166,12 @@ def create_app(
     async def context_hint(request: ContextHintRequest) -> ContextHintResponse:
         if not get_settings().runtime_context_broker_enabled:
             return bootstrap_context_hint(request)
-        return await build_context_hint(retrieval, request, cache=broker_cache)
+        return await build_context_hint(
+            retrieval,
+            request,
+            cache=broker_cache,
+            context_governance=context_governance,
+        )
 
     @app.post(
         "/v1/runtime/context-hint/cache/invalidate",
@@ -1388,6 +1398,7 @@ def create_app(
                 governance=governance,
                 utility=utility,
                 contracts=contracts,
+                observability=observability,
                 writer_workspace_root=writer_workspace_root,
             ),
             worker_id=request.worker_id,
@@ -2057,6 +2068,9 @@ def create_app(
         result = await retrieval.lexical_query(
             workspace_key=request.workspace_id,
             query=request.query,
+            trace_id=request.trace_id,
+            span_id=request.span_id,
+            parent_span_id=request.parent_span_id,
             session_id=request.session_id,
             turn_id=request.turn_id,
             limit=max(1, min(request.limit, 50)),

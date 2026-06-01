@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from uuid import uuid4
 
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalResult
@@ -22,6 +23,9 @@ class MemoryBrokerRetrievalStore:
         *,
         workspace_key: str,
         query: str,
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
         session_id: str | None = None,
         turn_id: str | None = None,
         limit: int = 10,
@@ -30,6 +34,9 @@ class MemoryBrokerRetrievalStore:
             {
                 "workspace_key": workspace_key,
                 "query": query,
+                "trace_id": trace_id,
+                "span_id": span_id,
+                "parent_span_id": parent_span_id,
                 "session_id": session_id,
                 "turn_id": turn_id,
                 "limit": limit,
@@ -79,8 +86,28 @@ class MemoryBrokerRetrievalStore:
         )
 
 
+class MemoryContextGovernanceStore:
+    def __init__(self) -> None:
+        self.artifacts: list[dict[str, object]] = []
+        self.ledgers: list[dict[str, object]] = []
+
+    async def record_artifact(self, **kwargs):
+        artifact_id = uuid4()
+        self.artifacts.append(kwargs | {"context_artifact_id": artifact_id})
+        return SimpleNamespace(
+            context_artifact_id=artifact_id,
+            token_count=max(1, (len(str(kwargs["text"])) + 3) // 4),
+        )
+
+    async def record_token_ledger(self, **kwargs):
+        self.ledgers.append(kwargs)
+        return SimpleNamespace(context_token_ledger_id=uuid4())
+
+
 def test_context_broker_renders_scanned_skill_candidates() -> None:
     skill_id = uuid4()
+    trace_id = uuid4()
+    span_id = uuid4()
     store = MemoryBrokerRetrievalStore(
         [
             RetrievalCandidate(
@@ -109,17 +136,21 @@ def test_context_broker_renders_scanned_skill_candidates() -> None:
             ),
         ]
     )
+    context = MemoryContextGovernanceStore()
 
     async def run():
         return await build_context_hint(
             store,
             ContextHintRequest(
                 workspace_id="dev-01",
+                trace_id=trace_id,
+                span_id=span_id,
                 session_id="session-1",
                 turn_id="turn-1",
                 user_intent="repair pdf table extraction",
                 max_tokens=120,
             ),
+            context_governance=context,
         )
 
     response = asyncio.run(run())
@@ -132,9 +163,41 @@ def test_context_broker_renders_scanned_skill_candidates() -> None:
     assert response.suppressed[0]["reason"] == "duplicate-skill"
     assert "exact-rerank" in response.reason_codes
     assert store.calls[0]["limit"] == 8
+    assert store.calls[0]["trace_id"] == trace_id
+    assert store.calls[0]["span_id"] == span_id
     assert store.graph_calls[0]["limit"] == 12
     assert store.records[0]["decision"] == "skill_hint"
     assert store.records[0]["rendered_skill_ids"] == [skill_id]
+    assert context.artifacts[0]["artifact_kind"] == "broker_hint"
+    assert context.artifacts[0]["source_object_type"] == "retrieval_log"
+    assert context.artifacts[0]["max_tokens"] == 120
+    assert context.ledgers[0]["visibility_state"] == "skill_visible"
+    assert context.ledgers[0]["context_artifact_id"] == context.artifacts[0]["context_artifact_id"]
+
+
+def test_context_broker_records_no_skill_token_ledger() -> None:
+    store = MemoryBrokerRetrievalStore([])
+    context = MemoryContextGovernanceStore()
+
+    async def run():
+        return await build_context_hint(
+            store,
+            ContextHintRequest(
+                workspace_id="dev-01",
+                session_id="session-1",
+                turn_id="turn-1",
+                user_intent="unknown operation",
+            ),
+            context_governance=context,
+        )
+
+    response = asyncio.run(run())
+
+    assert response.decision == "no_skill"
+    assert context.artifacts == []
+    assert context.ledgers[0]["visibility_state"] == "no_skill"
+    assert context.ledgers[0]["token_count"] == 0
+    assert context.ledgers[0]["session_id"] == "session-1"
 
 
 def test_context_broker_defers_evidence_only_matches() -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import asyncpg
 
@@ -59,6 +59,9 @@ class RetrievalStore(Protocol):
         *,
         workspace_key: str,
         query: str,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
         session_id: str | None = None,
         turn_id: str | None = None,
         limit: int = 10,
@@ -101,6 +104,9 @@ class NullRetrievalStore:
         *,
         workspace_key: str,
         query: str,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
         session_id: str | None = None,
         turn_id: str | None = None,
         limit: int = 10,
@@ -146,6 +152,9 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
         *,
         workspace_key: str,
         query: str,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
         session_id: str | None = None,
         turn_id: str | None = None,
         limit: int = 10,
@@ -254,6 +263,9 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
             log_id = await _insert_retrieval_log(
                 conn,
                 workspace_id=workspace_id,
+                trace_id=trace_id or uuid4(),
+                span_id=span_id or uuid4(),
+                parent_span_id=parent_span_id,
                 session_id=session_id,
                 turn_id=turn_id,
                 query=query,
@@ -421,6 +433,9 @@ async def _insert_retrieval_log(
     conn: asyncpg.Connection,
     *,
     workspace_id: UUID,
+    trace_id: UUID,
+    span_id: UUID,
+    parent_span_id: UUID | None,
     session_id: str | None,
     turn_id: str | None,
     query: str,
@@ -434,18 +449,27 @@ async def _insert_retrieval_log(
           workspace_id,
           session_id,
           turn_id,
+          trace_id,
+          span_id,
+          parent_span_id,
           decision,
           candidate_skill_ids,
           rendered_skill_ids,
           no_skill_control,
           metadata
         )
-        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, '{}'::uuid[], true, $6::jsonb)
+        VALUES (
+          gen_random_uuid(), $1, $2, $3, $4, $5, $6,
+          $7, $8, '{}'::uuid[], true, $9::jsonb
+        )
         RETURNING retrieval_log_id
         """,
         workspace_id,
         session_id,
         turn_id,
+        trace_id,
+        span_id,
+        parent_span_id,
         decision,
         [candidate.skill_id for candidate in candidates if candidate.skill_id],
         json.dumps(

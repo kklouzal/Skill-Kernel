@@ -15,6 +15,7 @@ from autoskill.db.evaluations import EvaluationStore
 from autoskill.db.evidence import EvidenceStore
 from autoskill.db.governance import GovernanceStore, RevocationRequestRecord
 from autoskill.db.jobs import JobRecord, JobStore
+from autoskill.db.observability import NullObservabilityStore, ObservabilityStore
 from autoskill.db.retrieval import RetrievalStore
 from autoskill.db.scheduler import SchedulerStore
 from autoskill.db.utility import UtilityStore
@@ -120,6 +121,7 @@ class WorkerStores:
     governance: GovernanceStore | None = None
     utility: UtilityStore | None = None
     contracts: ContractStore | None = None
+    observability: ObservabilityStore | None = None
     embedder: TextEmbedder | None = None
     workspace_root: Path | None = None
     archive_root: Path | None = None
@@ -149,12 +151,19 @@ async def run_worker_once(
         return WorkerRunResult(claimed=False, job=None, status="idle")
 
     definition = JOB_DEFINITIONS.get(job.job_kind)
+    span = await _start_job_span(stores, job, worker_id=worker_id, pool=pool)
     if definition is None:
         error = f"unsupported job kind: {job.job_kind}"
         completed = await stores.jobs.complete_job(
             job_id=job.job_id,
             worker_id=worker_id,
             status="failed",
+            error=error,
+        )
+        await _finish_job_span(
+            stores,
+            span_id=span.span_id,
+            status="error",
             error=error,
         )
         return WorkerRunResult(claimed=True, job=completed or job, status="failed", error=error)
@@ -175,12 +184,24 @@ async def run_worker_once(
             status="failed",
             error=message,
         )
+        await _finish_job_span(
+            stores,
+            span_id=span.span_id,
+            status="error",
+            error=message,
+        )
         return WorkerRunResult(claimed=True, job=completed or job, status="failed", error=message)
 
     completed = await stores.jobs.complete_job(
         job_id=job.job_id,
         worker_id=worker_id,
         status="succeeded",
+    )
+    await _finish_job_span(
+        stores,
+        span_id=span.span_id,
+        status="ok",
+        output=output,
     )
     return WorkerRunResult(
         claimed=True,
@@ -323,6 +344,58 @@ async def build_worker_health(
         jobs_by_kind=summary.by_kind,
         jobs_by_pool=jobs_by_pool,
         workers=[heartbeat.to_json() for heartbeat in heartbeats],
+    )
+
+
+async def _start_job_span(
+    stores: WorkerStores,
+    job: JobRecord,
+    *,
+    worker_id: str,
+    pool: WorkerPool,
+):
+    observability = stores.observability or NullObservabilityStore()
+    workspace = _payload_workspace(job) or job.workspace_key or "unknown"
+    return await observability.start_span(
+        workspace_key=workspace,
+        trace_id=job.trace_id,
+        parent_span_id=job.span_id or job.parent_span_id,
+        operation_name=job.job_kind,
+        operation_kind="job",
+        safe_attributes={
+            "job_id": str(job.job_id),
+            "job_kind": job.job_kind,
+            "worker_id": worker_id,
+            "pool": pool,
+            "attempt": job.attempts,
+        },
+        object_refs=[
+            {
+                "object_type": "job",
+                "object_id": str(job.job_id),
+            }
+        ],
+    )
+
+
+async def _finish_job_span(
+    stores: WorkerStores,
+    *,
+    span_id: UUID,
+    status: str,
+    output: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> None:
+    observability = stores.observability or NullObservabilityStore()
+    attributes: dict[str, Any] = {}
+    if error:
+        attributes["error"] = error[:500]
+    if output is not None:
+        attributes["output_keys"] = sorted(output.keys())
+    await observability.finish_span(
+        span_id=span_id,
+        status=status,  # type: ignore[arg-type]
+        safe_attributes=attributes,
     )
 
 

@@ -6,6 +6,7 @@ from autoskill.api.app import WorkerRunOnceRequest, create_app
 from autoskill.db.contracts import ContractExtractResult, DriftCheckResult
 from autoskill.db.evaluations import EvaluationRunResult
 from autoskill.db.evidence import EvidenceDeriveResult
+from autoskill.db.observability import TraceSpanRecord
 from autoskill.db.scheduler import SchedulerTickResult
 from autoskill.db.utility import CurationRunResult, UtilityRollupResult
 from autoskill.services.worker import (
@@ -86,6 +87,67 @@ class MemoryInvalidationStore:
     ) -> int:
         self.calls.append({"workspace_key": workspace_key, "objects": objects})
         return len(objects)
+
+
+class MemoryObservabilityStore:
+    def __init__(self) -> None:
+        self.started: list[TraceSpanRecord] = []
+        self.finished: list[dict[str, object]] = []
+
+    async def start_span(
+        self,
+        *,
+        workspace_key: str,
+        operation_name: str,
+        operation_kind: str,
+        trace_id=None,
+        parent_span_id=None,
+        safe_attributes=None,
+        object_refs=None,
+    ) -> TraceSpanRecord:
+        from datetime import UTC, datetime
+        from uuid import uuid4
+
+        span = TraceSpanRecord(
+            trace_id=trace_id or uuid4(),
+            span_id=uuid4(),
+            parent_span_id=parent_span_id,
+            workspace_id=None,
+            workspace_key=workspace_key,
+            operation_name=operation_name,
+            operation_kind=operation_kind,
+            status="running",
+            safe_attributes=safe_attributes or {},
+            object_refs=object_refs or [],
+            started_at=datetime.now(UTC),
+            ended_at=None,
+        )
+        self.started.append(span)
+        return span
+
+    async def finish_span(
+        self,
+        *,
+        span_id,
+        status="ok",
+        safe_attributes=None,
+        object_refs=None,
+    ) -> TraceSpanRecord | None:
+        self.finished.append(
+            {
+                "span_id": span_id,
+                "status": status,
+                "safe_attributes": safe_attributes or {},
+                "object_refs": object_refs or [],
+            }
+        )
+        return None
+
+    async def link_spans(self, **_kwargs) -> bool:
+        return True
+
+    async def list_trace(self, **_kwargs) -> list[TraceSpanRecord]:
+        return []
 
 
 class MemoryUtilityWorkerStore:
@@ -202,6 +264,84 @@ def test_worker_run_once_dispatches_maintenance_job() -> None:
     assert result.status == "succeeded"
     assert result.output == {"scanned": 1, "created": 1, "duplicate": 0, "evidence_ids": []}
     assert stores.evidence.calls == [{"workspace_key": "dev-01", "limit": 7}]
+
+
+def test_worker_run_once_records_trace_span_for_job_execution() -> None:
+    jobs = MemoryJobStore()
+    observability = MemoryObservabilityStore()
+
+    async def run():
+        enqueued = await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="evidence.derive",
+            idempotency_key="derive:traced",
+            payload={"workspace_id": "dev-01", "limit": 3},
+        )
+        result = await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=MemoryPendingEmbeddingStore(),
+                observability=observability,
+            ),
+            worker_id="worker-1",
+            pool="maintenance",
+        )
+        return enqueued.job, result
+
+    job, result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert len(observability.started) == 1
+    span = observability.started[0]
+    assert span.trace_id == job.trace_id
+    assert span.parent_span_id == job.span_id
+    assert span.operation_name == "evidence.derive"
+    assert span.operation_kind == "job"
+    assert span.safe_attributes["job_id"] == str(job.job_id)
+    assert span.safe_attributes["worker_id"] == "worker-1"
+    assert observability.finished == [
+        {
+            "span_id": span.span_id,
+            "status": "ok",
+            "safe_attributes": {"output_keys": ["created", "duplicate", "evidence_ids", "scanned"]},
+            "object_refs": [],
+        }
+    ]
+
+
+def test_worker_run_once_records_error_trace_span() -> None:
+    jobs = MemoryJobStore()
+    observability = MemoryObservabilityStore()
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="writer.apply",
+            idempotency_key="writer-apply:traced-error",
+            max_attempts=1,
+        )
+        return await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=MemoryPendingEmbeddingStore(),
+                governance=MemoryGovernanceStore(),
+                observability=observability,
+            ),
+            worker_id="worker-1",
+            pool="mutation",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "failed"
+    assert len(observability.started) == 1
+    assert observability.started[0].operation_name == "writer.apply"
+    assert observability.finished[0]["status"] == "error"
+    assert "writer roots are required" in observability.finished[0]["safe_attributes"]["error"]
 
 
 def test_worker_run_once_renews_lease_while_handler_runs() -> None:

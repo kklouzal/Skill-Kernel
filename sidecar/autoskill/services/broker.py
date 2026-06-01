@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from time import monotonic
 from uuid import UUID
 
+from autoskill.db.context import ContextGovernanceStore
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalStore
 from autoskill.services.scanner import has_blocking_findings, scan_text
 from pydantic import BaseModel, Field
@@ -19,6 +20,9 @@ class ContextHintRequest(BaseModel):
     agent_id: str | None = None
     session_id: str | None = None
     turn_id: str | None = None
+    trace_id: UUID | None = None
+    span_id: UUID | None = None
+    parent_span_id: UUID | None = None
     user_intent: str | None = None
     max_tokens: int = 600
 
@@ -93,6 +97,7 @@ async def build_context_hint(
     request: ContextHintRequest,
     *,
     cache: ContextHintCache | None = None,
+    context_governance: ContextGovernanceStore | None = None,
 ) -> ContextHintResponse:
     query = (request.user_intent or "").strip()
     if not query:
@@ -105,6 +110,9 @@ async def build_context_hint(
     result = await retrieval.lexical_query(
         workspace_key=request.workspace_id,
         query=query,
+        trace_id=request.trace_id,
+        span_id=request.span_id,
+        parent_span_id=request.parent_span_id,
         session_id=request.session_id,
         turn_id=request.turn_id,
         limit=8,
@@ -118,6 +126,7 @@ async def build_context_hint(
             reason_codes=["retrieval-empty"],
         )
         await _record_context_hint(retrieval, result.retrieval_log_id, response)
+        await _record_context_governance(context_governance, request, response)
         if cache is not None:
             cache.set(request, query, response)
         return response
@@ -140,6 +149,7 @@ async def build_context_hint(
             reason_codes=_reason_codes(suppressed, archive_promotion_skill_ids),
         )
         await _record_context_hint(retrieval, result.retrieval_log_id, response)
+        await _record_context_governance(context_governance, request, response)
         if cache is not None:
             cache.set(request, query, response)
         return response
@@ -155,6 +165,7 @@ async def build_context_hint(
             reason_codes=["render-scan-blocked"],
         )
         await _record_context_hint(retrieval, result.retrieval_log_id, response)
+        await _record_context_governance(context_governance, request, response)
         if cache is not None:
             cache.set(request, query, response)
         return response
@@ -170,6 +181,7 @@ async def build_context_hint(
         reason_codes=_reason_codes(suppressed, archive_promotion_skill_ids, selected),
     )
     await _record_context_hint(retrieval, result.retrieval_log_id, response)
+    await _record_context_governance(context_governance, request, response)
     if cache is not None:
         cache.set(request, query, response)
     return response
@@ -331,3 +343,63 @@ async def _record_context_hint(
         suppressed=response.suppressed,
         reason_codes=response.reason_codes,
     )
+
+
+async def _record_context_governance(
+    context_governance: ContextGovernanceStore | None,
+    request: ContextHintRequest,
+    response: ContextHintResponse,
+) -> None:
+    if context_governance is None:
+        return
+    artifact = None
+    token_count = _estimate_tokens(response.hint) if response.hint else 0
+    if response.hint:
+        artifact = await context_governance.record_artifact(
+            workspace_key=request.workspace_id,
+            artifact_kind="broker_hint",
+            source_object_type="retrieval_log",
+            text=response.hint,
+            max_tokens=max(1, request.max_tokens),
+            source_object_id=UUID(response.retrieval_log_id)
+            if response.retrieval_log_id
+            else None,
+            safety_status="passed",
+            equivalence_status="pending",
+            shadowing_status="pending",
+            metadata={
+                "broker_policy_version": response.broker_policy_version,
+                "decision": response.decision,
+                "skill_ids": response.skill_ids,
+                "reason_codes": response.reason_codes,
+            },
+        )
+        token_count = artifact.token_count
+    await context_governance.record_token_ledger(
+        workspace_key=request.workspace_id,
+        visibility_state=_visibility_state(response),
+        token_count=token_count,
+        context_artifact_id=artifact.context_artifact_id if artifact else None,
+        session_id=request.session_id,
+        turn_id=request.turn_id,
+        outcome=response.decision,
+        metadata={
+            "broker_policy_version": response.broker_policy_version,
+            "retrieval_log_id": response.retrieval_log_id,
+            "skill_ids": response.skill_ids,
+            "suppressed_count": len(response.suppressed),
+            "reason_codes": response.reason_codes,
+        },
+    )
+
+
+def _visibility_state(response: ContextHintResponse) -> str:
+    if response.decision == "skill_hint":
+        return "skill_visible"
+    if response.decision == "defer_skill":
+        return "skill_hidden"
+    return "no_skill"
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, (len(text) + 3) // 4)

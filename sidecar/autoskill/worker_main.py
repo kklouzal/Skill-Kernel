@@ -12,6 +12,7 @@ from autoskill.db.evaluations import AsyncpgEvaluationStore
 from autoskill.db.evidence import AsyncpgEvidenceStore
 from autoskill.db.governance import AsyncpgGovernanceStore
 from autoskill.db.jobs import AsyncpgJobStore
+from autoskill.db.observability import AsyncpgObservabilityStore
 from autoskill.db.retrieval import AsyncpgRetrievalStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore
 from autoskill.db.utility import AsyncpgUtilityStore
@@ -60,6 +61,10 @@ async def run_worker(args: argparse.Namespace) -> int:
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
     )
+    observability = AsyncpgObservabilityStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -78,6 +83,7 @@ async def run_worker(args: argparse.Namespace) -> int:
                 governance=governance,
                 utility=utility,
                 contracts=contracts,
+                observability=observability,
                 embedder=build_text_embedder_from_settings(settings),
                 workspace_root=workspace_root,
                 archive_root=archive_root,
@@ -103,6 +109,7 @@ async def run_worker(args: argparse.Namespace) -> int:
         await governance.close()
         await utility.close()
         await contracts.close()
+        await observability.close()
 
 
 def parse_args() -> argparse.Namespace:
