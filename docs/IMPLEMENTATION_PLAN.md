@@ -99,7 +99,7 @@ Deliverables:
 - model profile thinking-level and fallback policy; implemented on profile storage/API and recorded on invocation audit rows;
 - OpenAI-compatible `/chat/completions` route; implemented with bounded timeout and safe endpoint/API-key resolution;
 - OpenClaw text route; intentionally fail-closed as `unsupported` until a stable seam is available;
-- LLM invocation audit; implemented as content-safe `llm_invocations` rows with purpose, model/profile, route, trace/span, token estimates, status, error, and non-secret audit metadata;
+- LLM invocation audit and trace spans; implemented as content-safe `llm_invocations` rows with purpose, model/profile, route, trace/span, token estimates, status, error, and non-secret audit metadata, plus `llm_call` trace spans that preserve caller/job trace roots without storing prompt or response text in span attributes;
 - text-model qualification runs; implemented as control-authenticated probes through the typed LLM client, with dedicated run records and latest-verdict profile status stamping.
 
 Acceptance:
@@ -108,6 +108,7 @@ Acceptance:
 - unsupported OpenClaw text routing is audited and blocked instead of silently falling through;
 - API keys are never persisted in invocation audit metadata;
 - focused LLM client tests pass, full sidecar tests pass, and local Postgres smoke can persist an invocation audit row;
+- typed LLM calls record first-class `llm_call` spans for successful OpenAI-compatible calls and denied unsupported routes, with invocation audit rows attached to the model-call span;
 - model and embedding qualification runs persist dedicated audit rows and stamp the latest verdict onto profile records.
 
 ## Phase 5 - Runtime Context Broker
@@ -154,6 +155,7 @@ Acceptance:
 - malicious artifacts are rejected;
 - evaluator reports target, regression, and no-skill results; no-skill-control remains `needs_intervention` until recorded or redacted contrastive replay evidence exists.
 - proposal-gate evaluation runs are trace-visible without storing SkillIR or probe payloads in trace attributes; implemented and validated with focused tests plus compose/Postgres smoke coverage.
+- executor-scoped proposal-gate evaluations update `skill_profile_compatibility` as derived state (`compatible`, `degraded`, or `blocked`) with evaluation IDs, reason codes, and trace/span evidence, so broker routing consumes evaluator compatibility outcomes rather than only manual operator writes.
 
 ## Phase 7 - Deterministic Writer and Rollback
 

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 from urllib import error, request
 from uuid import UUID
 
 from autoskill.db.llm_invocations import LLMInvocationRecord, LLMInvocationStore
+from autoskill.db.observability import NullObservabilityStore, ObservabilityStore, TraceStatus
 from autoskill.db.profiles import ModelProfileRecord, ProfileStore
 
 
@@ -81,11 +82,13 @@ class LLMClient:
         profiles: ProfileStore,
         invocations: LLMInvocationStore,
         settings: object,
+        observability: ObservabilityStore | None = None,
         urlopen: URLOpener | None = None,
     ) -> None:
         self.profiles = profiles
         self.invocations = invocations
         self.settings = settings
+        self.observability = observability or NullObservabilityStore()
         self.urlopen = urlopen or request.urlopen
 
     async def complete(self, completion: LLMCompletionRequest) -> LLMCompletionResponse:
@@ -101,15 +104,65 @@ class LLMClient:
         prompt_estimate = estimate_text_tokens(
             "\n".join(message.content for message in completion.messages)
         )
+        span = await self.observability.start_span(
+            workspace_key=completion.workspace_key,
+            trace_id=completion.trace_id,
+            parent_span_id=completion.span_id,
+            operation_name="llm.complete",
+            operation_kind="llm_call",
+            safe_attributes={
+                "purpose": completion.purpose,
+                "profile_key": profile.profile_key,
+                "route_kind": profile.route_kind,
+                "provider": profile.provider,
+                "model": profile.model,
+                "requested_thinking_level": profile.thinking_level or "off",
+                "thinking_fallback_policy": profile.thinking_fallback_policy or "omit",
+                "prompt_token_estimate": prompt_estimate,
+                "max_output_tokens": completion.max_output_tokens,
+                "temperature": completion.temperature,
+            },
+            object_refs=[
+                {
+                    "object_type": "model_profile",
+                    "object_id": str(profile.profile_id),
+                }
+            ],
+        )
+        traced_completion = replace(
+            completion,
+            trace_id=span.trace_id,
+            span_id=span.span_id,
+        )
         try:
             thinking = _resolve_thinking(profile)
             if profile.route_kind == "openai_compatible":
-                return await self._complete_openai_compatible(
-                    completion=completion,
+                response = await self._complete_openai_compatible(
+                    completion=traced_completion,
                     profile=profile,
                     thinking=thinking,
                     prompt_token_estimate=prompt_estimate,
                 )
+                await self._finish_span(
+                    span_id=span.span_id,
+                    status="ok",
+                    safe_attributes={
+                        "purpose": completion.purpose,
+                        "profile_key": profile.profile_key,
+                        "status": "ok",
+                        "effective_thinking_level": thinking.effective,
+                        "thinking_downgraded": thinking.downgraded,
+                        "output_token_estimate": response.output_token_estimate,
+                        "finish_reason": response.finish_reason,
+                    },
+                    object_refs=[
+                        {
+                            "object_type": "llm_invocation",
+                            "object_id": str(response.invocation.llm_invocation_id),
+                        }
+                    ],
+                )
+                return response
             if profile.route_kind == "openclaw":
                 raise LLMRouteUnsupportedError(
                     "openclaw LLM route is not yet stable in the sidecar"
@@ -124,22 +177,57 @@ class LLMClient:
                 payload={},
             )
             await self._record_failure(
-                completion=completion,
+                completion=traced_completion,
                 profile=profile,
                 thinking=thinking,
                 prompt_token_estimate=prompt_estimate,
                 status="error",
                 error_text=str(exc),
             )
+            await self._finish_span(
+                span_id=span.span_id,
+                status="error",
+                safe_attributes={
+                    "purpose": completion.purpose,
+                    "profile_key": profile.profile_key,
+                    "status": "error",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:500],
+                },
+            )
             raise
         except LLMRouteUnsupportedError as exc:
             await self._record_failure(
-                completion=completion,
+                completion=traced_completion,
                 profile=profile,
                 thinking=thinking,
                 prompt_token_estimate=prompt_estimate,
                 status="unsupported",
                 error_text=str(exc),
+            )
+            await self._finish_span(
+                span_id=span.span_id,
+                status="denied",
+                safe_attributes={
+                    "purpose": completion.purpose,
+                    "profile_key": profile.profile_key,
+                    "status": "unsupported",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:500],
+                },
+            )
+            raise
+        except Exception as exc:
+            await self._finish_span(
+                span_id=span.span_id,
+                status=_trace_status_for_exception(exc),
+                safe_attributes={
+                    "purpose": completion.purpose,
+                    "profile_key": profile.profile_key,
+                    "status": "error",
+                    "error_type": type(exc).__name__,
+                    "error": _safe_error(exc)[:500],
+                },
             )
             raise
 
@@ -284,6 +372,21 @@ class LLMClient:
             audit={"endpoint_route": profile.route_kind},
         )
 
+    async def _finish_span(
+        self,
+        *,
+        span_id: UUID,
+        status: TraceStatus,
+        safe_attributes: dict[str, object],
+        object_refs: list[dict[str, str]] | None = None,
+    ) -> None:
+        await self.observability.finish_span(
+            span_id=span_id,
+            status=status,
+            safe_attributes=safe_attributes,
+            object_refs=object_refs,
+        )
+
 
 def estimate_text_tokens(text: str) -> int:
     if not text:
@@ -370,3 +473,9 @@ def _resolve_api_key(profile: ModelProfileRecord, settings: object) -> str | Non
 def _safe_error(exc: BaseException) -> str:
     text = str(exc)
     return text if text else exc.__class__.__name__
+
+
+def _trace_status_for_exception(exc: BaseException) -> TraceStatus:
+    if isinstance(exc, LLMClientError) and "timed out" in str(exc).lower():
+        return "timeout"
+    return "error"

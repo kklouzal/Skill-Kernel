@@ -1335,6 +1335,7 @@ def create_app(
         profiles=profiles,
         invocations=llm_invocations,
         settings=get_settings(),
+        observability=observability,
     )
     compatibility = compatibility_store or _build_compatibility_store()
     context_governance = context_governance_store or _build_context_governance_store()

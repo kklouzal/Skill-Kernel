@@ -6,6 +6,7 @@ from autoskill.db.evaluations import (
     EvaluationRunItem,
     EvaluationRunResult,
     _attach_contrastive_replays,
+    _finish_evaluation,
 )
 from autoskill.db.observability import TraceSpanRecord
 from autoskill.services.evaluator import evaluate_proposal_gate
@@ -211,6 +212,43 @@ def test_proposal_gate_blocks_when_scanner_failed() -> None:
     assert payload["reason_codes"] == ["scanner-blocked"]
 
 
+def test_evaluation_finish_records_executor_profile_compatibility() -> None:
+    conn = FakeEvaluationConnection()
+    workspace_id = uuid4()
+    evaluation_id = uuid4()
+    skill_version_id = uuid4()
+    executor_profile_id = uuid4()
+    trace_id = uuid4()
+    span_id = uuid4()
+    parent_span_id = uuid4()
+
+    async def run() -> None:
+        await _finish_evaluation(
+            conn,
+            workspace_id=workspace_id,
+            evaluation_id=evaluation_id,
+            skill_version_id=skill_version_id,
+            executor_profile_id=executor_profile_id,
+            status="needs_intervention",
+            result={"reason_codes": ["intervention-required"]},
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+        )
+
+    asyncio.run(run())
+
+    compatibility = conn.compatibility_calls[0]
+    assert compatibility["workspace_id"] == workspace_id
+    assert compatibility["skill_version_id"] == skill_version_id
+    assert compatibility["executor_profile_id"] == executor_profile_id
+    assert compatibility["status"] == "degraded"
+    assert compatibility["evidence"]["source"] == "proposal_gate_evaluation"
+    assert compatibility["evidence"]["evaluation_id"] == str(evaluation_id)
+    assert compatibility["evidence"]["reason_codes"] == ["intervention-required"]
+    assert compatibility["evidence"]["trace_id"] == str(trace_id)
+
+
 class MemoryEvaluationStore:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -244,6 +282,7 @@ class MemoryEvaluationStore:
                 EvaluationRunItem(
                     evaluation_id=uuid4(),
                     skill_version_id=uuid4(),
+                    executor_profile_id=None,
                     status="needs_intervention",
                     result={"workspace_key": workspace_key, "limit": limit},
                 )
@@ -366,3 +405,24 @@ class FakeContrastiveConnection:
             self.updated_probe_hashes.append(str(_args[1]))
         if "INSERT INTO autoskill.evidence_maturity" in query:
             self.maturity_evidence_ids.append(_args[1])
+
+
+class FakeEvaluationConnection:
+    def __init__(self) -> None:
+        self.compatibility_calls: list[dict[str, object]] = []
+
+    async def execute(self, query: str, *_args):
+        if "INSERT INTO autoskill.skill_profile_compatibility" not in query:
+            return "UPDATE 1"
+        import json
+
+        self.compatibility_calls.append(
+            {
+                "workspace_id": _args[0],
+                "skill_version_id": _args[1],
+                "executor_profile_id": _args[2],
+                "status": _args[3],
+                "evidence": json.loads(_args[4]),
+            }
+        )
+        return "INSERT 1"

@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from autoskill.db.llm_invocations import LLMInvocationRecord
+from autoskill.db.observability import TraceSpanRecord
 from autoskill.db.profiles import ModelProfileRecord
 from autoskill.services.llm import (
     LLMClient,
@@ -61,6 +62,64 @@ class MemoryInvocationStore:
         )
         self.records.append(record)
         return record
+
+
+class MemoryObservabilityStore:
+    def __init__(self) -> None:
+        self.started: list[TraceSpanRecord] = []
+        self.finished: list[dict[str, object]] = []
+
+    async def start_span(
+        self,
+        *,
+        workspace_key: str,
+        operation_name: str,
+        operation_kind: str,
+        trace_id=None,
+        parent_span_id=None,
+        safe_attributes=None,
+        object_refs=None,
+    ) -> TraceSpanRecord:
+        span = TraceSpanRecord(
+            trace_id=trace_id or uuid4(),
+            span_id=uuid4(),
+            parent_span_id=parent_span_id,
+            workspace_id=None,
+            workspace_key=workspace_key,
+            operation_name=operation_name,
+            operation_kind=operation_kind,
+            status="running",
+            safe_attributes=safe_attributes or {},
+            object_refs=object_refs or [],
+            started_at=datetime.now(UTC),
+            ended_at=None,
+        )
+        self.started.append(span)
+        return span
+
+    async def finish_span(
+        self,
+        *,
+        span_id,
+        status="ok",
+        safe_attributes=None,
+        object_refs=None,
+    ) -> TraceSpanRecord | None:
+        self.finished.append(
+            {
+                "span_id": span_id,
+                "status": status,
+                "safe_attributes": safe_attributes or {},
+                "object_refs": object_refs or [],
+            }
+        )
+        return None
+
+    async def link_spans(self, **_kwargs) -> bool:
+        return True
+
+    async def list_trace(self, **_kwargs) -> list[TraceSpanRecord]:
+        return []
 
 
 class FakeResponse:
@@ -135,6 +194,7 @@ def test_llm_client_posts_openai_compatible_request_and_records_safe_audit() -> 
         return FakeResponse()
 
     invocations = MemoryInvocationStore()
+    observability = MemoryObservabilityStore()
     client = LLMClient(
         profiles=MemoryProfileStore(
             _profile(
@@ -147,10 +207,12 @@ def test_llm_client_posts_openai_compatible_request_and_records_safe_audit() -> 
         ),
         invocations=invocations,
         settings=SimpleNamespace(llm_api_key="secret-test-key"),
+        observability=observability,
         urlopen=fake_urlopen,
     )
 
-    response = asyncio.run(client.complete(_request()))
+    request = _request()
+    response = asyncio.run(client.complete(request))
 
     assert response.text == "{\"candidate\": true}"
     assert captured["url"] == "http://127.0.0.1:9999/v1/chat/completions"
@@ -165,6 +227,36 @@ def test_llm_client_posts_openai_compatible_request_and_records_safe_audit() -> 
         "finish_reason": "stop",
         "provider_request_id": "chatcmpl-test",
     }
+    assert len(observability.started) == 1
+    span = observability.started[0]
+    assert span.trace_id == request.trace_id
+    assert span.parent_span_id == request.span_id
+    assert span.operation_name == "llm.complete"
+    assert span.operation_kind == "llm_call"
+    assert span.safe_attributes == {
+        "purpose": "skill_creation_plan",
+        "profile_key": "default-text",
+        "route_kind": "openai_compatible",
+        "provider": "test-provider",
+        "model": "test-model",
+        "requested_thinking_level": "medium",
+        "thinking_fallback_policy": "omit",
+        "prompt_token_estimate": 6,
+        "max_output_tokens": 1024,
+        "temperature": 0.0,
+    }
+    assert "Return a JSON proposal." not in json.dumps(span.safe_attributes)
+    assert invocations.records[0].trace_id == span.trace_id
+    assert invocations.records[0].span_id == span.span_id
+    assert observability.finished[0]["status"] == "ok"
+    assert observability.finished[0]["safe_attributes"]["finish_reason"] == "stop"
+    assert observability.finished[0]["safe_attributes"]["output_token_estimate"] == 5
+    assert observability.finished[0]["object_refs"] == [
+        {
+            "object_type": "llm_invocation",
+            "object_id": str(invocations.records[0].llm_invocation_id),
+        }
+    ]
 
 
 def test_llm_client_records_strict_thinking_policy_failure() -> None:
@@ -187,10 +279,12 @@ def test_llm_client_records_strict_thinking_policy_failure() -> None:
 
 def test_llm_client_records_openclaw_route_as_unsupported() -> None:
     invocations = MemoryInvocationStore()
+    observability = MemoryObservabilityStore()
     client = LLMClient(
         profiles=MemoryProfileStore(_profile(route_kind="openclaw")),
         invocations=invocations,
         settings=SimpleNamespace(llm_api_key="secret-test-key"),
+        observability=observability,
     )
 
     with pytest.raises(LLMRouteUnsupportedError):
@@ -198,3 +292,7 @@ def test_llm_client_records_openclaw_route_as_unsupported() -> None:
 
     assert invocations.records[0].status == "unsupported"
     assert invocations.records[0].audit == {"endpoint_route": "openclaw"}
+    assert observability.started[0].operation_kind == "llm_call"
+    assert invocations.records[0].span_id == observability.started[0].span_id
+    assert observability.finished[0]["status"] == "denied"
+    assert observability.finished[0]["safe_attributes"]["status"] == "unsupported"

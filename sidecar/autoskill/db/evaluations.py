@@ -16,6 +16,7 @@ from autoskill.services.evaluator import evaluate_proposal_gate
 class EvaluationRunItem:
     evaluation_id: UUID
     skill_version_id: UUID
+    executor_profile_id: UUID | None
     status: str
     result: dict[str, Any]
 
@@ -23,6 +24,9 @@ class EvaluationRunItem:
         return {
             "evaluation_id": str(self.evaluation_id),
             "skill_version_id": str(self.skill_version_id),
+            "executor_profile_id": (
+                str(self.executor_profile_id) if self.executor_profile_id else None
+            ),
             "status": self.status,
             "result": self.result,
         }
@@ -149,6 +153,7 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                     workspace_id=row["workspace_id"],
                     evaluation_id=row["evaluation_id"],
                     skill_version_id=row["skill_version_id"],
+                    executor_profile_id=row["executor_profile_id"],
                     status=gate.status,
                     result=result,
                     trace_id=trace_id,
@@ -159,6 +164,7 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                     EvaluationRunItem(
                         evaluation_id=row["evaluation_id"],
                         skill_version_id=row["skill_version_id"],
+                        executor_profile_id=row["executor_profile_id"],
                         status=gate.status,
                         result=result,
                     )
@@ -269,6 +275,7 @@ async def _claim_planned_evaluations(
           ev.evaluation_id,
           ev.workspace_id,
           ev.skill_version_id,
+          ev.executor_profile_id,
           ev.result,
           sv.skill_ir,
           sv.scanner_status
@@ -445,6 +452,7 @@ async def _finish_evaluation(
     workspace_id: UUID,
     evaluation_id: UUID,
     skill_version_id: UUID,
+    executor_profile_id: UUID | None,
     status: str,
     result: dict[str, Any],
     trace_id: UUID | None = None,
@@ -484,6 +492,75 @@ async def _finish_evaluation(
             skill_version_id=skill_version_id,
             result=result,
         )
+    if executor_profile_id is not None:
+        await _record_executor_compatibility(
+            conn,
+            workspace_id=workspace_id,
+            skill_version_id=skill_version_id,
+            executor_profile_id=executor_profile_id,
+            evaluation_id=evaluation_id,
+            status=status,
+            result=result,
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+        )
+
+
+async def _record_executor_compatibility(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    skill_version_id: UUID,
+    executor_profile_id: UUID,
+    evaluation_id: UUID,
+    status: str,
+    result: dict[str, Any],
+    trace_id: UUID | None,
+    span_id: UUID | None,
+    parent_span_id: UUID | None,
+) -> None:
+    compatibility_status = _compatibility_status_for_evaluation(status)
+    evidence = {
+        "source": "proposal_gate_evaluation",
+        "evaluation_id": str(evaluation_id),
+        "evaluation_status": status,
+        "reason_codes": result.get("reason_codes", []),
+        "trace_id": str(trace_id) if trace_id else None,
+        "span_id": str(span_id) if span_id else None,
+        "parent_span_id": str(parent_span_id) if parent_span_id else None,
+    }
+    await conn.execute(
+        """
+        INSERT INTO autoskill.skill_profile_compatibility (
+          skill_profile_compatibility_id,
+          workspace_id,
+          skill_version_id,
+          executor_profile_id,
+          status,
+          evidence
+        )
+        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5::jsonb)
+        ON CONFLICT (workspace_id, skill_version_id, executor_profile_id)
+        DO UPDATE SET
+          status = EXCLUDED.status,
+          evidence = EXCLUDED.evidence,
+          last_checked_at = now()
+        """,
+        workspace_id,
+        skill_version_id,
+        executor_profile_id,
+        compatibility_status,
+        _json(evidence),
+    )
+
+
+def _compatibility_status_for_evaluation(status: str) -> str:
+    if status == "passed":
+        return "compatible"
+    if status == "needs_intervention":
+        return "degraded"
+    return "blocked"
 
 
 async def _record_intervention_maturity(
