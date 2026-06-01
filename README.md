@@ -27,11 +27,12 @@ Implemented now:
 - typed event envelope, SkillIR, scanner, compiler, redaction, audit hash, and path-contained writer primitives;
 - initial Postgres migration covering the core v9 control-plane tables;
 - OpenClaw plugin/hook package skeleton with local redaction, bounded spool, forwarding, and replay utilities;
+- hook-package smoke tests that import the actual handlers and verify forwarded redacted envelopes;
 - focused Python and Node tests for deterministic primitives.
 
 Not implemented yet:
 
-- full OpenClaw runtime hook integration proof against the live gateway;
+- full installed-plugin proof against the live OpenClaw gateway;
 - pgvector-backed retrieval and embeddings;
 - durable scheduler worker loops;
 - LLM proposal operations;

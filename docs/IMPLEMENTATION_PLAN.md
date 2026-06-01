@@ -50,6 +50,7 @@ Acceptance:
 - sidecar outage does not block OpenClaw;
 - only redacted payloads are persisted;
 - spool replay is idempotent; implemented as accepted-or-duplicate deletion from bounded JSONL spool.
+- actual hook handlers import and forward redacted envelopes in the local smoke fixture.
 
 ## Phase 3 - Scheduler and Job Queue
 
