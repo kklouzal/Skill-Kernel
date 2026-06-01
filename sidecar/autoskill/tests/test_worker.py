@@ -638,6 +638,7 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
         "embeddings_deleted": 1,
         "retrieval_logs_invalidated": 0,
         "context_records_invalidated": 0,
+        "topology_records_invalidated": 0,
     }
     assert retrieval.calls == embeddings.calls
     assert retrieval.calls[0]["workspace_key"] == "dev-01"
@@ -729,6 +730,7 @@ def test_mutation_worker_deletes_initial_create_on_rollback(tmp_path) -> None:
         "embeddings_deleted": 1,
         "retrieval_logs_invalidated": 0,
         "context_records_invalidated": 0,
+        "topology_records_invalidated": 0,
     }
 
 
@@ -738,6 +740,7 @@ def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path
     retrieval = MemoryRetrievalInvalidationStore()
     embeddings = MemoryInvalidationStore()
     context = MemoryInvalidationStore()
+    topology = MemoryInvalidationStore()
     workspace_root = tmp_path / "workspace"
     staging_root = workspace_root / ".autoskill" / "staging"
     archive_root = workspace_root / ".autoskill" / "archive"
@@ -779,6 +782,14 @@ def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path
                         "object_type": "context_artifact",
                         "object_id": str(uuid4()),
                     },
+                    {
+                        "object_type": "skill_graph_operation",
+                        "object_id": str(uuid4()),
+                    },
+                    {
+                        "object_type": "planned_topology_trial",
+                        "object_id": str(uuid4()),
+                    },
                 ],
             },
         )
@@ -797,6 +808,7 @@ def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path
                 retrieval=retrieval,
                 governance=governance,
                 context_governance=context,
+                topology=topology,
                 workspace_root=workspace_root,
                 archive_root=archive_root,
             ),
@@ -808,14 +820,16 @@ def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path
 
     assert result.status == "succeeded"
     assert result.output["revocations"][0]["invalidation"] == {
-        "objects": 2,
-        "body_index_documents_deleted": 2,
-        "embeddings_deleted": 2,
-        "retrieval_logs_invalidated": 2,
-        "context_records_invalidated": 2,
+        "objects": 4,
+        "body_index_documents_deleted": 4,
+        "embeddings_deleted": 4,
+        "retrieval_logs_invalidated": 4,
+        "context_records_invalidated": 4,
+        "topology_records_invalidated": 4,
     }
     assert retrieval.log_calls[0]["workspace_key"] == "dev-01"
     assert context.calls[0]["workspace_key"] == "dev-01"
+    assert topology.calls[0]["workspace_key"] == "dev-01"
 
 
 def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) -> None:

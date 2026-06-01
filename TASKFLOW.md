@@ -133,6 +133,7 @@ Phase 10/11 v14 substrate buildout.
 - Topology proposal persistence is implemented: `/v1/topology/propose` records propose-only `improve`/`compose`/`decompose` plans into `skill_graph_operations`, starts an idempotent evolution transaction, records rollback-aware transaction items, writes `planned_topology_trials`, and links evidence/transactions/operations/trials through provenance without activating runtime files.
 - Embedding profile qualification is wired into embedding generation: `/v1/embeddings/generate` can target an `embedding_profile_key`, requires the profile to be `qualified`, validates the 1536-dimension contract, and routes generation through the profile model/provider instead of ad hoc settings.
 - Expanded rollback revocation invalidation now marks retrieval logs and context-governance records in addition to deleting body-index documents and embeddings, so rollback summaries report `retrieval_logs_invalidated` and `context_records_invalidated` derived-state counts.
+- Rollback revocation invalidation now also handles topology derived state: mutation workers can retire `planned_topology_trials`, mark `skill_graph_operations` rolled back, and report `topology_records_invalidated` in revocation summaries.
 - Validation passed for the v14 substrate slice: `ruff check sidecar/autoskill`, `.venv/bin/pytest -q sidecar/autoskill/tests` with 108 passing tests, `npm test --prefix plugin/autoskill` with 7 passing tests, and a real compose Postgres migration smoke.
 - Validation passed for the job trace propagation slice: `uv run pytest sidecar/autoskill/tests/test_jobs_api.py sidecar/autoskill/tests/test_scheduler_api.py -q` passed 6 tests; `uv run ruff check sidecar/autoskill/db/jobs.py sidecar/autoskill/db/scheduler.py sidecar/autoskill/api/app.py sidecar/autoskill/tests/test_jobs_api.py sidecar/autoskill/tests/test_scheduler_api.py` passed; real compose Postgres smoke proved migration backfill/defaults, duplicate enqueue trace preservation, generated/scheduled job trace IDs, and claim-time trace preservation; final gates `uv run ruff check sidecar`, `uv run pytest`, `uv run python -m compileall -q sidecar`, and `git diff --check` passed.
 - Validation passed for the worker/retrieval/context governance slice: focused worker/broker/retrieval tests passed, `uv run ruff check sidecar` passed, and `uv run pytest -q` passed with 111 tests.
@@ -140,6 +141,7 @@ Phase 10/11 v14 substrate buildout.
 - Validation passed for embedding profile qualification slice: focused embedding-generation tests passed 7 tests and focused ruff checks passed.
 - Validation passed for expanded revocation invalidation slice: focused worker/embedding tests passed 25 tests, `uv run ruff check sidecar` passed, and `uv run pytest -q` passed with 120 tests.
 - Validation passed for the topology persistence slice: focused topology/admin tests passed 12 tests, `uv run ruff check sidecar` passed, `uv run pytest -q` passed with 123 tests, `uv run python -m compileall -q sidecar/autoskill` passed, `git diff --check` passed, and a fresh compose Postgres migration plus topology persistence smoke recorded one candidate compose operation with three planned trials.
+- Validation passed for topology rollback invalidation wiring: focused worker/topology/admin tests passed 30 tests, focused ruff checks passed, and a fresh compose Postgres smoke invalidated one topology operation plus three planned trials (`operation_status='rolled_back'`, all trial statuses `retired`).
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
@@ -148,7 +150,7 @@ Phase 10/11 v14 substrate buildout.
 2. Continue trace propagation through evaluation, writer, rollback, revocation, and model/embedding call paths.
 3. Wire executor/model profiles into evaluation, broker routing, activation gates, and profile qualification probes.
 4. Persist compiler context artifacts automatically and add marginal-value outcome update paths for token-ledger trials.
-5. Add expanded derived-state revoke handlers for probes, graph edges, lifecycle state, topology operations/trials, and evaluations.
+5. Add expanded derived-state revoke handlers for probes, skill graph edges, lifecycle state, and evaluations.
 6. Add production embedding provider live validation once credentials/provider endpoint are configured.
 7. Add an external-skill scanner job that inventories real non-AutoSkill skill roots without storing raw root paths and records collision/shadow recommendations without mutating external-owned files.
 
@@ -164,7 +166,7 @@ Phase 10/11 v14 substrate buildout.
 - Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and broader shadow-edge policy tuning remain pending.
 - External-skill awareness is inventory/retrieval/matching only; real root scanning, embedding generation for external descriptions, collision risk scoring, and explicit import recommendation flows remain pending.
 - v14 trace/profile/context APIs and schema exist, but most existing operations still need to propagate trace/profile/context artifact records automatically.
-- SkillGraphIR now has propose-only planner/API/store persistence with transactions and planned trials, but improve/compose/decompose still need evaluator execution, apply semantics, and rollback handlers for accepted/applied topology operations.
+- SkillGraphIR now has propose-only planner/API/store persistence with transactions, planned trials, and revocation invalidation for operation/trial state, but improve/compose/decompose still need evaluator execution and apply semantics for accepted topology operations.
 - Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded or induced redacted intervention replay from explicit replay, attribution, canary, or broker outcome evidence.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints; mutation-worker apply exists but fails closed unless the queued job is explicitly policy-approved.
 - Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, invalidates body-index/embedding objects from traversal summaries, and freeze/critical-canary paths evict affected broker cache entries; broader revoke handlers are still pending.

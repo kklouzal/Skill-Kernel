@@ -167,6 +167,14 @@ class TopologyStore(Protocol):
     ) -> PlannedTopologyTrialRecord:
         """Record one planned topology evaluation trial."""
 
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        """Mark revoked topology operations/trials inactive."""
+
 
 class NullTopologyStore:
     def __init__(self) -> None:
@@ -236,6 +244,54 @@ class NullTopologyStore:
         )
         self.trials.append(record)
         return record
+
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        operation_ids = _object_ids(objects, "skill_graph_operation")
+        trial_ids = _object_ids(objects, "planned_topology_trial")
+        changed = 0
+        updated_operations = []
+        for operation in self.operations:
+            if operation.skill_graph_operation_id not in operation_ids:
+                updated_operations.append(operation)
+                continue
+            changed += 1
+            updated_operations.append(
+                SkillGraphOperationRecord(
+                    **{
+                        **operation.__dict__,
+                        "status": "rolled_back",
+                        "updated_at": datetime.now(UTC),
+                    }
+                )
+            )
+        self.operations = updated_operations
+
+        updated_trials = []
+        for trial in self.trials:
+            should_retire = (
+                trial.planned_topology_trial_id in trial_ids
+                or trial.skill_graph_operation_id in operation_ids
+            )
+            if not should_retire:
+                updated_trials.append(trial)
+                continue
+            changed += 1
+            updated_trials.append(
+                PlannedTopologyTrialRecord(
+                    **{
+                        **trial.__dict__,
+                        "status": "retired",
+                        "updated_at": datetime.now(UTC),
+                    }
+                )
+            )
+        self.trials = updated_trials
+        return changed
 
 
 class AsyncpgTopologyStore(AsyncpgPoolOwner):
@@ -336,6 +392,51 @@ class AsyncpgTopologyStore(AsyncpgPoolOwner):
             )
             return PlannedTopologyTrialRecord.from_row(row)
 
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        operation_ids = _object_ids(objects, "skill_graph_operation")
+        trial_ids = _object_ids(objects, "planned_topology_trial")
+        if not operation_ids and not trial_ids:
+            return 0
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            operation_rows = await conn.fetch(
+                """
+                UPDATE autoskill.skill_graph_operations
+                SET status = 'rolled_back',
+                    updated_at = now()
+                WHERE workspace_id = $1
+                  AND skill_graph_operation_id = ANY($2::uuid[])
+                  AND status <> 'rolled_back'
+                RETURNING skill_graph_operation_id
+                """,
+                workspace_id,
+                operation_ids,
+            )
+            trial_rows = await conn.fetch(
+                """
+                UPDATE autoskill.planned_topology_trials
+                SET status = 'retired',
+                    updated_at = now()
+                WHERE workspace_id = $1
+                  AND status <> 'retired'
+                  AND (
+                    planned_topology_trial_id = ANY($2::uuid[])
+                    OR skill_graph_operation_id = ANY($3::uuid[])
+                  )
+                RETURNING planned_topology_trial_id
+                """,
+                workspace_id,
+                trial_ids,
+                operation_ids,
+            )
+            return len(operation_rows) + len(trial_rows)
+
 
 def _json(value: dict[str, Any] | list[Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
@@ -360,3 +461,15 @@ def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:
         return row[key]
     except KeyError:
         return None
+
+
+def _object_ids(objects: list[dict[str, str]], object_type: str) -> list[UUID]:
+    values: list[UUID] = []
+    for item in objects:
+        if item.get("object_type") != object_type:
+            continue
+        try:
+            values.append(UUID(str(item.get("object_id"))))
+        except ValueError:
+            continue
+    return values

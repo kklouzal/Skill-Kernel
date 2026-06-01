@@ -19,6 +19,7 @@ from autoskill.db.jobs import JobRecord, JobStore
 from autoskill.db.observability import NullObservabilityStore, ObservabilityStore
 from autoskill.db.retrieval import RetrievalStore
 from autoskill.db.scheduler import SchedulerStore
+from autoskill.db.topology import TopologyStore
 from autoskill.db.utility import UtilityStore
 from autoskill.services.embedding_generation import TextEmbedder, generate_pending_embeddings
 from autoskill.services.opportunity import mine_opportunities
@@ -123,6 +124,7 @@ class WorkerStores:
     utility: UtilityStore | None = None
     contracts: ContractStore | None = None
     context_governance: ContextGovernanceStore | None = None
+    topology: TopologyStore | None = None
     observability: ObservabilityStore | None = None
     embedder: TextEmbedder | None = None
     workspace_root: Path | None = None
@@ -725,6 +727,7 @@ async def _invalidate_revoked_objects(
     embeddings_deleted = 0
     retrieval_logs_invalidated = 0
     context_records_invalidated = 0
+    topology_records_invalidated = 0
     if request.workspace_key is None or not objects:
         return {
             "objects": len(objects),
@@ -732,6 +735,7 @@ async def _invalidate_revoked_objects(
             "embeddings_deleted": embeddings_deleted,
             "retrieval_logs_invalidated": retrieval_logs_invalidated,
             "context_records_invalidated": context_records_invalidated,
+            "topology_records_invalidated": topology_records_invalidated,
         }
     if stores.retrieval is not None:
         invalidate = getattr(stores.retrieval, "invalidate_objects", None)
@@ -759,12 +763,20 @@ async def _invalidate_revoked_objects(
                 workspace_key=request.workspace_key,
                 objects=objects,
             )
+    if stores.topology is not None:
+        invalidate_topology = getattr(stores.topology, "invalidate_objects", None)
+        if invalidate_topology is not None:
+            topology_records_invalidated = await invalidate_topology(
+                workspace_key=request.workspace_key,
+                objects=objects,
+            )
     return {
         "objects": len(objects),
         "body_index_documents_deleted": body_index_deleted,
         "embeddings_deleted": embeddings_deleted,
         "retrieval_logs_invalidated": retrieval_logs_invalidated,
         "context_records_invalidated": context_records_invalidated,
+        "topology_records_invalidated": topology_records_invalidated,
     }
 
 

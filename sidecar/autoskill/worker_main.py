@@ -16,6 +16,7 @@ from autoskill.db.jobs import AsyncpgJobStore
 from autoskill.db.observability import AsyncpgObservabilityStore
 from autoskill.db.retrieval import AsyncpgRetrievalStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore
+from autoskill.db.topology import AsyncpgTopologyStore
 from autoskill.db.utility import AsyncpgUtilityStore
 from autoskill.services.embedding_generation import build_text_embedder_from_settings
 from autoskill.services.worker import WorkerLoopConfig, WorkerPool, WorkerStores, run_worker_loop
@@ -70,6 +71,10 @@ async def run_worker(args: argparse.Namespace) -> int:
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
     )
+    topology = AsyncpgTopologyStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -89,6 +94,7 @@ async def run_worker(args: argparse.Namespace) -> int:
                 utility=utility,
                 contracts=contracts,
                 context_governance=context_governance,
+                topology=topology,
                 observability=observability,
                 embedder=build_text_embedder_from_settings(settings),
                 workspace_root=workspace_root,
@@ -117,6 +123,7 @@ async def run_worker(args: argparse.Namespace) -> int:
         await contracts.close()
         await context_governance.close()
         await observability.close()
+        await topology.close()
 
 
 def parse_args() -> argparse.Namespace:
