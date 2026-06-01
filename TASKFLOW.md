@@ -129,9 +129,11 @@ Phase 10/11 v14 substrate buildout.
 - Retrieval trace propagation is implemented: direct retrieval queries and broker context-hint retrieval now pass trace/span/parent IDs into `retrieval_logs`, and new retrieval logs generate trace/span IDs when callers omit them.
 - Broker context governance recording is implemented: rendered broker hints persist as `broker_hint` context artifacts, and broker decisions write token-ledger rows for `skill_visible`, `skill_hidden`, and `no_skill` visibility states.
 - SkillGraphIR validation is implemented for topology operation graphs, including missing-node checks, compose effect-gap blocking, and decompose effect coverage requirements.
+- Propose-only topology operation planners are implemented for `improve`, `compose`, and `decompose`: planners validate effect compatibility, emit deterministic SkillGraphIR only when gates pass, produce stable plan hashes/idempotency keys, include rollback-aware transaction metadata, and create planned trial metadata without DB writes or runtime file activation.
 - Validation passed for the v14 substrate slice: `ruff check sidecar/autoskill`, `.venv/bin/pytest -q sidecar/autoskill/tests` with 108 passing tests, `npm test --prefix plugin/autoskill` with 7 passing tests, and a real compose Postgres migration smoke.
 - Validation passed for the job trace propagation slice: `uv run pytest sidecar/autoskill/tests/test_jobs_api.py sidecar/autoskill/tests/test_scheduler_api.py -q` passed 6 tests; `uv run ruff check sidecar/autoskill/db/jobs.py sidecar/autoskill/db/scheduler.py sidecar/autoskill/api/app.py sidecar/autoskill/tests/test_jobs_api.py sidecar/autoskill/tests/test_scheduler_api.py` passed; real compose Postgres smoke proved migration backfill/defaults, duplicate enqueue trace preservation, generated/scheduled job trace IDs, and claim-time trace preservation; final gates `uv run ruff check sidecar`, `uv run pytest`, `uv run python -m compileall -q sidecar`, and `git diff --check` passed.
 - Validation passed for the worker/retrieval/context governance slice: focused worker/broker/retrieval tests passed, `uv run ruff check sidecar` passed, and `uv run pytest -q` passed with 111 tests.
+- Validation passed for the propose-only topology planner slice: `uv run pytest -q sidecar/autoskill/tests/test_topology_services.py` passed 6 tests, `uv run ruff check sidecar/autoskill/services/topology.py sidecar/autoskill/tests/test_topology_services.py` passed, and `uv run pytest -q` passed with 117 tests.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
@@ -140,7 +142,7 @@ Phase 10/11 v14 substrate buildout.
 2. Continue trace propagation through evaluation, writer, rollback, revocation, and model/embedding call paths.
 3. Wire executor/model/embedding profiles into evaluation, broker routing, embedding generation, activation gates, and profile qualification probes.
 4. Persist compiler context artifacts automatically and add marginal-value outcome update paths for token-ledger trials.
-5. Implement topology operation services for improve/compose/decompose using SkillGraphIR, effect compatibility validation, operation trials, and rollback-aware transactions.
+5. Wire topology planners into an API/store layer that persists `skill_graph_operations`, evolution transactions, transaction items, and topology trial records while staying propose-only until full gates pass.
 6. Add expanded derived-state revoke handlers for probes, context artifacts, broker logs/cache, graph edges, lifecycle state, and evaluations.
 7. Add production embedding provider live validation once credentials/provider endpoint are configured.
 8. Add an external-skill scanner job that inventories real non-AutoSkill skill roots without storing raw root paths and records collision/shadow recommendations without mutating external-owned files.
