@@ -28,6 +28,7 @@ class MemoryShadowEvidenceStore:
 class MemoryAttributionStore:
     def __init__(self) -> None:
         self.events: list[AttributionEventRecord] = []
+        self.controls: list[dict[str, object]] = []
 
     async def record_event(
         self,
@@ -56,6 +57,28 @@ class MemoryAttributionStore:
         )
         self.events.append(event)
         return event
+
+    async def record_shadowing_control(
+        self,
+        *,
+        workspace_key: str,
+        selected_skill_id: UUID,
+        expected_skill_id: UUID,
+        evidence_ids: list[UUID],
+        support_count: int,
+    ) -> dict[str, object]:
+        control = {
+            "workspace_key": workspace_key,
+            "selected_skill_id": str(selected_skill_id),
+            "expected_skill_id": str(expected_skill_id),
+            "evidence_ids": [str(evidence_id) for evidence_id in evidence_ids],
+            "support_count": support_count,
+            "edge_created": True,
+            "probe_created": True,
+            "probe_hash": "shadow-probe",
+        }
+        self.controls.append(control)
+        return control
 
 
 @dataclass(frozen=True)
@@ -127,6 +150,33 @@ def test_shadowing_detection_records_selected_expected_mismatch() -> None:
 
     assert event.skill_ids == [skills.selected, skills.expected]
     assert event.metadata["reason"] == "selected skill differed from expected skill"
+
+
+def test_shadowing_detection_materializes_controls_after_repeated_mismatch() -> None:
+    skills = ShadowSkills(selected=uuid4(), expected=uuid4())
+    store = MemoryShadowEvidenceStore(
+        [
+            shadow_evidence({}, skills),
+            shadow_evidence({"classification": "wrong_skill"}, skills),
+        ]
+    )
+    attribution = MemoryAttributionStore()
+
+    async def run():
+        return await detect_shadowing_events(
+            store,
+            attribution,
+            workspace_key="dev-01",
+            min_support=2,
+        )
+
+    result = asyncio.run(run())
+
+    assert result.detected == 2
+    assert len(result.controls) == 1
+    assert result.controls[0]["selected_skill_id"] == str(skills.selected)
+    assert result.controls[0]["expected_skill_id"] == str(skills.expected)
+    assert result.controls[0]["support_count"] == 2
 
 
 def test_shadowing_detection_api_uses_stores() -> None:

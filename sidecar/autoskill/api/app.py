@@ -104,6 +104,11 @@ class JobCompleteRequest(BaseModel):
     error: str | None = None
 
 
+class JobRenewLeaseRequest(BaseModel):
+    worker_id: str
+    lease_seconds: int = 300
+
+
 class ScheduleUpsertRequest(BaseModel):
     workspace_id: str
     name: str
@@ -394,12 +399,14 @@ class SkillLifecycleResponse(BaseModel):
 class ShadowingDetectRequest(BaseModel):
     workspace_id: str
     limit: int = 100
+    min_support: int = 2
 
 
 class ShadowingDetectResponse(BaseModel):
     scanned: int
     detected: int
     events: list[dict[str, object]]
+    controls: list[dict[str, object]] = []
 
 
 class RetrievalQueryRequest(BaseModel):
@@ -972,6 +979,20 @@ def create_app(
         )
         return {"job": job.to_json() if job else None}
 
+    @app.post("/v1/jobs/{job_id}/renew-lease")
+    async def renew_job_lease(
+        job_id: UUID,
+        request: JobRenewLeaseRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> dict[str, object | None]:
+        _require_control_auth(authorization)
+        job = await jobs.renew_job_lease(
+            job_id=job_id,
+            worker_id=request.worker_id,
+            lease_seconds=max(1, min(request.lease_seconds, 3600)),
+        )
+        return {"job": job.to_json() if job else None}
+
     @app.get("/v1/schedules")
     async def list_schedules(
         authorization: Annotated[str | None, Header()] = None,
@@ -1480,6 +1501,7 @@ def create_app(
             attribution,
             workspace_key=request.workspace_id,
             limit=max(1, min(request.limit, 500)),
+            min_support=max(2, min(request.min_support, 25)),
         )
         return ShadowingDetectResponse(**result.to_json())
 

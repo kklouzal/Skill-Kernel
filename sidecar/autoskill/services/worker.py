@@ -159,7 +159,13 @@ async def run_worker_once(
         return WorkerRunResult(claimed=True, job=completed or job, status="failed", error=error)
 
     try:
-        output = await definition.handler(stores, job)
+        output = await _run_with_lease_renewal(
+            stores,
+            job,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+            handler=definition.handler,
+        )
     except Exception as error:
         message = f"{type(error).__name__}: {error}"
         completed = await stores.jobs.complete_job(
@@ -258,6 +264,32 @@ async def run_worker_loop(
         idle=idle,
         stopped=bool(stop_event and stop_event.is_set()),
     )
+
+
+async def _run_with_lease_renewal(
+    stores: WorkerStores,
+    job: JobRecord,
+    *,
+    worker_id: str,
+    lease_seconds: int,
+    handler: Callable[[WorkerStores, JobRecord], Awaitable[dict[str, Any]]],
+) -> dict[str, Any]:
+    interval = max(0.1, min(float(lease_seconds) / 2.0, 60.0))
+    task = asyncio.create_task(handler(stores, job))
+    while True:
+        done, _pending = await asyncio.wait({task}, timeout=interval)
+        if task in done:
+            return await task
+        renewed = await stores.jobs.renew_job_lease(
+            job_id=job.job_id,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+        )
+        if renewed is None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+            raise RuntimeError("job lease renewal failed")
 
 
 async def build_worker_health(

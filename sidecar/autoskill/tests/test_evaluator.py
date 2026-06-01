@@ -44,6 +44,21 @@ def planned_probes() -> list[dict[str, object]]:
     ]
 
 
+def replayed_probes() -> list[dict[str, object]]:
+    probes = planned_probes()
+    probes[1] = {
+        **probes[1],
+        "spec": {
+            "evidence_ids": skill_ir()["evidence_ids"],
+            "intervention_replay": {
+                "no_skill": {"success": False, "retries": 3, "latency_ms": 1200},
+                "skill_visible": {"success": True, "retries": 1, "latency_ms": 800},
+            },
+        },
+    }
+    return probes
+
+
 def test_proposal_gate_reports_target_no_skill_and_regression_results() -> None:
     result = evaluate_proposal_gate(
         skill_ir=skill_ir(),
@@ -63,6 +78,50 @@ def test_proposal_gate_reports_target_no_skill_and_regression_results() -> None:
     assert payload["probe_results"][1]["status"] == "needs_intervention"
     assert payload["probe_results"][2]["status"] == "passed"
     assert payload["reason_codes"] == ["intervention-required"]
+
+
+def test_proposal_gate_passes_with_intervention_replay_improvement() -> None:
+    result = evaluate_proposal_gate(
+        skill_ir=skill_ir(),
+        scanner_status="passed",
+        probes=replayed_probes(),
+    )
+
+    payload = result.to_json()
+
+    assert payload["status"] == "passed"
+    assert payload["probe_results"][1]["status"] == "passed"
+    assert (
+        payload["probe_results"][1]["reason"]
+        == "skill-visible replay outperformed no-skill control"
+    )
+    assert payload["reason_codes"] == ["all-deterministic-probes-passed"]
+
+
+def test_proposal_gate_fails_when_intervention_replay_does_not_improve() -> None:
+    probes = replayed_probes()
+    probes[1] = {
+        **probes[1],
+        "spec": {
+            "evidence_ids": skill_ir()["evidence_ids"],
+            "intervention_replay": {
+                "no_skill": {"success": True, "retries": 1},
+                "skill_visible": {"success": True, "retries": 2},
+            },
+        },
+    }
+
+    result = evaluate_proposal_gate(
+        skill_ir=skill_ir(),
+        scanner_status="passed",
+        probes=probes,
+    )
+
+    payload = result.to_json()
+
+    assert payload["status"] == "failed"
+    assert payload["probe_results"][1]["status"] == "failed"
+    assert payload["reason_codes"] == ["probe-failed"]
 
 
 def test_proposal_gate_blocks_when_scanner_failed() -> None:

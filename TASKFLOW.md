@@ -103,19 +103,21 @@ Phase 6/7 control-plane buildout.
 - Persistent worker heartbeat records are implemented: worker loops upsert `worker_heartbeats`, `/v1/workers/health` includes recently observed workers, and heartbeat summaries track loop iterations/claimed/succeeded/failed/idle counts.
 - Real local Postgres worker heartbeat validation passed via compose: a worker heartbeat was inserted, updated from `running` to `idle`, and listed with preserved `first_seen_at`, refreshed `last_seen_at`, pool/concurrency, and summary metadata.
 - Initial-create rollback deletion is implemented: mutation-worker rollback revocations now support `delete_active_path` rollback actions for newly-created active skills with no archive snapshot, record rollback transaction items/provenance, and run retrieval/embedding invalidation.
+- Long-running job lease renewal is implemented: `JobStore.renew_job_lease` extends currently held leases, `/v1/jobs/{job_id}/renew-lease` exposes the control surface, and worker handlers periodically renew leases while still running; focused job/worker tests cover API renewal and handler-side renewal.
+- Shadowing control materialization is implemented: repeated selected-vs-expected shadowing evidence records medium-risk attribution events, creates a `shadow` skill graph edge, and activates a contrastive `shadowing` probe for broker/evaluator use.
+- Proposal-gate intervention replay is implemented: no-skill-control probes with recorded `no_skill` and `skill_visible` replay outcomes deterministically pass or fail instead of staying `needs_intervention`, and passed proposal gates record `intervention_validated` maturity for the skill version and cited evidence.
+- Phase 9 deterministic drift probes now cover static path existence, bare executable availability, required environment presence, Python package availability, JSON schema loadability, and bounded TCP reachability without arbitrary shell execution.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
 2. Add production embedding provider live validation once credentials/provider endpoint are configured.
-3. Add lease renewal for long-running jobs once job handlers start exceeding one lease interval.
-4. Add contrastive induction and future intervention replay so no-skill-control probes can graduate from `needs_intervention` to pass/fail.
-5. Add shadow-edge/probe generation from repeated attribution events after deduplication policy is defined.
-6. Add active-cache invalidation and expanded derived-state revoke handlers for frozen skills and non-body-index transaction-derived artifacts.
-7. Add mutation-worker apply orchestration only after autonomous apply policy and intervention replay gates are ready.
-8. Extend Phase 8 beyond deterministic promotion/archive/merge/budget curation: split support, guarded improvement planning, promotion evaluator gates, and active-bank optimization beyond utility ordering.
-9. Expand Phase 9 beyond static path/command/env checks: package/API/schema/service probes, false-positive controls, drift probe lifecycle, and localized repair proposal generation.
+3. Add contrastive induction from clustered success/failure evidence so replay inputs can be generated automatically instead of supplied by future intervention records.
+4. Add active-cache invalidation and expanded derived-state revoke handlers for frozen skills and non-body-index transaction-derived artifacts.
+5. Add mutation-worker apply orchestration only after autonomous apply policy and intervention replay gates are ready.
+6. Extend Phase 8 beyond deterministic promotion/archive/merge/budget curation: split support, guarded improvement planning, promotion evaluator gates, and active-bank optimization beyond utility ordering.
+7. Expand Phase 9 beyond deterministic drift checks: false-positive controls, drift probe lifecycle, localized repair proposal generation, and API/schema/service probes that require live endpoint contracts.
 
 ## Known Risks
 
@@ -123,12 +125,12 @@ Phase 6/7 control-plane buildout.
 - Spool replay is best-effort from capture hooks and still needs a live gateway smoke test under actual hook concurrency.
 - Message hook event aliases remain intentionally broad until live OpenClaw installed-plugin validation confirms current names.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
-- Worker health now includes persistent heartbeat records; lease renewal is still pending for future handlers that exceed one lease interval.
-- Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive/intervention evidence still needs aggregation logic.
+- Worker health now includes persistent heartbeat records and long-running handlers can renew job leases; handlers still need workload-specific progress metadata once LLM/evaluation jobs become lengthy.
+- Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive evidence still needs aggregation logic beyond evaluator replay maturity records.
 - Embedding generation defaults to deterministic local hash embeddings until production provider settings are configured and live-validated.
-- Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and shadow-edge/probe generation from attribution events are still pending.
-- Candidate evaluator execution is deterministic and conservative; no-skill-control probes remain `needs_intervention` until real intervention/counterfactual replay exists, and this must pass before any staged writer/activation path is added.
+- Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and broader shadow-edge policy tuning remain pending.
+- Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded intervention replay, but automatic contrastive replay generation must land before any staged writer/activation path is added.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints, but mutation-worker orchestration still needs end-to-end caller wiring before autonomous apply is allowed.
 - Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, and invalidates body-index/embedding objects from traversal summaries; broader revoke handlers are still pending.
 - Utility rollups are deterministic v1 scoring, not full marginal-value/intervention scoring yet; curation now handles archived promotion, explicit duplicate merge/archive, low-utility archive, and active-budget overflow, while split support, promotion evaluator gates, and guarded improvement planning remain pending.
-- Contract/drift checks are deterministic v1 path/command/env probes only; package/API/schema/service probes and repair execution remain pending.
+- Contract/drift checks are deterministic v1 path/command/env/package/schema/TCP probes only; false-positive controls, probe lifecycle, live API contract probes, and repair execution remain pending.

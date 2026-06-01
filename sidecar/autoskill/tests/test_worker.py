@@ -22,8 +22,9 @@ from autoskill.tests.test_jobs_api import MemoryJobStore
 
 
 class MemoryEvidenceWorkerStore:
-    def __init__(self) -> None:
+    def __init__(self, *, delay_seconds: float = 0.0) -> None:
         self.calls: list[dict[str, object]] = []
+        self.delay_seconds = delay_seconds
 
     async def derive_from_raw_events(
         self,
@@ -31,6 +32,8 @@ class MemoryEvidenceWorkerStore:
         workspace_key: str | None = None,
         limit: int = 100,
     ) -> EvidenceDeriveResult:
+        if self.delay_seconds:
+            await asyncio.sleep(self.delay_seconds)
         self.calls.append({"workspace_key": workspace_key, "limit": limit})
         return EvidenceDeriveResult(scanned=1, created=1, duplicate=0, evidence=[])
 
@@ -192,6 +195,34 @@ def test_worker_run_once_dispatches_maintenance_job() -> None:
     assert result.status == "succeeded"
     assert result.output == {"scanned": 1, "created": 1, "duplicate": 0, "evidence_ids": []}
     assert stores.evidence.calls == [{"workspace_key": "dev-01", "limit": 7}]
+
+
+def test_worker_run_once_renews_lease_while_handler_runs() -> None:
+    stores = WorkerTestStores(
+        jobs=MemoryJobStore(),
+        scheduler=MemorySchedulerWorkerStore(),
+        evidence=MemoryEvidenceWorkerStore(delay_seconds=0.6),
+        embeddings=MemoryPendingEmbeddingStore(),
+    )
+
+    async def run():
+        await stores.jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="evidence.derive",
+            idempotency_key="derive:slow",
+        )
+        return await run_worker_once(
+            stores.as_worker_stores(),
+            worker_id="worker-1",
+            pool="maintenance",
+            lease_seconds=1,
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert stores.jobs.renewals
+    assert stores.jobs.renewals[0]["worker_id"] == "worker-1"
 
 
 def test_worker_pool_does_not_claim_other_pool_jobs() -> None:

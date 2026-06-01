@@ -161,6 +161,15 @@ class JobStore(Protocol):
     ) -> JobRecord | None:
         """Finish a leased job."""
 
+    async def renew_job_lease(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        lease_seconds: int = 300,
+    ) -> JobRecord | None:
+        """Extend a currently held lease."""
+
     async def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[JobRecord]:
         """List recent jobs."""
 
@@ -236,6 +245,15 @@ class NullJobStore:
         worker_id: str,
         status: Literal["succeeded", "failed"],
         error: str | None = None,
+    ) -> JobRecord | None:
+        return None
+
+    async def renew_job_lease(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        lease_seconds: int = 300,
     ) -> JobRecord | None:
         return None
 
@@ -432,6 +450,47 @@ class AsyncpgJobStore(AsyncpgPoolOwner):
                 worker_id,
                 status,
                 error,
+            )
+            workspace_key = await _workspace_key(conn, row["workspace_id"])
+            return JobRecord.from_row({**dict(row), "workspace_key": workspace_key})
+
+    async def renew_job_lease(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        lease_seconds: int = 300,
+    ) -> JobRecord | None:
+        pool = await self._get_pool()
+        lease_expires_at = datetime.now(UTC) + timedelta(seconds=lease_seconds)
+        async with pool.acquire() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                """
+                UPDATE autoskill.jobs
+                SET lease_expires_at = $3,
+                    updated_at = now()
+                WHERE job_id = $1
+                  AND lease_owner = $2
+                  AND status = 'leased'
+                  AND lease_expires_at >= now()
+                RETURNING *
+                """,
+                job_id,
+                worker_id,
+                lease_expires_at,
+            )
+            if row is None:
+                return None
+            await conn.execute(
+                """
+                UPDATE autoskill.job_attempts
+                SET status = 'leased'
+                WHERE job_id = $1
+                  AND worker_id = $2
+                  AND finished_at IS NULL
+                """,
+                job_id,
+                worker_id,
             )
             workspace_key = await _workspace_key(conn, row["workspace_id"])
             return JobRecord.from_row({**dict(row), "workspace_key": workspace_key})

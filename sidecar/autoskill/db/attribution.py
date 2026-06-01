@@ -8,6 +8,7 @@ from uuid import UUID
 
 import asyncpg
 
+from autoskill.core.hashing import sha256_json
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 
@@ -151,6 +152,75 @@ class AsyncpgAttributionStore(AsyncpgPoolOwner):
             )
             return AttributionEventRecord.from_row({**dict(row), "workspace_key": workspace_key})
 
+    async def record_shadowing_control(
+        self,
+        *,
+        workspace_key: str,
+        selected_skill_id: UUID,
+        expected_skill_id: UUID,
+        evidence_ids: list[UUID],
+        support_count: int,
+    ) -> dict[str, Any]:
+        pool = await self._get_pool()
+        payload = {
+            "schema": "autoskill.probe.v1",
+            "kind": "shadowing",
+            "selected_skill_id": str(selected_skill_id),
+            "expected_skill_id": str(expected_skill_id),
+            "evidence_ids": [str(evidence_id) for evidence_id in evidence_ids],
+        }
+        probe_hash = sha256_json(payload)
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            edge = await conn.fetchrow(
+                """
+                INSERT INTO autoskill.skill_edges (
+                  edge_id, workspace_id, from_skill_id, to_skill_id, edge_kind
+                )
+                VALUES (gen_random_uuid(), $1, $2, $3, 'shadow')
+                ON CONFLICT (from_skill_id, to_skill_id, edge_kind) DO NOTHING
+                RETURNING edge_id
+                """,
+                workspace_id,
+                selected_skill_id,
+                expected_skill_id,
+            )
+            probe = await conn.fetchrow(
+                """
+                INSERT INTO autoskill.probes (
+                  probe_id, workspace_id, probe_hash, kind, maturity, spec, expected, active
+                )
+                VALUES (
+                  gen_random_uuid(), $1, $2, 'shadowing', 'contrastive', $3::jsonb, $4::jsonb, true
+                )
+                ON CONFLICT (workspace_id, probe_hash) DO NOTHING
+                RETURNING probe_id
+                """,
+                workspace_id,
+                probe_hash,
+                _json(
+                    {
+                        **payload,
+                        "mode": "skill_hidden",
+                        "support_count": support_count,
+                    }
+                ),
+                _json(
+                    {
+                        "status": "compare",
+                        "selected_skill_should_not_shadow_expected": True,
+                    }
+                ),
+            )
+            return {
+                "edge_created": edge is not None,
+                "probe_created": probe is not None,
+                "probe_hash": probe_hash,
+                "selected_skill_id": str(selected_skill_id),
+                "expected_skill_id": str(expected_skill_id),
+                "support_count": support_count,
+            }
+
 
 def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:
     if isinstance(row, dict):
@@ -159,3 +229,7 @@ def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:
         return row[key]
     except KeyError:
         return None
+
+
+def _json(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))

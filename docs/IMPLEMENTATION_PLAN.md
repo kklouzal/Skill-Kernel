@@ -166,6 +166,7 @@ Acceptance:
 - invalid paths are rejected;
 - rollback restores the previous effective state;
 - canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed mutation-worker rollback execution, initial-create active-path deletion rollback, and body-index/embedding invalidation are implemented, while active-cache invalidation and broader per-object revoke handlers remain pending.
+- long-running job leases renew while handlers are still running; implemented in the job store, worker execution wrapper, and control API with focused tests.
 
 ## Phase 8 - Autonomous Improvement and Curation
 
@@ -190,13 +191,15 @@ Deliverables:
 
 - contract extraction; implemented for SkillIR `environment_contracts` into DB-backed environment contract rows;
 - drift checks; implemented as a deterministic first pass for static path-existence, bare-command availability, and required-env probes with drift event creation;
+- package/schema/service drift checks; implemented as deterministic Python package, JSON schema, and bounded TCP reachability probes without arbitrary shell execution;
 - localized repair;
 - skill graph maintenance;
+- repeated shadowing events materialize deterministic `shadow` skill graph edges plus active contrastive shadowing probes;
 - audit and retrieval policy reviews;
-- evidence maturity, action-attribution check, control-flow event, and revocation request storage; implemented as v9 governance schema foundations.
+- evidence maturity, action-attribution check, control-flow event, and revocation request storage; implemented as v9 governance schema foundations, with passed intervention-replay proposal gates recording `intervention_validated` maturity for cited evidence and skill versions.
 
 Acceptance:
 
-- drift violations trigger targeted repair; implemented as drift-event repair-candidate metadata, with actual repair planning still pending;
+- drift violations trigger targeted repair; implemented as drift-event repair-candidate metadata, with actual repair planning and false-positive lifecycle still pending;
 - curation logs features/actions/outcomes;
 - audit integrity verifies.

@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 from dataclasses import dataclass
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -277,6 +279,38 @@ def _check_contract(row: asyncpg.Record) -> tuple[str, str]:
         if os.environ.get(env_name):
             return "valid", f"environment variable set: {env_name}"
         return "violated", f"environment variable missing: {env_name}"
+    if probe.startswith("static:python-package:"):
+        package_name = probe.removeprefix("static:python-package:").strip()
+        if not _safe_package_name(package_name):
+            return "unknown", "python package probe is empty or invalid"
+        try:
+            importlib_metadata.version(package_name)
+        except importlib_metadata.PackageNotFoundError:
+            return "violated", f"python package missing: {package_name}"
+        return "valid", f"python package found: {package_name}"
+    if probe.startswith("static:json-schema:"):
+        path = Path(probe.removeprefix("static:json-schema:")).expanduser()
+        if not path.exists():
+            return "violated", f"json schema path missing: {path}"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            return "violated", f"json schema unreadable: {type(error).__name__}"
+        if not isinstance(payload, dict):
+            return "violated", "json schema is not an object"
+        if "$schema" in payload or "type" in payload or "properties" in payload:
+            return "valid", f"json schema loaded: {path}"
+        return "unknown", "json schema lacks schema/type/properties markers"
+    if probe.startswith("static:tcp:"):
+        target = probe.removeprefix("static:tcp:").strip()
+        host, port = _parse_host_port(target)
+        if host is None or port is None:
+            return "unknown", "tcp service probe must be host:port"
+        try:
+            with socket.create_connection((host, port), timeout=0.25):
+                return "valid", f"tcp service reachable: {host}:{port}"
+        except OSError:
+            return "violated", f"tcp service unreachable: {host}:{port}"
     return "unknown", "no deterministic validation probe configured"
 
 
@@ -287,7 +321,33 @@ def _validation_method_for_probe(probe: str) -> str:
         return "static_command_exists"
     if probe.startswith("static:env:"):
         return "static_env_present"
+    if probe.startswith("static:python-package:"):
+        return "static_python_package_present"
+    if probe.startswith("static:json-schema:"):
+        return "static_json_schema_loadable"
+    if probe.startswith("static:tcp:"):
+        return "static_tcp_reachable"
     return "manual"
+
+
+def _safe_package_name(package_name: str) -> bool:
+    if not package_name:
+        return False
+    return all(character.isalnum() or character in {"_", "-", "."} for character in package_name)
+
+
+def _parse_host_port(target: str) -> tuple[str | None, int | None]:
+    if ":" not in target:
+        return None, None
+    host, port_text = target.rsplit(":", 1)
+    host = host.strip()
+    try:
+        port = int(port_text)
+    except ValueError:
+        return None, None
+    if not host or port < 1 or port > 65535:
+        return None, None
+    return host, port
 
 
 def _json_dict(value: object) -> dict[str, Any]:

@@ -3,7 +3,13 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from autoskill.api.app import JobClaimRequest, JobEnqueueRequest, _require_control_auth, create_app
+from autoskill.api.app import (
+    JobClaimRequest,
+    JobEnqueueRequest,
+    JobRenewLeaseRequest,
+    _require_control_auth,
+    create_app,
+)
 from autoskill.core.config import get_settings
 from autoskill.db.jobs import JobEnqueueResult, JobQueueSummary, JobRecord, WorkerHeartbeatRecord
 from fastapi import HTTPException
@@ -13,6 +19,7 @@ class MemoryJobStore:
     def __init__(self) -> None:
         self.jobs: dict[str, JobRecord] = {}
         self.heartbeats: dict[str, WorkerHeartbeatRecord] = {}
+        self.renewals: list[dict[str, object]] = []
         self.closed = False
 
     async def close(self) -> None:
@@ -108,6 +115,30 @@ class MemoryJobStore:
                 )
                 self.jobs[key] = completed
                 return completed
+        return None
+
+    async def renew_job_lease(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        lease_seconds: int = 300,
+    ) -> JobRecord | None:
+        for key, job in list(self.jobs.items()):
+            if job.job_id == job_id and job.lease_owner == worker_id and job.status == "leased":
+                self.renewals.append(
+                    {
+                        "job_id": job_id,
+                        "worker_id": worker_id,
+                        "lease_seconds": lease_seconds,
+                    }
+                )
+                renewed = _replace_job(
+                    job,
+                    lease_expires_at=datetime.now(UTC) + timedelta(seconds=lease_seconds),
+                )
+                self.jobs[key] = renewed
+                return renewed
         return None
 
     async def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[JobRecord]:
@@ -206,14 +237,42 @@ async def test_job_store_enqueue_claim_complete_cycle() -> None:
     assert completed.status == "succeeded"
 
 
+@pytest.mark.asyncio
+async def test_job_store_renews_held_lease() -> None:
+    store = MemoryJobStore()
+
+    await store.enqueue_job(
+        workspace_key="dev-01",
+        job_kind="evidence_extraction",
+        idempotency_key="event:renew",
+    )
+    leased = await store.claim_next_job(worker_id="worker-1", lease_seconds=30)
+    assert leased is not None
+    renewed = await store.renew_job_lease(
+        job_id=leased.job_id,
+        worker_id="worker-1",
+        lease_seconds=60,
+    )
+
+    assert renewed is not None
+    assert renewed.status == "leased"
+    assert renewed.lease_owner == "worker-1"
+    assert renewed.lease_expires_at is not None
+    assert leased.lease_expires_at is not None
+    assert renewed.lease_expires_at > leased.lease_expires_at
+
+
 def test_jobs_api_uses_job_store() -> None:
     store = MemoryJobStore()
     app = create_app(job_store=store)
     enqueue_route = next(route for route in app.routes if route.path == "/v1/jobs/enqueue")
     claim_route = next(route for route in app.routes if route.path == "/v1/jobs/claim")
     list_route = next(route for route in app.routes if route.path == "/v1/jobs")
+    renew_route = next(
+        route for route in app.routes if route.path == "/v1/jobs/{job_id}/renew-lease"
+    )
 
-    async def run() -> tuple[object, object, dict[str, object]]:
+    async def run() -> tuple[object, object, object, dict[str, object]]:
         enqueued = await enqueue_route.endpoint(
             request=JobEnqueueRequest(
                 workspace_id="dev-01",
@@ -223,13 +282,18 @@ def test_jobs_api_uses_job_store() -> None:
             )
         )
         claimed = await claim_route.endpoint(request=JobClaimRequest(worker_id="worker-1"))
+        renewed = await renew_route.endpoint(
+            job_id=UUID(claimed.job["job_id"]),
+            request=JobRenewLeaseRequest(worker_id="worker-1", lease_seconds=60),
+        )
         listed = await list_route.endpoint()
-        return enqueued, claimed, listed
+        return enqueued, claimed, renewed, listed
 
-    enqueued, claimed, listed = asyncio.run(run())
+    enqueued, claimed, renewed, listed = asyncio.run(run())
     assert enqueued.created is True
     assert claimed.job is not None
     assert claimed.job["status"] == "leased"
+    assert renewed["job"]["status"] == "leased"
     assert listed["jobs"][0]["idempotency_key"] == "event:two"
 
 

@@ -22,12 +22,14 @@ class ShadowingDetectionResult:
     scanned: int
     detected: int
     events: list[AttributionEventRecord]
+    controls: list[dict[str, Any]]
 
     def to_json(self) -> dict[str, Any]:
         return {
             "scanned": self.scanned,
             "detected": self.detected,
             "events": [event.to_json() for event in self.events],
+            "controls": self.controls,
         }
 
 
@@ -37,9 +39,11 @@ async def detect_shadowing_events(
     *,
     workspace_key: str,
     limit: int = 100,
+    min_support: int = 2,
 ) -> ShadowingDetectionResult:
     evidence = await evidence_store.list_evidence(workspace_key=workspace_key, limit=limit)
     events: list[AttributionEventRecord] = []
+    grouped: dict[tuple[UUID, UUID], list[UUID]] = {}
     for record in evidence:
         signal = _shadowing_signal(record)
         if signal is None:
@@ -61,10 +65,22 @@ async def detect_shadowing_events(
             },
         )
         events.append(event)
+        selected_skill_id = signal.get("selected_skill_uuid")
+        expected_skill_id = signal.get("expected_skill_uuid")
+        if isinstance(selected_skill_id, UUID) and isinstance(expected_skill_id, UUID):
+            pair = (selected_skill_id, expected_skill_id)
+            grouped.setdefault(pair, []).append(record.evidence_id)
+    controls = await _materialize_shadowing_controls(
+        attribution_store,
+        workspace_key=workspace_key,
+        grouped=grouped,
+        min_support=max(2, min_support),
+    )
     return ShadowingDetectionResult(
         scanned=len(evidence),
         detected=len(events),
         events=events,
+        controls=controls,
     )
 
 
@@ -91,13 +107,46 @@ def _shadowing_signal(record: EvidenceRecord) -> dict[str, Any] | None:
     if reason is None:
         return None
 
-    skill_ids = [_uuid for value in (selected, expected) if (_uuid := _parse_uuid(value))]
+    selected_uuid = _parse_uuid(selected)
+    expected_uuid = _parse_uuid(expected)
+    skill_ids = [_uuid for _uuid in (selected_uuid, expected_uuid) if _uuid is not None]
     return {
         "reason": reason,
         "selected_skill_id": selected,
+        "selected_skill_uuid": selected_uuid,
         "expected_skill_id": expected,
+        "expected_skill_uuid": expected_uuid,
         "skill_ids": skill_ids,
     }
+
+
+async def _materialize_shadowing_controls(
+    attribution_store: AttributionStore,
+    *,
+    workspace_key: str,
+    grouped: dict[tuple[UUID, UUID], list[UUID]],
+    min_support: int,
+) -> list[dict[str, Any]]:
+    record_control = getattr(attribution_store, "record_shadowing_control", None)
+    if record_control is None:
+        return []
+    controls: list[dict[str, Any]] = []
+    for (selected_skill_id, expected_skill_id), evidence_ids in sorted(
+        grouped.items(),
+        key=lambda item: (str(item[0][0]), str(item[0][1])),
+    ):
+        if len(evidence_ids) < min_support:
+            continue
+        controls.append(
+            await record_control(
+                workspace_key=workspace_key,
+                selected_skill_id=selected_skill_id,
+                expected_skill_id=expected_skill_id,
+                evidence_ids=evidence_ids,
+                support_count=len(evidence_ids),
+            )
+        )
+    return controls
 
 
 def _parse_uuid(value: str | None) -> UUID | None:

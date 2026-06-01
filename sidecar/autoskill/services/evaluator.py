@@ -120,6 +120,9 @@ def _evaluate_no_skill_probe(
 ) -> ProbeEvaluation:
     if not spec.get("evidence_ids"):
         return _result(probe, status="failed", score=0.0, reason="missing baseline evidence")
+    replay = _dict(spec.get("intervention_replay"))
+    if replay:
+        return _evaluate_intervention_replay(probe=probe, replay=replay)
     if expected.get("candidate_must_improve_or_reduce_retries"):
         return _result(
             probe,
@@ -128,6 +131,55 @@ def _evaluate_no_skill_probe(
             reason="requires future skill-visible versus no-skill comparison",
         )
     return _result(probe, status="passed", score=1.0, reason="no-skill control recorded")
+
+
+def _evaluate_intervention_replay(
+    *,
+    probe: dict[str, Any],
+    replay: dict[str, Any],
+) -> ProbeEvaluation:
+    no_skill = _dict(replay.get("no_skill"))
+    skill_visible = _dict(replay.get("skill_visible"))
+    if not no_skill or not skill_visible:
+        return _result(
+            probe,
+            status="needs_intervention",
+            score=0.5,
+            reason="intervention replay requires no-skill and skill-visible outcomes",
+        )
+    no_skill_success = bool(no_skill.get("success"))
+    skill_success = bool(skill_visible.get("success"))
+    no_skill_retries = _optional_float(no_skill.get("retries"))
+    skill_retries = _optional_float(skill_visible.get("retries"))
+    no_skill_latency = _optional_float(no_skill.get("latency_ms"))
+    skill_latency = _optional_float(skill_visible.get("latency_ms"))
+
+    improved_success = skill_success and not no_skill_success
+    reduced_retries = (
+        skill_success
+        and no_skill_retries is not None
+        and skill_retries is not None
+        and skill_retries < no_skill_retries
+    )
+    reduced_latency = (
+        skill_success
+        and no_skill_latency is not None
+        and skill_latency is not None
+        and skill_latency < no_skill_latency
+    )
+    if improved_success or reduced_retries or reduced_latency:
+        return _result(
+            probe,
+            status="passed",
+            score=1.0,
+            reason="skill-visible replay outperformed no-skill control",
+        )
+    return _result(
+        probe,
+        status="failed",
+        score=0.0,
+        reason="skill-visible replay did not improve on no-skill control",
+    )
 
 
 def _evaluate_regression_probe(
@@ -177,3 +229,12 @@ def _result(
 
 def _dict(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

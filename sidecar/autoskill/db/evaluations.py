@@ -106,9 +106,11 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                     **_json_dict(row["result"]),
                     **gate.to_json(),
                     "executor": "deterministic-proposal-gate.v1",
+                    "evidence_ids": _probe_evidence_ids(probes),
                 }
                 await _finish_evaluation(
                     conn,
+                    workspace_id=row["workspace_id"],
                     evaluation_id=row["evaluation_id"],
                     skill_version_id=row["skill_version_id"],
                     status=gate.status,
@@ -197,6 +199,7 @@ async def _load_probes(conn: asyncpg.Connection, row: asyncpg.Record) -> list[di
 async def _finish_evaluation(
     conn: asyncpg.Connection,
     *,
+    workspace_id: UUID,
     evaluation_id: UUID,
     skill_version_id: UUID,
     status: str,
@@ -222,6 +225,58 @@ async def _finish_evaluation(
         skill_version_id,
         status,
     )
+    if status == "passed":
+        await _record_intervention_maturity(
+            conn,
+            workspace_id=workspace_id,
+            skill_version_id=skill_version_id,
+            result=result,
+        )
+
+
+async def _record_intervention_maturity(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    skill_version_id: UUID,
+    result: dict[str, Any],
+) -> None:
+    basis = {
+        "evaluation_status": result.get("status"),
+        "reason_codes": result.get("reason_codes", []),
+        "evaluation_id": result.get("evaluation_id"),
+    }
+    await conn.execute(
+        """
+        INSERT INTO autoskill.evidence_maturity (
+          evidence_maturity_id, workspace_id, object_type, object_id, maturity, basis
+        )
+        VALUES (gen_random_uuid(), $1, 'skill_version', $2, 'intervention_validated', $3::jsonb)
+        ON CONFLICT (workspace_id, object_type, object_id) DO UPDATE
+        SET maturity = EXCLUDED.maturity,
+            basis = EXCLUDED.basis,
+            updated_at = now()
+        """,
+        workspace_id,
+        skill_version_id,
+        _json(basis),
+    )
+    for evidence_id in _uuid_list(result.get("evidence_ids")):
+        await conn.execute(
+            """
+            INSERT INTO autoskill.evidence_maturity (
+              evidence_maturity_id, workspace_id, object_type, object_id, maturity, basis
+            )
+            VALUES (gen_random_uuid(), $1, 'evidence', $2, 'intervention_validated', $3::jsonb)
+            ON CONFLICT (workspace_id, object_type, object_id) DO UPDATE
+            SET maturity = EXCLUDED.maturity,
+                basis = EXCLUDED.basis,
+                updated_at = now()
+            """,
+            workspace_id,
+            evidence_id,
+            _json(basis),
+        )
 
 
 def _json_dict(value: object) -> dict[str, Any]:
@@ -230,6 +285,27 @@ def _json_dict(value: object) -> dict[str, Any]:
     if isinstance(value, str):
         return json.loads(value)
     return {}
+
+
+def _probe_evidence_ids(probes: list[dict[str, Any]]) -> list[str]:
+    evidence_ids: set[str] = set()
+    for probe in probes:
+        spec = _json_dict(probe.get("spec"))
+        for evidence_id in spec.get("evidence_ids") or []:
+            evidence_ids.add(str(evidence_id))
+    return sorted(evidence_ids)
+
+
+def _uuid_list(value: object) -> list[UUID]:
+    if not isinstance(value, list):
+        return []
+    parsed: list[UUID] = []
+    for item in value:
+        try:
+            parsed.append(UUID(str(item)))
+        except ValueError:
+            continue
+    return parsed
 
 
 def _json(payload: dict[str, Any]) -> str:
