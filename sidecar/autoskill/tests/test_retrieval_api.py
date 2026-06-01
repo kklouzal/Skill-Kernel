@@ -43,6 +43,16 @@ class MemoryRetrievalStore:
             candidates=[candidate],
         )
 
+    async def expand_skill_graph(
+        self,
+        *,
+        workspace_key: str,
+        skill_ids: list,
+        edge_kinds: list[str] | None = None,
+        limit: int = 25,
+    ) -> list[RetrievalCandidate]:
+        return []
+
 
 def test_retrieval_query_api_returns_candidates() -> None:
     store = MemoryRetrievalStore()

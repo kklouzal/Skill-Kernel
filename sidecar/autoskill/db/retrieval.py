@@ -65,6 +65,16 @@ class RetrievalStore(Protocol):
     ) -> RetrievalResult:
         """Run deterministic lexical retrieval and log the decision."""
 
+    async def expand_skill_graph(
+        self,
+        *,
+        workspace_key: str,
+        skill_ids: list[UUID],
+        edge_kinds: list[str] | None = None,
+        limit: int = 25,
+    ) -> list[RetrievalCandidate]:
+        """Hydrate body-level candidates connected to selected skills."""
+
 
 class NullRetrievalStore:
     async def lexical_query(
@@ -77,6 +87,16 @@ class NullRetrievalStore:
         limit: int = 10,
     ) -> RetrievalResult:
         return RetrievalResult(retrieval_log_id=None, decision="no_candidates", candidates=[])
+
+    async def expand_skill_graph(
+        self,
+        *,
+        workspace_key: str,
+        skill_ids: list[UUID],
+        edge_kinds: list[str] | None = None,
+        limit: int = 25,
+    ) -> list[RetrievalCandidate]:
+        return []
 
 
 class AsyncpgRetrievalStore(AsyncpgPoolOwner):
@@ -133,9 +153,13 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
                       'document_kind', d.document_kind,
                       'secret_scan_status', d.secret_scan_status,
                       'taint', d.taint,
-                      'skill_version_id', d.skill_version_id
+                      'skill_version_id', d.skill_version_id,
+                      'lifecycle_state', s.lifecycle_state,
+                      'slug', s.slug
                     ) AS metadata
-                  FROM autoskill.body_index_documents d, q
+                  FROM autoskill.body_index_documents d
+                  LEFT JOIN autoskill.skills s ON s.skill_id = d.skill_id
+                  CROSS JOIN q
                   WHERE d.workspace_id = $1
                     AND to_tsvector('simple', d.text_content) @@ q.query
                 )
@@ -169,6 +193,81 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
             decision=decision,
             candidates=candidates,
         )
+
+    async def expand_skill_graph(
+        self,
+        *,
+        workspace_key: str,
+        skill_ids: list[UUID],
+        edge_kinds: list[str] | None = None,
+        limit: int = 25,
+    ) -> list[RetrievalCandidate]:
+        if not skill_ids:
+            return []
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                WITH workspace AS (
+                  SELECT workspace_id
+                  FROM autoskill.workspaces
+                  WHERE external_key = $1
+                ),
+                edges AS (
+                  SELECT
+                    e.from_skill_id AS source_skill_id,
+                    e.to_skill_id AS related_skill_id,
+                    e.edge_kind
+                  FROM autoskill.skill_edges e, workspace w
+                  WHERE e.workspace_id = w.workspace_id
+                    AND e.from_skill_id = ANY($2::uuid[])
+                    AND ($3::text[] IS NULL OR e.edge_kind = ANY($3::text[]))
+                  UNION ALL
+                  SELECT
+                    e.to_skill_id AS source_skill_id,
+                    e.from_skill_id AS related_skill_id,
+                    e.edge_kind
+                  FROM autoskill.skill_edges e, workspace w
+                  WHERE e.workspace_id = w.workspace_id
+                    AND e.to_skill_id = ANY($2::uuid[])
+                    AND ($3::text[] IS NULL OR e.edge_kind = ANY($3::text[]))
+                )
+                SELECT
+                  'body_index_document'::text AS object_type,
+                  d.body_index_document_id AS object_id,
+                  d.skill_id,
+                  left(d.text_content, 240) AS summary,
+                  0.0::float AS rank,
+                  jsonb_build_object(
+                    'document_kind', d.document_kind,
+                    'secret_scan_status', d.secret_scan_status,
+                    'taint', d.taint,
+                    'skill_version_id', d.skill_version_id,
+                    'lifecycle_state', s.lifecycle_state,
+                    'slug', s.slug,
+                    'graph_edge_kind', edges.edge_kind,
+                    'graph_source_skill_id', edges.source_skill_id
+                  ) AS metadata
+                FROM edges
+                JOIN autoskill.body_index_documents d ON d.skill_id = edges.related_skill_id
+                JOIN autoskill.skills s ON s.skill_id = d.skill_id
+                ORDER BY
+                  CASE edges.edge_kind
+                    WHEN 'prerequisite' THEN 0
+                    WHEN 'conflict' THEN 1
+                    WHEN 'shadow' THEN 2
+                    ELSE 3
+                  END,
+                  s.slug ASC,
+                  d.created_at DESC
+                LIMIT $4
+                """,
+                workspace_key,
+                skill_ids,
+                edge_kinds,
+                limit,
+            )
+            return [RetrievalCandidate.from_row(row) for row in rows]
 
 
 async def _insert_retrieval_log(

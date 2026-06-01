@@ -75,8 +75,9 @@ Deliverables:
 - evidence extractor; implemented for deterministic observed evidence derived from redacted raw events;
 - redacted embeddings; storage/search primitives and deterministic development generation worker are implemented;
 - lexical + vector + metadata search; lexical evidence/body-index search and pgvector nearest search are implemented;
-- exact rerank;
-- active/archive/duplicate matching.
+- exact rerank; implemented as deterministic broker rerank over lexical score, query overlap, lifecycle, and graph edges;
+- active/archive matching; implemented in runtime broker so archived matches are promotion candidates rather than injected hints;
+- duplicate matching.
 
 Acceptance:
 
@@ -89,7 +90,7 @@ Acceptance:
 Deliverables:
 
 - deterministic broker planner;
-- set-aware context renderer; implemented as a conservative retrieval-backed first pass with duplicate skill suppression;
+- set-aware context renderer; implemented as a conservative retrieval-backed first pass with duplicate skill suppression and prerequisite graph expansion;
 - cache-backed context hint endpoint; endpoint is present behind a disabled-by-default config gate, cache layer pending;
 - shadowing logs.
 
