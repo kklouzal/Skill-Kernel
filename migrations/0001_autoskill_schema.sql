@@ -352,6 +352,16 @@ CREATE INDEX IF NOT EXISTS provenance_source_idx
 CREATE INDEX IF NOT EXISTS provenance_derived_idx
   ON autoskill.provenance_edges(workspace_id, derived_kind, derived_id);
 
+CREATE UNIQUE INDEX IF NOT EXISTS provenance_edges_unique_idx
+  ON autoskill.provenance_edges(
+    workspace_id,
+    source_kind,
+    source_id,
+    derived_kind,
+    derived_id,
+    relation
+  );
+
 CREATE TABLE IF NOT EXISTS autoskill.evidence_maturity (
   evidence_maturity_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),

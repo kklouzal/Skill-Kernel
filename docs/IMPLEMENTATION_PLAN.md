@@ -142,6 +142,7 @@ Acceptance:
 - rollback-relevant transaction items can be recorded with activation state and rollback metadata; implemented and validated against local Postgres;
 - revocation requests can be queued for rollback/traversal roots; implemented and validated against local Postgres;
 - candidate proposal persistence creates or accepts a `candidate_proposal` transaction, records source evidence IDs, stamps the inactive version, writes transaction items, and advances the transaction to `staged`; implemented and validated against local Postgres;
+- provenance edges can be recorded idempotently and revocation roots can be previewed through a bounded derived-object traversal; implemented and validated against local Postgres;
 - valid skill appears under active root;
 - invalid paths are rejected;
 - rollback restores the previous effective state;

@@ -231,6 +231,32 @@ class EvolutionTransactionItemResponse(BaseModel):
     item: dict[str, object]
 
 
+class ProvenanceEdgeCreateRequest(BaseModel):
+    workspace_id: str
+    source_kind: str
+    source_id: UUID
+    derived_kind: str
+    derived_id: UUID
+    relation: str
+
+
+class ProvenanceEdgeCreateResponse(BaseModel):
+    created: bool
+    edge: dict[str, object]
+
+
+class RevocationTraversalPreviewRequest(BaseModel):
+    workspace_id: str
+    root_object_type: str
+    root_object_id: UUID
+    max_depth: int = 8
+    max_nodes: int = 500
+
+
+class RevocationTraversalPreviewResponse(BaseModel):
+    traversal: dict[str, object]
+
+
 class RevocationRequestCreateRequest(BaseModel):
     workspace_id: str
     request_kind: str
@@ -941,18 +967,64 @@ def create_app(
         )
         return EvolutionTransactionItemResponse(item=item.to_json())
 
+    @app.post("/v1/provenance/edges", response_model=ProvenanceEdgeCreateResponse)
+    async def record_provenance_edge(
+        request: ProvenanceEdgeCreateRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ProvenanceEdgeCreateResponse:
+        _require_control_auth(authorization)
+        result = await governance.record_provenance_edge(
+            workspace_key=request.workspace_id,
+            source_kind=request.source_kind,
+            source_id=request.source_id,
+            derived_kind=request.derived_kind,
+            derived_id=request.derived_id,
+            relation=request.relation,
+        )
+        return ProvenanceEdgeCreateResponse(**result.to_json())
+
+    @app.post("/v1/revocations/preview", response_model=RevocationTraversalPreviewResponse)
+    async def preview_revocation_traversal(
+        request: RevocationTraversalPreviewRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> RevocationTraversalPreviewResponse:
+        _require_control_auth(authorization)
+        traversal = await governance.preview_revocation_traversal(
+            workspace_key=request.workspace_id,
+            root_object_type=request.root_object_type,
+            root_object_id=request.root_object_id,
+            max_depth=request.max_depth,
+            max_nodes=request.max_nodes,
+        )
+        return RevocationTraversalPreviewResponse(traversal=traversal.to_json())
+
     @app.post("/v1/revocations/request", response_model=RevocationRequestCreateResponse)
     async def request_revocation(
         request: RevocationRequestCreateRequest,
         authorization: Annotated[str | None, Header()] = None,
     ) -> RevocationRequestCreateResponse:
         _require_control_auth(authorization)
+        traversal_summary: dict[str, object] = request.traversal_summary
+        if not traversal_summary:
+            traversal = await governance.preview_revocation_traversal(
+                workspace_key=request.workspace_id,
+                root_object_type=request.root_object_type,
+                root_object_id=request.root_object_id,
+            )
+            traversal_payload = traversal.to_json()
+            traversal_summary = {
+                "root_object_type": traversal_payload["root_object_type"],
+                "root_object_id": traversal_payload["root_object_id"],
+                "impacted_count": traversal_payload["impacted_count"],
+                "impacted_objects": traversal_payload["impacted_objects"],
+                "truncated": traversal_payload["truncated"],
+            }
         revocation = await governance.request_revocation(
             workspace_key=request.workspace_id,
             request_kind=request.request_kind,
             root_object_type=request.root_object_type,
             root_object_id=request.root_object_id,
-            traversal_summary=request.traversal_summary,
+            traversal_summary=traversal_summary,
             created_by_job_id=request.created_by_job_id,
         )
         return RevocationRequestCreateResponse(revocation=revocation.to_json())

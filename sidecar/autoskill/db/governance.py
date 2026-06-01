@@ -136,6 +136,82 @@ class EvolutionTransactionItemRecord:
 
 
 @dataclass(frozen=True)
+class ProvenanceEdgeRecord:
+    provenance_edge_id: UUID
+    workspace_id: UUID | None
+    workspace_key: str | None
+    source_kind: str
+    source_id: UUID
+    derived_kind: str
+    derived_id: UUID
+    relation: str
+    created_at: datetime
+
+    @classmethod
+    def from_row(cls, row: asyncpg.Record | dict[str, Any]) -> ProvenanceEdgeRecord:
+        return cls(
+            provenance_edge_id=row["provenance_edge_id"],
+            workspace_id=_row_get(row, "workspace_id"),
+            workspace_key=_row_get(row, "workspace_key"),
+            source_kind=row["source_kind"],
+            source_id=row["source_id"],
+            derived_kind=row["derived_kind"],
+            derived_id=row["derived_id"],
+            relation=row["relation"],
+            created_at=row["created_at"],
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "provenance_edge_id": str(self.provenance_edge_id),
+            "workspace_id": str(self.workspace_id) if self.workspace_id else None,
+            "workspace_key": self.workspace_key,
+            "source_kind": self.source_kind,
+            "source_id": str(self.source_id),
+            "derived_kind": self.derived_kind,
+            "derived_id": str(self.derived_id),
+            "relation": self.relation,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+@dataclass(frozen=True)
+class ProvenanceEdgeCreateResult:
+    edge: ProvenanceEdgeRecord
+    created: bool
+
+    def to_json(self) -> dict[str, Any]:
+        return {"created": self.created, "edge": self.edge.to_json()}
+
+
+@dataclass(frozen=True)
+class RevocationTraversalRecord:
+    workspace_id: UUID | None
+    workspace_key: str | None
+    root_object_type: str
+    root_object_id: UUID
+    impacted_objects: list[dict[str, Any]]
+    edges: list[dict[str, Any]]
+    truncated: bool
+    max_depth: int
+    max_nodes: int
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "workspace_id": str(self.workspace_id) if self.workspace_id else None,
+            "workspace_key": self.workspace_key,
+            "root_object_type": self.root_object_type,
+            "root_object_id": str(self.root_object_id),
+            "impacted_count": len(self.impacted_objects),
+            "impacted_objects": self.impacted_objects,
+            "edges": self.edges,
+            "truncated": self.truncated,
+            "max_depth": self.max_depth,
+            "max_nodes": self.max_nodes,
+        }
+
+
+@dataclass(frozen=True)
 class RevocationRequestRecord:
     revocation_request_id: UUID
     workspace_id: UUID | None
@@ -220,6 +296,29 @@ class GovernanceStore(Protocol):
         rollback_action: dict[str, Any] | None = None,
     ) -> EvolutionTransactionItemRecord:
         """Record a transaction item with rollback metadata."""
+
+    async def record_provenance_edge(
+        self,
+        *,
+        workspace_key: str,
+        source_kind: str,
+        source_id: UUID,
+        derived_kind: str,
+        derived_id: UUID,
+        relation: str,
+    ) -> ProvenanceEdgeCreateResult:
+        """Record an idempotent provenance edge between source and derived objects."""
+
+    async def preview_revocation_traversal(
+        self,
+        *,
+        workspace_key: str,
+        root_object_type: str,
+        root_object_id: UUID,
+        max_depth: int = 8,
+        max_nodes: int = 500,
+    ) -> RevocationTraversalRecord:
+        """Return a bounded derived-object traversal for rollback/revocation planning."""
 
     async def request_revocation(
         self,
@@ -322,6 +421,58 @@ class NullGovernanceStore:
             activation_state=activation_state,
             rollback_action=rollback_action or {},
             created_at=datetime.now(UTC),
+        )
+
+    async def record_provenance_edge(
+        self,
+        *,
+        workspace_key: str,
+        source_kind: str,
+        source_id: UUID,
+        derived_kind: str,
+        derived_id: UUID,
+        relation: str,
+    ) -> ProvenanceEdgeCreateResult:
+        return ProvenanceEdgeCreateResult(
+            edge=ProvenanceEdgeRecord(
+                provenance_edge_id=UUID("00000000-0000-0000-0000-000000000000"),
+                workspace_id=None,
+                workspace_key=workspace_key,
+                source_kind=source_kind,
+                source_id=source_id,
+                derived_kind=derived_kind,
+                derived_id=derived_id,
+                relation=relation,
+                created_at=datetime.now(UTC),
+            ),
+            created=True,
+        )
+
+    async def preview_revocation_traversal(
+        self,
+        *,
+        workspace_key: str,
+        root_object_type: str,
+        root_object_id: UUID,
+        max_depth: int = 8,
+        max_nodes: int = 500,
+    ) -> RevocationTraversalRecord:
+        return RevocationTraversalRecord(
+            workspace_id=None,
+            workspace_key=workspace_key,
+            root_object_type=root_object_type,
+            root_object_id=root_object_id,
+            impacted_objects=[
+                {
+                    "object_type": root_object_type,
+                    "object_id": str(root_object_id),
+                    "depth": 0,
+                }
+            ],
+            edges=[],
+            truncated=False,
+            max_depth=max_depth,
+            max_nodes=max_nodes,
         )
 
     async def request_revocation(
@@ -488,6 +639,191 @@ class AsyncpgGovernanceStore(AsyncpgPoolOwner):
                 _json(rollback_action or {}),
             )
             return EvolutionTransactionItemRecord.from_row(row)
+
+    async def record_provenance_edge(
+        self,
+        *,
+        workspace_key: str,
+        source_kind: str,
+        source_id: UUID,
+        derived_kind: str,
+        derived_id: UUID,
+        relation: str,
+    ) -> ProvenanceEdgeCreateResult:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                WITH inserted AS (
+                  INSERT INTO autoskill.provenance_edges (
+                    provenance_edge_id,
+                    workspace_id,
+                    source_kind,
+                    source_id,
+                    derived_kind,
+                    derived_id,
+                    relation
+                  )
+                  SELECT gen_random_uuid(), $1, $2, $3, $4, $5, $6
+                  WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM autoskill.provenance_edges
+                    WHERE workspace_id = $1
+                      AND source_kind = $2
+                      AND source_id = $3
+                      AND derived_kind = $4
+                      AND derived_id = $5
+                      AND relation = $6
+                  )
+                  RETURNING *, true AS created
+                )
+                SELECT *, $7::text AS workspace_key
+                FROM inserted
+                UNION ALL
+                SELECT provenance_edges.*, false AS created, $7::text AS workspace_key
+                FROM autoskill.provenance_edges
+                WHERE workspace_id = $1
+                  AND source_kind = $2
+                  AND source_id = $3
+                  AND derived_kind = $4
+                  AND derived_id = $5
+                  AND relation = $6
+                LIMIT 1
+                """,
+                workspace_id,
+                source_kind,
+                source_id,
+                derived_kind,
+                derived_id,
+                relation,
+                workspace_key,
+            )
+            return ProvenanceEdgeCreateResult(
+                edge=ProvenanceEdgeRecord.from_row(row),
+                created=bool(row["created"]),
+            )
+
+    async def preview_revocation_traversal(
+        self,
+        *,
+        workspace_key: str,
+        root_object_type: str,
+        root_object_id: UUID,
+        max_depth: int = 8,
+        max_nodes: int = 500,
+    ) -> RevocationTraversalRecord:
+        max_depth = max(0, min(max_depth, 32))
+        max_nodes = max(1, min(max_nodes, 5_000))
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            rows = await conn.fetch(
+                """
+                WITH RECURSIVE traversal AS (
+                  SELECT
+                    0 AS depth,
+                    $2::text AS object_type,
+                    $3::uuid AS object_id,
+                    ARRAY[$2::text || ':' || $3::text] AS path
+                  UNION ALL
+                  SELECT
+                    traversal.depth + 1,
+                    edge.derived_kind,
+                    edge.derived_id,
+                    traversal.path || (edge.derived_kind || ':' || edge.derived_id::text)
+                  FROM traversal
+                  JOIN autoskill.provenance_edges edge
+                    ON edge.workspace_id = $1
+                   AND edge.source_kind = traversal.object_type
+                   AND edge.source_id = traversal.object_id
+                  WHERE traversal.depth < $4
+                    AND NOT edge.derived_kind || ':' || edge.derived_id::text = ANY(traversal.path)
+                )
+                SELECT depth, object_type, object_id
+                FROM traversal
+                ORDER BY depth, object_type, object_id
+                LIMIT $5 + 1
+                """,
+                workspace_id,
+                root_object_type,
+                root_object_id,
+                max_depth,
+                max_nodes,
+            )
+            edge_rows = await conn.fetch(
+                """
+                WITH RECURSIVE traversal AS (
+                  SELECT
+                    0 AS depth,
+                    $2::text AS object_type,
+                    $3::uuid AS object_id,
+                    ARRAY[$2::text || ':' || $3::text] AS path
+                  UNION ALL
+                  SELECT
+                    traversal.depth + 1,
+                    edge.derived_kind,
+                    edge.derived_id,
+                    traversal.path || (edge.derived_kind || ':' || edge.derived_id::text)
+                  FROM traversal
+                  JOIN autoskill.provenance_edges edge
+                    ON edge.workspace_id = $1
+                   AND edge.source_kind = traversal.object_type
+                   AND edge.source_id = traversal.object_id
+                  WHERE traversal.depth < $4
+                    AND NOT edge.derived_kind || ':' || edge.derived_id::text = ANY(traversal.path)
+                )
+                SELECT DISTINCT
+                  edge.provenance_edge_id,
+                  edge.source_kind,
+                  edge.source_id,
+                  edge.derived_kind,
+                  edge.derived_id,
+                  edge.relation
+                FROM traversal
+                JOIN autoskill.provenance_edges edge
+                  ON edge.workspace_id = $1
+                 AND edge.source_kind = traversal.object_type
+                 AND edge.source_id = traversal.object_id
+                ORDER BY edge.source_kind, edge.derived_kind, edge.provenance_edge_id
+                LIMIT $5
+                """,
+                workspace_id,
+                root_object_type,
+                root_object_id,
+                max_depth,
+                max_nodes,
+            )
+        truncated = len(rows) > max_nodes
+        impacted_rows = rows[:max_nodes]
+        return RevocationTraversalRecord(
+            workspace_id=workspace_id,
+            workspace_key=workspace_key,
+            root_object_type=root_object_type,
+            root_object_id=root_object_id,
+            impacted_objects=[
+                {
+                    "object_type": row["object_type"],
+                    "object_id": str(row["object_id"]),
+                    "depth": row["depth"],
+                }
+                for row in impacted_rows
+            ],
+            edges=[
+                {
+                    "provenance_edge_id": str(row["provenance_edge_id"]),
+                    "source_kind": row["source_kind"],
+                    "source_id": str(row["source_id"]),
+                    "derived_kind": row["derived_kind"],
+                    "derived_id": str(row["derived_id"]),
+                    "relation": row["relation"],
+                }
+                for row in edge_rows
+            ],
+            truncated=truncated,
+            max_depth=max_depth,
+            max_nodes=max_nodes,
+        )
 
     async def request_revocation(
         self,

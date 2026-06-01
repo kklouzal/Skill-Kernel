@@ -6,13 +6,18 @@ from autoskill.api.app import (
     EvolutionTransactionItemRequest,
     EvolutionTransactionStartRequest,
     EvolutionTransactionStatusRequest,
+    ProvenanceEdgeCreateRequest,
     RevocationRequestCreateRequest,
+    RevocationTraversalPreviewRequest,
     create_app,
 )
 from autoskill.db.governance import (
     EvolutionTransactionItemRecord,
     EvolutionTransactionRecord,
+    ProvenanceEdgeCreateResult,
+    ProvenanceEdgeRecord,
     RevocationRequestRecord,
+    RevocationTraversalRecord,
     TransactionStartResult,
 )
 
@@ -21,6 +26,7 @@ class MemoryGovernanceStore:
     def __init__(self) -> None:
         self.transactions: dict[str, EvolutionTransactionRecord] = {}
         self.items: list[EvolutionTransactionItemRecord] = []
+        self.edges: list[ProvenanceEdgeRecord] = []
         self.revocations: list[RevocationRequestRecord] = []
 
     async def start_transaction(
@@ -105,6 +111,99 @@ class MemoryGovernanceStore:
         self.items.append(item)
         return item
 
+    async def record_provenance_edge(
+        self,
+        *,
+        workspace_key: str,
+        source_kind: str,
+        source_id: UUID,
+        derived_kind: str,
+        derived_id: UUID,
+        relation: str,
+    ) -> ProvenanceEdgeCreateResult:
+        for edge in self.edges:
+            if (
+                edge.source_kind == source_kind
+                and edge.source_id == source_id
+                and edge.derived_kind == derived_kind
+                and edge.derived_id == derived_id
+                and edge.relation == relation
+            ):
+                return ProvenanceEdgeCreateResult(edge=edge, created=False)
+        edge = ProvenanceEdgeRecord(
+            provenance_edge_id=uuid4(),
+            workspace_id=uuid4(),
+            workspace_key=workspace_key,
+            source_kind=source_kind,
+            source_id=source_id,
+            derived_kind=derived_kind,
+            derived_id=derived_id,
+            relation=relation,
+            created_at=datetime.now(UTC),
+        )
+        self.edges.append(edge)
+        return ProvenanceEdgeCreateResult(edge=edge, created=True)
+
+    async def preview_revocation_traversal(
+        self,
+        *,
+        workspace_key: str,
+        root_object_type: str,
+        root_object_id: UUID,
+        max_depth: int = 8,
+        max_nodes: int = 500,
+    ) -> RevocationTraversalRecord:
+        impacted: list[dict[str, object]] = [
+            {
+                "object_type": root_object_type,
+                "object_id": str(root_object_id),
+                "depth": 0,
+            }
+        ]
+        traversed_edges: list[dict[str, object]] = []
+        frontier = [(root_object_type, root_object_id, 0)]
+        seen = {(root_object_type, root_object_id)}
+        while frontier and len(impacted) < max_nodes:
+            object_type, object_id, depth = frontier.pop(0)
+            if depth >= max_depth:
+                continue
+            for edge in self.edges:
+                if edge.source_kind != object_type or edge.source_id != object_id:
+                    continue
+                traversed_edges.append(
+                    {
+                        "provenance_edge_id": str(edge.provenance_edge_id),
+                        "source_kind": edge.source_kind,
+                        "source_id": str(edge.source_id),
+                        "derived_kind": edge.derived_kind,
+                        "derived_id": str(edge.derived_id),
+                        "relation": edge.relation,
+                    }
+                )
+                key = (edge.derived_kind, edge.derived_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                impacted.append(
+                    {
+                        "object_type": edge.derived_kind,
+                        "object_id": str(edge.derived_id),
+                        "depth": depth + 1,
+                    }
+                )
+                frontier.append((edge.derived_kind, edge.derived_id, depth + 1))
+        return RevocationTraversalRecord(
+            workspace_id=None,
+            workspace_key=workspace_key,
+            root_object_type=root_object_type,
+            root_object_id=root_object_id,
+            impacted_objects=impacted,
+            edges=traversed_edges,
+            truncated=bool(frontier and len(impacted) >= max_nodes),
+            max_depth=max_depth,
+            max_nodes=max_nodes,
+        )
+
     async def request_revocation(
         self,
         *,
@@ -148,11 +247,14 @@ def test_governance_api_records_transaction_item_and_revocation() -> None:
         for route in app.routes
         if route.path == "/v1/evolution/transactions/{transaction_id}/items"
     )
+    edge_route = next(route for route in app.routes if route.path == "/v1/provenance/edges")
+    preview_route = next(route for route in app.routes if route.path == "/v1/revocations/preview")
     revocation_route = next(
         route for route in app.routes if route.path == "/v1/revocations/request"
     )
 
     root_object_id = uuid4()
+    evidence_id = uuid4()
 
     async def run():
         started = await start_route.endpoint(
@@ -187,23 +289,56 @@ def test_governance_api_records_transaction_item_and_revocation() -> None:
                 rollback_action={"delete": True},
             ),
         )
+        edge = await edge_route.endpoint(
+            request=ProvenanceEdgeCreateRequest(
+                workspace_id="dev-01",
+                source_kind="evidence_item",
+                source_id=evidence_id,
+                derived_kind="skill_version",
+                derived_id=root_object_id,
+                relation="proposed_from",
+            ),
+        )
+        duplicate_edge = await edge_route.endpoint(
+            request=ProvenanceEdgeCreateRequest(
+                workspace_id="dev-01",
+                source_kind="evidence_item",
+                source_id=evidence_id,
+                derived_kind="skill_version",
+                derived_id=root_object_id,
+                relation="proposed_from",
+            ),
+        )
+        preview = await preview_route.endpoint(
+            request=RevocationTraversalPreviewRequest(
+                workspace_id="dev-01",
+                root_object_type="evidence_item",
+                root_object_id=evidence_id,
+            )
+        )
         revocation = await revocation_route.endpoint(
             request=RevocationRequestCreateRequest(
                 workspace_id="dev-01",
                 request_kind="rollback",
-                root_object_type="skill_version",
-                root_object_id=root_object_id,
-                traversal_summary={"queued": True},
+                root_object_type="evidence_item",
+                root_object_id=evidence_id,
             )
         )
-        return started, duplicate, updated, item, revocation
+        return started, duplicate, updated, item, edge, duplicate_edge, preview, revocation
 
-    started, duplicate, updated, item, revocation = asyncio.run(run())
+    started, duplicate, updated, item, edge, duplicate_edge, preview, revocation = asyncio.run(
+        run()
+    )
 
     assert started.created is True
     assert duplicate.created is False
     assert updated.transaction["status"] == "staged"
     assert updated.transaction["metrics"] == {"items": 1}
     assert item.item["relative_path"] == "skills/autoskill/example/SKILL.md"
-    assert revocation.revocation["root_object_id"] == str(root_object_id)
+    assert edge.created is True
+    assert duplicate_edge.created is False
+    assert preview.traversal["impacted_count"] == 2
+    assert preview.traversal["impacted_objects"][1]["object_type"] == "skill_version"
+    assert revocation.revocation["root_object_id"] == str(evidence_id)
     assert revocation.revocation["status"] == "queued"
+    assert revocation.revocation["traversal_summary"]["impacted_count"] == 2
