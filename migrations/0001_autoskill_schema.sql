@@ -159,9 +159,17 @@ CREATE TABLE IF NOT EXISTS autoskill.skill_edges (
   from_skill_id uuid NOT NULL REFERENCES autoskill.skills(skill_id),
   to_skill_id uuid NOT NULL REFERENCES autoskill.skills(skill_id),
   edge_kind text NOT NULL,
+  revoked_at timestamptz,
+  revocation_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(from_skill_id, to_skill_id, edge_kind)
 );
+
+ALTER TABLE autoskill.skill_edges
+  ADD COLUMN IF NOT EXISTS revoked_at timestamptz;
+
+ALTER TABLE autoskill.skill_edges
+  ADD COLUMN IF NOT EXISTS revocation_metadata jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS autoskill.probes (
   probe_id uuid PRIMARY KEY,

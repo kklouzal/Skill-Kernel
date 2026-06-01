@@ -28,6 +28,7 @@ class MemoryGovernanceStore:
         self.items: list[EvolutionTransactionItemRecord] = []
         self.edges: list[ProvenanceEdgeRecord] = []
         self.revocations: list[RevocationRequestRecord] = []
+        self.invalidation_calls: list[dict[str, object]] = []
 
     async def start_transaction(
         self,
@@ -293,6 +294,17 @@ class MemoryGovernanceStore:
             self.revocations[index] = updated
             return updated
         return None
+
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        self.invalidation_calls.append(
+            {"workspace_key": workspace_key, "objects": objects}
+        )
+        return len(objects)
 
 
 def test_governance_api_records_transaction_item_and_revocation() -> None:

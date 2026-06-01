@@ -292,7 +292,9 @@ class AsyncpgAttributionStore(AsyncpgPoolOwner):
                   edge_id, workspace_id, from_skill_id, to_skill_id, edge_kind
                 )
                 VALUES (gen_random_uuid(), $1, $2, $3, 'shadow')
-                ON CONFLICT (from_skill_id, to_skill_id, edge_kind) DO NOTHING
+                ON CONFLICT (from_skill_id, to_skill_id, edge_kind) DO UPDATE
+                SET revoked_at = NULL,
+                    revocation_metadata = '{}'::jsonb
                 RETURNING edge_id
                 """,
                 workspace_id,

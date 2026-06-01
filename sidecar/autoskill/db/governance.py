@@ -358,6 +358,14 @@ class GovernanceStore(Protocol):
     ) -> RevocationRequestRecord | None:
         """Mark a claimed revocation request completed or failed."""
 
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        """Revoke governance-owned derived state for impacted objects."""
+
 
 class NullGovernanceStore:
     async def start_transaction(
@@ -550,6 +558,14 @@ class NullGovernanceStore:
         traversal_summary: dict[str, Any],
     ) -> RevocationRequestRecord | None:
         return None
+
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        return 0
 
 
 class AsyncpgGovernanceStore(AsyncpgPoolOwner):
@@ -971,6 +987,110 @@ class AsyncpgGovernanceStore(AsyncpgPoolOwner):
             )
             return RevocationRequestRecord.from_row(row) if row else None
 
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        object_keys = _object_keys(objects)
+        if not object_keys:
+            return 0
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            result = await conn.fetchval(
+                """
+                WITH targets AS (
+                  SELECT *
+                  FROM unnest($2::text[], $3::uuid[]) AS target(object_type, object_id)
+                ),
+                skill_targets AS (
+                  SELECT object_id AS skill_id
+                  FROM targets
+                  WHERE object_type = 'skill'
+                  UNION
+                  SELECT sv.skill_id
+                  FROM autoskill.skill_versions sv
+                  JOIN autoskill.skills s
+                    ON s.skill_id = sv.skill_id
+                   AND s.active_version_id = sv.skill_version_id
+                  JOIN targets t
+                    ON t.object_type = 'skill_version'
+                   AND t.object_id = sv.skill_version_id
+                  WHERE s.workspace_id = $1
+                ),
+                revoked_edges AS (
+                  UPDATE autoskill.skill_edges edge
+                  SET revoked_at = COALESCE(edge.revoked_at, now()),
+                      revocation_metadata = edge.revocation_metadata || jsonb_build_object(
+                        'revoked', true,
+                        'revoked_at', now(),
+                        'revocation_reason', 'derived_object_revoked'
+                      )
+                  WHERE edge.workspace_id = $1
+                    AND edge.revoked_at IS NULL
+                    AND (
+                      edge.edge_id IN (
+                        SELECT object_id FROM targets WHERE object_type = 'skill_edge'
+                      )
+                      OR edge.from_skill_id IN (SELECT skill_id FROM skill_targets)
+                      OR edge.to_skill_id IN (SELECT skill_id FROM skill_targets)
+                    )
+                  RETURNING edge.edge_id
+                ),
+                revoked_skills AS (
+                  UPDATE autoskill.skills skill
+                  SET lifecycle_state = 'revoked',
+                      freeze_reason = COALESCE(freeze_reason, 'derived object revoked'),
+                      updated_at = now()
+                  WHERE skill.workspace_id = $1
+                    AND skill.skill_id IN (SELECT skill_id FROM skill_targets)
+                    AND skill.lifecycle_state <> 'revoked'
+                  RETURNING skill.skill_id
+                ),
+                revoked_maturity AS (
+                  UPDATE autoskill.evidence_maturity maturity
+                  SET maturity = 'revoked',
+                      basis = maturity.basis || jsonb_build_object(
+                        'revoked', true,
+                        'revoked_at', now(),
+                        'revocation_reason', 'derived_object_revoked',
+                        'previous_maturity', maturity.maturity
+                      ),
+                      updated_at = now()
+                  WHERE maturity.workspace_id = $1
+                    AND maturity.maturity <> 'revoked'
+                    AND (
+                      (maturity.object_type, maturity.object_id) IN (
+                        SELECT object_type, object_id FROM targets
+                      )
+                      OR (
+                        maturity.object_type = 'skill'
+                        AND maturity.object_id IN (SELECT skill_id FROM skill_targets)
+                      )
+                      OR (
+                        maturity.object_type = 'skill_version'
+                        AND maturity.object_id IN (
+                          SELECT object_id
+                          FROM targets
+                          WHERE object_type = 'skill_version'
+                        )
+                      )
+                    )
+                  RETURNING maturity.evidence_maturity_id
+                )
+                SELECT
+                  (SELECT count(*) FROM revoked_edges)
+                  + (SELECT count(*) FROM revoked_skills)
+                  + (SELECT count(*) FROM revoked_maturity) AS invalidated
+                """,
+                workspace_id,
+                [object_type for object_type, _object_id in object_keys],
+                [object_id for _object_type, object_id in object_keys],
+            )
+        return int(result or 0)
+
     async def complete_revocation_request(
         self,
         *,
@@ -1023,3 +1143,17 @@ def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:
 
 def _iso_or_none(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
+
+
+def _object_keys(objects: list[dict[str, str]]) -> list[tuple[str, UUID]]:
+    keys: list[tuple[str, UUID]] = []
+    for item in objects:
+        object_type = str(item.get("object_type") or "")
+        object_id = item.get("object_id")
+        if not object_type or object_id is None:
+            continue
+        try:
+            keys.append((object_type, UUID(str(object_id))))
+        except ValueError:
+            continue
+    return keys

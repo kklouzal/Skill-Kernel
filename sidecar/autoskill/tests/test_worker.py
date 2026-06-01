@@ -670,6 +670,7 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
         "topology_records_invalidated": 0,
         "evaluation_records_invalidated": 0,
         "attribution_records_invalidated": 0,
+        "governance_records_invalidated": 1,
     }
     assert retrieval.calls == embeddings.calls
     assert retrieval.calls[0]["workspace_key"] == "dev-01"
@@ -764,6 +765,7 @@ def test_mutation_worker_deletes_initial_create_on_rollback(tmp_path) -> None:
         "topology_records_invalidated": 0,
         "evaluation_records_invalidated": 0,
         "attribution_records_invalidated": 0,
+        "governance_records_invalidated": 1,
     }
 
 
@@ -865,7 +867,9 @@ def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path
         "topology_records_invalidated": 4,
         "evaluation_records_invalidated": 4,
         "attribution_records_invalidated": 4,
+        "governance_records_invalidated": 4,
     }
+    assert governance.invalidation_calls[0]["workspace_key"] == "dev-01"
     assert retrieval.log_calls[0]["workspace_key"] == "dev-01"
     assert context.calls[0]["workspace_key"] == "dev-01"
     assert topology.calls[0]["workspace_key"] == "dev-01"

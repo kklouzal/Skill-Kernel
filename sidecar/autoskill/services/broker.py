@@ -213,7 +213,7 @@ def _select_skill_candidates(
                 archive_promotion_skill_ids.append(skill_id)
             suppressed.append(_suppressed(candidate, "archived-promotion-candidate"))
             continue
-        if lifecycle_state in {"quarantined", "frozen", "deleted"}:
+        if lifecycle_state in {"quarantined", "frozen", "deleted", "revoked"}:
             suppressed.append(_suppressed(candidate, f"lifecycle-{lifecycle_state}"))
             continue
         if skill_id in seen_skill_ids:

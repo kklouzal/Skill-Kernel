@@ -322,6 +322,7 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
                   FROM autoskill.skill_edges e, workspace w
                   WHERE e.workspace_id = w.workspace_id
                     AND e.from_skill_id = ANY($2::uuid[])
+                    AND e.revoked_at IS NULL
                     AND ($3::text[] IS NULL OR e.edge_kind = ANY($3::text[]))
                   UNION ALL
                   SELECT
@@ -331,6 +332,7 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
                   FROM autoskill.skill_edges e, workspace w
                   WHERE e.workspace_id = w.workspace_id
                     AND e.to_skill_id = ANY($2::uuid[])
+                    AND e.revoked_at IS NULL
                     AND ($3::text[] IS NULL OR e.edge_kind = ANY($3::text[]))
                 )
                 SELECT

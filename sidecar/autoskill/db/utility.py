@@ -383,6 +383,7 @@ async def _archive_duplicate_edges(
          AND to_skill.workspace_id = e.workspace_id
         WHERE e.workspace_id = $1
           AND e.edge_kind IN ('duplicate', 'duplicate_of')
+          AND e.revoked_at IS NULL
           AND from_skill.lifecycle_state = 'active'
           AND to_skill.lifecycle_state = 'active'
         ORDER BY from_skill.slug ASC, to_skill.slug ASC
