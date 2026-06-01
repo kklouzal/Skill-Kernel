@@ -56,12 +56,14 @@ Phase 0/1 bootstrap.
 - Real local Postgres worker-loop validation passed via compose: queued `worker-loop:derive` and `worker-loop:embed`, ran the maintenance loop with concurrency 2, and verified both jobs reached `succeeded` with one attempt.
 - Embedding provider routing is implemented: deterministic hash provider remains the safe default, OpenAI-compatible `/embeddings` provider is configurable with base URL/API key/model/timeout, and both API and worker generation paths use the configured provider.
 - Real local Postgres provider-routing validation passed via compose: configured a non-default hash embedding model, generated one evidence embedding, and verified pgvector search found it under the configured model name.
+- Active/archive duplicate matching primitive is implemented: `/v1/skills/match` checks candidate descriptions/runtime text against body-index documents, returns `reuse_active`, `consider_archive_promotion`, or `create_candidate`, and keeps active/archived match lists separate for opportunity-miner gating.
+- Real local Postgres duplicate-match validation passed via compose: seeded active and archived body-index matches, matcher returned `reuse_active`, surfaced both active and archived matches, and wrote a retrieval log.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
-2. Add active/archive duplicate matching and opportunity-miner integration before new skill creation.
+2. Add opportunity-miner integration that calls duplicate matching before candidate generation.
 3. Add explicit shadowing event detection from outcomes/corrections, beyond current broker suppression telemetry.
 4. Add worker observability/health counters and pool-specific concurrency settings from config.
 5. Add production embedding provider live validation once credentials/provider endpoint are configured.

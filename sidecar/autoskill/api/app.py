@@ -27,6 +27,7 @@ from autoskill.services.embedding_generation import (
     build_text_embedder_from_settings,
     generate_pending_embeddings,
 )
+from autoskill.services.matching import SkillMatchRequest, match_existing_skills
 from autoskill.services.worker import WorkerRunResult, WorkerStores, run_worker_once
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi import status as http_status
@@ -137,6 +138,21 @@ class RetrievalQueryResponse(BaseModel):
     retrieval_log_id: str | None
     decision: str
     candidates: list[dict[str, object]]
+
+
+class SkillMatchApiRequest(BaseModel):
+    workspace_id: str
+    candidate_slug: str
+    candidate_description: str
+    candidate_runtime_text: str = ""
+    limit: int = 10
+
+
+class SkillMatchApiResponse(BaseModel):
+    decision: str
+    retrieval_log_id: str | None
+    active_matches: list[dict[str, object]]
+    archived_matches: list[dict[str, object]]
 
 
 class EmbeddingUpsertRequest(BaseModel):
@@ -512,6 +528,24 @@ def create_app(
             decision=result.decision,
             candidates=[candidate.to_json() for candidate in result.candidates],
         )
+
+    @app.post("/v1/skills/match", response_model=SkillMatchApiResponse)
+    async def match_skills(
+        request: SkillMatchApiRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> SkillMatchApiResponse:
+        _require_control_auth(authorization)
+        result = await match_existing_skills(
+            retrieval,
+            SkillMatchRequest(
+                workspace_key=request.workspace_id,
+                candidate_slug=request.candidate_slug,
+                candidate_description=request.candidate_description,
+                candidate_runtime_text=request.candidate_runtime_text,
+                limit=request.limit,
+            ),
+        )
+        return SkillMatchApiResponse(**result.to_json())
 
     @app.post("/v1/embeddings/upsert", response_model=EmbeddingUpsertResponse)
     async def upsert_embedding(

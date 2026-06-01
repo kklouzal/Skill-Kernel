@@ -77,7 +77,7 @@ Deliverables:
 - redacted embeddings; storage/search primitives, deterministic development generation worker, and configurable provider routing are implemented;
 - lexical + vector + metadata search; lexical evidence/body-index search and pgvector nearest search are implemented;
 - exact rerank; implemented as deterministic broker rerank over lexical score, query overlap, lifecycle, and graph edges;
-- active/archive matching; implemented in runtime broker so archived matches are promotion candidates rather than injected hints;
+- active/archive matching; implemented in runtime broker and `/v1/skills/match` so archived matches are promotion candidates rather than injected hints or duplicate new skills;
 - duplicate matching.
 
 Acceptance:
