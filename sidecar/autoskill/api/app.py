@@ -10,6 +10,7 @@ from uuid import UUID
 from autoskill import __version__
 from autoskill.core.config import get_settings
 from autoskill.core.events import IngestRequest, IngestResult
+from autoskill.db.embeddings import AsyncpgEmbeddingStore, EmbeddingStore, NullEmbeddingStore
 from autoskill.db.events import AsyncpgEventStore, EventStore, NullEventStore
 from autoskill.db.evidence import AsyncpgEvidenceStore, EvidenceStore, NullEvidenceStore
 from autoskill.db.jobs import AsyncpgJobStore, JobStore, NullJobStore
@@ -20,7 +21,8 @@ from autoskill.services.broker import (
     ContextHintResponse,
     bootstrap_context_hint,
 )
-from fastapi import FastAPI, Header, HTTPException, Query, status
+from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import status as http_status
 from pydantic import BaseModel
 
 
@@ -116,6 +118,33 @@ class RetrievalQueryResponse(BaseModel):
     candidates: list[dict[str, object]]
 
 
+class EmbeddingUpsertRequest(BaseModel):
+    workspace_id: str
+    object_type: str
+    object_id: UUID
+    embedding_model: str
+    embedding: list[float]
+    text: str
+    skill_id: UUID | None = None
+
+
+class EmbeddingUpsertResponse(BaseModel):
+    created: bool
+    embedding: dict[str, object]
+
+
+class EmbeddingSearchRequest(BaseModel):
+    workspace_id: str
+    embedding_model: str
+    embedding: list[float]
+    object_type: str | None = None
+    limit: int = 10
+
+
+class EmbeddingSearchResponse(BaseModel):
+    candidates: list[dict[str, object]]
+
+
 def _build_event_store() -> EventStore:
     settings = get_settings()
     if settings.database_url:
@@ -166,6 +195,16 @@ def _build_retrieval_store() -> RetrievalStore:
     return NullRetrievalStore()
 
 
+def _build_embedding_store() -> EmbeddingStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgEmbeddingStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullEmbeddingStore()
+
+
 def _require_ingest_auth(authorization: str | None) -> None:
     settings = get_settings()
     if not settings.ingest_token:
@@ -174,7 +213,7 @@ def _require_ingest_auth(authorization: str | None) -> None:
     expected = f"Bearer {settings.ingest_token}"
     if authorization is None or not compare_digest(authorization, expected):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=http_status.HTTP_401_UNAUTHORIZED,
             detail="invalid ingest authorization",
         )
 
@@ -187,7 +226,7 @@ def _require_control_auth(authorization: str | None) -> None:
     expected = f"Bearer {settings.control_token}"
     if authorization is None or not compare_digest(authorization, expected):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=http_status.HTTP_401_UNAUTHORIZED,
             detail="invalid control authorization",
         )
 
@@ -198,19 +237,21 @@ def create_app(
     scheduler_store: SchedulerStore | None = None,
     evidence_store: EvidenceStore | None = None,
     retrieval_store: RetrievalStore | None = None,
+    embedding_store: EmbeddingStore | None = None,
 ) -> FastAPI:
     store = event_store or _build_event_store()
     jobs = job_store or _build_job_store()
     scheduler = scheduler_store or _build_scheduler_store()
     evidence = evidence_store or _build_evidence_store()
     retrieval = retrieval_store or _build_retrieval_store()
+    embeddings = embedding_store or _build_embedding_store()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:
-            for closeable in (store, jobs, scheduler, evidence, retrieval):
+            for closeable in (store, jobs, scheduler, evidence, retrieval, embeddings):
                 close = getattr(closeable, "close", None)
                 if close is not None:
                     await close()
@@ -311,7 +352,7 @@ def create_app(
         _require_control_auth(authorization)
         if request.status not in {"succeeded", "failed"}:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail="status must be succeeded or failed",
             )
         job = await jobs.complete_job(
@@ -411,6 +452,55 @@ def create_app(
             retrieval_log_id=str(result.retrieval_log_id) if result.retrieval_log_id else None,
             decision=result.decision,
             candidates=[candidate.to_json() for candidate in result.candidates],
+        )
+
+    @app.post("/v1/embeddings/upsert", response_model=EmbeddingUpsertResponse)
+    async def upsert_embedding(
+        request: EmbeddingUpsertRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> EmbeddingUpsertResponse:
+        _require_control_auth(authorization)
+        try:
+            result = await embeddings.upsert_embedding(
+                workspace_key=request.workspace_id,
+                object_type=request.object_type,
+                object_id=request.object_id,
+                embedding_model=request.embedding_model,
+                embedding=request.embedding,
+                text=request.text,
+                skill_id=request.skill_id,
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return EmbeddingUpsertResponse(
+            created=result.created,
+            embedding=result.embedding.to_json(),
+        )
+
+    @app.post("/v1/embeddings/search", response_model=EmbeddingSearchResponse)
+    async def search_embeddings(
+        request: EmbeddingSearchRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> EmbeddingSearchResponse:
+        _require_control_auth(authorization)
+        try:
+            candidates = await embeddings.search_embeddings(
+                workspace_key=request.workspace_id,
+                embedding_model=request.embedding_model,
+                embedding=request.embedding,
+                object_type=request.object_type,
+                limit=max(1, min(request.limit, 50)),
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return EmbeddingSearchResponse(
+            candidates=[candidate.to_json() for candidate in candidates],
         )
 
     @app.get("/v1/audit/recent")

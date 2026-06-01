@@ -38,12 +38,14 @@ Phase 0/1 bootstrap.
 - Retrieval schema support is implemented for body index documents, `vector(1536)` embedding records, lexical indexes, HNSW vector index, and retrieval logs.
 - Deterministic lexical retrieval API is implemented for evidence/body-index records.
 - Real local Postgres retrieval validation passed via compose: migration applied, evidence derived, lexical query found an evidence candidate, and a retrieval log row was written.
+- Embedding upsert/search primitives are implemented with fixed `vector(1536)` dimension validation, finite-value checks, all-zero rejection, and pgvector cosine nearest search.
+- Real local Postgres embedding validation passed via compose: migration applied, two non-zero embeddings inserted, nearest search returned both, and cosine ordering was correct.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
-2. Add embedding write/read service and pgvector candidate generation.
+2. Add embedding generation workers over evidence/body-index text.
 3. Add context-broker data access and set-aware context rendering.
 4. Add worker loop dispatch with risk/cost pool separation.
 5. Add retry backoff and terminal failure policy for jobs.
@@ -56,4 +58,4 @@ Phase 0/1 bootstrap.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
 - Job completion currently records terminal success/failure; retry backoff policy beyond expired-lease recovery is still pending.
 - Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive/intervention evidence still needs aggregation logic.
-- Retrieval is currently lexical-only despite the pgvector schema/indexes being present; embedding generation and vector candidate search are still pending.
+- Retrieval has lexical and vector storage/search primitives, but no embedding-generation worker is wired yet.
