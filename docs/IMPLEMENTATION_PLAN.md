@@ -93,7 +93,7 @@ Deliverables:
 - deterministic broker planner;
 - set-aware context renderer; implemented as a conservative retrieval-backed first pass with duplicate skill suppression and prerequisite graph expansion;
 - cache-backed context hint endpoint; endpoint is present behind a disabled-by-default config gate with short in-process cache;
-- shadowing logs; broker suppression/rendering telemetry is attached to retrieval logs, outcome-based shadowing detection pending.
+- shadowing logs; broker suppression/rendering telemetry is attached to retrieval logs, and outcome/correction-based shadowing detection records attribution events.
 
 Acceptance:
 
