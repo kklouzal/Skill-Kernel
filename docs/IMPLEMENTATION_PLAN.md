@@ -14,7 +14,10 @@ Deliverables:
 
 Acceptance:
 
-- an installed local plugin can capture tool and turn events;
+- an installed local plugin can capture tool and turn events; implemented for the
+  runtime plugin shape with `openclaw --dev plugins inspect autoskill --json
+  --runtime` proving `imported=true`, `hookCount=11`, and no diagnostics when
+  `allowConversationAccess`/`allowPromptInjection` are enabled;
 - a generated test skill loads from `<workspace>/skills/autoskill/<slug>/SKILL.md`;
 - archived skills under `<workspace>/.autoskill/archive` are invisible to OpenClaw skill loading;
 - context hints can be disabled and fail softly.

@@ -3,7 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "src/index.js",
   "description": "OpenClaw AutoSkill Manager capture plugin for SkillKernel",
+  "openclaw": {
+    "extensions": [
+      "./src/index.js"
+    ]
+  },
   "scripts": {
     "check": "node --check src/index.js && find hooks -name handler.js -print0 | xargs -0 -n1 node --check",
     "test": "node --test"

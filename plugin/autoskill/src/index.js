@@ -5,6 +5,45 @@ import { appendSpool, getSpoolStats, replaySpool } from "./spool/index.js";
 
 let replayInFlight = false;
 
+const CAPTURE_HOOKS = [
+  ["after_tool_call", "tool_call_end", "trusted", ["tool"]],
+  ["before_tool_call", "tool_call_start", "trusted", ["tool"]],
+  ["gateway_start", "gateway_startup", "trusted", ["gateway"]],
+  ["llm_input", "llm_input", "trusted", ["llm"]],
+  ["llm_output", "llm_output", "trusted", ["llm"]],
+  ["message_received", "message_received", "untrusted", ["message"]],
+  ["message_sent", "message_sent", "trusted", ["message"]],
+  ["model_call_ended", "model_call_ended", "trusted", ["model"]],
+  ["model_call_started", "model_call_started", "trusted", ["model"]],
+  ["tool_result_persist", "tool_result_persist", "trusted", ["tool"]],
+];
+
+export const id = "autoskill";
+export const name = "AutoSkill Manager";
+export const kind = "memory";
+
+export function register(api) {
+  for (const [hookName, eventType, trust, taint] of CAPTURE_HOOKS) {
+    api.on(
+      hookName,
+      (event, ctx) => captureEvent({ eventType, payload: event, trust, taint, hookContext: ctx }),
+      { name: `autoskill-${eventType}` },
+    );
+  }
+  api.on(
+    "before_prompt_build",
+    (event, ctx) => maybeContextHint({ prompt: event?.prompt, hookContext: ctx }),
+    { name: "autoskill-context-hint" },
+  );
+}
+
+export default {
+  id,
+  name,
+  kind,
+  register,
+};
+
 export async function captureEvent({ eventType, payload, trust, taint, hookContext }) {
   const config = resolveConfig(hookContext);
   if (!config.enabled) {

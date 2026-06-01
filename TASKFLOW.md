@@ -176,11 +176,11 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Validation passed for broker external shadow-risk metadata: focused broker tests passed, full sidecar tests passed with 142 tests, plugin tests passed with 7 tests, and a real compose Postgres smoke deferred a changed external skill while recording high external shadow risk and `review_changed_external_skill_before_runtime_hint` metadata.
 - Validation passed for direct writer API trace spans: focused writer/admin tests passed 19 tests, full sidecar tests passed with 142 tests, plugin tests passed with 7 tests, and a real compose Postgres smoke recorded `writer.apply` and `writer.rollback` spans parented under a caller trace root.
 - Validation passed for deterministic topology apply semantics: focused topology/admin tests passed 10 tests, full sidecar tests passed with 144 tests, plugin tests passed with 7 tests, and a real compose Postgres smoke blocked apply while trials were planned, then moved the operation to `applied` after all planned topology trials were marked passed.
-- OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
+- Validation passed for the installed OpenClaw runtime-plugin seam: the AutoSkill plugin now uses `openclaw.plugin.json` plus `package.json#openclaw.extensions` instead of a metadata-only `.codex-plugin` bundle, registers typed hooks through `api.on(...)`, and `openclaw --dev plugins inspect autoskill --json --runtime` reports `imported=true`, `hookCount=11`, and no diagnostics when dev-profile `allowConversationAccess` and `allowPromptInjection` are enabled.
 
 ## Next Gates
 
-1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
+1. Confirm active skill root loading and archive invisibility with a real OpenClaw dev-profile skill-root smoke.
 2. Continue trace propagation through revocation and any queued semantic jobs that bypass the typed LLM client. Direct writer apply/rollback API calls now record content-safe trace spans; mutation worker writer/revocation paths still use job-level spans.
 3. Extend topology apply semantics from state transition to full downstream mutation orchestration. Topology apply now requires passed trials and can require activation readiness for associated skill versions before marking an operation `applied`.
 4. Add production embedding provider live validation once credentials/provider endpoint are configured.
@@ -188,9 +188,11 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Known Risks
 
-- Hook event names are currently scaffolded from local code inspection and must be confirmed with an installed plugin smoke test before relying on capture coverage.
+- Installed-plugin runtime loading is now smoke-tested under the dev profile. Full
+  hook coverage requires plugin entry hook policy to allow conversation access
+  and prompt injection; production config still needs that explicit operator
+  setting.
 - Spool replay is best-effort from capture hooks and still needs a live gateway smoke test under actual hook concurrency.
-- Message hook event aliases remain intentionally broad until live OpenClaw installed-plugin validation confirms current names.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
 - Worker health now includes persistent heartbeat records and long-running handlers can renew job leases; handlers still need workload-specific progress metadata once LLM/evaluation jobs become lengthy.
 - Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive evidence still needs aggregation logic beyond evaluator replay maturity records.

@@ -125,6 +125,40 @@ test("plugin diagnostics reports spool and sidecar status", async () => {
   }
 });
 
+test("plugin runtime registers typed OpenClaw hooks", async () => {
+  const { default: plugin } = await import("../src/index.js");
+  const registrations = [];
+  const api = {
+    on(hookName, handler, options) {
+      registrations.push({ hookName, handler, options });
+    },
+  };
+
+  plugin.register(api);
+
+  assert.equal(plugin.id, "autoskill");
+  assert.deepEqual(
+    registrations.map((entry) => entry.hookName).sort(),
+    [
+      "after_tool_call",
+      "before_prompt_build",
+      "before_tool_call",
+      "gateway_start",
+      "llm_input",
+      "llm_output",
+      "message_received",
+      "message_sent",
+      "model_call_ended",
+      "model_call_started",
+      "tool_result_persist",
+    ].sort(),
+  );
+  assert.equal(
+    registrations.find((entry) => entry.hookName === "before_prompt_build").options.name,
+    "autoskill-context-hint",
+  );
+});
+
 test("every hook directory declares OpenClaw event metadata", async () => {
   const hooksRoot = new URL("../hooks/", import.meta.url);
   const entries = await fs.readdir(hooksRoot, { withFileTypes: true });
