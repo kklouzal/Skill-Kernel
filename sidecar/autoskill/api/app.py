@@ -21,6 +21,12 @@ from autoskill.db.embeddings import AsyncpgEmbeddingStore, EmbeddingStore, NullE
 from autoskill.db.evaluations import AsyncpgEvaluationStore, EvaluationStore, NullEvaluationStore
 from autoskill.db.events import AsyncpgEventStore, EventStore, NullEventStore
 from autoskill.db.evidence import AsyncpgEvidenceStore, EvidenceStore, NullEvidenceStore
+from autoskill.db.external_skills import (
+    AsyncpgExternalSkillStore,
+    ExternalSkillInput,
+    ExternalSkillStore,
+    NullExternalSkillStore,
+)
 from autoskill.db.governance import AsyncpgGovernanceStore, GovernanceStore, NullGovernanceStore
 from autoskill.db.jobs import AsyncpgJobStore, JobStore, NullJobStore
 from autoskill.db.lifecycle import AsyncpgLifecycleStore, LifecycleStore, NullLifecycleStore
@@ -162,6 +168,33 @@ class ContextCacheInvalidateResponse(BaseModel):
 
 
 class SkillListResponse(BaseModel):
+    skills: list[dict[str, object]]
+
+
+class ExternalSkillInventoryItem(BaseModel):
+    source: str
+    root_path_hash: str
+    slug: str
+    file_hash: str
+    name: str | None = None
+    description: str | None = None
+    frontmatter: dict[str, object] = {}
+    status: str = "visible"
+    risk_summary: dict[str, object] = {}
+
+
+class ExternalSkillInventoryUpsertRequest(BaseModel):
+    workspace_id: str
+    skills: list[ExternalSkillInventoryItem]
+
+
+class ExternalSkillInventoryUpsertResponse(BaseModel):
+    created: int
+    updated: int
+    skills: list[dict[str, object]]
+
+
+class ExternalSkillInventoryListResponse(BaseModel):
     skills: list[dict[str, object]]
 
 
@@ -448,6 +481,7 @@ class SkillMatchApiResponse(BaseModel):
     retrieval_log_id: str | None
     active_matches: list[dict[str, object]]
     archived_matches: list[dict[str, object]]
+    external_matches: list[dict[str, object]] = []
 
 
 def _candidate_transaction_idempotency_key(
@@ -604,6 +638,16 @@ def _build_evidence_store() -> EvidenceStore:
             statement_timeout_ms=settings.statement_timeout_ms,
         )
     return NullEvidenceStore()
+
+
+def _build_external_skill_store() -> ExternalSkillStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgExternalSkillStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullExternalSkillStore()
 
 
 def _build_retrieval_store() -> RetrievalStore:
@@ -805,6 +849,7 @@ def create_app(
     job_store: JobStore | None = None,
     scheduler_store: SchedulerStore | None = None,
     evidence_store: EvidenceStore | None = None,
+    external_skill_store: ExternalSkillStore | None = None,
     retrieval_store: RetrievalStore | None = None,
     skill_store: SkillStore | None = None,
     embedding_store: EmbeddingStore | None = None,
@@ -822,6 +867,7 @@ def create_app(
     jobs = job_store or _build_job_store()
     scheduler = scheduler_store or _build_scheduler_store()
     evidence = evidence_store or _build_evidence_store()
+    external_skills = external_skill_store or _build_external_skill_store()
     retrieval = retrieval_store or _build_retrieval_store()
     skills = skill_store or _build_skill_store()
     embeddings = embedding_store or _build_embedding_store()
@@ -845,6 +891,7 @@ def create_app(
                 jobs,
                 scheduler,
                 evidence,
+                external_skills,
                 retrieval,
                 skills,
                 embeddings,
@@ -946,6 +993,61 @@ def create_app(
             limit=max(1, min(limit, 500)),
         )
         return SkillListResponse(skills=[skill.to_json() for skill in listed])
+
+    @app.get("/v1/external-skills", response_model=ExternalSkillInventoryListResponse)
+    async def list_external_skills(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> ExternalSkillInventoryListResponse:
+        _require_control_auth(authorization)
+        try:
+            listed = await external_skills.list_external_skills(
+                workspace_key=workspace_id,
+                status=status,
+                limit=max(1, min(limit, 500)),
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return ExternalSkillInventoryListResponse(skills=[skill.to_json() for skill in listed])
+
+    @app.post(
+        "/v1/external-skills/upsert",
+        response_model=ExternalSkillInventoryUpsertResponse,
+    )
+    async def upsert_external_skills(
+        request: ExternalSkillInventoryUpsertRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ExternalSkillInventoryUpsertResponse:
+        _require_control_auth(authorization)
+        try:
+            result = await external_skills.upsert_external_skills(
+                workspace_key=request.workspace_id,
+                skills=[
+                    ExternalSkillInput(
+                        source=item.source,
+                        root_path_hash=item.root_path_hash,
+                        slug=item.slug,
+                        file_hash=item.file_hash,
+                        name=item.name,
+                        description=item.description,
+                        frontmatter=item.frontmatter,
+                        status=item.status,
+                        risk_summary=item.risk_summary,
+                    )
+                    for item in request.skills
+                ],
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return ExternalSkillInventoryUpsertResponse(**result.to_json())
 
     @app.get("/v1/jobs")
     async def list_jobs(

@@ -24,6 +24,8 @@ class OpportunityCandidate:
             return "reuse_active"
         if self.match.decision == "consider_archive_promotion":
             return "promote_archived"
+        if self.match.decision == "external_collision_review":
+            return "review_external_collision"
         return "propose_candidate"
 
     def to_json(self) -> dict[str, Any]:

@@ -115,8 +115,10 @@ Phase 6/7 control-plane buildout.
 - Phase 8 guarded curation planning is implemented: repeated harmful outcomes and shadowing patterns create planned `plan_improvement`, `plan_disambiguation_repair`, or `plan_split` curation actions instead of directly mutating skill text.
 - Mutation-worker apply orchestration is implemented as fail-closed `writer.apply`: the mutation pool can apply a staged manifest through the transaction-aware writer only when the job payload explicitly sets `policy_approved=true`.
 - Durable worker entrypoint wiring now includes utility and contract stores, so long-lived maintenance workers can actually execute `curation.run`, `contracts.extract`, and `drift.check` jobs rather than only the in-process API test path.
+- External-skill inventory and collision awareness are implemented: external skills can be upserted/listed through control-authenticated APIs, persisted with hashed roots/file hashes/status/risk metadata, surfaced by lexical retrieval as non-runtime `external_skill` candidates, suppressed by the broker instead of injected, and returned by duplicate matching as `external_collision_review` so candidate creation pauses for review instead of mutating external skill roots.
 - Real local Postgres contrastive-replay validation passed via compose: a fresh candidate evaluation consumed redacted no-skill failure and skill-visible success evidence, persisted the no-skill probe as `contrastive`, passed the proposal gate, and recorded intervention-validated maturity rows for the skill version plus both evidence items.
 - Real local Postgres drift/curation/writer validation passed via compose: one SkillIR env contract was extracted, the missing env var created one drift event and one active drift probe, repeated harmful attribution produced one planned improvement action, attribution/canary contrastive evidence produced a replay, and a policy-approved mutation-worker `writer.apply` job activated a staged autoskill artifact.
+- Real local Postgres external-skill validation passed via compose: migration applied, first external inventory upsert created one row, second upsert updated the same row to `changed`, status-filtered listing returned it, lexical retrieval surfaced it as `external_skill`, and compose was cleaned down afterward.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
@@ -126,6 +128,7 @@ Phase 6/7 control-plane buildout.
 3. Add expanded derived-state revoke handlers for frozen skills and non-body-index transaction-derived artifacts.
 4. Extend Phase 8 from planned curation actions into proposal generation for splits, disambiguation repairs, guarded improvements, and merge probes.
 5. Expand Phase 9 beyond deterministic drift checks into false-positive review flows, repair proposal generation from drift events, and API/schema/service probes that require live endpoint contracts.
+6. Add an external-skill scanner job that inventories real non-AutoSkill skill roots without storing raw root paths and records collision/shadow recommendations without mutating external-owned files.
 
 ## Known Risks
 
@@ -137,6 +140,7 @@ Phase 6/7 control-plane buildout.
 - Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive evidence still needs aggregation logic beyond evaluator replay maturity records.
 - Embedding generation defaults to deterministic local hash embeddings until production provider settings are configured and live-validated.
 - Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and broader shadow-edge policy tuning remain pending.
+- External-skill awareness is inventory/retrieval/matching only; real root scanning, embedding generation for external descriptions, collision risk scoring, and explicit import recommendation flows remain pending.
 - Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded or induced redacted intervention replay from explicit replay, attribution, canary, or broker outcome evidence.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints; mutation-worker apply exists but fails closed unless the queued job is explicitly policy-approved.
 - Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, invalidates body-index/embedding objects from traversal summaries, and freeze/critical-canary paths evict affected broker cache entries; broader revoke handlers are still pending.

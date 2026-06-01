@@ -200,12 +200,47 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
                   CROSS JOIN q
                   WHERE d.workspace_id = $1
                     AND to_tsvector('simple', d.text_content) @@ q.query
+                ),
+                external_skill_candidates AS (
+                  SELECT
+                    'external_skill'::text AS object_type,
+                    e.external_skill_id AS object_id,
+                    NULL::uuid AS skill_id,
+                    left(
+                      COALESCE(e.name, e.slug) || ': ' || COALESCE(e.description, ''),
+                      240
+                    ) AS summary,
+                    ts_rank(
+                      to_tsvector(
+                        'simple',
+                        COALESCE(e.name, '') || ' ' || COALESCE(e.description, '')
+                      ),
+                      q.query
+                    )::float AS rank,
+                    jsonb_build_object(
+                      'source', e.source,
+                      'root_path_hash', e.root_path_hash,
+                      'slug', e.slug,
+                      'status', e.status,
+                      'ownership', 'external',
+                      'file_hash', e.file_hash,
+                      'risk_summary', e.risk_summary
+                    ) AS metadata
+                  FROM autoskill.external_skill_inventory e, q
+                  WHERE e.workspace_id = $1
+                    AND e.status IN ('visible', 'changed')
+                    AND to_tsvector(
+                      'simple',
+                      COALESCE(e.name, '') || ' ' || COALESCE(e.description, '')
+                    ) @@ q.query
                 )
                 SELECT *
                 FROM (
                   SELECT * FROM evidence_candidates
                   UNION ALL
                   SELECT * FROM body_candidates
+                  UNION ALL
+                  SELECT * FROM external_skill_candidates
                 ) candidates
                 ORDER BY rank DESC, summary ASC
                 LIMIT $3

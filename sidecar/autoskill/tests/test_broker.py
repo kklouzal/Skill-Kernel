@@ -277,6 +277,39 @@ def test_context_broker_suppresses_archived_matches_for_promotion() -> None:
     assert response.suppressed[0]["reason"] == "archived-promotion-candidate"
 
 
+def test_context_broker_suppresses_external_skill_collisions() -> None:
+    store = MemoryBrokerRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="external_skill",
+                object_id=uuid4(),
+                skill_id=None,
+                summary="External PDF table cleanup workflow.",
+                rank=0.9,
+                metadata={
+                    "ownership": "external",
+                    "source": "workspace-skill-root",
+                    "status": "visible",
+                    "slug": "pdf-table-cleanup",
+                },
+            )
+        ]
+    )
+
+    async def run():
+        return await build_context_hint(
+            store,
+            ContextHintRequest(workspace_id="dev-01", user_intent="pdf table cleanup"),
+        )
+
+    response = asyncio.run(run())
+
+    assert response.decision == "defer_skill"
+    assert response.skill_ids == []
+    assert response.suppressed[0]["reason"] == "external-skill-collision"
+    assert "external-skill-collision" in response.reason_codes
+
+
 def test_context_broker_cache_avoids_duplicate_retrieval() -> None:
     skill_id = uuid4()
     store = MemoryBrokerRetrievalStore(

@@ -98,6 +98,45 @@ def test_skill_match_surfaces_archived_promotion_candidate() -> None:
     assert result.archived_matches[0].skill_id == str(archived_skill_id)
 
 
+def test_skill_match_surfaces_external_collision_without_reuse() -> None:
+    external_skill_id = uuid4()
+    store = MemorySkillMatchRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="external_skill",
+                object_id=external_skill_id,
+                skill_id=None,
+                summary="PDF table cleanup: external workflow for repairing malformed cells.",
+                rank=0.7,
+                metadata={
+                    "ownership": "external",
+                    "source": "workspace-skill-root",
+                    "status": "visible",
+                    "slug": "pdf-table-cleanup",
+                },
+            )
+        ]
+    )
+
+    async def run():
+        return await match_existing_skills(
+            store,
+            SkillMatchRequest(
+                workspace_key="dev-01",
+                candidate_slug="pdf-table-repair",
+                candidate_description="Repair malformed PDF table extraction boundaries.",
+            ),
+        )
+
+    result = asyncio.run(run())
+
+    assert result.decision == "external_collision_review"
+    assert result.active_matches == []
+    assert result.archived_matches == []
+    assert result.external_matches[0].external_skill_id == str(external_skill_id)
+    assert result.external_matches[0].source == "workspace-skill-root"
+
+
 def test_skill_match_api_uses_retrieval_store() -> None:
     store = MemorySkillMatchRetrievalStore([])
     app = create_app(retrieval_store=store)
@@ -116,4 +155,5 @@ def test_skill_match_api_uses_retrieval_store() -> None:
 
     assert response.decision == "create_candidate"
     assert response.active_matches == []
+    assert response.external_matches == []
     assert store.queries[0] == "brand new"

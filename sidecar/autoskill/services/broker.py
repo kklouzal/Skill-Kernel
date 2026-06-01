@@ -184,6 +184,9 @@ def _select_skill_candidates(
     seen_skill_ids: set[str] = set()
 
     for candidate in candidates:
+        if candidate.object_type == "external_skill":
+            suppressed.append(_suppressed(candidate, "external-skill-collision"))
+            continue
         if candidate.object_type != "body_index_document" or candidate.skill_id is None:
             suppressed.append(_suppressed(candidate, "not-runtime-skill"))
             continue

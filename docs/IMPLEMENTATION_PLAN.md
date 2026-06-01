@@ -95,6 +95,7 @@ Deliverables:
 - set-aware context renderer; implemented as a conservative retrieval-backed first pass with duplicate skill suppression and prerequisite graph expansion;
 - cache-backed context hint endpoint; endpoint is present behind a disabled-by-default config gate with short in-process cache;
 - shadowing logs; broker suppression/rendering telemetry is attached to retrieval logs, and outcome/correction-based shadowing detection records attribution events.
+- external-skill inventory awareness; implemented as control-authenticated upsert/list APIs, hashed-root/file-hash/status/risk metadata persistence, lexical retrieval of visible/changed external skills, broker suppression as non-runtime collisions, and duplicate-match `external_collision_review` decisions that block automatic candidate creation.
 
 Acceptance:
 
@@ -102,6 +103,7 @@ Acceptance:
 - no LLM call runs in the hook path;
 - no raw memory/evidence is injected; implemented for evidence-only matches by deferring without hint text.
 - rendered skill IDs, suppression reasons, and reason codes are recorded on retrieval logs.
+- external skills are visible to collision analysis but are never injected as runtime hints or selected for autonomous mutation.
 
 ## Phase 6 - Candidate Generation in Propose-Only Mode
 
@@ -186,6 +188,7 @@ Acceptance:
 - archived skills promote when demand recurs; implemented for archived skills with repeated retrieval demand, no harm/canary failures, and latest evaluator pass;
 - duplicates merge only after probes pass; implemented for explicit duplicate graph edges as lower-utility duplicate archiving only when both latest skill versions have evaluator pass, with repair/split planning now logged for harmful or shadowing patterns and dedicated merge probe planning still pending;
 - active bank budget is enforced; implemented by archiving lowest-utility overflow active skills.
+- external collisions pause candidate creation for review; real external-root scanning/import recommendation flows remain pending.
 
 ## Phase 9 - Drift and Advanced Governance
 
