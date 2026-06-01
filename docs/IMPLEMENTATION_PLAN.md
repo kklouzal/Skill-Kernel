@@ -144,7 +144,7 @@ Deliverables:
   queue rollback revocation requests for transaction-scoped critical canary failures.
 - mutation-worker rollback revocation execution; implemented for queued rollback revocation
   requests whose originating transaction recorded an archive-backed compiled-file rollback
-  action.
+  action or an initial-create active-path deletion rollback action.
 - rollback-derived invalidation; implemented for traversal-summary impacted objects by deleting
   matching body-index documents and embeddings during mutation-worker rollback completion.
 
@@ -165,7 +165,7 @@ Acceptance:
 - valid skill appears under active root;
 - invalid paths are rejected;
 - rollback restores the previous effective state;
-- canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed mutation-worker rollback execution, and body-index/embedding invalidation are implemented, while active-cache invalidation, broader per-object revoke handlers, and active-path deletion rollbacks remain pending.
+- canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed mutation-worker rollback execution, initial-create active-path deletion rollback, and body-index/embedding invalidation are implemented, while active-cache invalidation and broader per-object revoke handlers remain pending.
 
 ## Phase 8 - Autonomous Improvement and Curation
 

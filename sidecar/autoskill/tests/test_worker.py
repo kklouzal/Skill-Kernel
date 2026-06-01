@@ -448,6 +448,93 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
     assert retrieval.calls[0]["workspace_key"] == "dev-01"
 
 
+def test_mutation_worker_deletes_initial_create_on_rollback(tmp_path) -> None:
+    jobs = MemoryJobStore()
+    governance = MemoryGovernanceStore()
+    retrieval = MemoryInvalidationStore()
+    embeddings = MemoryInvalidationStore()
+    workspace_root = tmp_path / "workspace"
+    staging_root = workspace_root / ".autoskill" / "staging"
+    archive_root = workspace_root / ".autoskill" / "archive"
+    active_root = workspace_root / "skills" / "autoskill" / "new-skill"
+
+    async def run():
+        apply_transaction = await governance.start_transaction(
+            workspace_key="dev-01",
+            transaction_kind="compile",
+            idempotency_key="apply:new-skill",
+            plan_hash="apply-plan",
+        )
+        staged = stage_compiled_skill(
+            staging_root,
+            staging_id=uuid4(),
+            skill_version_id=uuid4(),
+            slug="new-skill",
+            compiled_skill_md="WHEN new\nDO useful behavior\n",
+        )
+        await apply_staged_manifest_with_governance(
+            governance,
+            evolution_transaction_id=apply_transaction.transaction.evolution_transaction_id,
+            staging_root=staging_root,
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            manifest_relative_path=staged.manifest_relative_path,
+        )
+        revocation = await governance.request_revocation(
+            workspace_key="dev-01",
+            request_kind="rollback",
+            root_object_type="evolution_transaction",
+            root_object_id=apply_transaction.transaction.evolution_transaction_id,
+            traversal_summary={
+                "impacted_objects": [
+                    {
+                        "object_type": "skill_version",
+                        "object_id": str(staged.skill_version_id),
+                    }
+                ],
+            },
+        )
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="revocations.rollback",
+            idempotency_key="rollback:new-skill",
+            payload={"workspace_id": "dev-01"},
+        )
+        result = await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=embeddings,
+                retrieval=retrieval,
+                governance=governance,
+                workspace_root=workspace_root,
+                archive_root=archive_root,
+            ),
+            worker_id="mutation-worker",
+            pool="mutation",
+        )
+        return result, revocation
+
+    result, revocation = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["completed"] == 1
+    assert not active_root.exists()
+    completed = next(
+        request
+        for request in governance.revocations
+        if request.revocation_request_id == revocation.revocation_request_id
+    )
+    assert completed.status == "completed"
+    assert completed.traversal_summary["artifact"]["operation"] == "delete_active_path"
+    assert completed.traversal_summary["invalidation"] == {
+        "objects": 1,
+        "body_index_documents_deleted": 1,
+        "embeddings_deleted": 1,
+    }
+
+
 def test_worker_run_once_dispatches_evaluation_job() -> None:
     evaluations = MemoryEvaluationWorkerStore()
     stores = WorkerTestStores(

@@ -536,6 +536,55 @@ async def rollback_active_skill_with_governance(
     return rolled_back
 
 
+async def delete_active_skill_with_governance(
+    governance: Any,
+    *,
+    evolution_transaction_id: UUID,
+    workspace_root: Path,
+    active_relative_path: str,
+) -> dict[str, Any]:
+    """Delete a newly-created active skill path and record the rollback transaction item."""
+
+    rolling_back_transaction = await governance.update_transaction_status(
+        evolution_transaction_id=evolution_transaction_id,
+        status="rolling_back",
+        metrics={"active_relative_path": active_relative_path},
+    )
+    workspace_key = _transaction_workspace_key(rolling_back_transaction)
+    active_path = resolve_contained(workspace_root, active_relative_path)
+    if active_path != (workspace_root.resolve() / active_relative_path).resolve():
+        raise PathContainmentError("active path failed containment check")
+    _remove_path(active_path)
+    item = await governance.record_transaction_item(
+        evolution_transaction_id=evolution_transaction_id,
+        item_kind="compiled_skill_file",
+        activation_state="rolled_back",
+        relative_path=active_relative_path,
+        before_hash=None,
+        after_hash=None,
+        rollback_action={
+            "operation": "operator_review",
+            "reason": "rollback transaction deleted initial active path",
+        },
+    )
+    await _record_writer_item_provenance(
+        governance,
+        workspace_key=workspace_key,
+        evolution_transaction_id=evolution_transaction_id,
+        items=[item],
+        relation="rolled_back_by",
+    )
+    await governance.update_transaction_status(
+        evolution_transaction_id=evolution_transaction_id,
+        status="rolled_back",
+        metrics={"active_relative_path": active_relative_path, "operation": "delete_active_path"},
+    )
+    return {
+        "active_relative_path": active_relative_path,
+        "operation": "delete_active_path",
+    }
+
+
 def verify_archive_manifest(root: Path, manifest_relative_path: str) -> dict[str, object]:
     manifest_path = resolve_contained(root, manifest_relative_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

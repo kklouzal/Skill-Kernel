@@ -100,6 +100,7 @@ Phase 6/7 control-plane buildout.
 - Real local Postgres recall-audit validation passed via compose with two stored embeddings and perfect recall against exact ordering.
 - Persistent worker heartbeat records are implemented: worker loops upsert `worker_heartbeats`, `/v1/workers/health` includes recently observed workers, and heartbeat summaries track loop iterations/claimed/succeeded/failed/idle counts.
 - Real local Postgres worker heartbeat validation passed via compose: a worker heartbeat was inserted, updated from `running` to `idle`, and listed with preserved `first_seen_at`, refreshed `last_seen_at`, pool/concurrency, and summary metadata.
+- Initial-create rollback deletion is implemented: mutation-worker rollback revocations now support `delete_active_path` rollback actions for newly-created active skills with no archive snapshot, record rollback transaction items/provenance, and run retrieval/embedding invalidation.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
@@ -109,7 +110,7 @@ Phase 6/7 control-plane buildout.
 3. Add lease renewal for long-running jobs once job handlers start exceeding one lease interval.
 4. Add contrastive induction and future intervention replay so no-skill-control probes can graduate from `needs_intervention` to pass/fail.
 5. Add shadow-edge/probe generation from repeated attribution events after deduplication policy is defined.
-6. Add active-cache invalidation and expanded derived-state revoke handlers for frozen skills, initial-create rollbacks, and non-body-index transaction-derived artifacts.
+6. Add active-cache invalidation and expanded derived-state revoke handlers for frozen skills and non-body-index transaction-derived artifacts.
 7. Add mutation-worker apply orchestration only after autonomous apply policy and intervention replay gates are ready.
 8. Extend Phase 8 beyond deterministic promotion/archive/merge/budget curation: split support, guarded improvement planning, promotion evaluator gates, and active-bank optimization beyond utility ordering.
 9. Expand Phase 9 beyond static path checks: CLI/package/API/schema/service probes, false-positive controls, drift probes, and localized repair proposal generation.
@@ -126,6 +127,6 @@ Phase 6/7 control-plane buildout.
 - Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and shadow-edge/probe generation from attribution events are still pending.
 - Candidate evaluator execution is deterministic and conservative; no-skill-control probes remain `needs_intervention` until real intervention/counterfactual replay exists, and this must pass before any staged writer/activation path is added.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints, but mutation-worker orchestration still needs end-to-end caller wiring before autonomous apply is allowed.
-- Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and invalidates body-index/embedding objects from traversal summaries; active-path deletion rollbacks and broader revoke handlers are still pending.
+- Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, and invalidates body-index/embedding objects from traversal summaries; broader revoke handlers are still pending.
 - Utility rollups are deterministic v1 scoring, not full marginal-value/intervention scoring yet; curation now handles archived promotion, explicit duplicate merge/archive, low-utility archive, and active-budget overflow, while split support, promotion evaluator gates, and guarded improvement planning remain pending.
 - Contract/drift checks are deterministic v1 path probes only; broader contract types and repair execution remain pending.

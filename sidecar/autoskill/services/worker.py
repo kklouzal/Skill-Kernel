@@ -20,7 +20,10 @@ from autoskill.db.scheduler import SchedulerStore
 from autoskill.db.utility import UtilityStore
 from autoskill.services.embedding_generation import TextEmbedder, generate_pending_embeddings
 from autoskill.services.opportunity import mine_opportunities
-from autoskill.services.writer import rollback_active_skill_with_governance
+from autoskill.services.writer import (
+    delete_active_skill_with_governance,
+    rollback_active_skill_with_governance,
+)
 
 WorkerPool = Literal["scheduler", "maintenance", "mutation"]
 
@@ -489,9 +492,15 @@ async def _execute_rollback_revocation(
         stores.governance,
         request.root_object_id,
     )
-    if rollback_action.get("operation") != "restore_archive_manifest":
-        raise ValueError("rollback action does not reference a restorable archive manifest")
-    archive_manifest_relative_path = str(rollback_action["archive_manifest_relative_path"])
+    operation = rollback_action.get("operation")
+    if operation not in {"restore_archive_manifest", "delete_active_path"}:
+        raise ValueError("rollback action is not supported by the mutation worker")
+    archive_manifest_relative_path = (
+        str(rollback_action["archive_manifest_relative_path"])
+        if operation == "restore_archive_manifest"
+        else None
+    )
+    active_relative_path = str(rollback_action.get("active_relative_path") or "")
     started = await stores.governance.start_transaction(
         workspace_key=request.workspace_key,
         transaction_kind="rollback_skill",
@@ -501,6 +510,8 @@ async def _execute_rollback_revocation(
                 "revocation_request_id": str(request.revocation_request_id),
                 "root_object_id": str(request.root_object_id),
                 "archive_manifest_relative_path": archive_manifest_relative_path,
+                "active_relative_path": active_relative_path,
+                "operation": operation,
             }
         ),
         actor="autoskill-mutation-worker",
@@ -512,19 +523,29 @@ async def _execute_rollback_revocation(
         },
         rollback_of_transaction_id=request.root_object_id,
     )
-    artifact = await rollback_active_skill_with_governance(
-        stores.governance,
-        evolution_transaction_id=started.transaction.evolution_transaction_id,
-        workspace_root=stores.workspace_root,
-        archive_root=stores.archive_root,
-        archive_manifest_relative_path=archive_manifest_relative_path,
-    )
+    if operation == "restore_archive_manifest":
+        artifact = await rollback_active_skill_with_governance(
+            stores.governance,
+            evolution_transaction_id=started.transaction.evolution_transaction_id,
+            workspace_root=stores.workspace_root,
+            archive_root=stores.archive_root,
+            archive_manifest_relative_path=str(archive_manifest_relative_path),
+        )
+        artifact_summary = artifact.to_json()
+        active_relative_path = artifact.active_relative_path
+    else:
+        artifact_summary = await delete_active_skill_with_governance(
+            stores.governance,
+            evolution_transaction_id=started.transaction.evolution_transaction_id,
+            workspace_root=stores.workspace_root,
+            active_relative_path=active_relative_path,
+        )
     invalidation = await _invalidate_revoked_objects(stores, request)
     summary = request.traversal_summary | {
         "status": "completed",
         "rollback_transaction_id": str(started.transaction.evolution_transaction_id),
         "archive_manifest_relative_path": archive_manifest_relative_path,
-        "artifact": artifact.to_json(),
+        "artifact": artifact_summary,
         "invalidation": invalidation,
     }
     await stores.governance.complete_revocation_request(
@@ -536,7 +557,7 @@ async def _execute_rollback_revocation(
         "revocation_request_id": str(request.revocation_request_id),
         "status": "completed",
         "rollback_transaction_id": str(started.transaction.evolution_transaction_id),
-        "active_relative_path": artifact.active_relative_path,
+        "active_relative_path": active_relative_path,
         "invalidation": invalidation,
     }
 
