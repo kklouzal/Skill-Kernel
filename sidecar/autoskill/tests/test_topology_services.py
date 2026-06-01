@@ -1,11 +1,14 @@
 from uuid import uuid4
 
 from autoskill.core.skillir import EffectSignature
+from autoskill.db.governance import NullGovernanceStore
+from autoskill.db.topology import NullTopologyStore
 from autoskill.services.topology import (
     ComposeTopologyRequest,
     DecomposeTopologyRequest,
     ImproveTopologyRequest,
     TopologySkill,
+    persist_topology_proposal,
     propose_composition,
     propose_decomposition,
     propose_improvement,
@@ -204,4 +207,52 @@ def test_decomposition_proposal_records_coverage_and_rollback_metadata() -> None
             "subject_skill_id": str(subject_id),
             "remove_successor_slugs": ["diagnose-maintenance", "repair-maintenance"],
         }
+    ]
+
+
+def test_topology_proposal_persistence_records_operation_trials_and_transaction() -> None:
+    evidence_id = uuid4()
+    topology = NullTopologyStore()
+    governance = NullGovernanceStore()
+    result = propose_composition(
+        ComposeTopologyRequest(
+            components=[
+                TopologySkill(
+                    skill_id=uuid4(),
+                    slug="inspect-failure",
+                    effects=EffectSignature(outputs=["diagnostic"]),
+                ),
+                TopologySkill(
+                    skill_id=uuid4(),
+                    slug="repair-failure",
+                    effects=EffectSignature(outputs=["patch"]),
+                ),
+            ],
+            composed_output=TopologySkill(
+                slug="inspect-and-repair",
+                effects=EffectSignature(outputs=["diagnostic", "patch"]),
+            ),
+            evidence_ids=[str(evidence_id)],
+        )
+    )
+
+    import asyncio
+
+    persisted = asyncio.run(
+        persist_topology_proposal(
+            topology,
+            governance,
+            workspace_key="dev-01",
+            proposal=result,
+        )
+    )
+
+    assert persisted.operation.operation_kind == "compose"
+    assert persisted.operation.status == "candidate"
+    assert persisted.operation.evidence_ids == [evidence_id]
+    assert persisted.operation.evolution_transaction_id is not None
+    assert [trial.trial_kind for trial in persisted.trials] == [
+        "component_baseline",
+        "composed_workflow",
+        "shadowing",
     ]

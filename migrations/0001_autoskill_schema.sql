@@ -832,7 +832,7 @@ CREATE TABLE IF NOT EXISTS autoskill.skill_graph_operations (
     operation_kind IN ('create','improve','compose','decompose','merge','archive','promote')
   ),
   status text NOT NULL DEFAULT 'candidate' CHECK (
-    status IN ('candidate','trial','accepted','rejected','applied','rolled_back')
+    status IN ('candidate','blocked','trial','accepted','rejected','applied','rolled_back')
   ),
   subject_skill_ids uuid[] NOT NULL DEFAULT '{}',
   output_skill_ids uuid[] NOT NULL DEFAULT '{}',
@@ -840,6 +840,22 @@ CREATE TABLE IF NOT EXISTS autoskill.skill_graph_operations (
   evidence_ids uuid[] NOT NULL DEFAULT '{}',
   effect_coverage jsonb NOT NULL DEFAULT '{}'::jsonb,
   trial_summary jsonb NOT NULL DEFAULT '{}'::jsonb,
+  evolution_transaction_id uuid REFERENCES autoskill.evolution_transactions(evolution_transaction_id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.planned_topology_trials (
+  planned_topology_trial_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_graph_operation_id uuid NOT NULL REFERENCES autoskill.skill_graph_operations(skill_graph_operation_id),
+  trial_kind text NOT NULL,
+  objective text NOT NULL,
+  expected jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status text NOT NULL DEFAULT 'planned' CHECK (
+    status IN ('planned','running','passed','failed','blocked','retired')
+  ),
+  result jsonb NOT NULL DEFAULT '{}'::jsonb,
   evolution_transaction_id uuid REFERENCES autoskill.evolution_transactions(evolution_transaction_id),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -912,6 +928,9 @@ CREATE INDEX IF NOT EXISTS context_token_ledgers_workspace_visibility_idx
 
 CREATE INDEX IF NOT EXISTS skill_graph_operations_workspace_status_idx
   ON autoskill.skill_graph_operations(workspace_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS planned_topology_trials_operation_idx
+  ON autoskill.planned_topology_trials(skill_graph_operation_id, status, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS skill_usage_windows_workspace_time_idx
   ON autoskill.skill_usage_windows(workspace_id, observed_at DESC);

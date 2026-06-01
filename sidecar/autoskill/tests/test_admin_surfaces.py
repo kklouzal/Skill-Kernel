@@ -9,11 +9,14 @@ from autoskill.api.app import (
     EmbeddingProfileUpsertRequest,
     ExecutorProfileUpsertRequest,
     ModelProfileUpsertRequest,
+    TopologyProposalRequest,
+    TopologySkillPayload,
     TraceSpanStartRequest,
     create_app,
 )
 from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.db.skills import SkillRecord
+from autoskill.db.topology import NullTopologyStore
 
 
 class MemorySkillStore:
@@ -217,3 +220,75 @@ def test_v14_trace_diagnostics_profiles_and_context_surfaces() -> None:
     assert momentum.momentum["status"] == "ready_for_probe"
     assert artifact.artifact["budget_status"] == "passed"
     assert ledger.ledger["visibility_state"] == "skill_visible"
+
+
+def test_topology_proposal_endpoint_persists_propose_only_operation() -> None:
+    topology = NullTopologyStore()
+    app = create_app(topology_store=topology)
+    route = next(route for route in app.routes if route.path == "/v1/topology/propose")
+
+    async def run():
+        return await route.endpoint(
+            request=TopologyProposalRequest(
+                workspace_id="dev-01",
+                operation_kind="compose",
+                components=[
+                    TopologySkillPayload(
+                        skill_id=uuid4(),
+                        slug="inspect-failure",
+                        effects={"outputs": ["diagnostic"]},
+                    ),
+                    TopologySkillPayload(
+                        skill_id=uuid4(),
+                        slug="repair-failure",
+                        effects={"outputs": ["patch"]},
+                    ),
+                ],
+                composed_output=TopologySkillPayload(
+                    slug="inspect-and-repair",
+                    effects={"outputs": ["diagnostic", "patch"]},
+                ),
+                evidence_ids=[str(uuid4())],
+            )
+        )
+
+    response = asyncio.run(run())
+
+    assert response.proposal["status"] == "candidate"
+    assert response.persistence is not None
+    assert response.persistence["operation"]["operation_kind"] == "compose"
+    assert len(response.persistence["trials"]) == 3
+    assert topology.operations[0].evolution_transaction_id is not None
+
+
+def test_topology_proposal_endpoint_records_blocked_trials() -> None:
+    topology = NullTopologyStore()
+    app = create_app(topology_store=topology)
+    route = next(route for route in app.routes if route.path == "/v1/topology/propose")
+
+    async def run():
+        return await route.endpoint(
+            request=TopologyProposalRequest(
+                workspace_id="dev-01",
+                operation_kind="decompose",
+                subject=TopologySkillPayload(
+                    skill_id=uuid4(),
+                    slug="broad-maintenance",
+                    effects={"outputs": ["diagnostic", "patch"]},
+                ),
+                successors=[
+                    TopologySkillPayload(
+                        slug="diagnose-maintenance",
+                        effects={"outputs": ["diagnostic"]},
+                    )
+                ],
+                evidence_ids=[str(uuid4())],
+            )
+        )
+
+    response = asyncio.run(run())
+
+    assert response.proposal["status"] == "blocked"
+    assert response.persistence is not None
+    assert response.persistence["operation"]["status"] == "blocked"
+    assert {trial["status"] for trial in response.persistence["trials"]} == {"blocked"}

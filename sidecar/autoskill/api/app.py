@@ -13,6 +13,7 @@ from autoskill import __version__
 from autoskill.core.config import get_settings
 from autoskill.core.events import IngestRequest, IngestResult
 from autoskill.core.hashing import sha256_text
+from autoskill.core.skillir import EffectSignature
 from autoskill.db.attribution import AsyncpgAttributionStore, AttributionStore, NullAttributionStore
 from autoskill.db.audit import AsyncpgAuditStore, AuditStore, NullAuditStore
 from autoskill.db.candidates import AsyncpgCandidateStore, CandidateStore, NullCandidateStore
@@ -49,6 +50,7 @@ from autoskill.db.profiles import AsyncpgProfileStore, NullProfileStore, Profile
 from autoskill.db.retrieval import AsyncpgRetrievalStore, NullRetrievalStore, RetrievalStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore, NullSchedulerStore, SchedulerStore
 from autoskill.db.skills import AsyncpgSkillStore, NullSkillStore, SkillStore
+from autoskill.db.topology import AsyncpgTopologyStore, NullTopologyStore, TopologyStore
 from autoskill.db.utility import AsyncpgUtilityStore, NullUtilityStore, UtilityStore
 from autoskill.services.broker import (
     ContextHintCache,
@@ -67,6 +69,16 @@ from autoskill.services.embedding_generation import (
 from autoskill.services.matching import SkillMatchRequest, match_existing_skills
 from autoskill.services.opportunity import mine_opportunities
 from autoskill.services.shadowing import detect_shadowing_events
+from autoskill.services.topology import (
+    ComposeTopologyRequest,
+    DecomposeTopologyRequest,
+    ImproveTopologyRequest,
+    TopologySkill,
+    persist_topology_proposal,
+    propose_composition,
+    propose_decomposition,
+    propose_improvement,
+)
 from autoskill.services.worker import (
     WorkerRunResult,
     WorkerStores,
@@ -305,6 +317,32 @@ class ContextTokenLedgerRequest(BaseModel):
 
 class ContextTokenLedgerResponse(BaseModel):
     ledger: dict[str, object]
+
+
+class TopologySkillPayload(BaseModel):
+    slug: str
+    skill_id: UUID | None = None
+    effects: dict[str, object] = Field(default_factory=dict)
+
+
+class TopologyProposalRequest(BaseModel):
+    workspace_id: str
+    operation_kind: str
+    subject: TopologySkillPayload | None = None
+    proposed: TopologySkillPayload | None = None
+    components: list[TopologySkillPayload] = Field(default_factory=list)
+    composed_output: TopologySkillPayload | None = None
+    successors: list[TopologySkillPayload] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    improvement_reasons: list[str] = Field(default_factory=list)
+    required_effects_by_component: dict[str, list[str]] | None = None
+    coverage_requirements: list[str] | None = None
+    persist: bool = True
+
+
+class TopologyProposalResponse(BaseModel):
+    proposal: dict[str, object]
+    persistence: dict[str, object] | None = None
 
 
 class ContextCacheInvalidateRequest(BaseModel):
@@ -943,6 +981,16 @@ def _build_context_governance_store() -> ContextGovernanceStore:
     return NullContextGovernanceStore()
 
 
+def _build_topology_store() -> TopologyStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgTopologyStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullTopologyStore()
+
+
 def _build_lifecycle_store(governance: GovernanceStore) -> LifecycleStore:
     settings = get_settings()
     if settings.database_url:
@@ -1080,6 +1128,63 @@ def _worker_stores(
     )
 
 
+def _topology_skill(payload: TopologySkillPayload) -> TopologySkill:
+    return TopologySkill(
+        slug=payload.slug,
+        skill_id=payload.skill_id,
+        effects=EffectSignature.model_validate(payload.effects),
+    )
+
+
+def _build_topology_proposal(request: TopologyProposalRequest):
+    if request.operation_kind == "improve":
+        if request.subject is None or request.proposed is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="improve requires subject and proposed skills",
+            )
+        return propose_improvement(
+            ImproveTopologyRequest(
+                subject=_topology_skill(request.subject),
+                proposed=_topology_skill(request.proposed),
+                evidence_ids=request.evidence_ids,
+                improvement_reasons=request.improvement_reasons,
+            )
+        )
+    if request.operation_kind == "compose":
+        if request.composed_output is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="compose requires composed_output",
+            )
+        return propose_composition(
+            ComposeTopologyRequest(
+                components=[_topology_skill(component) for component in request.components],
+                composed_output=_topology_skill(request.composed_output),
+                evidence_ids=request.evidence_ids,
+                required_effects_by_component=request.required_effects_by_component,
+            )
+        )
+    if request.operation_kind == "decompose":
+        if request.subject is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="decompose requires subject",
+            )
+        return propose_decomposition(
+            DecomposeTopologyRequest(
+                subject=_topology_skill(request.subject),
+                successors=[_topology_skill(successor) for successor in request.successors],
+                evidence_ids=request.evidence_ids,
+                coverage_requirements=request.coverage_requirements,
+            )
+        )
+    raise HTTPException(
+        status_code=http_status.HTTP_400_BAD_REQUEST,
+        detail="operation_kind must be improve, compose, or decompose",
+    )
+
+
 def create_app(
     event_store: EventStore | None = None,
     job_store: JobStore | None = None,
@@ -1101,6 +1206,7 @@ def create_app(
     diagnostic_store: DiagnosticMomentumStore | None = None,
     profile_store: ProfileStore | None = None,
     context_governance_store: ContextGovernanceStore | None = None,
+    topology_store: TopologyStore | None = None,
     writer_workspace_root: Path | None = None,
 ) -> FastAPI:
     store = event_store or _build_event_store()
@@ -1123,6 +1229,7 @@ def create_app(
     diagnostics = diagnostic_store or _build_diagnostic_store()
     profiles = profile_store or _build_profile_store()
     context_governance = context_governance_store or _build_context_governance_store()
+    topology = topology_store or _build_topology_store()
     broker_cache = ContextHintCache()
 
     @asynccontextmanager
@@ -1151,6 +1258,7 @@ def create_app(
                 diagnostics,
                 profiles,
                 context_governance,
+                topology,
             ):
                 close = getattr(closeable, "close", None)
                 if close is not None:
@@ -1670,6 +1778,27 @@ def create_app(
             metadata=request.metadata,
         )
         return ContextTokenLedgerResponse(ledger=ledger.to_json())
+
+    @app.post("/v1/topology/propose", response_model=TopologyProposalResponse)
+    async def propose_topology_operation(
+        request: TopologyProposalRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> TopologyProposalResponse:
+        _require_control_auth(authorization)
+        proposal = _build_topology_proposal(request)
+        persistence = None
+        if request.persist:
+            persisted = await persist_topology_proposal(
+                topology,
+                governance,
+                workspace_key=request.workspace_id,
+                proposal=proposal,
+            )
+            persistence = persisted.to_json()
+        return TopologyProposalResponse(
+            proposal=proposal.to_json(),
+            persistence=persistence,
+        )
 
     @app.get("/v1/evidence")
     async def list_evidence(

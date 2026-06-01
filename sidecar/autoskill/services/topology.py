@@ -7,6 +7,8 @@ from uuid import UUID
 from autoskill.core.hashing import sha256_json
 from autoskill.core.skillgraph import SkillGraphEdge, SkillGraphIR, SkillGraphNode
 from autoskill.core.skillir import EffectSignature
+from autoskill.db.governance import GovernanceStore
+from autoskill.db.topology import TopologyPersistenceRecord, TopologyStore
 
 TopologyOperationKind = Literal["improve", "compose", "decompose"]
 
@@ -130,6 +132,130 @@ class TopologyProposalResult:
             "trial_plan": [trial.to_json() for trial in self.trial_plan],
             "transaction": self.transaction.to_json(),
         }
+
+
+async def persist_topology_proposal(
+    topology: TopologyStore,
+    governance: GovernanceStore,
+    *,
+    workspace_key: str,
+    proposal: TopologyProposalResult,
+) -> TopologyPersistenceRecord:
+    evidence_ids = _uuid_values(proposal.evidence_ids)
+    transaction = await governance.start_transaction(
+        workspace_key=workspace_key,
+        transaction_kind=proposal.transaction.transaction_kind,
+        idempotency_key=proposal.transaction.idempotency_key,
+        plan_hash=proposal.transaction.plan_hash,
+        cause={
+            "source": "topology_proposal",
+            "operation_kind": proposal.operation_kind,
+            "status": proposal.status,
+            "blockers": proposal.blockers,
+        },
+        source_evidence_ids=evidence_ids,
+        policy_snapshot={
+            "mode": "propose_only",
+            "writes": proposal.transaction.writes,
+            "requires_trial_before_apply": True,
+        },
+    )
+    graph = (
+        proposal.skill_graph_ir.model_dump(by_alias=True, mode="json")
+        if proposal.skill_graph_ir
+        else {}
+    )
+    operation = await topology.record_operation(
+        workspace_key=workspace_key,
+        operation_kind=proposal.operation_kind,
+        status=proposal.status,
+        subject_skill_ids=_operation_skill_ids(proposal, roles={"subject", "component"}),
+        output_skill_ids=_operation_skill_ids(
+            proposal,
+            roles={"successor", "composed_output"},
+        ),
+        skill_graph_ir=graph,
+        evidence_ids=evidence_ids,
+        effect_coverage=graph.get("effect_coverage", {}) if graph else {},
+        trial_summary={
+            "plan_hash": proposal.plan_hash,
+            "blockers": proposal.blockers,
+            "trials": [trial.to_json() for trial in proposal.trial_plan],
+        },
+        evolution_transaction_id=transaction.transaction.evolution_transaction_id,
+    )
+    await governance.record_transaction_item(
+        evolution_transaction_id=transaction.transaction.evolution_transaction_id,
+        item_kind="skill_graph_operation",
+        item_id=operation.skill_graph_operation_id,
+        activation_state=proposal.status,
+        after_hash=proposal.plan_hash,
+        rollback_action={
+            "operation": "mark_topology_operation_rolled_back",
+            "skill_graph_operation_id": str(operation.skill_graph_operation_id),
+        },
+    )
+    await governance.record_provenance_edge(
+        workspace_key=workspace_key,
+        source_kind="evolution_transaction",
+        source_id=transaction.transaction.evolution_transaction_id,
+        derived_kind="skill_graph_operation",
+        derived_id=operation.skill_graph_operation_id,
+        relation="planned_topology_operation",
+    )
+    for evidence_id in evidence_ids:
+        await governance.record_provenance_edge(
+            workspace_key=workspace_key,
+            source_kind="evidence_item",
+            source_id=evidence_id,
+            derived_kind="skill_graph_operation",
+            derived_id=operation.skill_graph_operation_id,
+            relation="supports_topology_proposal",
+        )
+
+    trials = []
+    for trial in proposal.trial_plan:
+        trial_record = await topology.record_planned_trial(
+            workspace_key=workspace_key,
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+            trial_kind=trial.kind,
+            objective=trial.objective,
+            expected=trial.expected,
+            status="blocked" if proposal.status == "blocked" else "planned",
+            result={"blockers": proposal.blockers} if proposal.status == "blocked" else {},
+            evolution_transaction_id=transaction.transaction.evolution_transaction_id,
+        )
+        trials.append(trial_record)
+        await governance.record_transaction_item(
+            evolution_transaction_id=transaction.transaction.evolution_transaction_id,
+            item_kind="planned_topology_trial",
+            item_id=trial_record.planned_topology_trial_id,
+            activation_state=trial_record.status,
+            after_hash=sha256_json(trial_record.to_json()),
+            rollback_action={
+                "operation": "retire_planned_topology_trial",
+                "planned_topology_trial_id": str(trial_record.planned_topology_trial_id),
+            },
+        )
+        await governance.record_provenance_edge(
+            workspace_key=workspace_key,
+            source_kind="skill_graph_operation",
+            source_id=operation.skill_graph_operation_id,
+            derived_kind="planned_topology_trial",
+            derived_id=trial_record.planned_topology_trial_id,
+            relation="requires_trial",
+        )
+
+    await governance.update_transaction_status(
+        evolution_transaction_id=transaction.transaction.evolution_transaction_id,
+        status="staged" if proposal.status == "candidate" else "blocked",
+        metrics={
+            "topology_operation_kind": proposal.operation_kind,
+            "planned_trials": len(trials),
+            "blockers": len(proposal.blockers),
+        },
+    )
+    return TopologyPersistenceRecord(operation=operation, trials=trials)
 
 
 def propose_improvement(request: ImproveTopologyRequest) -> TopologyProposalResult:
@@ -516,3 +642,27 @@ def _graph_json(graph: SkillGraphIR | None) -> dict[str, Any] | None:
     if graph is None:
         return None
     return graph.model_dump(by_alias=True, mode="json")
+
+
+def _uuid_values(values: list[str]) -> list[UUID]:
+    parsed: list[UUID] = []
+    for value in values:
+        try:
+            parsed.append(UUID(str(value)))
+        except ValueError:
+            continue
+    return parsed
+
+
+def _operation_skill_ids(
+    proposal: TopologyProposalResult,
+    *,
+    roles: set[str],
+) -> list[UUID]:
+    if proposal.skill_graph_ir is None:
+        return []
+    return [
+        node.skill_id
+        for node in proposal.skill_graph_ir.nodes
+        if node.skill_id is not None and node.operation_role in roles
+    ]
