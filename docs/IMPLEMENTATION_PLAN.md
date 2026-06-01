@@ -111,7 +111,7 @@ Deliverables:
 - contrastive induction;
 - typed LLM operation wrappers;
 - SkillIR compiler and deterministic propose-only candidate scaffolding from gated opportunities;
-- inactive candidate skill/version persistence with body-level indexing; implemented for propose-only candidates without writing runtime files;
+- inactive candidate skill/version persistence with body-level indexing; implemented for propose-only candidates without writing runtime files and now anchored to idempotent governance transactions;
 - scanner;
 - probe generator; implemented as deterministic target, no-skill-control, and regression probe plans for persisted candidates;
 - evaluator; implemented as deterministic proposal-gate execution that records target, no-skill-control, and regression probe results while requiring intervention replay before activation.
@@ -119,6 +119,7 @@ Deliverables:
 Acceptance:
 
 - candidates require grounded evidence; proposal scaffolds carry cited evidence IDs, skip active/archive duplicates, and persist inactive candidate revisions only;
+- persisted candidate revisions are stamped with `created_by_transaction_id` and rollback-aware transaction items are recorded for the inactive version and compiled `SKILL.md`;
 - self-feedback-only changes fail;
 - malicious artifacts are rejected;
 - evaluator reports target, regression, and no-skill results; no-skill-control remains `needs_intervention` until real intervention/counterfactual replay exists.
@@ -140,6 +141,7 @@ Acceptance:
 - transaction start is idempotent by workspace/idempotency key; implemented and validated against local Postgres;
 - rollback-relevant transaction items can be recorded with activation state and rollback metadata; implemented and validated against local Postgres;
 - revocation requests can be queued for rollback/traversal roots; implemented and validated against local Postgres;
+- candidate proposal persistence creates or accepts a `candidate_proposal` transaction, records source evidence IDs, stamps the inactive version, writes transaction items, and advances the transaction to `staged`; implemented and validated against local Postgres;
 - valid skill appears under active root;
 - invalid paths are rejected;
 - rollback restores the previous effective state;

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -10,6 +11,7 @@ from uuid import UUID
 from autoskill import __version__
 from autoskill.core.config import get_settings
 from autoskill.core.events import IngestRequest, IngestResult
+from autoskill.core.hashing import sha256_text
 from autoskill.db.attribution import AsyncpgAttributionStore, AttributionStore, NullAttributionStore
 from autoskill.db.candidates import AsyncpgCandidateStore, CandidateStore, NullCandidateStore
 from autoskill.db.embeddings import AsyncpgEmbeddingStore, EmbeddingStore, NullEmbeddingStore
@@ -162,6 +164,7 @@ class CandidateProposalRequest(BaseModel):
     limit: int = 100
     min_support: int = 2
     persist: bool = True
+    evolution_transaction_id: UUID | None = None
 
 
 class CandidateProposalResponse(BaseModel):
@@ -279,6 +282,63 @@ class SkillMatchApiResponse(BaseModel):
     retrieval_log_id: str | None
     active_matches: list[dict[str, object]]
     archived_matches: list[dict[str, object]]
+
+
+def _candidate_transaction_idempotency_key(
+    *,
+    workspace_key: str,
+    proposals: list[dict[str, object]],
+) -> str:
+    plan_hash = _candidate_transaction_plan_hash(
+        workspace_key=workspace_key,
+        proposals=proposals,
+    )
+    return f"candidate-proposal:{plan_hash}"
+
+
+def _candidate_transaction_plan_hash(
+    *,
+    workspace_key: str,
+    proposals: list[dict[str, object]],
+) -> str:
+    payload = {
+        "workspace_key": workspace_key,
+        "transaction_kind": "candidate_proposal",
+        "proposals": [
+            {
+                "candidate_slug": proposal.get("candidate_slug"),
+                "compiled_sha256": proposal.get("compiled_sha256"),
+                "evidence_ids": proposal.get("evidence_ids", []),
+                "recommendation": proposal.get("recommendation"),
+            }
+            for proposal in proposals
+            if proposal.get("skillir") is not None
+        ],
+    }
+    return sha256_text(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
+def _candidate_source_evidence_ids(
+    proposals: list[dict[str, object]],
+) -> list[UUID]:
+    seen: set[UUID] = set()
+    ordered: list[UUID] = []
+    for proposal in proposals:
+        evidence_ids = proposal.get("evidence_ids", [])
+        if not isinstance(evidence_ids, list):
+            continue
+        for evidence_id in evidence_ids:
+            if not isinstance(evidence_id, str):
+                continue
+            try:
+                parsed = UUID(evidence_id)
+            except ValueError:
+                continue
+            if parsed in seen:
+                continue
+            seen.add(parsed)
+            ordered.append(parsed)
+    return ordered
 
 
 class EmbeddingUpsertRequest(BaseModel):
@@ -758,11 +818,54 @@ def create_app(
         result = propose_candidate_skills(opportunities)
         payload = result.to_json()
         if request.persist:
+            transaction = None
+            transaction_id = request.evolution_transaction_id
+            if result.proposed > 0 and transaction_id is None:
+                started = await governance.start_transaction(
+                    workspace_key=request.workspace_id,
+                    transaction_kind="candidate_proposal",
+                    idempotency_key=_candidate_transaction_idempotency_key(
+                        workspace_key=request.workspace_id,
+                        proposals=payload["proposals"],
+                    ),
+                    plan_hash=_candidate_transaction_plan_hash(
+                        workspace_key=request.workspace_id,
+                        proposals=payload["proposals"],
+                    ),
+                    actor="autoskill-sidecar",
+                    cause={
+                        "endpoint": "/v1/candidates/propose",
+                        "mode": "propose_only",
+                    },
+                    source_evidence_ids=_candidate_source_evidence_ids(
+                        payload["proposals"],
+                    ),
+                    policy_snapshot={
+                        "runtime_file_writes": "forbidden",
+                        "candidate_state": "inactive",
+                        "activation_gate": "disabled",
+                    },
+                )
+                transaction = started.transaction
+                transaction_id = started.transaction.evolution_transaction_id
             persistence = await candidates.persist_candidate_proposals(
                 workspace_key=request.workspace_id,
                 proposals=result.proposals,
+                evolution_transaction_id=transaction_id,
             )
-            payload["persistence"] = persistence.to_json()
+            persistence_payload = persistence.to_json()
+            if transaction_id is not None and persistence.persisted > 0:
+                transaction = await governance.update_transaction_status(
+                    evolution_transaction_id=transaction_id,
+                    status="staged",
+                    metrics={
+                        "persisted_candidates": persistence.persisted,
+                        "skipped_candidates": persistence.skipped,
+                    },
+                )
+            if transaction is not None:
+                persistence_payload["transaction"] = transaction.to_json()
+            payload["persistence"] = persistence_payload
         return CandidateProposalResponse(**payload)
 
     @app.post("/v1/evaluations/run", response_model=EvaluationRunResponse)

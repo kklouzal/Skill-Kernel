@@ -18,6 +18,7 @@ class PersistedCandidate:
     candidate_slug: str
     skill_id: UUID
     skill_version_id: UUID
+    evolution_transaction_id: UUID | None
     version: int
     created: bool
     scanner_status: str
@@ -30,6 +31,9 @@ class PersistedCandidate:
             "candidate_slug": self.candidate_slug,
             "skill_id": str(self.skill_id),
             "skill_version_id": str(self.skill_version_id),
+            "evolution_transaction_id": (
+                str(self.evolution_transaction_id) if self.evolution_transaction_id else None
+            ),
             "version": self.version,
             "created": self.created,
             "scanner_status": self.scanner_status,
@@ -44,11 +48,15 @@ class CandidatePersistResult:
     persisted: int
     skipped: int
     candidates: list[PersistedCandidate]
+    evolution_transaction_id: UUID | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
             "persisted": self.persisted,
             "skipped": self.skipped,
+            "evolution_transaction_id": (
+                str(self.evolution_transaction_id) if self.evolution_transaction_id else None
+            ),
             "candidates": [candidate.to_json() for candidate in self.candidates],
         }
 
@@ -59,6 +67,7 @@ class CandidateStore(Protocol):
         *,
         workspace_key: str,
         proposals: list[CandidateSkillProposal],
+        evolution_transaction_id: UUID | None = None,
     ) -> CandidatePersistResult:
         """Persist inactive candidate SkillIR revisions and planned probes."""
 
@@ -69,11 +78,13 @@ class NullCandidateStore:
         *,
         workspace_key: str,
         proposals: list[CandidateSkillProposal],
+        evolution_transaction_id: UUID | None = None,
     ) -> CandidatePersistResult:
         return CandidatePersistResult(
             persisted=0,
             skipped=sum(1 for proposal in proposals if proposal.skillir is None),
             candidates=[],
+            evolution_transaction_id=evolution_transaction_id,
         )
 
 
@@ -86,6 +97,7 @@ class AsyncpgCandidateStore(AsyncpgPoolOwner):
         *,
         workspace_key: str,
         proposals: list[CandidateSkillProposal],
+        evolution_transaction_id: UUID | None = None,
     ) -> CandidatePersistResult:
         pool = await self._get_pool()
         persisted: list[PersistedCandidate] = []
@@ -96,12 +108,20 @@ class AsyncpgCandidateStore(AsyncpgPoolOwner):
                 if proposal.skillir is None or proposal.compiled_runtime_text is None:
                     skipped += 1
                     continue
-                persisted.append(await _persist_candidate(conn, workspace_id, proposal))
+                persisted.append(
+                    await _persist_candidate(
+                        conn,
+                        workspace_id,
+                        proposal,
+                        evolution_transaction_id=evolution_transaction_id,
+                    )
+                )
 
         return CandidatePersistResult(
             persisted=len(persisted),
             skipped=skipped,
             candidates=persisted,
+            evolution_transaction_id=evolution_transaction_id,
         )
 
 
@@ -109,6 +129,8 @@ async def _persist_candidate(
     conn: asyncpg.Connection,
     workspace_id: UUID,
     proposal: CandidateSkillProposal,
+    *,
+    evolution_transaction_id: UUID | None = None,
 ) -> PersistedCandidate:
     assert proposal.skillir is not None
     assert proposal.compiled_runtime_text is not None
@@ -167,10 +189,16 @@ async def _persist_candidate(
               compiled_sha256,
               manifest,
               scanner_status,
-              evaluator_status
+              evaluator_status,
+              created_by_transaction_id
             )
-            VALUES (gen_random_uuid(), $1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)
-            RETURNING skill_version_id, version, scanner_status, evaluator_status
+            VALUES (gen_random_uuid(), $1, $2, $3::jsonb, $4, $5::jsonb, $6, $7, $8)
+            RETURNING
+              skill_version_id,
+              version,
+              scanner_status,
+              evaluator_status,
+              created_by_transaction_id
             """,
             skill_id,
             version,
@@ -187,6 +215,7 @@ async def _persist_candidate(
             ),
             scanner_status,
             evaluator_status,
+            evolution_transaction_id,
         )
         created = True
     else:
@@ -215,16 +244,107 @@ async def _persist_candidate(
         probe_hashes=probe_hashes,
         scanner_status=scanner_status,
     )
+    if evolution_transaction_id is not None:
+        await _persist_transaction_items(
+            conn,
+            evolution_transaction_id=evolution_transaction_id,
+            skill_version_id=skill_version_id,
+            proposal=proposal,
+        )
     return PersistedCandidate(
         candidate_slug=proposal.candidate_slug,
         skill_id=skill_id,
         skill_version_id=skill_version_id,
+        evolution_transaction_id=evolution_transaction_id,
         version=version_row["version"],
         created=created,
         scanner_status=scanner_status,
         evaluator_status=evaluator_status,
         probe_hashes=probe_hashes,
         evaluation_status=evaluation_status,
+    )
+
+
+async def _persist_transaction_items(
+    conn: asyncpg.Connection,
+    *,
+    evolution_transaction_id: UUID,
+    skill_version_id: UUID,
+    proposal: CandidateSkillProposal,
+) -> None:
+    skill_path = f"skills/autoskill/{proposal.candidate_slug}/SKILL.md"
+    rollback_action = {
+        "delete_inactive_candidate_version": str(skill_version_id),
+        "delete_compiled_file_path": skill_path,
+    }
+    await _insert_transaction_item_once(
+        conn,
+        evolution_transaction_id=evolution_transaction_id,
+        item_kind="skill_version",
+        item_id=skill_version_id,
+        relative_path=None,
+        before_hash=None,
+        after_hash=proposal.compiled_sha256,
+        activation_state="candidate",
+        rollback_action=rollback_action,
+    )
+    await _insert_transaction_item_once(
+        conn,
+        evolution_transaction_id=evolution_transaction_id,
+        item_kind="compiled_skill_file",
+        item_id=skill_version_id,
+        relative_path=skill_path,
+        before_hash=None,
+        after_hash=proposal.compiled_sha256,
+        activation_state="inactive",
+        rollback_action=rollback_action,
+    )
+
+
+async def _insert_transaction_item_once(
+    conn: asyncpg.Connection,
+    *,
+    evolution_transaction_id: UUID,
+    item_kind: str,
+    item_id: UUID,
+    relative_path: str | None,
+    before_hash: str | None,
+    after_hash: str | None,
+    activation_state: str,
+    rollback_action: dict[str, Any],
+) -> None:
+    await conn.execute(
+        """
+        INSERT INTO autoskill.evolution_transaction_items (
+          transaction_item_id,
+          evolution_transaction_id,
+          item_kind,
+          item_id,
+          relative_path,
+          before_hash,
+          after_hash,
+          activation_state,
+          rollback_action
+        )
+        SELECT gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8::jsonb
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM autoskill.evolution_transaction_items
+          WHERE evolution_transaction_id = $1
+            AND item_kind = $2
+            AND item_id = $3
+            AND relative_path IS NOT DISTINCT FROM $4
+            AND after_hash IS NOT DISTINCT FROM $6
+        )
+        """,
+        evolution_transaction_id,
+        item_kind,
+        item_id,
+        relative_path,
+        before_hash,
+        after_hash,
+        activation_state,
+        _json(rollback_action),
     )
 
 
