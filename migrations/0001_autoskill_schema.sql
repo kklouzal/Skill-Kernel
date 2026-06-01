@@ -261,6 +261,20 @@ CREATE TABLE IF NOT EXISTS autoskill.job_attempts (
   error text
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.worker_heartbeats (
+  worker_id text PRIMARY KEY,
+  pool text NOT NULL,
+  concurrency integer NOT NULL DEFAULT 1,
+  status text NOT NULL,
+  current_job_id uuid REFERENCES autoskill.jobs(job_id),
+  summary jsonb NOT NULL DEFAULT '{}'::jsonb,
+  first_seen_at timestamptz NOT NULL DEFAULT now(),
+  last_seen_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS worker_heartbeats_last_seen_idx
+  ON autoskill.worker_heartbeats(last_seen_at DESC);
+
 CREATE TABLE IF NOT EXISTS autoskill.evolution_transactions (
   evolution_transaction_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),

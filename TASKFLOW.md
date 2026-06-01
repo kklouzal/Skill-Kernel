@@ -98,13 +98,15 @@ Phase 6/7 control-plane buildout.
 - Real local Postgres contract/drift validation passed via compose: migration applied, a SkillIR path contract was extracted, the missing path was marked violated, and a drift event was recorded.
 - ANN/vector recall audit is implemented: `/v1/embeddings/recall-audit` compares index-preferred nearest-neighbor results against exact pgvector ordering for a bounded sample and reports min/average recall plus per-sample failures.
 - Real local Postgres recall-audit validation passed via compose with two stored embeddings and perfect recall against exact ordering.
+- Persistent worker heartbeat records are implemented: worker loops upsert `worker_heartbeats`, `/v1/workers/health` includes recently observed workers, and heartbeat summaries track loop iterations/claimed/succeeded/failed/idle counts.
+- Real local Postgres worker heartbeat validation passed via compose: a worker heartbeat was inserted, updated from `running` to `idle`, and listed with preserved `first_seen_at`, refreshed `last_seen_at`, pool/concurrency, and summary metadata.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
 2. Add production embedding provider live validation once credentials/provider endpoint are configured.
-3. Add persistent worker heartbeat/lease renewal records if long-running jobs start exceeding one lease interval.
+3. Add lease renewal for long-running jobs once job handlers start exceeding one lease interval.
 4. Add contrastive induction and future intervention replay so no-skill-control probes can graduate from `needs_intervention` to pass/fail.
 5. Add shadow-edge/probe generation from repeated attribution events after deduplication policy is defined.
 6. Add active-cache invalidation and expanded derived-state revoke handlers for frozen skills, initial-create rollbacks, and non-body-index transaction-derived artifacts.

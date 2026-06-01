@@ -283,6 +283,8 @@ def test_worker_loop_runs_bounded_concurrent_iterations() -> None:
     assert summary.succeeded == 2
     assert summary.failed == 0
     assert summary.idle == 1
+    assert stores.jobs.heartbeats["loop-worker"].status == "idle"
+    assert stores.jobs.heartbeats["loop-worker"].summary["claimed"] == 2
 
 
 def test_worker_loop_stops_on_event_while_idle() -> None:
@@ -322,6 +324,13 @@ def test_worker_health_reports_pool_concurrency_and_job_counts() -> None:
             job_kind="scheduler.tick",
             idempotency_key="tick:health",
         )
+        await jobs.record_worker_heartbeat(
+            worker_id="maintenance-1",
+            pool="maintenance",
+            concurrency=2,
+            status="running",
+            summary={"claimed": 3},
+        )
         return await build_worker_health(
             jobs,
             concurrency_by_pool={
@@ -340,6 +349,8 @@ def test_worker_health_reports_pool_concurrency_and_job_counts() -> None:
     assert health["jobs_by_kind"]["evidence.derive"] == {"queued": 1}
     assert health["jobs_by_pool"]["maintenance"] == {"queued": 1}
     assert health["jobs_by_pool"]["scheduler"] == {"queued": 1}
+    assert health["workers"][0]["worker_id"] == "maintenance-1"
+    assert health["workers"][0]["summary"] == {"claimed": 3}
 
 
 def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:

@@ -5,13 +5,14 @@ from uuid import UUID, uuid4
 import pytest
 from autoskill.api.app import JobClaimRequest, JobEnqueueRequest, _require_control_auth, create_app
 from autoskill.core.config import get_settings
-from autoskill.db.jobs import JobEnqueueResult, JobQueueSummary, JobRecord
+from autoskill.db.jobs import JobEnqueueResult, JobQueueSummary, JobRecord, WorkerHeartbeatRecord
 from fastapi import HTTPException
 
 
 class MemoryJobStore:
     def __init__(self) -> None:
         self.jobs: dict[str, JobRecord] = {}
+        self.heartbeats: dict[str, WorkerHeartbeatRecord] = {}
         self.closed = False
 
     async def close(self) -> None:
@@ -123,6 +124,40 @@ class MemoryJobStore:
             kind_counts = by_kind.setdefault(job.job_kind, {})
             kind_counts[job.status] = kind_counts.get(job.status, 0) + 1
         return JobQueueSummary(counts=counts, by_kind=by_kind)
+
+    async def record_worker_heartbeat(
+        self,
+        *,
+        worker_id: str,
+        pool: str,
+        concurrency: int,
+        status: str,
+        current_job_id: UUID | None = None,
+        summary: dict[str, object] | None = None,
+    ) -> WorkerHeartbeatRecord:
+        now = datetime.now(UTC)
+        existing = self.heartbeats.get(worker_id)
+        first_seen = existing.first_seen_at if existing else now
+        heartbeat = WorkerHeartbeatRecord(
+            worker_id=worker_id,
+            pool=pool,
+            concurrency=concurrency,
+            status=status,
+            current_job_id=current_job_id,
+            summary=summary or {},
+            first_seen_at=first_seen,
+            last_seen_at=now,
+        )
+        self.heartbeats[worker_id] = heartbeat
+        return heartbeat
+
+    async def list_worker_heartbeats(
+        self,
+        *,
+        active_within_seconds: int = 600,
+        limit: int = 50,
+    ) -> list[WorkerHeartbeatRecord]:
+        return list(self.heartbeats.values())[:limit]
 
 
 def _replace_job(job: JobRecord, **updates: object) -> JobRecord:

@@ -58,7 +58,7 @@ Deliverables:
 
 - sidecar-owned schedules;
 - jobs, attempts, leases, idempotency keys;
-- worker pools; implemented as explicit scheduler/maintenance/mutation run-once dispatch, bounded loop entrypoints, configured per-pool loop concurrency, and worker health summaries.
+- worker pools; implemented as explicit scheduler/maintenance/mutation run-once dispatch, bounded loop entrypoints, configured per-pool loop concurrency, persistent worker heartbeats, and worker health summaries.
 
 Acceptance:
 
@@ -67,7 +67,7 @@ Acceptance:
 - stuck leases recover; implemented for expired leases with remaining attempts;
 - failed attempts back off and terminally fail at `max_attempts`;
 - maintenance worker can claim and complete deterministic evidence/embedding jobs.
-- worker loop supports bounded/configured concurrency, worker health observation, and graceful process shutdown.
+- worker loop supports bounded/configured concurrency, persistent heartbeat observation, and graceful process shutdown.
 
 ## Phase 4 - Evidence, Embeddings, Retrieval
 

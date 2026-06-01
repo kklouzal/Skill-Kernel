@@ -88,6 +88,46 @@ class JobQueueSummary:
     by_kind: dict[str, dict[str, int]]
 
 
+@dataclass(frozen=True)
+class WorkerHeartbeatRecord:
+    worker_id: str
+    pool: str
+    concurrency: int
+    status: str
+    current_job_id: UUID | None
+    summary: dict[str, Any]
+    first_seen_at: datetime
+    last_seen_at: datetime
+
+    @classmethod
+    def from_row(cls, row: asyncpg.Record | dict[str, Any]) -> WorkerHeartbeatRecord:
+        summary = row["summary"]
+        if isinstance(summary, str):
+            summary = json.loads(summary)
+        return cls(
+            worker_id=row["worker_id"],
+            pool=row["pool"],
+            concurrency=row["concurrency"],
+            status=row["status"],
+            current_job_id=_row_get(row, "current_job_id"),
+            summary=summary,
+            first_seen_at=row["first_seen_at"],
+            last_seen_at=row["last_seen_at"],
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "worker_id": self.worker_id,
+            "pool": self.pool,
+            "concurrency": self.concurrency,
+            "status": self.status,
+            "current_job_id": str(self.current_job_id) if self.current_job_id else None,
+            "summary": self.summary,
+            "first_seen_at": self.first_seen_at.isoformat(),
+            "last_seen_at": self.last_seen_at.isoformat(),
+        }
+
+
 class JobStore(Protocol):
     async def enqueue_job(
         self,
@@ -126,6 +166,26 @@ class JobStore(Protocol):
 
     async def summary(self) -> JobQueueSummary:
         """Return queue counts by status."""
+
+    async def record_worker_heartbeat(
+        self,
+        *,
+        worker_id: str,
+        pool: str,
+        concurrency: int,
+        status: str,
+        current_job_id: UUID | None = None,
+        summary: dict[str, Any] | None = None,
+    ) -> WorkerHeartbeatRecord:
+        """Upsert one persistent worker heartbeat."""
+
+    async def list_worker_heartbeats(
+        self,
+        *,
+        active_within_seconds: int = 600,
+        limit: int = 50,
+    ) -> list[WorkerHeartbeatRecord]:
+        """List recently observed workers."""
 
 
 class NullJobStore:
@@ -184,6 +244,36 @@ class NullJobStore:
 
     async def summary(self) -> JobQueueSummary:
         return JobQueueSummary(counts={}, by_kind={})
+
+    async def record_worker_heartbeat(
+        self,
+        *,
+        worker_id: str,
+        pool: str,
+        concurrency: int,
+        status: str,
+        current_job_id: UUID | None = None,
+        summary: dict[str, Any] | None = None,
+    ) -> WorkerHeartbeatRecord:
+        now = datetime.now(UTC)
+        return WorkerHeartbeatRecord(
+            worker_id=worker_id,
+            pool=pool,
+            concurrency=max(1, concurrency),
+            status=status,
+            current_job_id=current_job_id,
+            summary=summary or {},
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+
+    async def list_worker_heartbeats(
+        self,
+        *,
+        active_within_seconds: int = 600,
+        limit: int = 50,
+    ) -> list[WorkerHeartbeatRecord]:
+        return []
 
 
 class AsyncpgJobStore(AsyncpgPoolOwner):
@@ -388,6 +478,68 @@ class AsyncpgJobStore(AsyncpgPoolOwner):
                 counts={row["status"]: row["count"] for row in status_rows},
                 by_kind=by_kind,
             )
+
+    async def record_worker_heartbeat(
+        self,
+        *,
+        worker_id: str,
+        pool: str,
+        concurrency: int,
+        status: str,
+        current_job_id: UUID | None = None,
+        summary: dict[str, Any] | None = None,
+    ) -> WorkerHeartbeatRecord:
+        db_pool = await self._get_pool()
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO autoskill.worker_heartbeats (
+                  worker_id,
+                  pool,
+                  concurrency,
+                  status,
+                  current_job_id,
+                  summary
+                )
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                ON CONFLICT (worker_id) DO UPDATE
+                SET pool = EXCLUDED.pool,
+                    concurrency = EXCLUDED.concurrency,
+                    status = EXCLUDED.status,
+                    current_job_id = EXCLUDED.current_job_id,
+                    summary = EXCLUDED.summary,
+                    last_seen_at = now()
+                RETURNING *
+                """,
+                worker_id,
+                pool,
+                max(1, concurrency),
+                status,
+                current_job_id,
+                _json(summary or {}),
+            )
+            return WorkerHeartbeatRecord.from_row(row)
+
+    async def list_worker_heartbeats(
+        self,
+        *,
+        active_within_seconds: int = 600,
+        limit: int = 50,
+    ) -> list[WorkerHeartbeatRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT *
+                FROM autoskill.worker_heartbeats
+                WHERE last_seen_at >= now() - make_interval(secs => $1)
+                ORDER BY last_seen_at DESC, worker_id ASC
+                LIMIT $2
+                """,
+                max(1, active_within_seconds),
+                max(1, min(limit, 500)),
+            )
+            return [WorkerHeartbeatRecord.from_row(row) for row in rows]
 
 
 async def _recover_expired_leases(conn: asyncpg.Connection) -> None:

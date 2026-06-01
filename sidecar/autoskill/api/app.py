@@ -144,6 +144,7 @@ class WorkerHealthResponse(BaseModel):
     jobs_by_status: dict[str, int]
     jobs_by_kind: dict[str, dict[str, int]]
     jobs_by_pool: dict[str, dict[str, int]]
+    workers: list[dict[str, object]]
 
 
 class SkillListResponse(BaseModel):

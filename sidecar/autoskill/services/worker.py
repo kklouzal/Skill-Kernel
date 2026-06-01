@@ -93,6 +93,7 @@ class WorkerHealthSummary:
     jobs_by_status: dict[str, int]
     jobs_by_kind: dict[str, dict[str, int]]
     jobs_by_pool: dict[str, dict[str, int]]
+    workers: list[dict[str, Any]]
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -100,6 +101,7 @@ class WorkerHealthSummary:
             "jobs_by_status": self.jobs_by_status,
             "jobs_by_kind": self.jobs_by_kind,
             "jobs_by_pool": self.jobs_by_pool,
+            "workers": self.workers,
         }
 
 
@@ -194,6 +196,19 @@ async def run_worker_loop(
     while stop_event is None or not stop_event.is_set():
         if config.max_iterations is not None and iterations >= config.max_iterations:
             break
+        await stores.jobs.record_worker_heartbeat(
+            worker_id=config.worker_id,
+            pool=config.pool,
+            concurrency=concurrency,
+            status="running",
+            summary={
+                "iterations": iterations,
+                "claimed": claimed,
+                "succeeded": succeeded,
+                "failed": failed,
+                "idle": idle,
+            },
+        )
         iterations += 1
         results = await asyncio.gather(
             *[
@@ -219,6 +234,19 @@ async def run_worker_loop(
                 with suppress(TimeoutError):
                     await asyncio.wait_for(stop_event.wait(), timeout=config.idle_sleep_seconds)
 
+    await stores.jobs.record_worker_heartbeat(
+        worker_id=config.worker_id,
+        pool=config.pool,
+        concurrency=concurrency,
+        status="stopped" if stop_event and stop_event.is_set() else "idle",
+        summary={
+            "iterations": iterations,
+            "claimed": claimed,
+            "succeeded": succeeded,
+            "failed": failed,
+            "idle": idle,
+        },
+    )
     return WorkerLoopSummary(
         iterations=iterations,
         claimed=claimed,
@@ -235,6 +263,7 @@ async def build_worker_health(
     concurrency_by_pool: dict[WorkerPool, int],
 ) -> WorkerHealthSummary:
     summary = await jobs.summary()
+    heartbeats = await jobs.list_worker_heartbeats()
     pools = [
         WorkerPoolConfig(
             pool=pool,
@@ -257,6 +286,7 @@ async def build_worker_health(
         jobs_by_status=summary.counts,
         jobs_by_kind=summary.by_kind,
         jobs_by_pool=jobs_by_pool,
+        workers=[heartbeat.to_json() for heartbeat in heartbeats],
     )
 
 
