@@ -11,6 +11,7 @@ from autoskill import __version__
 from autoskill.core.config import get_settings
 from autoskill.core.events import IngestRequest, IngestResult
 from autoskill.db.events import AsyncpgEventStore, EventStore, NullEventStore
+from autoskill.db.evidence import AsyncpgEvidenceStore, EvidenceStore, NullEvidenceStore
 from autoskill.db.jobs import AsyncpgJobStore, JobStore, NullJobStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore, NullSchedulerStore, SchedulerStore
 from autoskill.services.broker import (
@@ -88,6 +89,18 @@ class SchedulerTickResponse(BaseModel):
     jobs: list[dict[str, object]]
 
 
+class EvidenceDeriveRequest(BaseModel):
+    workspace_id: str | None = None
+    limit: int = 100
+
+
+class EvidenceDeriveResponse(BaseModel):
+    scanned: int
+    created: int
+    duplicate: int
+    evidence: list[dict[str, object]]
+
+
 def _build_event_store() -> EventStore:
     settings = get_settings()
     if settings.database_url:
@@ -116,6 +129,16 @@ def _build_scheduler_store() -> SchedulerStore:
             statement_timeout_ms=settings.statement_timeout_ms,
         )
     return NullSchedulerStore()
+
+
+def _build_evidence_store() -> EvidenceStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgEvidenceStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullEvidenceStore()
 
 
 def _require_ingest_auth(authorization: str | None) -> None:
@@ -148,17 +171,19 @@ def create_app(
     event_store: EventStore | None = None,
     job_store: JobStore | None = None,
     scheduler_store: SchedulerStore | None = None,
+    evidence_store: EvidenceStore | None = None,
 ) -> FastAPI:
     store = event_store or _build_event_store()
     jobs = job_store or _build_job_store()
     scheduler = scheduler_store or _build_scheduler_store()
+    evidence = evidence_store or _build_evidence_store()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:
-            for closeable in (store, jobs, scheduler):
+            for closeable in (store, jobs, scheduler, evidence):
                 close = getattr(closeable, "close", None)
                 if close is not None:
                     await close()
@@ -310,6 +335,36 @@ def create_app(
             due=result.due,
             enqueued=result.enqueued,
             jobs=[job.to_json() for job in result.jobs],
+        )
+
+    @app.get("/v1/evidence")
+    async def list_evidence(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, list[dict[str, object]]]:
+        _require_control_auth(authorization)
+        records = await evidence.list_evidence(
+            workspace_key=workspace_id,
+            limit=max(1, min(limit, 250)),
+        )
+        return {"evidence": [record.to_json() for record in records]}
+
+    @app.post("/v1/evidence/derive", response_model=EvidenceDeriveResponse)
+    async def derive_evidence(
+        request: EvidenceDeriveRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> EvidenceDeriveResponse:
+        _require_control_auth(authorization)
+        result = await evidence.derive_from_raw_events(
+            workspace_key=request.workspace_id,
+            limit=max(1, min(request.limit, 500)),
+        )
+        return EvidenceDeriveResponse(
+            scanned=result.scanned,
+            created=result.created,
+            duplicate=result.duplicate,
+            evidence=[record.to_json() for record in result.evidence],
         )
 
     @app.get("/v1/audit/recent")

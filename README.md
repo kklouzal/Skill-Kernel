@@ -27,6 +27,7 @@ Implemented now:
 - optional bearer-token auth for control/job APIs;
 - Postgres-backed job enqueue, idempotency, claim, completion, and expired-lease recovery primitives;
 - sidecar-owned scheduler tick primitive that creates idempotent jobs from due schedules;
+- deterministic evidence derivation from redacted raw events with provenance edges;
 - typed event envelope, SkillIR, scanner, compiler, redaction, audit hash, and path-contained writer primitives;
 - initial Postgres migration covering the core v9 control-plane tables;
 - OpenClaw plugin/hook package skeleton with local redaction, bounded spool, forwarding, and replay utilities;

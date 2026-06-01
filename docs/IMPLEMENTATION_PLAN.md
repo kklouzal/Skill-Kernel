@@ -70,7 +70,7 @@ Acceptance:
 
 Deliverables:
 
-- evidence extractor;
+- evidence extractor; implemented for deterministic observed evidence derived from redacted raw events;
 - redacted embeddings;
 - lexical + vector + metadata search;
 - exact rerank;

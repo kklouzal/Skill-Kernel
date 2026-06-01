@@ -33,13 +33,15 @@ Phase 0/1 bootstrap.
 - Real local Postgres job validation passed via compose: duplicate enqueue returned existing job, claim leased a job, completion marked success, expired lease was recovered and reclaimed.
 - Sidecar scheduler tick primitive is implemented: due schedules enqueue idempotent jobs and advance `next_run_at`.
 - Real local Postgres scheduler validation passed via compose: first tick enqueued one due job, second tick produced no duplicate, and the schedule advanced.
+- Sidecar evidence derivation primitive is implemented: redacted raw events become observed `event_observation` evidence items with source-event provenance.
+- Real local Postgres evidence validation passed via compose: first event ingest accepted, duplicate ingest deduped, first derive created one observed item, second derive produced no duplicate, and the evidence payload remained redacted.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
-2. Add evidence-item derivation from captured events.
-3. Add retrieval policy and context-broker data access.
+2. Add retrieval policy and context-broker data access.
+3. Add embedding write records and lexical/vector candidate generation.
 4. Add worker loop dispatch with risk/cost pool separation.
 5. Add retry backoff and terminal failure policy for jobs.
 
@@ -50,3 +52,4 @@ Phase 0/1 bootstrap.
 - Message hook event aliases remain intentionally broad until live OpenClaw installed-plugin validation confirms current names.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
 - Job completion currently records terminal success/failure; retry backoff policy beyond expired-lease recovery is still pending.
+- Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive/intervention evidence still needs aggregation logic.
