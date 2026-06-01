@@ -79,6 +79,7 @@ class ExternalSkillMatch:
     score: float
     summary: str
     collision_risk: str
+    collision_score: float
     recommendation: str
     reason_codes: list[str]
 
@@ -100,8 +101,10 @@ class ExternalSkillMatch:
             candidate_slug=candidate_slug,
             status=status,
             score=score,
+            metadata=candidate.metadata,
         )
-        collision_risk = _external_collision_risk(reason_codes)
+        collision_score = _external_collision_score(reason_codes, score)
+        collision_risk = _external_collision_risk(collision_score, reason_codes)
         return cls(
             external_skill_id=str(candidate.object_id),
             source=(
@@ -114,7 +117,12 @@ class ExternalSkillMatch:
             score=score,
             summary=candidate.summary,
             collision_risk=collision_risk,
-            recommendation=_external_collision_recommendation(collision_risk, status),
+            collision_score=collision_score,
+            recommendation=_external_collision_recommendation(
+                collision_risk,
+                status,
+                reason_codes,
+            ),
             reason_codes=reason_codes,
         )
 
@@ -127,6 +135,7 @@ class ExternalSkillMatch:
             "score": self.score,
             "summary": self.summary,
             "collision_risk": self.collision_risk,
+            "collision_score": self.collision_score,
             "recommendation": self.recommendation,
             "reason_codes": self.reason_codes,
         }
@@ -247,10 +256,13 @@ def _external_collision_reason_codes(
     candidate_slug: str,
     status: str,
     score: float,
+    metadata: dict[str, object],
 ) -> list[str]:
     reasons: list[str] = []
     if slug == candidate_slug:
         reasons.append("exact_slug_collision")
+    elif slug and _slug_overlap(slug, candidate_slug) >= 0.5:
+        reasons.append("slug_family_overlap")
     if score >= 0.75:
         reasons.append("high_similarity")
     elif score >= 0.45:
@@ -259,19 +271,60 @@ def _external_collision_reason_codes(
         reasons.append("external_skill_changed")
     if status == "visible":
         reasons.append("external_skill_visible")
+    if status in {"ignored", "quarantined"}:
+        reasons.append(f"external_skill_{status}")
+    risk_summary = metadata.get("risk_summary")
+    if isinstance(risk_summary, dict):
+        scanner_status = str(risk_summary.get("scanner_status") or "")
+        if scanner_status == "blocked":
+            reasons.append("external_skill_scanner_blocked")
+        if risk_summary.get("changed_since_review") is True:
+            reasons.append("external_skill_changed_since_review")
+        if risk_summary.get("stored_raw_root_path") is False:
+            reasons.append("external_skill_path_safe")
     return reasons
 
 
-def _external_collision_risk(reason_codes: list[str]) -> str:
-    if "exact_slug_collision" in reason_codes or "high_similarity" in reason_codes:
+def _external_collision_score(reason_codes: list[str], retrieval_score: float) -> float:
+    score = min(max(retrieval_score, 0.0), 1.0)
+    weights = {
+        "exact_slug_collision": 0.35,
+        "slug_family_overlap": 0.2,
+        "high_similarity": 0.3,
+        "moderate_similarity": 0.15,
+        "external_skill_changed": 0.15,
+        "external_skill_changed_since_review": 0.15,
+        "external_skill_scanner_blocked": 0.25,
+        "external_skill_quarantined": 0.25,
+        "external_skill_ignored": -0.2,
+        "external_skill_path_safe": -0.05,
+    }
+    for reason in reason_codes:
+        score += weights.get(reason, 0.0)
+    return round(min(max(score, 0.0), 1.0), 3)
+
+
+def _external_collision_risk(collision_score: float, reason_codes: list[str]) -> str:
+    if (
+        "external_skill_scanner_blocked" in reason_codes
+        or "external_skill_quarantined" in reason_codes
+    ):
+        return "blocked"
+    if collision_score >= 0.75:
         return "high"
-    if "moderate_similarity" in reason_codes or "external_skill_changed" in reason_codes:
+    if collision_score >= 0.45:
         return "medium"
     return "low"
 
 
-def _external_collision_recommendation(collision_risk: str, status: str) -> str:
-    if status == "changed":
+def _external_collision_recommendation(
+    collision_risk: str,
+    status: str,
+    reason_codes: list[str],
+) -> str:
+    if collision_risk == "blocked":
+        return "do_not_import_external_skill_until_unquarantined"
+    if "external_skill_changed_since_review" in reason_codes or status == "changed":
         return "review_changed_external_skill_before_candidate_creation"
     if collision_risk == "high":
         return "operator_review_import_or_reuse_external_skill"
@@ -282,6 +335,14 @@ def _external_collision_recommendation(collision_risk: str, status: str) -> str:
 
 def _terms(text: str) -> set[str]:
     return {term for term in text.lower().replace("-", " ").split() if len(term) > 2}
+
+
+def _slug_overlap(left: str, right: str) -> float:
+    left_terms = _terms(left)
+    right_terms = _terms(right)
+    if not left_terms or not right_terms:
+        return 0.0
+    return len(left_terms & right_terms) / max(len(left_terms), len(right_terms))
 
 
 def _ordered_terms(text: str) -> list[str]:

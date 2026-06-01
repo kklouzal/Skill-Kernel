@@ -139,10 +139,12 @@ def test_skill_match_surfaces_external_collision_without_reuse() -> None:
     assert result.external_matches[0].external_skill_id == str(external_skill_id)
     assert result.external_matches[0].source == "workspace-skill-root"
     assert result.external_matches[0].collision_risk == "high"
+    assert result.external_matches[0].collision_score >= 0.75
     assert result.external_matches[0].recommendation == (
         "operator_review_import_or_reuse_external_skill"
     )
     assert "high_similarity" in result.external_matches[0].reason_codes
+    assert "slug_family_overlap" in result.external_matches[0].reason_codes
 
 
 def test_skill_match_flags_changed_external_skill_for_review() -> None:
@@ -182,6 +184,46 @@ def test_skill_match_flags_changed_external_skill_for_review() -> None:
         "review_changed_external_skill_before_candidate_creation"
     )
     assert "external_skill_changed" in result.external_matches[0].reason_codes
+
+
+def test_skill_match_blocks_quarantined_external_skill_import_recommendation() -> None:
+    store = MemorySkillMatchRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="external_skill",
+                object_id=uuid4(),
+                skill_id=None,
+                summary="PDF table cleanup: external workflow for repairing malformed cells.",
+                rank=0.8,
+                metadata={
+                    "ownership": "external",
+                    "source": "workspace-skill-root",
+                    "status": "quarantined",
+                    "slug": "pdf-table-cleanup",
+                    "risk_summary": {"scanner_status": "blocked"},
+                },
+            )
+        ]
+    )
+
+    async def run():
+        return await match_existing_skills(
+            store,
+            SkillMatchRequest(
+                workspace_key="dev-01",
+                candidate_slug="pdf-table-cleanup",
+                candidate_description="Repair malformed PDF table extraction boundaries.",
+            ),
+        )
+
+    result = asyncio.run(run())
+
+    assert result.decision == "external_collision_review"
+    assert result.external_matches[0].collision_risk == "blocked"
+    assert result.external_matches[0].recommendation == (
+        "do_not_import_external_skill_until_unquarantined"
+    )
+    assert "external_skill_scanner_blocked" in result.external_matches[0].reason_codes
 
 
 def test_skill_match_api_uses_retrieval_store() -> None:
