@@ -138,7 +138,9 @@ Deliverables:
 - transaction-aware writer service wrappers; implemented for apply/rollback transaction status updates, active compiled-file and archive-snapshot transaction items, rollback metadata, and fail-closed filesystem recovery when governance recording fails after apply;
 - sidecar writer control endpoints; implemented for `/v1/writer/apply` and `/v1/writer/rollback` with control auth, workspace-contained staging/archive roots, pinned `skills/autoskill` active-root policy, and transaction-aware writer wrapper calls;
 - writer artifact provenance traversal; implemented by linking active/archive/rollback writer transaction items from their evolution transaction during apply/rollback;
-- canary states.
+- canary states; implemented as canary-result storage plus deterministic freeze/unfreeze
+  control APIs that suppress frozen skills through the existing broker lifecycle filter and
+  queue rollback revocation requests for transaction-scoped critical canary failures.
 
 Acceptance:
 
@@ -152,10 +154,11 @@ Acceptance:
 - active-root apply/rollback service wrappers record governance transaction items/statuses and restore the previous active state if post-apply governance recording fails; implemented and validated with focused writer tests;
 - sidecar writer endpoints apply and roll back verified manifests through the transaction-aware writer service; implemented and validated with focused writer/API tests and compose/Postgres smoke coverage;
 - writer apply/rollback transaction items are discoverable by provenance traversal from their evolution transaction root; implemented and validated with focused writer/governance tests plus compose/Postgres smoke coverage;
+- canary critical failures record canary evidence, mark the skill `frozen`, store the freeze reason, record a transaction item, and queue a rollback revocation request when the canary is transaction-scoped; implemented and validated with focused tests plus compose/Postgres smoke coverage;
 - valid skill appears under active root;
 - invalid paths are rejected;
 - rollback restores the previous effective state;
-- canary critical failures trigger rollback/freeze.
+- canary critical failures trigger rollback/freeze; freeze and rollback revocation queueing are implemented, while mutation-worker rollback execution remains pending.
 
 ## Phase 8 - Autonomous Improvement and Curation
 

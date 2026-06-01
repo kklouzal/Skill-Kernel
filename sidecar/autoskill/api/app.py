@@ -21,6 +21,7 @@ from autoskill.db.events import AsyncpgEventStore, EventStore, NullEventStore
 from autoskill.db.evidence import AsyncpgEvidenceStore, EvidenceStore, NullEvidenceStore
 from autoskill.db.governance import AsyncpgGovernanceStore, GovernanceStore, NullGovernanceStore
 from autoskill.db.jobs import AsyncpgJobStore, JobStore, NullJobStore
+from autoskill.db.lifecycle import AsyncpgLifecycleStore, LifecycleStore, NullLifecycleStore
 from autoskill.db.retrieval import AsyncpgRetrievalStore, NullRetrievalStore, RetrievalStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore, NullSchedulerStore, SchedulerStore
 from autoskill.services.broker import (
@@ -289,6 +290,42 @@ class RevocationRequestCreateResponse(BaseModel):
     revocation: dict[str, object]
 
 
+class CanaryResultRequest(BaseModel):
+    workspace_id: str
+    skill_id: UUID
+    status: str
+    critical: bool = False
+    reason: str | None = None
+    metrics: dict[str, object] = {}
+    skill_version_id: UUID | None = None
+    evolution_transaction_id: UUID | None = None
+
+
+class CanaryResultResponse(BaseModel):
+    canary: dict[str, object]
+    skill: dict[str, object] | None
+    revocation: dict[str, object] | None = None
+
+
+class FreezeSkillRequest(BaseModel):
+    workspace_id: str
+    skill_id: UUID
+    reason: str
+    evolution_transaction_id: UUID | None = None
+
+
+class UnfreezeSkillRequest(BaseModel):
+    workspace_id: str
+    skill_id: UUID
+    target_state: str = "candidate"
+    reason: str | None = None
+    evolution_transaction_id: UUID | None = None
+
+
+class SkillLifecycleResponse(BaseModel):
+    skill: dict[str, object] | None
+
+
 class ShadowingDetectRequest(BaseModel):
     workspace_id: str
     limit: int = 100
@@ -528,6 +565,17 @@ def _build_governance_store() -> GovernanceStore:
     return NullGovernanceStore()
 
 
+def _build_lifecycle_store(governance: GovernanceStore) -> LifecycleStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgLifecycleStore(
+            settings.database_url,
+            governance=governance,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullLifecycleStore()
+
+
 def _require_ingest_auth(authorization: str | None) -> None:
     settings = get_settings()
     if not settings.ingest_token:
@@ -593,6 +641,7 @@ def create_app(
     candidate_store: CandidateStore | None = None,
     evaluation_store: EvaluationStore | None = None,
     governance_store: GovernanceStore | None = None,
+    lifecycle_store: LifecycleStore | None = None,
     writer_workspace_root: Path | None = None,
 ) -> FastAPI:
     store = event_store or _build_event_store()
@@ -605,6 +654,7 @@ def create_app(
     candidates = candidate_store or _build_candidate_store()
     evaluations = evaluation_store or _build_evaluation_store()
     governance = governance_store or _build_governance_store()
+    lifecycle = lifecycle_store or _build_lifecycle_store(governance)
     broker_cache = ContextHintCache()
 
     @asynccontextmanager
@@ -623,6 +673,7 @@ def create_app(
                 candidates,
                 evaluations,
                 governance,
+                lifecycle,
             ):
                 close = getattr(closeable, "close", None)
                 if close is not None:
@@ -1121,6 +1172,69 @@ def create_app(
             created_by_job_id=request.created_by_job_id,
         )
         return RevocationRequestCreateResponse(revocation=revocation.to_json())
+
+    @app.post("/v1/canary/results", response_model=CanaryResultResponse)
+    async def record_canary_result(
+        request: CanaryResultRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> CanaryResultResponse:
+        _require_control_auth(authorization)
+        if request.status not in {"passed", "failed", "critical"}:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="status must be passed, failed, or critical",
+            )
+        result = await lifecycle.record_canary_result(
+            workspace_key=request.workspace_id,
+            skill_id=request.skill_id,
+            status=request.status,
+            critical=request.critical or request.status == "critical",
+            reason=request.reason,
+            metrics=request.metrics,
+            skill_version_id=request.skill_version_id,
+            evolution_transaction_id=request.evolution_transaction_id,
+        )
+        return CanaryResultResponse(**result.to_json())
+
+    @app.post("/v1/control/freeze", response_model=SkillLifecycleResponse)
+    async def freeze_skill(
+        request: FreezeSkillRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> SkillLifecycleResponse:
+        _require_control_auth(authorization)
+        skill = await lifecycle.freeze_skill(
+            workspace_key=request.workspace_id,
+            skill_id=request.skill_id,
+            reason=request.reason,
+            evolution_transaction_id=request.evolution_transaction_id,
+        )
+        return SkillLifecycleResponse(skill=skill.to_json() if skill else None)
+
+    @app.post("/v1/control/unfreeze", response_model=SkillLifecycleResponse)
+    async def unfreeze_skill(
+        request: UnfreezeSkillRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> SkillLifecycleResponse:
+        _require_control_auth(authorization)
+        if request.target_state == "frozen":
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="target_state must not be frozen",
+            )
+        try:
+            skill = await lifecycle.unfreeze_skill(
+                workspace_key=request.workspace_id,
+                skill_id=request.skill_id,
+                target_state=request.target_state,
+                reason=request.reason,
+                evolution_transaction_id=request.evolution_transaction_id,
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return SkillLifecycleResponse(skill=skill.to_json() if skill else None)
 
     @app.post("/v1/shadowing/detect", response_model=ShadowingDetectResponse)
     async def detect_shadowing(

@@ -56,10 +56,22 @@ CREATE TABLE IF NOT EXISTS autoskill.skills (
   source text NOT NULL DEFAULT 'autoskill',
   lifecycle_state text NOT NULL DEFAULT 'candidate',
   active_version_id uuid,
+  last_canary_status text,
+  freeze_reason text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
+  frozen_at timestamptz,
   UNIQUE(workspace_id, slug)
 );
+
+ALTER TABLE autoskill.skills
+  ADD COLUMN IF NOT EXISTS last_canary_status text;
+
+ALTER TABLE autoskill.skills
+  ADD COLUMN IF NOT EXISTS freeze_reason text;
+
+ALTER TABLE autoskill.skills
+  ADD COLUMN IF NOT EXISTS frozen_at timestamptz;
 
 CREATE TABLE IF NOT EXISTS autoskill.skill_versions (
   skill_version_id uuid PRIMARY KEY,
@@ -322,6 +334,22 @@ CREATE TABLE IF NOT EXISTS autoskill.evolution_transaction_items (
   rollback_action jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS autoskill.canary_results (
+  canary_result_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_id uuid NOT NULL REFERENCES autoskill.skills(skill_id),
+  skill_version_id uuid REFERENCES autoskill.skill_versions(skill_version_id),
+  evolution_transaction_id uuid REFERENCES autoskill.evolution_transactions(evolution_transaction_id),
+  status text NOT NULL,
+  critical boolean NOT NULL DEFAULT false,
+  reason text,
+  metrics jsonb NOT NULL DEFAULT '{}'::jsonb,
+  observed_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS canary_results_skill_observed_idx
+  ON autoskill.canary_results(skill_id, observed_at DESC);
 
 CREATE TABLE IF NOT EXISTS autoskill.transaction_artifacts (
   transaction_artifact_id uuid PRIMARY KEY,
