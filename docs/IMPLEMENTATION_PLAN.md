@@ -72,7 +72,7 @@ Deliverables:
 
 - evidence extractor; implemented for deterministic observed evidence derived from redacted raw events;
 - redacted embeddings;
-- lexical + vector + metadata search;
+- lexical + vector + metadata search; lexical evidence/body-index search is implemented, vector generation/search is pending;
 - exact rerank;
 - active/archive/duplicate matching.
 

@@ -28,6 +28,8 @@ Implemented now:
 - Postgres-backed job enqueue, idempotency, claim, completion, and expired-lease recovery primitives;
 - sidecar-owned scheduler tick primitive that creates idempotent jobs from due schedules;
 - deterministic evidence derivation from redacted raw events with provenance edges;
+- retrieval schema support for body index documents, pgvector embeddings, lexical indexes, and retrieval logs;
+- deterministic lexical retrieval API over evidence/body-index records;
 - typed event envelope, SkillIR, scanner, compiler, redaction, audit hash, and path-contained writer primitives;
 - initial Postgres migration covering the core v9 control-plane tables;
 - OpenClaw plugin/hook package skeleton with local redaction, bounded spool, forwarding, and replay utilities;
@@ -38,7 +40,7 @@ Implemented now:
 Not implemented yet:
 
 - full installed-plugin proof against the live OpenClaw gateway;
-- pgvector-backed retrieval and embeddings;
+- embedding generation and pgvector candidate search;
 - durable worker dispatch loops;
 - LLM proposal operations;
 - evaluator/probe execution;

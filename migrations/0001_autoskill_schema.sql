@@ -180,6 +180,34 @@ CREATE TABLE IF NOT EXISTS autoskill.retrieval_logs (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.body_index_documents (
+  body_index_document_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_id uuid REFERENCES autoskill.skills(skill_id),
+  skill_version_id uuid REFERENCES autoskill.skill_versions(skill_version_id),
+  document_kind text NOT NULL,
+  text_hash text NOT NULL,
+  text_content text NOT NULL,
+  secret_scan_status text NOT NULL,
+  taint text[] NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, skill_version_id, document_kind, text_hash)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.embeddings (
+  embedding_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  object_type text NOT NULL,
+  object_id uuid NOT NULL,
+  skill_id uuid REFERENCES autoskill.skills(skill_id),
+  embedding_model text NOT NULL,
+  embedding_dim integer NOT NULL,
+  embedding vector(1536) NOT NULL,
+  text_hash text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (object_type, object_id, embedding_model)
+);
+
 CREATE TABLE IF NOT EXISTS autoskill.schedules (
   schedule_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
@@ -298,3 +326,18 @@ CREATE INDEX IF NOT EXISTS raw_events_workspace_time_idx
 
 CREATE INDEX IF NOT EXISTS jobs_ready_idx
   ON autoskill.jobs(status, available_at, priority);
+
+CREATE INDEX IF NOT EXISTS evidence_items_lexical_idx
+  ON autoskill.evidence_items
+  USING gin (to_tsvector('simple', summary));
+
+CREATE INDEX IF NOT EXISTS body_index_documents_lexical_idx
+  ON autoskill.body_index_documents
+  USING gin (to_tsvector('simple', text_content));
+
+CREATE INDEX IF NOT EXISTS embeddings_hnsw_cosine_idx
+  ON autoskill.embeddings
+  USING hnsw (embedding vector_cosine_ops);
+
+CREATE INDEX IF NOT EXISTS embeddings_object_idx
+  ON autoskill.embeddings (workspace_id, object_type, skill_id);

@@ -13,6 +13,7 @@ from autoskill.core.events import IngestRequest, IngestResult
 from autoskill.db.events import AsyncpgEventStore, EventStore, NullEventStore
 from autoskill.db.evidence import AsyncpgEvidenceStore, EvidenceStore, NullEvidenceStore
 from autoskill.db.jobs import AsyncpgJobStore, JobStore, NullJobStore
+from autoskill.db.retrieval import AsyncpgRetrievalStore, NullRetrievalStore, RetrievalStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore, NullSchedulerStore, SchedulerStore
 from autoskill.services.broker import (
     ContextHintRequest,
@@ -101,6 +102,20 @@ class EvidenceDeriveResponse(BaseModel):
     evidence: list[dict[str, object]]
 
 
+class RetrievalQueryRequest(BaseModel):
+    workspace_id: str
+    query: str
+    session_id: str | None = None
+    turn_id: str | None = None
+    limit: int = 10
+
+
+class RetrievalQueryResponse(BaseModel):
+    retrieval_log_id: str | None
+    decision: str
+    candidates: list[dict[str, object]]
+
+
 def _build_event_store() -> EventStore:
     settings = get_settings()
     if settings.database_url:
@@ -141,6 +156,16 @@ def _build_evidence_store() -> EvidenceStore:
     return NullEvidenceStore()
 
 
+def _build_retrieval_store() -> RetrievalStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgRetrievalStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullRetrievalStore()
+
+
 def _require_ingest_auth(authorization: str | None) -> None:
     settings = get_settings()
     if not settings.ingest_token:
@@ -172,18 +197,20 @@ def create_app(
     job_store: JobStore | None = None,
     scheduler_store: SchedulerStore | None = None,
     evidence_store: EvidenceStore | None = None,
+    retrieval_store: RetrievalStore | None = None,
 ) -> FastAPI:
     store = event_store or _build_event_store()
     jobs = job_store or _build_job_store()
     scheduler = scheduler_store or _build_scheduler_store()
     evidence = evidence_store or _build_evidence_store()
+    retrieval = retrieval_store or _build_retrieval_store()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:
-            for closeable in (store, jobs, scheduler, evidence):
+            for closeable in (store, jobs, scheduler, evidence, retrieval):
                 close = getattr(closeable, "close", None)
                 if close is not None:
                     await close()
@@ -365,6 +392,25 @@ def create_app(
             created=result.created,
             duplicate=result.duplicate,
             evidence=[record.to_json() for record in result.evidence],
+        )
+
+    @app.post("/v1/retrieval/query", response_model=RetrievalQueryResponse)
+    async def retrieval_query(
+        request: RetrievalQueryRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> RetrievalQueryResponse:
+        _require_control_auth(authorization)
+        result = await retrieval.lexical_query(
+            workspace_key=request.workspace_id,
+            query=request.query,
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            limit=max(1, min(request.limit, 50)),
+        )
+        return RetrievalQueryResponse(
+            retrieval_log_id=str(result.retrieval_log_id) if result.retrieval_log_id else None,
+            decision=result.decision,
+            candidates=[candidate.to_json() for candidate in result.candidates],
         )
 
     @app.get("/v1/audit/recent")
