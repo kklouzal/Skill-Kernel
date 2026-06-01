@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 from uuid import uuid4
@@ -10,8 +11,10 @@ from autoskill.services.writer import (
     PathContainmentError,
     WriterPolicyError,
     apply_staged_manifest,
+    apply_staged_manifest_with_governance,
     resolve_contained,
     rollback_active_skill,
+    rollback_active_skill_with_governance,
     stage_compiled_skill,
     stage_text,
     validate_support_artifact_path,
@@ -178,6 +181,128 @@ def test_writer_rolls_back_active_skill_from_archive_snapshot(tmp_path: Path) ->
     assert (active_path / "SKILL.md").read_text(encoding="utf-8").startswith("# Old")
 
 
+def test_writer_apply_records_governance_items(tmp_path: Path) -> None:
+    staging_root = tmp_path / "staging"
+    workspace_root = tmp_path / "workspace"
+    archive_root = workspace_root / ".autoskill" / "archive"
+    workspace_root.mkdir()
+    active_path = workspace_root / "skills" / "autoskill" / "autoskill-example"
+    active_path.mkdir(parents=True)
+    (active_path / "SKILL.md").write_text("# Old\n\n## WHEN\n- Old.\n", encoding="utf-8")
+    staged = stage_compiled_skill(
+        staging_root,
+        staging_id=uuid4(),
+        skill_version_id=uuid4(),
+        slug="autoskill-example",
+        compiled_skill_md="# New\n\n## WHEN\n- New.\n",
+    )
+    governance = MemoryWriterGovernance()
+    transaction_id = uuid4()
+
+    async def run():
+        return await apply_staged_manifest_with_governance(
+            governance,
+            evolution_transaction_id=transaction_id,
+            staging_root=staging_root,
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            manifest_relative_path=staged.manifest_relative_path,
+        )
+
+    applied = asyncio.run(run())
+
+    assert applied.previous_snapshot is not None
+    assert governance.statuses[-1]["status"] == "applied"
+    assert governance.statuses[-1]["metrics"]["previous_snapshot"] == (
+        applied.previous_snapshot.manifest_relative_path
+    )
+    assert [item["item_kind"] for item in governance.items] == [
+        "compiled_skill_file",
+        "archive_snapshot",
+    ]
+    assert governance.items[0]["activation_state"] == "active"
+    assert governance.items[0]["relative_path"] == "skills/autoskill/autoskill-example"
+    assert governance.items[0]["rollback_action"]["operation"] == "restore_archive_manifest"
+    assert governance.items[1]["activation_state"] == "archived"
+
+
+def test_writer_apply_restores_previous_active_if_governance_recording_fails(
+    tmp_path: Path,
+) -> None:
+    staging_root = tmp_path / "staging"
+    workspace_root = tmp_path / "workspace"
+    archive_root = workspace_root / ".autoskill" / "archive"
+    workspace_root.mkdir()
+    active_path = workspace_root / "skills" / "autoskill" / "autoskill-example"
+    active_path.mkdir(parents=True)
+    (active_path / "SKILL.md").write_text("# Old\n\n## WHEN\n- Old.\n", encoding="utf-8")
+    staged = stage_compiled_skill(
+        staging_root,
+        staging_id=uuid4(),
+        skill_version_id=uuid4(),
+        slug="autoskill-example",
+        compiled_skill_md="# New\n\n## WHEN\n- New.\n",
+    )
+    governance = MemoryWriterGovernance(fail_record_item=True)
+
+    async def run():
+        await apply_staged_manifest_with_governance(
+            governance,
+            evolution_transaction_id=uuid4(),
+            staging_root=staging_root,
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            manifest_relative_path=staged.manifest_relative_path,
+        )
+
+    with pytest.raises(RuntimeError, match="governance unavailable"):
+        asyncio.run(run())
+
+    assert (active_path / "SKILL.md").read_text(encoding="utf-8").startswith("# Old")
+    assert governance.statuses[-1]["status"] == "failed"
+
+
+def test_writer_rollback_records_governance_item(tmp_path: Path) -> None:
+    staging_root = tmp_path / "staging"
+    workspace_root = tmp_path / "workspace"
+    archive_root = workspace_root / ".autoskill" / "archive"
+    workspace_root.mkdir()
+    active_path = workspace_root / "skills" / "autoskill" / "autoskill-example"
+    active_path.mkdir(parents=True)
+    (active_path / "SKILL.md").write_text("# Old\n\n## WHEN\n- Old.\n", encoding="utf-8")
+    staged = stage_compiled_skill(
+        staging_root,
+        staging_id=uuid4(),
+        skill_version_id=uuid4(),
+        slug="autoskill-example",
+        compiled_skill_md="# New\n\n## WHEN\n- New.\n",
+    )
+    applied = apply_staged_manifest(
+        staging_root,
+        workspace_root,
+        archive_root,
+        staged.manifest_relative_path,
+    )
+    assert applied.previous_snapshot is not None
+    governance = MemoryWriterGovernance()
+
+    async def run():
+        return await rollback_active_skill_with_governance(
+            governance,
+            evolution_transaction_id=uuid4(),
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            archive_manifest_relative_path=applied.previous_snapshot.manifest_relative_path,
+        )
+
+    rolled_back = asyncio.run(run())
+
+    assert rolled_back.slug == "autoskill-example"
+    assert governance.statuses[-1]["status"] == "rolled_back"
+    assert governance.items[0]["activation_state"] == "rolled_back"
+    assert governance.items[0]["rollback_action"]["operation"] == "operator_review"
+
+
 def test_writer_rejects_manifest_target_outside_active_root(tmp_path: Path) -> None:
     staging_root = tmp_path / "staging"
     workspace_root = tmp_path / "workspace"
@@ -226,4 +351,53 @@ def test_writer_rejects_active_snapshot_symlink(tmp_path: Path) -> None:
             workspace_root,
             archive_root,
             staged.manifest_relative_path,
+        )
+
+
+class MemoryWriterGovernance:
+    def __init__(self, *, fail_record_item: bool = False) -> None:
+        self.fail_record_item = fail_record_item
+        self.statuses: list[dict[str, object]] = []
+        self.items: list[dict[str, object]] = []
+
+    async def update_transaction_status(
+        self,
+        *,
+        evolution_transaction_id,
+        status,
+        metrics=None,
+    ):
+        self.statuses.append(
+            {
+                "evolution_transaction_id": evolution_transaction_id,
+                "status": status,
+                "metrics": metrics or {},
+            }
+        )
+
+    async def record_transaction_item(
+        self,
+        *,
+        evolution_transaction_id,
+        item_kind,
+        activation_state,
+        item_id=None,
+        relative_path=None,
+        before_hash=None,
+        after_hash=None,
+        rollback_action=None,
+    ):
+        if self.fail_record_item:
+            raise RuntimeError("governance unavailable")
+        self.items.append(
+            {
+                "evolution_transaction_id": evolution_transaction_id,
+                "item_kind": item_kind,
+                "activation_state": activation_state,
+                "item_id": item_id,
+                "relative_path": relative_path,
+                "before_hash": before_hash,
+                "after_hash": after_hash,
+                "rollback_action": rollback_action or {},
+            }
         )

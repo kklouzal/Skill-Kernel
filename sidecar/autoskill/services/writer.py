@@ -5,6 +5,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from autoskill.core.hashing import sha256_bytes, sha256_json, sha256_text
@@ -83,6 +84,27 @@ class AppliedSkillArtifact:
     manifest_sha256: str
     files: list[StagedFile]
     previous_snapshot: ArchiveSnapshot | None
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "slug": self.slug,
+            "active_relative_path": self.active_relative_path,
+            "manifest_sha256": self.manifest_sha256,
+            "files": [file.to_manifest() for file in self.files],
+            "previous_snapshot": (
+                {
+                    "archive_relative_path": self.previous_snapshot.archive_relative_path,
+                    "manifest_relative_path": self.previous_snapshot.manifest_relative_path,
+                    "manifest_sha256": self.previous_snapshot.manifest_sha256,
+                    "files": [
+                        file.to_manifest()
+                        for file in self.previous_snapshot.files
+                    ],
+                }
+                if self.previous_snapshot
+                else None
+            ),
+        }
 
 
 def resolve_contained(root: Path, relative_path: str) -> Path:
@@ -401,6 +423,103 @@ def rollback_active_skill(
     )
 
 
+async def apply_staged_manifest_with_governance(
+    governance: Any,
+    *,
+    evolution_transaction_id: UUID,
+    staging_root: Path,
+    workspace_root: Path,
+    archive_root: Path,
+    manifest_relative_path: str,
+) -> AppliedSkillArtifact:
+    """Apply a staged manifest and record rollback-aware transaction items.
+
+    The filesystem writer remains deterministic authority. If governance
+    recording fails after the replace, the wrapper restores the previous active
+    snapshot, or removes the newly-created active skill when no previous version
+    existed, so apply is fail-closed instead of leaving untracked exposure.
+    """
+
+    await governance.update_transaction_status(
+        evolution_transaction_id=evolution_transaction_id,
+        status="applying",
+        metrics={"manifest_relative_path": manifest_relative_path},
+    )
+    applied = apply_staged_manifest(
+        staging_root,
+        workspace_root,
+        archive_root,
+        manifest_relative_path,
+    )
+    try:
+        await _record_apply_transaction_items(
+            governance,
+            evolution_transaction_id=evolution_transaction_id,
+            applied=applied,
+        )
+        await governance.update_transaction_status(
+            evolution_transaction_id=evolution_transaction_id,
+            status="applied",
+            metrics=_writer_metrics(applied),
+        )
+    except Exception:
+        _recover_failed_governance_apply(
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            applied=applied,
+        )
+        await governance.update_transaction_status(
+            evolution_transaction_id=evolution_transaction_id,
+            status="failed",
+            metrics={
+                "failed_stage": "governance_recording",
+                "recovered_active_path": applied.active_relative_path,
+            },
+        )
+        raise
+    return applied
+
+
+async def rollback_active_skill_with_governance(
+    governance: Any,
+    *,
+    evolution_transaction_id: UUID,
+    workspace_root: Path,
+    archive_root: Path,
+    archive_manifest_relative_path: str,
+) -> AppliedSkillArtifact:
+    """Restore an archive snapshot and record the rollback transaction item."""
+
+    await governance.update_transaction_status(
+        evolution_transaction_id=evolution_transaction_id,
+        status="rolling_back",
+        metrics={"archive_manifest_relative_path": archive_manifest_relative_path},
+    )
+    rolled_back = rollback_active_skill(
+        workspace_root,
+        archive_root,
+        archive_manifest_relative_path=archive_manifest_relative_path,
+    )
+    await governance.record_transaction_item(
+        evolution_transaction_id=evolution_transaction_id,
+        item_kind="compiled_skill_file",
+        activation_state="rolled_back",
+        relative_path=rolled_back.active_relative_path,
+        before_hash=None,
+        after_hash=rolled_back.manifest_sha256,
+        rollback_action={
+            "operation": "operator_review",
+            "reason": "rollback transaction restored this archive snapshot",
+        },
+    )
+    await governance.update_transaction_status(
+        evolution_transaction_id=evolution_transaction_id,
+        status="rolled_back",
+        metrics=_writer_metrics(rolled_back),
+    )
+    return rolled_back
+
+
 def verify_archive_manifest(root: Path, manifest_relative_path: str) -> dict[str, object]:
     manifest_path = resolve_contained(root, manifest_relative_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -501,3 +620,81 @@ def _remove_path(path: Path) -> None:
         path.unlink()
     elif path.exists():
         shutil.rmtree(path)
+
+
+async def _record_apply_transaction_items(
+    governance: Any,
+    *,
+    evolution_transaction_id: UUID,
+    applied: AppliedSkillArtifact,
+) -> None:
+    await governance.record_transaction_item(
+        evolution_transaction_id=evolution_transaction_id,
+        item_kind="compiled_skill_file",
+        activation_state="active",
+        relative_path=applied.active_relative_path,
+        before_hash=(
+            applied.previous_snapshot.manifest_sha256 if applied.previous_snapshot else None
+        ),
+        after_hash=applied.manifest_sha256,
+        rollback_action=_apply_rollback_action(applied),
+    )
+    if applied.previous_snapshot is not None:
+        await governance.record_transaction_item(
+            evolution_transaction_id=evolution_transaction_id,
+            item_kind="archive_snapshot",
+            activation_state="archived",
+            relative_path=(
+                f".autoskill/archive/{applied.previous_snapshot.manifest_relative_path}"
+            ),
+            before_hash=None,
+            after_hash=applied.previous_snapshot.manifest_sha256,
+            rollback_action={
+                "operation": "retain",
+                "reason": "archive snapshot is required for rollback traversal",
+            },
+        )
+
+
+def _apply_rollback_action(applied: AppliedSkillArtifact) -> dict[str, object]:
+    if applied.previous_snapshot is None:
+        return {
+            "operation": "delete_active_path",
+            "active_relative_path": applied.active_relative_path,
+        }
+    return {
+        "operation": "restore_archive_manifest",
+        "archive_manifest_relative_path": applied.previous_snapshot.manifest_relative_path,
+        "archive_manifest_sha256": applied.previous_snapshot.manifest_sha256,
+        "active_relative_path": applied.active_relative_path,
+    }
+
+
+def _recover_failed_governance_apply(
+    *,
+    workspace_root: Path,
+    archive_root: Path,
+    applied: AppliedSkillArtifact,
+) -> None:
+    if applied.previous_snapshot is None:
+        _remove_path(resolve_contained(workspace_root, applied.active_relative_path))
+        return
+    rollback_active_skill(
+        workspace_root,
+        archive_root,
+        archive_manifest_relative_path=applied.previous_snapshot.manifest_relative_path,
+    )
+
+
+def _writer_metrics(applied: AppliedSkillArtifact) -> dict[str, Any]:
+    return {
+        "slug": applied.slug,
+        "active_relative_path": applied.active_relative_path,
+        "manifest_sha256": applied.manifest_sha256,
+        "file_count": len(applied.files),
+        "previous_snapshot": (
+            applied.previous_snapshot.manifest_relative_path
+            if applied.previous_snapshot
+            else None
+        ),
+    }

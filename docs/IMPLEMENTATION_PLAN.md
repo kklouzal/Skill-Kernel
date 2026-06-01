@@ -135,6 +135,7 @@ Deliverables:
 - atomic apply; implemented as a deterministic same-root active skill directory replacement from verified writer manifests;
 - archive snapshots; implemented as manifest-and-hash verified snapshots of previous active `skills/autoskill/<slug>` directories;
 - rollback; implemented as deterministic active-root restore from verified archive snapshots;
+- transaction-aware writer service wrappers; implemented for apply/rollback transaction status updates, active compiled-file and archive-snapshot transaction items, rollback metadata, and fail-closed filesystem recovery when governance recording fails after apply;
 - canary states.
 
 Acceptance:
@@ -146,6 +147,7 @@ Acceptance:
 - provenance edges can be recorded idempotently and revocation roots can be previewed through a bounded derived-object traversal; implemented and validated against local Postgres;
 - compiled runtime `SKILL.md` artifacts can be staged with deterministic manifests, slug/path/symlink checks, support-artifact allowlisting, scanner blocking, and staged hash verification; implemented and validated with focused writer tests;
 - verified staged manifests can atomically replace one active autoskill directory, snapshot the previous active directory into `.autoskill/archive`, reject active snapshot symlinks and manifest target escapes, and restore the previous active directory from a verified archive snapshot; implemented and validated with focused writer tests;
+- active-root apply/rollback service wrappers record governance transaction items/statuses and restore the previous active state if post-apply governance recording fails; implemented and validated with focused writer tests;
 - valid skill appears under active root;
 - invalid paths are rejected;
 - rollback restores the previous effective state;

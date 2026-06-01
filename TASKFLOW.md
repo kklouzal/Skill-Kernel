@@ -77,6 +77,8 @@ Phase 6/7 control-plane buildout.
 - Deterministic staged writer manifest primitives are implemented: compiled `SKILL.md` artifacts can be staged under a bounded staging root with scanner blocking, slug validation, symlink/path containment checks, support-artifact path allowlisting, writer manifests, and staged file hash verification without activating runtime skill files.
 - Deterministic active-root apply and rollback filesystem primitives are implemented: verified writer manifests can replace one `skills/autoskill/<slug>` directory through a temporary same-root directory, previous active versions are snapshotted under `.autoskill/archive` with archive manifests/hashes, rollback restores a verified archive snapshot, and active snapshot symlinks or target path escapes are rejected.
 - Writer validation passed locally: focused writer tests covered manifest creation/verification, scanner rejection, support-artifact allowlisting, staging symlink rejection, active apply, archive snapshot verification, rollback restore, manifest target escape rejection, and active snapshot symlink rejection; full Python suite passed with 68 tests.
+- Transaction-aware writer apply/rollback service primitives are implemented: staged manifest apply records active compiled-file and archive-snapshot transaction items with rollback actions, rollback restore records a rolled-back compiled-file item, transaction statuses advance through applying/applied and rolling_back/rolled_back, and failed governance recording after filesystem apply restores the previous active snapshot or removes the newly-created active path.
+- Writer governance validation passed locally: focused writer tests covered transaction item recording for apply, fail-closed active restore on governance recording failure, and rollback item recording; full Python suite passed with 71 tests.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
@@ -86,8 +88,8 @@ Phase 6/7 control-plane buildout.
 3. Add persistent worker heartbeat/lease renewal records if long-running jobs start exceeding one lease interval.
 4. Add contrastive induction and future intervention replay so no-skill-control probes can graduate from `needs_intervention` to pass/fail.
 5. Add shadow-edge/probe generation from repeated attribution events after deduplication policy is defined.
-6. Extend governance transaction anchoring from candidate persistence into future staged writer apply/rollback paths.
-7. Wire active-root apply/rollback into governance transaction items, provenance traversal, sidecar control endpoints, and later canary/freeze state transitions.
+6. Expose transaction-aware writer apply/rollback through sidecar control endpoints once the endpoint path/root policy is pinned.
+7. Wire writer apply/rollback records into provenance traversal, canary/freeze state transitions, and active-cache/embedding invalidation.
 
 ## Known Risks
 
@@ -101,4 +103,4 @@ Phase 6/7 control-plane buildout.
 - Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and shadow-edge/probe generation from attribution events are still pending.
 - Candidate evaluator execution is deterministic and conservative; no-skill-control probes remain `needs_intervention` until real intervention/counterfactual replay exists, and this must pass before any staged writer/activation path is added.
 - Candidate proposal persistence is transaction-anchored, but future staged writer apply/rollback paths still need end-to-end transaction wrapping.
-- Revocation traversal now previews impacted derived artifacts, and staged writer apply/rollback filesystem primitives exist, but DB transaction integration, canary/freeze orchestration, and per-object invalidation/revoke handlers are still pending.
+- Revocation traversal now previews impacted derived artifacts, and staged writer apply/rollback filesystem primitives have transaction-aware service wrappers, but sidecar control endpoints, canary/freeze orchestration, provenance edges for writer artifacts, and per-object invalidation/revoke handlers are still pending.
