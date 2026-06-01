@@ -106,16 +106,18 @@ Phase 6/7 control-plane buildout.
 - Long-running job lease renewal is implemented: `JobStore.renew_job_lease` extends currently held leases, `/v1/jobs/{job_id}/renew-lease` exposes the control surface, and worker handlers periodically renew leases while still running; focused job/worker tests cover API renewal and handler-side renewal.
 - Shadowing control materialization is implemented: repeated selected-vs-expected shadowing evidence records medium-risk attribution events, creates a `shadow` skill graph edge, and activates a contrastive `shadowing` probe for broker/evaluator use.
 - Proposal-gate intervention replay is implemented: no-skill-control probes with recorded `no_skill` and `skill_visible` replay outcomes deterministically pass or fail instead of staying `needs_intervention`, and passed proposal gates record `intervention_validated` maturity for the skill version and cited evidence.
+- Contrastive replay induction is implemented for proposal gates: redacted evidence rows carrying paired `autoskill_replay`/`contrastive_replay` outcomes are clustered by planned no-skill probe evidence IDs, attached to the probe as deterministic `intervention_replay`, persisted with `maturity='contrastive'`, and then evaluated through the existing proposal gate.
 - Phase 9 deterministic drift probes now cover static path existence, bare executable availability, required environment presence, Python package availability, JSON schema loadability, and bounded TCP reachability without arbitrary shell execution.
 - Runtime context cache invalidation is implemented: the in-process broker cache can evict by workspace and skill IDs, exposes a control endpoint, and freeze/critical-canary paths invalidate affected skill hints immediately.
 - Promotion/duplicate curation now has evaluator gates: archived promotion and duplicate merge/archive record blocked curation actions unless the latest skill versions have passed evaluator status.
+- Real local Postgres contrastive-replay validation passed via compose: a fresh candidate evaluation consumed redacted no-skill failure and skill-visible success evidence, persisted the no-skill probe as `contrastive`, passed the proposal gate, and recorded intervention-validated maturity rows for the skill version plus both evidence items.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
 2. Add production embedding provider live validation once credentials/provider endpoint are configured.
-3. Add contrastive induction from clustered success/failure evidence so replay inputs can be generated automatically instead of supplied by future intervention records.
+3. Expand contrastive induction beyond explicit redacted replay evidence into additional success/failure outcome schemas from attribution, canary, and broker telemetry.
 4. Add expanded derived-state revoke handlers for frozen skills and non-body-index transaction-derived artifacts.
 5. Add mutation-worker apply orchestration only after autonomous apply policy and intervention replay gates are ready.
 6. Extend Phase 8 beyond deterministic promotion/archive/merge/budget curation: split support, guarded improvement planning, merge probe planning, and active-bank optimization beyond utility ordering.
@@ -131,7 +133,7 @@ Phase 6/7 control-plane buildout.
 - Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive evidence still needs aggregation logic beyond evaluator replay maturity records.
 - Embedding generation defaults to deterministic local hash embeddings until production provider settings are configured and live-validated.
 - Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and broader shadow-edge policy tuning remain pending.
-- Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded intervention replay, but automatic contrastive replay generation must land before any staged writer/activation path is added.
+- Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded or induced redacted intervention replay, but automatic replay currently requires explicit paired outcome fields and should be expanded before any staged writer/activation path is added.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints, but mutation-worker orchestration still needs end-to-end caller wiring before autonomous apply is allowed.
 - Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, invalidates body-index/embedding objects from traversal summaries, and freeze/critical-canary paths evict affected broker cache entries; broader revoke handlers are still pending.
 - Utility rollups are deterministic v1 scoring, not full marginal-value/intervention scoring yet; curation now handles archived promotion, explicit duplicate merge/archive, low-utility archive, active-budget overflow, and evaluator blocking for promotion/duplicate merge, while split support and guarded improvement planning remain pending.

@@ -2,7 +2,11 @@ import asyncio
 from uuid import uuid4
 
 from autoskill.api.app import EvaluationRunRequest, create_app
-from autoskill.db.evaluations import EvaluationRunItem, EvaluationRunResult
+from autoskill.db.evaluations import (
+    EvaluationRunItem,
+    EvaluationRunResult,
+    _attach_contrastive_replays,
+)
 from autoskill.services.evaluator import evaluate_proposal_gate
 
 
@@ -98,6 +102,74 @@ def test_proposal_gate_passes_with_intervention_replay_improvement() -> None:
     assert payload["reason_codes"] == ["all-deterministic-probes-passed"]
 
 
+def test_proposal_gate_attaches_contrastive_replay_from_evidence() -> None:
+    workspace_id = uuid4()
+    no_skill_evidence_id = uuid4()
+    skill_visible_evidence_id = uuid4()
+    probe = {
+        "probe_hash": "no-skill-hash",
+        "kind": "no_skill_control",
+        "maturity": "observed",
+        "spec": {
+            "candidate_slug": "demo-skill",
+            "evidence_ids": [str(no_skill_evidence_id), str(skill_visible_evidence_id)],
+        },
+        "expected": {"candidate_must_improve_or_reduce_retries": True},
+    }
+    conn = FakeContrastiveConnection(
+        [
+            {
+                "evidence_id": no_skill_evidence_id,
+                "payload": {
+                    "redacted_payload": {
+                        "autoskill_replay": {
+                            "candidate_slug": "demo-skill",
+                            "mode": "no_skill",
+                            "success": False,
+                            "retries": 3,
+                        }
+                    }
+                },
+            },
+            {
+                "evidence_id": skill_visible_evidence_id,
+                "payload": {
+                    "redacted_payload": {
+                        "autoskill_replay": {
+                            "candidate_slug": "demo-skill",
+                            "mode": "skill_visible",
+                            "success": True,
+                            "retries": 1,
+                        }
+                    }
+                },
+            },
+        ]
+    )
+
+    async def run():
+        enriched, replays = await _attach_contrastive_replays(
+            conn,
+            workspace_id=workspace_id,
+            probes=[probe],
+        )
+        return enriched, replays
+
+    enriched, replays = asyncio.run(run())
+    result = evaluate_proposal_gate(
+        skill_ir=skill_ir(),
+        scanner_status="passed",
+        probes=[planned_probes()[0], enriched[0], planned_probes()[2]],
+    )
+
+    assert enriched[0]["maturity"] == "contrastive"
+    assert enriched[0]["spec"]["intervention_replay"]["skill_visible"]["retries"] == 1.0
+    assert replays[0]["probe_hash"] == "no-skill-hash"
+    assert conn.updated_probe_hashes == ["no-skill-hash"]
+    assert set(conn.maturity_evidence_ids) == {no_skill_evidence_id, skill_visible_evidence_id}
+    assert result.status == "passed"
+
+
 def test_proposal_gate_fails_when_intervention_replay_does_not_improve() -> None:
     probes = replayed_probes()
     probes[1] = {
@@ -177,3 +249,19 @@ def test_evaluation_run_api_uses_configured_store() -> None:
     assert response.evaluated == 1
     assert response.needs_intervention == 1
     assert response.evaluations[0]["result"] == {"workspace_key": "dev-01", "limit": 7}
+
+
+class FakeContrastiveConnection:
+    def __init__(self, evidence_rows: list[dict[str, object]]) -> None:
+        self.evidence_rows = evidence_rows
+        self.updated_probe_hashes: list[str] = []
+        self.maturity_evidence_ids: list[object] = []
+
+    async def fetch(self, _query: str, *_args):
+        return self.evidence_rows
+
+    async def execute(self, query: str, *_args):
+        if "UPDATE autoskill.probes" in query:
+            self.updated_probe_hashes.append(str(_args[1]))
+        if "INSERT INTO autoskill.evidence_maturity" in query:
+            self.maturity_evidence_ids.append(_args[1])

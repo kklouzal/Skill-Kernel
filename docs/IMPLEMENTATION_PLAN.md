@@ -116,6 +116,7 @@ Deliverables:
 - scanner;
 - probe generator; implemented as deterministic target, no-skill-control, and regression probe plans for persisted candidates;
 - evaluator; implemented as deterministic proposal-gate execution that records target, no-skill-control, and regression probe results while requiring intervention replay before activation.
+- contrastive induction; implemented for redacted paired outcome evidence by attaching generated `intervention_replay` inputs to no-skill-control probes, persisting contrastive probe maturity, and evaluating through the existing proposal gate.
 
 Acceptance:
 
@@ -123,7 +124,7 @@ Acceptance:
 - persisted candidate revisions are stamped with `created_by_transaction_id` and rollback-aware transaction items are recorded for the inactive version and compiled `SKILL.md`;
 - self-feedback-only changes fail;
 - malicious artifacts are rejected;
-- evaluator reports target, regression, and no-skill results; no-skill-control remains `needs_intervention` until real intervention/counterfactual replay exists.
+- evaluator reports target, regression, and no-skill results; no-skill-control remains `needs_intervention` until recorded or redacted contrastive replay evidence exists.
 
 ## Phase 7 - Deterministic Writer and Rollback
 
@@ -197,7 +198,7 @@ Deliverables:
 - skill graph maintenance;
 - repeated shadowing events materialize deterministic `shadow` skill graph edges plus active contrastive shadowing probes;
 - audit and retrieval policy reviews;
-- evidence maturity, action-attribution check, control-flow event, and revocation request storage; implemented as v9 governance schema foundations, with passed intervention-replay proposal gates recording `intervention_validated` maturity for cited evidence and skill versions.
+- evidence maturity, action-attribution check, control-flow event, and revocation request storage; implemented as v9 governance schema foundations, with passed recorded or contrastively induced intervention-replay proposal gates recording `intervention_validated` maturity for cited evidence and skill versions.
 
 Acceptance:
 

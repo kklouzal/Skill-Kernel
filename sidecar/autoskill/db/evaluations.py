@@ -8,6 +8,7 @@ from uuid import UUID
 import asyncpg
 
 from autoskill.db.pool import AsyncpgPoolOwner
+from autoskill.services.contrastive import derive_contrastive_replay
 from autoskill.services.evaluator import evaluate_proposal_gate
 
 
@@ -97,6 +98,11 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
             )
             for row in rows:
                 probes = await _load_probes(conn, row)
+                probes, contrastive_replays = await _attach_contrastive_replays(
+                    conn,
+                    workspace_id=row["workspace_id"],
+                    probes=probes,
+                )
                 gate = evaluate_proposal_gate(
                     skill_ir=_json_dict(row["skill_ir"]),
                     scanner_status=row["scanner_status"],
@@ -108,6 +114,8 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                     "executor": "deterministic-proposal-gate.v1",
                     "evidence_ids": _probe_evidence_ids(probes),
                 }
+                if contrastive_replays:
+                    result["contrastive_replays"] = contrastive_replays
                 await _finish_evaluation(
                     conn,
                     workspace_id=row["workspace_id"],
@@ -194,6 +202,128 @@ async def _load_probes(conn: asyncpg.Connection, row: asyncpg.Record) -> list[di
         }
         for record in rows
     ]
+
+
+async def _attach_contrastive_replays(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    probes: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    enriched: list[dict[str, Any]] = []
+    replays: list[dict[str, Any]] = []
+    for probe in probes:
+        spec = _json_dict(probe.get("spec"))
+        if probe.get("kind") != "no_skill_control" or spec.get("intervention_replay"):
+            enriched.append(probe)
+            continue
+
+        evidence_ids = _uuid_list(spec.get("evidence_ids"))
+        if not evidence_ids:
+            enriched.append(probe)
+            continue
+
+        evidence = await _load_replay_evidence(
+            conn,
+            workspace_id=workspace_id,
+            evidence_ids=evidence_ids,
+        )
+        replay = derive_contrastive_replay(
+            evidence,
+            candidate_slug=str(spec.get("candidate_slug") or "") or None,
+        )
+        if replay is None:
+            enriched.append(probe)
+            continue
+
+        replay_json = replay.to_json()
+        updated_spec = {**spec, "intervention_replay": replay_json}
+        enriched_probe = {**probe, "maturity": "contrastive", "spec": updated_spec}
+        await _persist_contrastive_probe(
+            conn,
+            workspace_id=workspace_id,
+            probe_hash=str(probe["probe_hash"]),
+            spec=updated_spec,
+            evidence_ids=_uuid_list(replay_json.get("evidence_ids")),
+            basis={
+                **replay_json["basis"],
+                "probe_hash": str(probe["probe_hash"]),
+            },
+        )
+        replays.append(
+            {
+                "probe_hash": str(probe["probe_hash"]),
+                "evidence_ids": replay_json["evidence_ids"],
+                "basis": replay_json["basis"],
+            }
+        )
+        enriched.append(enriched_probe)
+    return enriched, replays
+
+
+async def _load_replay_evidence(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    evidence_ids: list[UUID],
+) -> list[dict[str, Any]]:
+    rows = await conn.fetch(
+        """
+        SELECT evidence_id, payload
+        FROM autoskill.evidence_items
+        WHERE workspace_id = $1
+          AND evidence_id = ANY($2::uuid[])
+          AND revoked_at IS NULL
+        """,
+        workspace_id,
+        evidence_ids,
+    )
+    return [
+        {
+            "evidence_id": str(row["evidence_id"]),
+            "payload": _json_dict(row["payload"]),
+        }
+        for row in rows
+    ]
+
+
+async def _persist_contrastive_probe(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    probe_hash: str,
+    spec: dict[str, Any],
+    evidence_ids: list[UUID],
+    basis: dict[str, Any],
+) -> None:
+    await conn.execute(
+        """
+        UPDATE autoskill.probes
+        SET maturity = 'contrastive',
+            spec = $3::jsonb
+        WHERE workspace_id = $1
+          AND probe_hash = $2
+        """,
+        workspace_id,
+        probe_hash,
+        _json(spec),
+    )
+    for evidence_id in evidence_ids:
+        await conn.execute(
+            """
+            INSERT INTO autoskill.evidence_maturity (
+              evidence_maturity_id, workspace_id, object_type, object_id, maturity, basis
+            )
+            VALUES (gen_random_uuid(), $1, 'evidence', $2, 'contrastive', $3::jsonb)
+            ON CONFLICT (workspace_id, object_type, object_id) DO UPDATE
+            SET maturity = EXCLUDED.maturity,
+                basis = EXCLUDED.basis,
+                updated_at = now()
+            """,
+            workspace_id,
+            evidence_id,
+            _json(basis),
+        )
 
 
 async def _finish_evaluation(
