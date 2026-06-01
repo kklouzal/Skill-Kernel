@@ -66,6 +66,7 @@ from autoskill.services.embedding_generation import (
     build_text_embedder_from_settings,
     generate_pending_embeddings,
 )
+from autoskill.services.evaluation_runner import run_pending_proposal_gates_with_trace
 from autoskill.services.matching import SkillMatchRequest, match_existing_skills
 from autoskill.services.opportunity import mine_opportunities
 from autoskill.services.shadowing import detect_shadowing_events
@@ -431,6 +432,9 @@ class CandidateProposalResponse(BaseModel):
 
 class EvaluationRunRequest(BaseModel):
     workspace_id: str | None = None
+    trace_id: UUID | None = None
+    span_id: UUID | None = None
+    parent_span_id: UUID | None = None
     limit: int = 50
 
 
@@ -1100,6 +1104,7 @@ def _worker_stores(
     jobs: JobStore,
     scheduler: SchedulerStore,
     evidence: EvidenceStore,
+    external_skills: ExternalSkillStore,
     embeddings: EmbeddingStore,
     retrieval: RetrievalStore,
     evaluations: EvaluationStore,
@@ -1110,12 +1115,14 @@ def _worker_stores(
     context_governance: ContextGovernanceStore,
     topology: TopologyStore,
     writer_workspace_root: Path | None = None,
+    external_skill_roots: list[Path] | None = None,
 ) -> WorkerStores:
     workspace_root, _staging_root, archive_root = _writer_roots(writer_workspace_root)
     return WorkerStores(
         jobs=jobs,
         scheduler=scheduler,
         evidence=evidence,
+        external_skills=external_skills,
         embeddings=embeddings,
         retrieval=retrieval,
         evaluations=evaluations,
@@ -1127,6 +1134,7 @@ def _worker_stores(
         observability=observability,
         workspace_root=workspace_root,
         archive_root=archive_root,
+        external_skill_roots=external_skill_roots,
     )
 
 
@@ -1210,6 +1218,7 @@ def create_app(
     context_governance_store: ContextGovernanceStore | None = None,
     topology_store: TopologyStore | None = None,
     writer_workspace_root: Path | None = None,
+    external_skill_roots: list[Path] | None = None,
 ) -> FastAPI:
     store = event_store or _build_event_store()
     jobs = job_store or _build_job_store()
@@ -1546,6 +1555,7 @@ def create_app(
                 jobs=jobs,
                 scheduler=scheduler,
                 evidence=evidence,
+                external_skills=external_skills,
                 embeddings=embeddings,
                 retrieval=retrieval,
                 evaluations=evaluations,
@@ -1556,6 +1566,7 @@ def create_app(
                 context_governance=context_governance,
                 topology=topology,
                 writer_workspace_root=writer_workspace_root,
+                external_skill_roots=external_skill_roots,
             ),
             worker_id=request.worker_id,
             pool=request.pool,
@@ -1920,9 +1931,14 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
     ) -> EvaluationRunResponse:
         _require_control_auth(authorization)
-        result = await evaluations.run_pending_proposal_gates(
+        result = await run_pending_proposal_gates_with_trace(
+            evaluations,
+            observability=observability,
             workspace_key=request.workspace_id,
             limit=max(1, min(request.limit, 250)),
+            trace_id=request.trace_id,
+            parent_span_id=request.span_id or request.parent_span_id,
+            source="api",
         )
         return EvaluationRunResponse(**result.to_json())
 

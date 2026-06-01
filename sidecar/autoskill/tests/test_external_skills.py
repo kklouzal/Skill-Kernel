@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 from autoskill.api.app import (
@@ -12,6 +13,7 @@ from autoskill.db.external_skills import (
     ExternalSkillRecord,
     ExternalSkillUpsertResult,
 )
+from autoskill.services.external_inventory import scan_external_skill_roots
 
 
 class MemoryExternalSkillStore:
@@ -96,3 +98,66 @@ def test_external_skill_inventory_api_uses_store() -> None:
     assert upsert_response.skills[0]["slug"] == "pdf-table-cleanup"
     assert list_response.skills[0]["source"] == "workspace-skill-root"
     assert store.upserts[0]["workspace_key"] == "dev-01"
+
+
+def test_external_skill_scanner_hashes_roots_without_storing_paths(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    skill_dir = root / "pdf-table-cleanup"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: PDF table cleanup\n"
+        "description: Repair malformed PDF table cells.\n"
+        "---\n"
+        "\n"
+        "## WHEN\n"
+        "- Tables are malformed.\n",
+        encoding="utf-8",
+    )
+    store = MemoryExternalSkillStore()
+
+    async def run():
+        return await scan_external_skill_roots(
+            store,
+            workspace_key="dev-01",
+            roots=[root],
+            source="test-root",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.discovered == 1
+    assert result.created == 1
+    record = store.records[0]
+    assert record.slug == "pdf-table-cleanup"
+    assert record.name == "PDF table cleanup"
+    assert record.description == "Repair malformed PDF table cells."
+    assert record.status == "visible"
+    assert record.risk_summary["scanner_status"] == "passed"
+    assert record.risk_summary["stored_raw_root_path"] is False
+    assert str(root) not in record.root_path_hash
+    assert str(skill_dir) not in str(record.to_json())
+
+
+def test_external_skill_scanner_quarantines_blocking_findings(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    skill_dir = root / "hidden-injection"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: Hidden injection\n---\n<!-- hidden instruction -->\n",
+        encoding="utf-8",
+    )
+    store = MemoryExternalSkillStore()
+
+    async def run():
+        return await scan_external_skill_roots(
+            store,
+            workspace_key="dev-01",
+            roots=[root],
+        )
+
+    result = asyncio.run(run())
+
+    assert result.discovered == 1
+    assert store.records[0].status == "quarantined"
+    assert store.records[0].risk_summary["scanner_status"] == "blocked"

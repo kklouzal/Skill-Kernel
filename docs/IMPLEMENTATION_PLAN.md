@@ -97,7 +97,7 @@ Deliverables:
 - set-aware context renderer; implemented as a conservative retrieval-backed first pass with duplicate skill suppression and prerequisite graph expansion;
 - cache-backed context hint endpoint; endpoint is present behind a disabled-by-default config gate with short in-process cache;
 - shadowing logs; broker suppression/rendering telemetry is attached to retrieval logs, and outcome/correction-based shadowing detection records attribution events.
-- external-skill inventory awareness; implemented as control-authenticated upsert/list APIs, hashed-root/file-hash/status/risk metadata persistence, lexical retrieval of visible/changed external skills, broker suppression as non-runtime collisions, and duplicate-match `external_collision_review` decisions that block automatic candidate creation.
+- external-skill inventory awareness; implemented as control-authenticated upsert/list APIs, hashed-root/file-hash/status/risk metadata persistence, read-only scanner job wiring, lexical retrieval of visible/changed external skills, broker suppression as non-runtime collisions, and duplicate-match `external_collision_review` decisions that block automatic candidate creation.
 
 Acceptance:
 
@@ -105,7 +105,7 @@ Acceptance:
 - no LLM call runs in the hook path;
 - no raw memory/evidence is injected; implemented for evidence-only matches by deferring without hint text.
 - rendered skill IDs, suppression reasons, and reason codes are recorded on retrieval logs.
-- external skills are visible to collision analysis but are never injected as runtime hints or selected for autonomous mutation.
+- external skills are visible to collision analysis but are never injected as runtime hints or selected for autonomous mutation; scanner jobs hash external roots/files and quarantine scanner-blocked external skills without storing raw root paths.
 
 ## Phase 6 - Candidate Generation in Propose-Only Mode
 
@@ -120,6 +120,7 @@ Deliverables:
 - scanner;
 - probe generator; implemented as deterministic target, no-skill-control, and regression probe plans for persisted candidates;
 - evaluator; implemented as deterministic proposal-gate execution that records target, no-skill-control, and regression probe results while requiring intervention replay before activation.
+- evaluator trace propagation; implemented for API-triggered and worker-triggered proposal-gate runs with content-safe `evaluator` spans, caller/job trace preservation, and safe count/status/object-ref close metadata.
 - contrastive induction; implemented for redacted paired outcome evidence by attaching generated `intervention_replay` inputs to no-skill-control probes, persisting contrastive probe maturity, and evaluating through the existing proposal gate.
 
 Acceptance:
@@ -129,6 +130,7 @@ Acceptance:
 - self-feedback-only changes fail;
 - malicious artifacts are rejected;
 - evaluator reports target, regression, and no-skill results; no-skill-control remains `needs_intervention` until recorded or redacted contrastive replay evidence exists.
+- proposal-gate evaluation runs are trace-visible without storing SkillIR or probe payloads in trace attributes; implemented and validated with focused tests plus compose/Postgres smoke coverage.
 
 ## Phase 7 - Deterministic Writer and Rollback
 

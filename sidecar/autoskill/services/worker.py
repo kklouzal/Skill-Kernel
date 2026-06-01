@@ -14,6 +14,7 @@ from autoskill.db.contracts import ContractStore
 from autoskill.db.embeddings import EmbeddingStore
 from autoskill.db.evaluations import EvaluationStore
 from autoskill.db.evidence import EvidenceStore
+from autoskill.db.external_skills import ExternalSkillStore
 from autoskill.db.governance import GovernanceStore, RevocationRequestRecord
 from autoskill.db.jobs import JobRecord, JobStore
 from autoskill.db.observability import NullObservabilityStore, ObservabilityStore
@@ -22,6 +23,8 @@ from autoskill.db.scheduler import SchedulerStore
 from autoskill.db.topology import TopologyStore
 from autoskill.db.utility import UtilityStore
 from autoskill.services.embedding_generation import TextEmbedder, generate_pending_embeddings
+from autoskill.services.evaluation_runner import run_pending_proposal_gates_with_trace
+from autoskill.services.external_inventory import scan_external_skill_roots
 from autoskill.services.opportunity import mine_opportunities
 from autoskill.services.writer import (
     apply_staged_manifest_with_governance,
@@ -118,6 +121,7 @@ class WorkerStores:
     scheduler: SchedulerStore
     evidence: EvidenceStore
     embeddings: EmbeddingStore
+    external_skills: ExternalSkillStore | None = None
     retrieval: RetrievalStore | None = None
     evaluations: EvaluationStore | None = None
     governance: GovernanceStore | None = None
@@ -129,6 +133,7 @@ class WorkerStores:
     embedder: TextEmbedder | None = None
     workspace_root: Path | None = None
     archive_root: Path | None = None
+    external_skill_roots: list[Path] | None = None
 
 
 @dataclass(frozen=True)
@@ -464,9 +469,18 @@ async def _run_evaluation_proposal_gates(
     if stores.evaluations is None:
         raise ValueError("evaluation store is required for proposal-gate evaluation")
     limit = _payload_int(job.payload, "limit", default=50, minimum=1, maximum=250)
-    result = await stores.evaluations.run_pending_proposal_gates(
+    result = await run_pending_proposal_gates_with_trace(
+        stores.evaluations,
+        observability=stores.observability,
         workspace_key=_payload_workspace(job),
         limit=limit,
+        trace_id=job.trace_id,
+        parent_span_id=job.span_id or job.parent_span_id,
+        source="worker",
+        safe_attributes={
+            "job_id": str(job.job_id),
+            "job_kind": job.job_kind,
+        },
     )
     return result.to_json()
 
@@ -533,6 +547,23 @@ async def _run_drift_checks(stores: WorkerStores, job: JobRecord) -> dict[str, A
         raise ValueError("drift checks require workspace_id")
     result = await stores.contracts.run_drift_checks(
         workspace_key=workspace,
+        limit=_payload_int(job.payload, "limit", default=250, minimum=1, maximum=1000),
+    )
+    return result.to_json()
+
+
+async def _run_external_skill_scan(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
+    if stores.external_skills is None:
+        raise ValueError("external skill store is required for external skill scans")
+    workspace = _payload_workspace(job)
+    if workspace is None:
+        raise ValueError("external skill scan requires workspace_id")
+    roots = stores.external_skill_roots or []
+    result = await scan_external_skill_roots(
+        stores.external_skills,
+        workspace_key=workspace,
+        roots=roots,
+        source=_payload_str(job.payload, "source") or "workspace-skill-root",
         limit=_payload_int(job.payload, "limit", default=250, minimum=1, maximum=1000),
     )
     return result.to_json()
@@ -885,6 +916,11 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "drift.check",
         "maintenance",
         _run_drift_checks,
+    ),
+    "external_skills.scan": JobDefinition(
+        "external_skills.scan",
+        "maintenance",
+        _run_external_skill_scan,
     ),
     "revocations.rollback": JobDefinition(
         "revocations.rollback",

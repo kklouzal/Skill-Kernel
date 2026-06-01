@@ -75,6 +75,37 @@ def test_writer_stages_compiled_skill_with_manifest(tmp_path: Path) -> None:
     assert manifest["staging_id"] == str(staging_id)
     assert manifest["skill_version_id"] == str(skill_version_id)
     assert manifest["files"][0]["sha256"] == artifact.files[0].sha256
+    assert manifest["context_gate"]["loadability_class"] == "runtime_skill_body"
+    assert manifest["context_gate"]["artifact_kind"] == "skill_md"
+    assert manifest["context_gate"]["safety_status"] == "passed"
+    assert manifest["context_gate"]["equivalence_status"] == "passed"
+    assert manifest["context_gate"]["budget_status"] == "passed"
+    assert manifest["context_gate"]["text_hash"] == artifact.files[0].sha256
+
+
+def test_writer_rejects_manifest_without_context_gate(tmp_path: Path) -> None:
+    staging_root = tmp_path / "staging"
+    workspace_root = tmp_path / "workspace"
+    archive_root = workspace_root / ".autoskill" / "archive"
+    staged = stage_compiled_skill(
+        staging_root,
+        staging_id=uuid4(),
+        skill_version_id=uuid4(),
+        slug="autoskill-example",
+        compiled_skill_md="# Safe\n\n## WHEN\n- Safe.\n",
+    )
+    manifest_path = staging_root / staged.manifest_relative_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("context_gate")
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(WriterPolicyError, match="missing context gate"):
+        apply_staged_manifest(
+            staging_root,
+            workspace_root,
+            archive_root,
+            staged.manifest_relative_path,
+        )
 
 
 def test_writer_rejects_blocked_compiled_skill(tmp_path: Path) -> None:

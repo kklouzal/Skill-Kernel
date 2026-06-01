@@ -7,6 +7,7 @@ from autoskill.db.evaluations import (
     EvaluationRunResult,
     _attach_contrastive_replays,
 )
+from autoskill.db.observability import TraceSpanRecord
 from autoskill.services.evaluator import evaluate_proposal_gate
 
 
@@ -211,12 +212,27 @@ def test_proposal_gate_blocks_when_scanner_failed() -> None:
 
 
 class MemoryEvaluationStore:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
     async def run_pending_proposal_gates(
         self,
         *,
         workspace_key: str | None = None,
         limit: int = 50,
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
     ) -> EvaluationRunResult:
+        self.calls.append(
+            {
+                "workspace_key": workspace_key,
+                "limit": limit,
+                "trace_id": trace_id,
+                "span_id": span_id,
+                "parent_span_id": parent_span_id,
+            }
+        )
         return EvaluationRunResult(
             scanned=1,
             evaluated=1,
@@ -236,12 +252,24 @@ class MemoryEvaluationStore:
 
 
 def test_evaluation_run_api_uses_configured_store() -> None:
-    app = create_app(evaluation_store=MemoryEvaluationStore())
+    observability = MemoryObservabilityStore()
+    evaluations = MemoryEvaluationStore()
+    trace_id = uuid4()
+    parent_span_id = uuid4()
+    app = create_app(
+        evaluation_store=evaluations,
+        observability_store=observability,
+    )
     route = next(route for route in app.routes if route.path == "/v1/evaluations/run")
 
     async def run():
         return await route.endpoint(
-            request=EvaluationRunRequest(workspace_id="dev-01", limit=7)
+            request=EvaluationRunRequest(
+                workspace_id="dev-01",
+                limit=7,
+                trace_id=trace_id,
+                span_id=parent_span_id,
+            )
         )
 
     response = asyncio.run(run())
@@ -249,6 +277,79 @@ def test_evaluation_run_api_uses_configured_store() -> None:
     assert response.evaluated == 1
     assert response.needs_intervention == 1
     assert response.evaluations[0]["result"] == {"workspace_key": "dev-01", "limit": 7}
+    assert observability.started[0].trace_id == trace_id
+    assert observability.started[0].parent_span_id == parent_span_id
+    assert observability.started[0].operation_kind == "evaluator"
+    assert observability.started[0].safe_attributes == {"source": "api", "limit": 7}
+    assert evaluations.calls[0]["trace_id"] == trace_id
+    assert evaluations.calls[0]["span_id"] == observability.started[0].span_id
+    assert evaluations.calls[0]["parent_span_id"] == parent_span_id
+    assert observability.finished[0]["status"] == "ok"
+    assert observability.finished[0]["safe_attributes"]["evaluated"] == 1
+    assert {ref["object_type"] for ref in observability.finished[0]["object_refs"]} == {
+        "evaluation",
+        "skill_version",
+    }
+
+
+class MemoryObservabilityStore:
+    def __init__(self) -> None:
+        self.started: list[TraceSpanRecord] = []
+        self.finished: list[dict[str, object]] = []
+
+    async def start_span(
+        self,
+        *,
+        workspace_key: str,
+        operation_name: str,
+        operation_kind: str,
+        trace_id=None,
+        parent_span_id=None,
+        safe_attributes=None,
+        object_refs=None,
+    ) -> TraceSpanRecord:
+        from datetime import UTC, datetime
+
+        span = TraceSpanRecord(
+            trace_id=trace_id or uuid4(),
+            span_id=uuid4(),
+            parent_span_id=parent_span_id,
+            workspace_id=None,
+            workspace_key=workspace_key,
+            operation_name=operation_name,
+            operation_kind=operation_kind,
+            status="running",
+            safe_attributes=safe_attributes or {},
+            object_refs=object_refs or [],
+            started_at=datetime.now(UTC),
+            ended_at=None,
+        )
+        self.started.append(span)
+        return span
+
+    async def finish_span(
+        self,
+        *,
+        span_id,
+        status="ok",
+        safe_attributes=None,
+        object_refs=None,
+    ) -> TraceSpanRecord | None:
+        self.finished.append(
+            {
+                "span_id": span_id,
+                "status": status,
+                "safe_attributes": safe_attributes or {},
+                "object_refs": object_refs or [],
+            }
+        )
+        return None
+
+    async def link_spans(self, **_kwargs) -> bool:
+        return True
+
+    async def list_trace(self, **_kwargs) -> list[TraceSpanRecord]:
+        return []
 
 
 class FakeContrastiveConnection:

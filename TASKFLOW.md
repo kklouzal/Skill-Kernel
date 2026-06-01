@@ -127,11 +127,14 @@ Phase 10/11 v14 substrate buildout.
 - Job queue trace propagation is implemented: job enqueue accepts explicit trace context, new API/scheduled jobs generate missing `trace_id`/`span_id`, existing dev rows are migration-backfilled and constrained non-null for trace/span, and job list/claim/renew/complete responses preserve the trace fields.
 - Worker execution trace-span recording is implemented: claimed jobs open content-safe `job` spans under their queued job span, close spans as `ok` or `error`, and include safe job/worker/output-key/error metadata without raw payload capture.
 - Retrieval trace propagation is implemented: direct retrieval queries and broker context-hint retrieval now pass trace/span/parent IDs into `retrieval_logs`, and new retrieval logs generate trace/span IDs when callers omit them.
+- Evaluator trace propagation is implemented: API-triggered and worker-triggered proposal-gate evaluation runs open content-safe `evaluator` spans, preserve caller/job trace roots, and close spans with safe counts/status/object refs instead of SkillIR or probe payloads.
 - Broker context governance recording is implemented: rendered broker hints persist as `broker_hint` context artifacts, and broker decisions write token-ledger rows for `skill_visible`, `skill_hidden`, and `no_skill` visibility states.
 - SkillGraphIR validation is implemented for topology operation graphs, including missing-node checks, compose effect-gap blocking, and decompose effect coverage requirements.
 - Propose-only topology operation planners are implemented for `improve`, `compose`, and `decompose`: planners validate effect compatibility, emit deterministic SkillGraphIR only when gates pass, produce stable plan hashes/idempotency keys, include rollback-aware transaction metadata, and create planned trial metadata without DB writes or runtime file activation.
 - Topology proposal persistence is implemented: `/v1/topology/propose` records propose-only `improve`/`compose`/`decompose` plans into `skill_graph_operations`, starts an idempotent evolution transaction, records rollback-aware transaction items, writes `planned_topology_trials`, and links evidence/transactions/operations/trials through provenance without activating runtime files.
 - Embedding profile qualification is wired into embedding generation: `/v1/embeddings/generate` can target an `embedding_profile_key`, requires the profile to be `qualified`, validates the 1536-dimension contract, and routes generation through the profile model/provider instead of ad hoc settings.
+- Runtime context-loadability gates are now attached to compiled skill artifacts: staged writer manifests include `runtime_skill_body` loadability metadata, scanner/equivalence/token-budget statuses, token counts, and text hashes; writer apply rejects manifests without passed context gates, and candidate persistence records matching `skill_md` context artifacts for inactive candidate versions.
+- External-skill scanner job wiring is implemented: read-only skill roots can be passed to the worker entrypoint, `external_skills.scan` inventories `*/SKILL.md` files without storing raw root paths, hashes roots/files, parses public name/description frontmatter, and quarantines scanner-blocked external skills.
 - Expanded rollback revocation invalidation now marks retrieval logs and context-governance records in addition to deleting body-index documents and embeddings, so rollback summaries report `retrieval_logs_invalidated` and `context_records_invalidated` derived-state counts.
 - Rollback revocation invalidation now also handles topology derived state: mutation workers can retire `planned_topology_trials`, mark `skill_graph_operations` rolled back, and report `topology_records_invalidated` in revocation summaries.
 - Validation passed for the v14 substrate slice: `ruff check sidecar/autoskill`, `.venv/bin/pytest -q sidecar/autoskill/tests` with 108 passing tests, `npm test --prefix plugin/autoskill` with 7 passing tests, and a real compose Postgres migration smoke.
@@ -142,17 +145,20 @@ Phase 10/11 v14 substrate buildout.
 - Validation passed for expanded revocation invalidation slice: focused worker/embedding tests passed 25 tests, `uv run ruff check sidecar` passed, and `uv run pytest -q` passed with 120 tests.
 - Validation passed for the topology persistence slice: focused topology/admin tests passed 12 tests, `uv run ruff check sidecar` passed, `uv run pytest -q` passed with 123 tests, `uv run python -m compileall -q sidecar/autoskill` passed, `git diff --check` passed, and a fresh compose Postgres migration plus topology persistence smoke recorded one candidate compose operation with three planned trials.
 - Validation passed for topology rollback invalidation wiring: focused worker/topology/admin tests passed 30 tests, focused ruff checks passed, and a fresh compose Postgres smoke invalidated one topology operation plus three planned trials (`operation_status='rolled_back'`, all trial statuses `retired`).
+- Validation passed for evaluator trace propagation: focused evaluator/worker tests passed 24 tests, `uv run ruff check sidecar` passed, `uv run pytest` passed with 127 tests, `uv run python -m compileall -q sidecar` passed, `git diff --check` passed, and a fresh compose Postgres smoke persisted a closed `evaluator` trace span with safe count metadata.
+- Validation passed for compiled context-loadability gates: focused writer/candidate tests passed 21 tests, focused ruff checks passed, and a fresh compose Postgres smoke persisted a candidate `skill_md` context artifact with `runtime_skill_body`, passed safety/equivalence/budget gates, and `269/1200` token usage.
+- Validation passed for external-skill scanner wiring: focused external-skill tests covered root hashing, no raw path persistence, frontmatter extraction, and scanner-blocked quarantine; full `uv run pytest` passed with 127 tests.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
-2. Continue trace propagation through evaluation, writer, rollback, revocation, and model/embedding call paths.
+2. Continue trace propagation through writer, rollback, revocation, and model/embedding call paths.
 3. Wire executor/model profiles into evaluation, broker routing, activation gates, and profile qualification probes.
-4. Persist compiler context artifacts automatically and add marginal-value outcome update paths for token-ledger trials.
+4. Add marginal-value outcome update paths for token-ledger trials.
 5. Add expanded derived-state revoke handlers for probes, skill graph edges, lifecycle state, and evaluations.
 6. Add production embedding provider live validation once credentials/provider endpoint are configured.
-7. Add an external-skill scanner job that inventories real non-AutoSkill skill roots without storing raw root paths and records collision/shadow recommendations without mutating external-owned files.
+7. Add external-skill scan scheduling defaults, embedding generation for external summaries, collision recommendations, and broader shadow-risk scoring without mutating external-owned files.
 
 ## Known Risks
 
@@ -164,8 +170,8 @@ Phase 10/11 v14 substrate buildout.
 - Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive evidence still needs aggregation logic beyond evaluator replay maturity records.
 - Embedding generation defaults to deterministic local hash embeddings until production provider settings are configured and live-validated.
 - Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and broader shadow-edge policy tuning remain pending.
-- External-skill awareness is inventory/retrieval/matching only; real root scanning, embedding generation for external descriptions, collision risk scoring, and explicit import recommendation flows remain pending.
-- v14 trace/profile/context APIs and schema exist, but most existing operations still need to propagate trace/profile/context artifact records automatically.
+- External-skill awareness now includes read-only root scanning plus inventory/retrieval/matching; scan scheduling defaults, embedding generation for external descriptions, richer collision risk scoring, and explicit import recommendation flows remain pending.
+- v14 trace/profile/context APIs and schema exist; event/job/retrieval/evaluator/context-broker paths now propagate trace or context artifacts, while writer rollback/revocation and model/embedding call paths still need deeper automatic trace/profile/context artifact records.
 - SkillGraphIR now has propose-only planner/API/store persistence with transactions, planned trials, and revocation invalidation for operation/trial state, but improve/compose/decompose still need evaluator execution and apply semantics for accepted topology operations.
 - Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded or induced redacted intervention replay from explicit replay, attribution, canary, or broker outcome evidence.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints; mutation-worker apply exists but fails closed unless the queued job is explicitly policy-approved.

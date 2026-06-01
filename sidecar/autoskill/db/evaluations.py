@@ -56,6 +56,9 @@ class EvaluationStore(Protocol):
         *,
         workspace_key: str | None = None,
         limit: int = 50,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
     ) -> EvaluationRunResult:
         """Execute deterministic proposal-gate evaluations."""
 
@@ -66,6 +69,9 @@ class NullEvaluationStore:
         *,
         workspace_key: str | None = None,
         limit: int = 50,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
     ) -> EvaluationRunResult:
         return EvaluationRunResult(
             scanned=0,
@@ -87,6 +93,9 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
         *,
         workspace_key: str | None = None,
         limit: int = 50,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
     ) -> EvaluationRunResult:
         pool = await self._get_pool()
         items: list[EvaluationRunItem] = []
@@ -113,6 +122,9 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                     **gate.to_json(),
                     "executor": "deterministic-proposal-gate.v1",
                     "evidence_ids": _probe_evidence_ids(probes),
+                    "trace_id": str(trace_id) if trace_id else None,
+                    "span_id": str(span_id) if span_id else None,
+                    "parent_span_id": str(parent_span_id) if parent_span_id else None,
                 }
                 if contrastive_replays:
                     result["contrastive_replays"] = contrastive_replays
@@ -123,6 +135,9 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                     skill_version_id=row["skill_version_id"],
                     status=gate.status,
                     result=result,
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    parent_span_id=parent_span_id,
                 )
                 items.append(
                     EvaluationRunItem(
@@ -334,17 +349,26 @@ async def _finish_evaluation(
     skill_version_id: UUID,
     status: str,
     result: dict[str, Any],
+    trace_id: UUID | None = None,
+    span_id: UUID | None = None,
+    parent_span_id: UUID | None = None,
 ) -> None:
     await conn.execute(
         """
         UPDATE autoskill.evaluations
         SET status = $2,
-            result = $3::jsonb
+            result = $3::jsonb,
+            trace_id = COALESCE($4, trace_id),
+            span_id = COALESCE($5, span_id),
+            parent_span_id = COALESCE($6, parent_span_id)
         WHERE evaluation_id = $1
         """,
         evaluation_id,
         status,
         _json(result),
+        trace_id,
+        span_id,
+        parent_span_id,
     )
     await conn.execute(
         """

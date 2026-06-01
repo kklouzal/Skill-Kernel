@@ -18,6 +18,7 @@ from autoskill.services.worker import (
 )
 from autoskill.services.writer import apply_staged_manifest_with_governance, stage_compiled_skill
 from autoskill.tests.test_embedding_generation import MemoryPendingEmbeddingStore
+from autoskill.tests.test_external_skills import MemoryExternalSkillStore
 from autoskill.tests.test_governance import MemoryGovernanceStore
 from autoskill.tests.test_jobs_api import MemoryJobStore
 
@@ -62,8 +63,19 @@ class MemoryEvaluationWorkerStore:
         *,
         workspace_key: str | None = None,
         limit: int = 50,
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
     ) -> EvaluationRunResult:
-        self.calls.append({"workspace_key": workspace_key, "limit": limit})
+        self.calls.append(
+            {
+                "workspace_key": workspace_key,
+                "limit": limit,
+                "trace_id": trace_id,
+                "span_id": span_id,
+                "parent_span_id": parent_span_id,
+            }
+        )
         return EvaluationRunResult(
             scanned=1,
             evaluated=1,
@@ -242,6 +254,7 @@ class WorkerTestStores:
     evidence: MemoryEvidenceWorkerStore
     embeddings: MemoryPendingEmbeddingStore
     evaluations: MemoryEvaluationWorkerStore | None = None
+    observability: MemoryObservabilityStore | None = None
 
     def as_worker_stores(self) -> WorkerStores:
         return WorkerStores(
@@ -250,6 +263,7 @@ class WorkerTestStores:
             evidence=self.evidence,
             embeddings=self.embeddings,
             evaluations=self.evaluations,
+            observability=self.observability,
         )
 
 
@@ -921,13 +935,17 @@ def test_mutation_worker_apply_fails_closed_without_policy_approval(tmp_path) ->
 
 def test_worker_run_once_dispatches_evaluation_job() -> None:
     evaluations = MemoryEvaluationWorkerStore()
+    observability = MemoryObservabilityStore()
     stores = WorkerTestStores(
         jobs=MemoryJobStore(),
         scheduler=MemorySchedulerWorkerStore(),
         evidence=MemoryEvidenceWorkerStore(),
         embeddings=MemoryPendingEmbeddingStore(),
         evaluations=evaluations,
+        observability=observability,
     )
+    trace_id = uuid4()
+    span_id = uuid4()
 
     async def run():
         await stores.jobs.enqueue_job(
@@ -935,6 +953,8 @@ def test_worker_run_once_dispatches_evaluation_job() -> None:
             job_kind="evaluations.run",
             idempotency_key="eval:one",
             payload={"workspace_id": "dev-01", "limit": 7},
+            trace_id=trace_id,
+            span_id=span_id,
         )
         return await run_worker_once(
             stores.as_worker_stores(),
@@ -947,7 +967,62 @@ def test_worker_run_once_dispatches_evaluation_job() -> None:
     assert result.status == "succeeded"
     assert result.output["evaluated"] == 1
     assert result.output["needs_intervention"] == 1
-    assert evaluations.calls == [{"workspace_key": "dev-01", "limit": 7}]
+    assert [span.operation_kind for span in observability.started] == ["job", "evaluator"]
+    assert observability.started[1].trace_id == trace_id
+    assert observability.started[1].parent_span_id == span_id
+    assert evaluations.calls == [
+        {
+            "workspace_key": "dev-01",
+            "limit": 7,
+            "trace_id": trace_id,
+            "span_id": observability.started[1].span_id,
+            "parent_span_id": span_id,
+        }
+    ]
+    assert observability.started[1].safe_attributes["source"] == "worker"
+    assert observability.started[1].safe_attributes["job_kind"] == "evaluations.run"
+    assert observability.finished[0]["status"] == "ok"
+    assert observability.finished[0]["safe_attributes"]["needs_intervention"] == 1
+
+
+def test_worker_run_once_dispatches_external_skill_scan(tmp_path) -> None:
+    root = tmp_path / "external-skills"
+    skill_dir = root / "pdf-table-cleanup"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: PDF table cleanup\n---\n\n## WHEN\n- Tables need cleanup.\n",
+        encoding="utf-8",
+    )
+    jobs = MemoryJobStore()
+    external_skills = MemoryExternalSkillStore()
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="external_skills.scan",
+            idempotency_key="external-scan:one",
+            payload={"workspace_id": "dev-01", "source": "test-root"},
+        )
+        return await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                external_skills=external_skills,
+                embeddings=MemoryPendingEmbeddingStore(),
+                external_skill_roots=[root],
+            ),
+            worker_id="worker-1",
+            pool="maintenance",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["discovered"] == 1
+    assert external_skills.upserts[0]["workspace_key"] == "dev-01"
+    assert external_skills.records[0].slug == "pdf-table-cleanup"
+    assert str(root) not in str(external_skills.records[0].to_json())
 
 
 def test_worker_health_api_uses_configured_pool_concurrency(monkeypatch) -> None:

@@ -11,6 +11,7 @@ from autoskill.db.contracts import AsyncpgContractStore
 from autoskill.db.embeddings import AsyncpgEmbeddingStore
 from autoskill.db.evaluations import AsyncpgEvaluationStore
 from autoskill.db.evidence import AsyncpgEvidenceStore
+from autoskill.db.external_skills import AsyncpgExternalSkillStore
 from autoskill.db.governance import AsyncpgGovernanceStore
 from autoskill.db.jobs import AsyncpgJobStore
 from autoskill.db.observability import AsyncpgObservabilityStore
@@ -36,6 +37,10 @@ async def run_worker(args: argparse.Namespace) -> int:
         statement_timeout_ms=settings.statement_timeout_ms,
     )
     evidence = AsyncpgEvidenceStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
+    external_skills = AsyncpgExternalSkillStore(
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
     )
@@ -87,6 +92,7 @@ async def run_worker(args: argparse.Namespace) -> int:
                 jobs=jobs,
                 scheduler=scheduler,
                 evidence=evidence,
+                external_skills=external_skills,
                 embeddings=embeddings,
                 evaluations=evaluations,
                 retrieval=retrieval,
@@ -99,6 +105,7 @@ async def run_worker(args: argparse.Namespace) -> int:
                 embedder=build_text_embedder_from_settings(settings),
                 workspace_root=workspace_root,
                 archive_root=archive_root,
+                external_skill_roots=args.external_skill_root,
             ),
             WorkerLoopConfig(
                 worker_id=args.worker_id,
@@ -115,6 +122,7 @@ async def run_worker(args: argparse.Namespace) -> int:
         await jobs.close()
         await scheduler.close()
         await evidence.close()
+        await external_skills.close()
         await embeddings.close()
         await evaluations.close()
         await retrieval.close()
@@ -138,6 +146,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lease-seconds", type=int, default=300)
     parser.add_argument("--idle-sleep-seconds", type=float, default=1.0)
     parser.add_argument("--workspace-root", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--external-skill-root",
+        action="append",
+        type=Path,
+        default=[],
+        help="Read-only skill root to inventory for external-skill collision awareness.",
+    )
     return parser.parse_args()
 
 

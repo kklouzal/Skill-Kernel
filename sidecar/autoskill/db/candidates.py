@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from math import ceil
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -11,6 +12,8 @@ from autoskill.core.hashing import sha256_text
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 from autoskill.services.candidates import CandidateSkillProposal
+
+DEFAULT_MAX_CONTEXT_TOKENS = 1200
 
 
 @dataclass(frozen=True)
@@ -413,6 +416,101 @@ async def _persist_candidate_artifacts(
             content,
             "passed" if scanner_status == "passed" else "blocked",
         )
+    await _persist_context_artifact(
+        conn,
+        workspace_id=workspace_id,
+        skill_id=skill_id,
+        skill_version_id=skill_version_id,
+        proposal=proposal,
+        scanner_status=scanner_status,
+    )
+
+
+async def _persist_context_artifact(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    skill_id: UUID,
+    skill_version_id: UUID,
+    proposal: CandidateSkillProposal,
+    scanner_status: str,
+) -> None:
+    runtime_text = proposal.compiled_runtime_text or ""
+    token_count = _estimate_tokens(runtime_text)
+    budget_status = (
+        "passed" if token_count <= DEFAULT_MAX_CONTEXT_TOKENS else "over_budget"
+    )
+    safety_status = "passed" if scanner_status == "passed" else "blocked"
+    await conn.execute(
+        """
+        INSERT INTO autoskill.context_artifacts (
+          context_artifact_id,
+          workspace_id,
+          artifact_kind,
+          source_object_type,
+          source_object_id,
+          skill_id,
+          skill_version_id,
+          text_hash,
+          token_count,
+          max_tokens,
+          safety_status,
+          equivalence_status,
+          budget_status,
+          shadowing_status,
+          metadata
+        )
+        VALUES (
+          gen_random_uuid(),
+          $1,
+          'skill_md',
+          'skill_version',
+          $2,
+          $3,
+          $2,
+          $4,
+          $5,
+          $6,
+          $7,
+          'passed',
+          $8,
+          'pending',
+          $9::jsonb
+        )
+        ON CONFLICT (
+          workspace_id,
+          artifact_kind,
+          source_object_type,
+          source_object_id,
+          text_hash
+        )
+        DO UPDATE SET
+          token_count = EXCLUDED.token_count,
+          max_tokens = EXCLUDED.max_tokens,
+          safety_status = EXCLUDED.safety_status,
+          equivalence_status = EXCLUDED.equivalence_status,
+          budget_status = EXCLUDED.budget_status,
+          shadowing_status = EXCLUDED.shadowing_status,
+          metadata = EXCLUDED.metadata
+        """,
+        workspace_id,
+        skill_version_id,
+        skill_id,
+        proposal.compiled_sha256,
+        token_count,
+        DEFAULT_MAX_CONTEXT_TOKENS,
+        safety_status,
+        budget_status,
+        _json(
+            {
+                "loadability_class": "runtime_skill_body",
+                "compiler": "autoskill-compiler.v1",
+                "candidate_slug": proposal.candidate_slug,
+                "scanner_status": scanner_status,
+                "source": "candidate_persistence",
+            }
+        ),
+    )
 
 
 async def _persist_probe_plan(
@@ -542,3 +640,7 @@ def _scanner_status(proposal: CandidateSkillProposal) -> str:
 
 def _json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, ceil(len(text) / 4))

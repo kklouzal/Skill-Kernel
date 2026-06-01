@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 from dataclasses import dataclass
+from math import ceil
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -23,6 +24,7 @@ class WriterPolicyError(ValueError):
 SAFE_SKILL_SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$")
 SAFE_SUPPORT_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$")
 ALLOWED_ASSET_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".json", ".png", ".txt", ".webp"}
+DEFAULT_MAX_CONTEXT_TOKENS = 1200
 
 
 @dataclass(frozen=True)
@@ -165,6 +167,7 @@ def stage_compiled_skill(
     skill_version_id: UUID,
     slug: str,
     compiled_skill_md: str,
+    max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
     overwrite: bool = False,
 ) -> StagedSkillArtifact:
     """Stage a scanned runtime SKILL.md and manifest without activating it."""
@@ -174,6 +177,13 @@ def stage_compiled_skill(
     scanner_findings = scan_text(compiled_skill_md)
     if has_blocking_findings(scanner_findings):
         raise WriterPolicyError("compiled skill has blocking scanner findings")
+    context_gate = _context_gate(
+        text=compiled_skill_md,
+        max_context_tokens=max_context_tokens,
+        scanner_findings=scanner_findings,
+    )
+    if context_gate["budget_status"] != "passed":
+        raise WriterPolicyError("compiled skill exceeds context token budget")
 
     skill_relative_path = f"{staging_id}/{slug}/SKILL.md"
     target_relative_path = f"skills/autoskill/{slug}/SKILL.md"
@@ -191,6 +201,7 @@ def stage_compiled_skill(
         slug=slug,
         files=[staged_file],
         scanner_findings=scanner_findings,
+        context_gate=context_gate,
     )
     manifest_relative_path = f"{staging_id}/{slug}/autoskill.manifest.json"
     manifest_text = json.dumps(manifest, sort_keys=True, indent=2) + "\n"
@@ -618,12 +629,14 @@ def _writer_manifest(
     slug: str,
     files: list[StagedFile],
     scanner_findings: list[ScannerFinding],
+    context_gate: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "schema": "autoskill.writer-manifest.v1",
         "staging_id": str(staging_id),
         "skill_version_id": str(skill_version_id),
         "slug": slug,
+        "context_gate": context_gate or {},
         "files": [file.to_manifest() for file in files],
         "scanner_findings": [
             {
@@ -655,12 +668,58 @@ def _validate_manifest_for_apply(manifest: dict[str, object]) -> None:
         for finding in manifest["scanner_findings"]:  # type: ignore[index]
             if str(finding.get("severity")) in {"error", "critical"}:
                 raise WriterPolicyError("manifest contains blocking scanner findings")
+    _validate_context_gate(manifest)
     files = manifest.get("files")
     if not isinstance(files, list) or not files:
         raise WriterPolicyError("writer manifest must contain files")
     for entry in files:
         target_relative_path = str(entry["target_relative_path"])
         _target_path_inside_skill(slug, target_relative_path)
+
+
+def _context_gate(
+    *,
+    text: str,
+    max_context_tokens: int,
+    scanner_findings: list[ScannerFinding],
+) -> dict[str, object]:
+    token_count = _estimate_tokens(text)
+    safety_status = "blocked" if has_blocking_findings(scanner_findings) else "passed"
+    return {
+        "loadability_class": "runtime_skill_body",
+        "artifact_kind": "skill_md",
+        "text_hash": sha256_text(text),
+        "token_count": token_count,
+        "max_tokens": max(1, max_context_tokens),
+        "safety_status": safety_status,
+        "equivalence_status": "passed",
+        "budget_status": "passed" if token_count <= max(1, max_context_tokens) else "over_budget",
+        "scanner_codes": [finding.code for finding in scanner_findings],
+    }
+
+
+def _validate_context_gate(manifest: dict[str, object]) -> None:
+    context_gate = manifest.get("context_gate")
+    if not isinstance(context_gate, dict):
+        raise WriterPolicyError("writer manifest is missing context gate")
+    if context_gate.get("loadability_class") != "runtime_skill_body":
+        raise WriterPolicyError("compiled skill lacks runtime loadability class")
+    if context_gate.get("artifact_kind") != "skill_md":
+        raise WriterPolicyError("compiled skill context artifact kind must be skill_md")
+    for key in ("text_hash", "token_count", "max_tokens"):
+        if key not in context_gate:
+            raise WriterPolicyError(f"compiled skill context gate missing {key}")
+    for status_key in ("safety_status", "equivalence_status", "budget_status"):
+        if context_gate.get(status_key) != "passed":
+            raise WriterPolicyError(f"compiled skill context gate failed {status_key}")
+    token_count = int(context_gate["token_count"])
+    max_tokens = int(context_gate["max_tokens"])
+    if token_count <= 0 or max_tokens <= 0 or token_count > max_tokens:
+        raise WriterPolicyError("compiled skill context token budget failed")
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, ceil(len(text) / 4))
 
 
 def _target_path_inside_skill(slug: str, target_relative_path: str) -> str:
