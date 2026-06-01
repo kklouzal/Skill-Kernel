@@ -9,6 +9,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from autoskill.core.hashing import sha256_json
+from autoskill.db.attribution import AttributionStore
 from autoskill.db.context import ContextGovernanceStore
 from autoskill.db.contracts import ContractStore
 from autoskill.db.embeddings import EmbeddingStore
@@ -130,6 +131,7 @@ class WorkerStores:
     context_governance: ContextGovernanceStore | None = None
     topology: TopologyStore | None = None
     observability: ObservabilityStore | None = None
+    attribution: AttributionStore | None = None
     embedder: TextEmbedder | None = None
     workspace_root: Path | None = None
     archive_root: Path | None = None
@@ -760,6 +762,7 @@ async def _invalidate_revoked_objects(
     context_records_invalidated = 0
     topology_records_invalidated = 0
     evaluation_records_invalidated = 0
+    attribution_records_invalidated = 0
     if request.workspace_key is None or not objects:
         return {
             "objects": len(objects),
@@ -769,6 +772,7 @@ async def _invalidate_revoked_objects(
             "context_records_invalidated": context_records_invalidated,
             "topology_records_invalidated": topology_records_invalidated,
             "evaluation_records_invalidated": evaluation_records_invalidated,
+            "attribution_records_invalidated": attribution_records_invalidated,
         }
     if stores.retrieval is not None:
         invalidate = getattr(stores.retrieval, "invalidate_objects", None)
@@ -810,6 +814,13 @@ async def _invalidate_revoked_objects(
                 workspace_key=request.workspace_key,
                 objects=objects,
             )
+    if stores.attribution is not None:
+        invalidate_attribution = getattr(stores.attribution, "invalidate_objects", None)
+        if invalidate_attribution is not None:
+            attribution_records_invalidated = await invalidate_attribution(
+                workspace_key=request.workspace_key,
+                objects=objects,
+            )
     return {
         "objects": len(objects),
         "body_index_documents_deleted": body_index_deleted,
@@ -818,6 +829,7 @@ async def _invalidate_revoked_objects(
         "context_records_invalidated": context_records_invalidated,
         "topology_records_invalidated": topology_records_invalidated,
         "evaluation_records_invalidated": evaluation_records_invalidated,
+        "attribution_records_invalidated": attribution_records_invalidated,
     }
 
 

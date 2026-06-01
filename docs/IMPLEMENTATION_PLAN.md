@@ -153,7 +153,9 @@ Deliverables:
   requests whose originating transaction recorded an archive-backed compiled-file rollback
   action or an initial-create active-path deletion rollback action.
 - rollback-derived invalidation; implemented for traversal-summary impacted objects by deleting
-  matching body-index documents and embeddings during mutation-worker rollback completion.
+  matching body-index documents and embeddings, marking retrieval/context/topology/evaluator
+  derived state revoked or rolled back, and revoking matching attribution records during
+  mutation-worker rollback completion.
 
 Acceptance:
 
@@ -173,7 +175,7 @@ Acceptance:
 - valid skill appears under active root;
 - invalid paths are rejected;
 - rollback restores the previous effective state;
-- canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed mutation-worker rollback execution, initial-create active-path deletion rollback, body-index/embedding invalidation, active broker-cache invalidation, and fail-closed policy-approved mutation-worker writer apply orchestration are implemented, while broader per-object revoke handlers remain pending.
+- canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed mutation-worker rollback execution, initial-create active-path deletion rollback, body-index/embedding/retrieval/context/topology/evaluator/attribution invalidation, active broker-cache invalidation, and fail-closed policy-approved mutation-worker writer apply orchestration are implemented, while broader per-object revoke handlers for skill graph edges, lifecycle state, and evidence maturity remain pending.
 - long-running job leases renew while handlers are still running; implemented in the job store, worker execution wrapper, and control API with focused tests.
 
 ## Phase 8 - Autonomous Improvement and Curation

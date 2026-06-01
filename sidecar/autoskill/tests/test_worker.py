@@ -669,6 +669,7 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
         "context_records_invalidated": 0,
         "topology_records_invalidated": 0,
         "evaluation_records_invalidated": 0,
+        "attribution_records_invalidated": 0,
     }
     assert retrieval.calls == embeddings.calls
     assert retrieval.calls[0]["workspace_key"] == "dev-01"
@@ -762,6 +763,7 @@ def test_mutation_worker_deletes_initial_create_on_rollback(tmp_path) -> None:
         "context_records_invalidated": 0,
         "topology_records_invalidated": 0,
         "evaluation_records_invalidated": 0,
+        "attribution_records_invalidated": 0,
     }
 
 
@@ -773,6 +775,7 @@ def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path
     context = MemoryInvalidationStore()
     topology = MemoryInvalidationStore()
     evaluations = MemoryEvaluationWorkerStore()
+    attribution = MemoryInvalidationStore()
     workspace_root = tmp_path / "workspace"
     staging_root = workspace_root / ".autoskill" / "staging"
     archive_root = workspace_root / ".autoskill" / "archive"
@@ -842,6 +845,7 @@ def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path
                 evaluations=evaluations,
                 context_governance=context,
                 topology=topology,
+                attribution=attribution,
                 workspace_root=workspace_root,
                 archive_root=archive_root,
             ),
@@ -860,11 +864,13 @@ def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path
         "context_records_invalidated": 4,
         "topology_records_invalidated": 4,
         "evaluation_records_invalidated": 4,
+        "attribution_records_invalidated": 4,
     }
     assert retrieval.log_calls[0]["workspace_key"] == "dev-01"
     assert context.calls[0]["workspace_key"] == "dev-01"
     assert topology.calls[0]["workspace_key"] == "dev-01"
     assert evaluations.calls[0]["operation"] == "invalidate_objects"
+    assert attribution.calls[0]["workspace_key"] == "dev-01"
 
 
 def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) -> None:

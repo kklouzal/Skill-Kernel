@@ -77,6 +77,14 @@ class AttributionStore(Protocol):
     ) -> AttributionEventRecord:
         """Record an auditable outcome-attribution event."""
 
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        """Mark attribution records influenced by revoked objects."""
+
 
 class NullAttributionStore:
     async def record_event(
@@ -104,6 +112,14 @@ class NullAttributionStore:
             metadata=metadata,
             created_at=datetime.now().astimezone(),
         )
+
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        return 0
 
 
 class AsyncpgAttributionStore(AsyncpgPoolOwner):
@@ -151,6 +167,104 @@ class AsyncpgAttributionStore(AsyncpgPoolOwner):
                 json.dumps(metadata, sort_keys=True, separators=(",", ":")),
             )
             return AttributionEventRecord.from_row({**dict(row), "workspace_key": workspace_key})
+
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        object_keys = _object_keys(objects)
+        if not object_keys:
+            return 0
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            result = await conn.fetchval(
+                """
+                WITH targets AS (
+                  SELECT *
+                  FROM unnest($2::text[], $3::uuid[]) AS target(object_type, object_id)
+                ),
+                skill_targets AS (
+                  SELECT object_id AS skill_id
+                  FROM targets
+                  WHERE object_type = 'skill'
+                  UNION
+                  SELECT sv.skill_id
+                  FROM autoskill.skill_versions sv
+                  JOIN targets t ON t.object_type = 'skill_version'
+                    AND t.object_id = sv.skill_version_id
+                ),
+                revoked_events AS (
+                  UPDATE autoskill.attribution_events ae
+                  SET metadata = ae.metadata || jsonb_build_object(
+                        'revoked', true,
+                        'revoked_at', now(),
+                        'revocation_reason', 'derived_object_revoked'
+                      )
+                  FROM autoskill.workspaces w
+                  WHERE ae.workspace_id = w.workspace_id
+                    AND w.external_key = $1
+                    AND ae.metadata->>'revoked' IS DISTINCT FROM 'true'
+                    AND (
+                      ae.attribution_event_id IN (
+                        SELECT object_id FROM targets WHERE object_type = 'attribution_event'
+                      )
+                      OR ae.skill_ids && ARRAY(SELECT skill_id FROM skill_targets)
+                      OR ae.memory_ids && ARRAY(
+                        SELECT object_id FROM targets WHERE object_type = 'memory'
+                      )
+                      OR ae.retrieved_artifact_ids && ARRAY(
+                        SELECT object_id FROM targets
+                        WHERE object_type IN (
+                          'body_index_document',
+                          'context_artifact',
+                          'retrieved_artifact'
+                        )
+                      )
+                    )
+                  RETURNING ae.attribution_event_id
+                ),
+                revoked_checks AS (
+                  UPDATE autoskill.action_attribution_checks ac
+                  SET verdict = 'revoked',
+                      metrics = ac.metrics || jsonb_build_object(
+                        'revoked', true,
+                        'revoked_at', now(),
+                        'revocation_reason', 'derived_object_revoked'
+                      )
+                  FROM autoskill.workspaces w
+                  WHERE ac.workspace_id = w.workspace_id
+                    AND w.external_key = $1
+                    AND ac.metrics->>'revoked' IS DISTINCT FROM 'true'
+                    AND (
+                      ac.action_attribution_check_id IN (
+                        SELECT object_id
+                        FROM targets
+                        WHERE object_type = 'action_attribution_check'
+                      )
+                      OR ac.contributing_skill_ids && ARRAY(SELECT skill_id FROM skill_targets)
+                      OR ac.contributing_memory_ids && ARRAY(
+                        SELECT object_id FROM targets WHERE object_type = 'memory'
+                      )
+                      OR ac.contributing_evidence_ids && ARRAY(
+                        SELECT object_id FROM targets WHERE object_type = 'evidence'
+                      )
+                      OR ac.broker_policy_version_id IN (
+                        SELECT object_id FROM targets WHERE object_type = 'broker_policy_version'
+                      )
+                    )
+                  RETURNING ac.action_attribution_check_id
+                )
+                SELECT
+                  (SELECT count(*) FROM revoked_events)
+                  + (SELECT count(*) FROM revoked_checks) AS invalidated
+                """,
+                workspace_key,
+                [object_type for object_type, _object_id in object_keys],
+                [object_id for _object_type, object_id in object_keys],
+            )
+        return int(result or 0)
 
     async def record_shadowing_control(
         self,
@@ -233,3 +347,18 @@ def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:
 
 def _json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _object_keys(objects: list[dict[str, str]]) -> list[tuple[str, UUID]]:
+    keys: list[tuple[str, UUID]] = []
+    for item in objects:
+        object_type = item.get("object_type")
+        object_id = item.get("object_id")
+        if not object_type or not object_id:
+            continue
+        try:
+            parsed = UUID(str(object_id))
+        except (TypeError, ValueError):
+            continue
+        keys.append((str(object_type), parsed))
+    return keys

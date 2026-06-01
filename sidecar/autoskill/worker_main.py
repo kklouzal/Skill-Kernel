@@ -6,6 +6,7 @@ import signal
 from pathlib import Path
 
 from autoskill.core.config import Settings, get_settings
+from autoskill.db.attribution import AsyncpgAttributionStore
 from autoskill.db.context import AsyncpgContextGovernanceStore
 from autoskill.db.contracts import AsyncpgContractStore
 from autoskill.db.embeddings import AsyncpgEmbeddingStore
@@ -80,6 +81,10 @@ async def run_worker(args: argparse.Namespace) -> int:
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
     )
+    attribution = AsyncpgAttributionStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -101,6 +106,7 @@ async def run_worker(args: argparse.Namespace) -> int:
                 contracts=contracts,
                 context_governance=context_governance,
                 topology=topology,
+                attribution=attribution,
                 observability=observability,
                 embedder=build_text_embedder_from_settings(settings),
                 workspace_root=workspace_root,
@@ -132,6 +138,7 @@ async def run_worker(args: argparse.Namespace) -> int:
         await context_governance.close()
         await observability.close()
         await topology.close()
+        await attribution.close()
 
 
 def parse_args() -> argparse.Namespace:
