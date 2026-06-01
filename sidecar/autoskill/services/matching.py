@@ -4,6 +4,27 @@ from dataclasses import dataclass
 
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalStore
 
+MATCH_STOP_WORDS = {
+    "active",
+    "and",
+    "are",
+    "archived",
+    "around",
+    "candidate",
+    "derive",
+    "evidence",
+    "guarded",
+    "insufficient",
+    "matches",
+    "observed",
+    "only",
+    "procedural",
+    "repeated",
+    "skill",
+    "times",
+    "workflow",
+}
+
 
 @dataclass(frozen=True)
 class SkillMatchRequest:
@@ -105,7 +126,7 @@ async def match_existing_skills(
 
 
 def _query_text(request: SkillMatchRequest) -> str:
-    query = " ".join(
+    raw_query = " ".join(
         part.strip()
         for part in (
             request.candidate_description,
@@ -113,7 +134,14 @@ def _query_text(request: SkillMatchRequest) -> str:
         )
         if part.strip()
     )
-    return query or request.candidate_slug.replace("-", " ")
+    terms = [
+        term
+        for term in _ordered_terms(raw_query)
+        if term not in MATCH_STOP_WORDS
+    ]
+    if not terms:
+        terms = _ordered_terms(request.candidate_slug.replace("-", " "))
+    return " ".join(terms[:6])
 
 
 def _score(candidate: RetrievalCandidate, query_terms: set[str], slug: str) -> float:
@@ -133,3 +161,15 @@ def _decision(active: list[SkillMatch], archived: list[SkillMatch]) -> str:
 
 def _terms(text: str) -> set[str]:
     return {term for term in text.lower().replace("-", " ").split() if len(term) > 2}
+
+
+def _ordered_terms(text: str) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for term in text.lower().replace("-", " ").split():
+        cleaned = "".join(ch for ch in term if ch.isalnum())
+        if len(cleaned) <= 2 or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        ordered.append(cleaned)
+    return ordered

@@ -58,15 +58,17 @@ Phase 0/1 bootstrap.
 - Real local Postgres provider-routing validation passed via compose: configured a non-default hash embedding model, generated one evidence embedding, and verified pgvector search found it under the configured model name.
 - Active/archive duplicate matching primitive is implemented: `/v1/skills/match` checks candidate descriptions/runtime text against body-index documents, returns `reuse_active`, `consider_archive_promotion`, or `create_candidate`, and keeps active/archived match lists separate for opportunity-miner gating.
 - Real local Postgres duplicate-match validation passed via compose: seeded active and archived body-index matches, matcher returned `reuse_active`, surfaced both active and archived matches, and wrote a retrieval log.
+- Deterministic opportunity-miner primitive is implemented: groups repeated observed evidence, builds candidate descriptions with trigger terms, calls duplicate matching before recommending action, exposes `/v1/opportunities/mine`, and adds `opportunities.mine` as a maintenance job kind.
+- Real local Postgres opportunity-miner validation passed via compose: two repeated `message_received` evidence records were grouped into one opportunity, an active body-index skill was matched, and the recommendation was `reuse_active` instead of creating a duplicate candidate.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
-2. Add opportunity-miner integration that calls duplicate matching before candidate generation.
-3. Add explicit shadowing event detection from outcomes/corrections, beyond current broker suppression telemetry.
-4. Add worker observability/health counters and pool-specific concurrency settings from config.
-5. Add production embedding provider live validation once credentials/provider endpoint are configured.
+2. Add explicit shadowing event detection from outcomes/corrections, beyond current broker suppression telemetry.
+3. Add worker observability/health counters and pool-specific concurrency settings from config.
+4. Add production embedding provider live validation once credentials/provider endpoint are configured.
+5. Add candidate SkillIR proposal scaffolding in propose-only mode, gated by opportunity recommendations.
 
 ## Known Risks
 

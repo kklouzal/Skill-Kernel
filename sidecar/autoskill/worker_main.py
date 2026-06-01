@@ -8,6 +8,7 @@ from autoskill.core.config import get_settings
 from autoskill.db.embeddings import AsyncpgEmbeddingStore
 from autoskill.db.evidence import AsyncpgEvidenceStore
 from autoskill.db.jobs import AsyncpgJobStore
+from autoskill.db.retrieval import AsyncpgRetrievalStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore
 from autoskill.services.embedding_generation import build_text_embedder_from_settings
 from autoskill.services.worker import WorkerLoopConfig, WorkerStores, run_worker_loop
@@ -34,6 +35,10 @@ async def run_worker(args: argparse.Namespace) -> int:
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
     )
+    retrieval = AsyncpgRetrievalStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -46,6 +51,7 @@ async def run_worker(args: argparse.Namespace) -> int:
                 scheduler=scheduler,
                 evidence=evidence,
                 embeddings=embeddings,
+                retrieval=retrieval,
                 embedder=build_text_embedder_from_settings(settings),
             ),
             WorkerLoopConfig(
@@ -64,6 +70,7 @@ async def run_worker(args: argparse.Namespace) -> int:
         await scheduler.close()
         await evidence.close()
         await embeddings.close()
+        await retrieval.close()
 
 
 def parse_args() -> argparse.Namespace:

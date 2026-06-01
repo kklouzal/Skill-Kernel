@@ -116,4 +116,4 @@ def test_skill_match_api_uses_retrieval_store() -> None:
 
     assert response.decision == "create_candidate"
     assert response.active_matches == []
-    assert "brand new workflow" in store.queries[0]
+    assert store.queries[0] == "brand new"

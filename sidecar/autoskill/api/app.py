@@ -28,6 +28,7 @@ from autoskill.services.embedding_generation import (
     generate_pending_embeddings,
 )
 from autoskill.services.matching import SkillMatchRequest, match_existing_skills
+from autoskill.services.opportunity import mine_opportunities
 from autoskill.services.worker import WorkerRunResult, WorkerStores, run_worker_once
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi import status as http_status
@@ -124,6 +125,17 @@ class EvidenceDeriveResponse(BaseModel):
     created: int
     duplicate: int
     evidence: list[dict[str, object]]
+
+
+class OpportunityMineRequest(BaseModel):
+    workspace_id: str
+    limit: int = 100
+    min_support: int = 2
+
+
+class OpportunityMineResponse(BaseModel):
+    scanned: int
+    candidates: list[dict[str, object]]
 
 
 class RetrievalQueryRequest(BaseModel):
@@ -473,7 +485,13 @@ def create_app(
                 detail="pool must be scheduler, maintenance, or mutation",
             )
         result: WorkerRunResult = await run_worker_once(
-            WorkerStores(jobs=jobs, scheduler=scheduler, evidence=evidence, embeddings=embeddings),
+            WorkerStores(
+                jobs=jobs,
+                scheduler=scheduler,
+                evidence=evidence,
+                embeddings=embeddings,
+                retrieval=retrieval,
+            ),
             worker_id=request.worker_id,
             pool=request.pool,
             lease_seconds=max(1, min(request.lease_seconds, 3600)),
@@ -509,6 +527,21 @@ def create_app(
             duplicate=result.duplicate,
             evidence=[record.to_json() for record in result.evidence],
         )
+
+    @app.post("/v1/opportunities/mine", response_model=OpportunityMineResponse)
+    async def mine_opportunity_candidates(
+        request: OpportunityMineRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> OpportunityMineResponse:
+        _require_control_auth(authorization)
+        result = await mine_opportunities(
+            evidence,
+            retrieval,
+            workspace_key=request.workspace_id,
+            limit=max(1, min(request.limit, 500)),
+            min_support=max(2, min(request.min_support, 25)),
+        )
+        return OpportunityMineResponse(**result.to_json())
 
     @app.post("/v1/retrieval/query", response_model=RetrievalQueryResponse)
     async def retrieval_query(

@@ -107,6 +107,7 @@ Acceptance:
 Deliverables:
 
 - opportunity miner;
+- duplicate matching before candidate generation; implemented in deterministic opportunity miner;
 - contrastive induction;
 - typed LLM operation wrappers;
 - SkillIR compiler;

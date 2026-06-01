@@ -9,8 +9,10 @@ from typing import Any, Literal
 from autoskill.db.embeddings import EmbeddingStore
 from autoskill.db.evidence import EvidenceStore
 from autoskill.db.jobs import JobRecord, JobStore
+from autoskill.db.retrieval import RetrievalStore
 from autoskill.db.scheduler import SchedulerStore
 from autoskill.services.embedding_generation import TextEmbedder, generate_pending_embeddings
+from autoskill.services.opportunity import mine_opportunities
 
 WorkerPool = Literal["scheduler", "maintenance", "mutation"]
 
@@ -69,6 +71,7 @@ class WorkerStores:
     scheduler: SchedulerStore
     evidence: EvidenceStore
     embeddings: EmbeddingStore
+    retrieval: RetrievalStore | None = None
     embedder: TextEmbedder | None = None
 
 
@@ -218,6 +221,24 @@ async def _run_embedding_generate(stores: WorkerStores, job: JobRecord) -> dict[
     return result.to_json()
 
 
+async def _run_opportunity_mine(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
+    if stores.retrieval is None:
+        raise ValueError("retrieval store is required for opportunity mining")
+    limit = _payload_int(job.payload, "limit", default=100, minimum=1, maximum=500)
+    min_support = _payload_int(job.payload, "min_support", default=2, minimum=2, maximum=25)
+    workspace = _payload_workspace(job)
+    if workspace is None:
+        raise ValueError("workspace_id is required for opportunity mining")
+    result = await mine_opportunities(
+        stores.evidence,
+        stores.retrieval,
+        workspace_key=workspace,
+        limit=limit,
+        min_support=min_support,
+    )
+    return result.to_json()
+
+
 def _job_kinds_for_pool(pool: WorkerPool) -> list[str]:
     return [
         definition.kind
@@ -260,5 +281,10 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "embeddings.generate",
         "maintenance",
         _run_embedding_generate,
+    ),
+    "opportunities.mine": JobDefinition(
+        "opportunities.mine",
+        "maintenance",
+        _run_opportunity_mine,
     ),
 }
