@@ -1,6 +1,10 @@
+import asyncio
+from dataclasses import replace
 from uuid import uuid4
 
+from autoskill.api.app import TopologyApplyRequest, create_app
 from autoskill.core.skillir import EffectSignature
+from autoskill.db.activation import ActivationReadiness
 from autoskill.db.governance import NullGovernanceStore
 from autoskill.db.topology import NullTopologyStore
 from autoskill.services.topology import (
@@ -13,6 +17,37 @@ from autoskill.services.topology import (
     propose_decomposition,
     propose_improvement,
 )
+
+
+class MemoryTopologyActivationGate:
+    def __init__(self, *, allowed: bool) -> None:
+        self.allowed = allowed
+        self.calls: list[dict[str, object]] = []
+
+    async def check_activation_readiness(
+        self,
+        *,
+        workspace_key,
+        skill_version_id,
+        executor_profile_id=None,
+    ) -> ActivationReadiness:
+        self.calls.append(
+            {
+                "workspace_key": workspace_key,
+                "skill_version_id": skill_version_id,
+                "executor_profile_id": executor_profile_id,
+            }
+        )
+        return ActivationReadiness(
+            allowed=self.allowed,
+            skill_version_id=skill_version_id,
+            executor_profile_id=executor_profile_id,
+            scanner_status="passed" if self.allowed else "blocked",
+            evaluator_status="passed" if self.allowed else "failed",
+            latest_evaluation_status="passed" if self.allowed else "failed",
+            compatibility_status="compatible" if self.allowed else "blocked",
+            blockers=[] if self.allowed else ["not ready"],
+        )
 
 
 def test_improvement_proposal_preserves_effects_and_plans_rollback() -> None:
@@ -236,8 +271,6 @@ def test_topology_proposal_persistence_records_operation_trials_and_transaction(
         )
     )
 
-    import asyncio
-
     persisted = asyncio.run(
         persist_topology_proposal(
             topology,
@@ -256,3 +289,104 @@ def test_topology_proposal_persistence_records_operation_trials_and_transaction(
         "composed_workflow",
         "shadowing",
     ]
+
+
+def test_topology_apply_requires_passed_trials() -> None:
+    topology = NullTopologyStore()
+    governance = NullGovernanceStore()
+    result = propose_composition(
+        ComposeTopologyRequest(
+            components=[
+                TopologySkill(
+                    skill_id=uuid4(),
+                    slug="inspect-failure",
+                    effects=EffectSignature(outputs=["diagnostic"]),
+                ),
+                TopologySkill(
+                    skill_id=uuid4(),
+                    slug="repair-failure",
+                    effects=EffectSignature(outputs=["patch"]),
+                ),
+            ],
+            composed_output=TopologySkill(
+                slug="inspect-and-repair",
+                effects=EffectSignature(outputs=["diagnostic", "patch"]),
+            ),
+            evidence_ids=[str(uuid4())],
+        )
+    )
+    persisted = asyncio.run(
+        persist_topology_proposal(
+            topology,
+            governance,
+            workspace_key="dev-01",
+            proposal=result,
+        )
+    )
+
+    blocked = asyncio.run(
+        topology.apply_operation(
+            workspace_key="dev-01",
+            skill_graph_operation_id=persisted.operation.skill_graph_operation_id,
+        )
+    )
+    topology.trials = [replace(trial, status="passed") for trial in topology.trials]
+    applied = asyncio.run(
+        topology.apply_operation(
+            workspace_key="dev-01",
+            skill_graph_operation_id=persisted.operation.skill_graph_operation_id,
+            applied_by="test",
+        )
+    )
+
+    assert blocked.allowed is False
+    assert "is planned" in blocked.blockers[0]
+    assert applied.allowed is True
+    assert applied.operation is not None
+    assert applied.operation.status == "applied"
+    assert applied.operation.trial_summary["applied_by"] == "test"
+
+
+def test_topology_apply_api_activation_gate_blocks_state_change() -> None:
+    topology = NullTopologyStore()
+    operation = asyncio.run(
+        topology.record_operation(
+            workspace_key="dev-01",
+            operation_kind="compose",
+            status="candidate",
+        )
+    )
+    asyncio.run(
+        topology.record_planned_trial(
+            workspace_key="dev-01",
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+            trial_kind="composed_workflow",
+            objective="candidate improves the workflow",
+            status="passed",
+        )
+    )
+    activation_gate = MemoryTopologyActivationGate(allowed=False)
+    app = create_app(topology_store=topology, activation_gate_store=activation_gate)
+    route = next(route for route in app.routes if route.path == "/v1/topology/apply")
+    skill_version_id = uuid4()
+
+    async def run():
+        return await route.endpoint(
+            request=TopologyApplyRequest(
+                workspace_id="dev-01",
+                skill_graph_operation_id=operation.skill_graph_operation_id,
+                activation_gate_required=True,
+                skill_version_ids=[skill_version_id],
+            )
+        )
+
+    try:
+        asyncio.run(run())
+    except Exception as error:
+        raised = error
+    else:  # pragma: no cover
+        raise AssertionError("topology apply should have been blocked")
+
+    assert getattr(raised, "status_code", None) == 409
+    assert activation_gate.calls[0]["skill_version_id"] == skill_version_id
+    assert topology.operations[0].status == "candidate"

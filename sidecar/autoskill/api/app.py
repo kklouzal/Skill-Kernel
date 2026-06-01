@@ -408,6 +408,21 @@ class TopologyProposalResponse(BaseModel):
     persistence: dict[str, object] | None = None
 
 
+class TopologyApplyRequest(BaseModel):
+    workspace_id: str
+    skill_graph_operation_id: UUID
+    activation_gate_required: bool = False
+    skill_version_ids: list[UUID] = []
+    executor_profile_id: UUID | None = None
+    applied_by: str = "autoskill-sidecar"
+
+
+class TopologyApplyResponse(BaseModel):
+    allowed: bool
+    operation: dict[str, object] | None = None
+    blockers: list[str]
+
+
 class ContextCacheInvalidateRequest(BaseModel):
     workspace_id: str | None = None
     skill_ids: list[str] = []
@@ -1355,6 +1370,37 @@ async def _check_writer_activation_gate_for_api(
         )
 
 
+async def _check_topology_activation_gate_for_api(
+    activation_gate: ActivationGateStore,
+    *,
+    request: TopologyApplyRequest,
+) -> None:
+    if not request.activation_gate_required:
+        return
+    if not request.skill_version_ids:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="topology apply activation gate requires skill_version_ids",
+        )
+    blockers: list[dict[str, object]] = []
+    for skill_version_id in request.skill_version_ids:
+        readiness = await activation_gate.check_activation_readiness(
+            workspace_key=request.workspace_id,
+            skill_version_id=skill_version_id,
+            executor_profile_id=request.executor_profile_id,
+        )
+        if not readiness.allowed:
+            blockers.append(readiness.to_json())
+    if blockers:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail={
+                "message": "activation gate blocked topology apply",
+                "readiness": blockers,
+            },
+        )
+
+
 def create_app(
     event_store: EventStore | None = None,
     job_store: JobStore | None = None,
@@ -2097,6 +2143,28 @@ def create_app(
             proposal=proposal.to_json(),
             persistence=persistence,
         )
+
+    @app.post("/v1/topology/apply", response_model=TopologyApplyResponse)
+    async def apply_topology_operation(
+        request: TopologyApplyRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> TopologyApplyResponse:
+        _require_control_auth(authorization)
+        await _check_topology_activation_gate_for_api(
+            activation_gate,
+            request=request,
+        )
+        result = await topology.apply_operation(
+            workspace_key=request.workspace_id,
+            skill_graph_operation_id=request.skill_graph_operation_id,
+            applied_by=request.applied_by,
+        )
+        if not result.allowed:
+            raise HTTPException(
+                status_code=http_status.HTTP_409_CONFLICT,
+                detail=result.to_json(),
+            )
+        return TopologyApplyResponse(**result.to_json())
 
     @app.get("/v1/evidence")
     async def list_evidence(

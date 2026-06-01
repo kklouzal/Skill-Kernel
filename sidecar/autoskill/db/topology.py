@@ -136,6 +136,20 @@ class TopologyPersistenceRecord:
         }
 
 
+@dataclass(frozen=True)
+class TopologyApplyResult:
+    allowed: bool
+    operation: SkillGraphOperationRecord | None
+    blockers: list[str]
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "allowed": self.allowed,
+            "operation": self.operation.to_json() if self.operation else None,
+            "blockers": self.blockers,
+        }
+
+
 class TopologyStore(Protocol):
     async def record_operation(
         self,
@@ -174,6 +188,15 @@ class TopologyStore(Protocol):
         objects: list[dict[str, str]],
     ) -> int:
         """Mark revoked topology operations/trials inactive."""
+
+    async def apply_operation(
+        self,
+        *,
+        workspace_key: str,
+        skill_graph_operation_id: UUID,
+        applied_by: str = "autoskill-sidecar",
+    ) -> TopologyApplyResult:
+        """Mark a topology operation applied after deterministic trial gates pass."""
 
 
 class NullTopologyStore:
@@ -292,6 +315,54 @@ class NullTopologyStore:
             )
         self.trials = updated_trials
         return changed
+
+    async def apply_operation(
+        self,
+        *,
+        workspace_key: str,
+        skill_graph_operation_id: UUID,
+        applied_by: str = "autoskill-sidecar",
+    ) -> TopologyApplyResult:
+        operation = next(
+            (
+                item
+                for item in self.operations
+                if item.skill_graph_operation_id == skill_graph_operation_id
+            ),
+            None,
+        )
+        if operation is None:
+            return TopologyApplyResult(
+                allowed=False,
+                operation=None,
+                blockers=["topology operation not found"],
+            )
+        trials = [
+            trial
+            for trial in self.trials
+            if trial.skill_graph_operation_id == skill_graph_operation_id
+        ]
+        blockers = _topology_apply_blockers(operation, trials)
+        if blockers:
+            return TopologyApplyResult(allowed=False, operation=operation, blockers=blockers)
+        now = datetime.now(UTC)
+        updated = SkillGraphOperationRecord(
+            **{
+                **operation.__dict__,
+                "status": "applied",
+                "trial_summary": {
+                    **operation.trial_summary,
+                    "applied_by": applied_by,
+                    "applied_at": now.isoformat(),
+                },
+                "updated_at": now,
+            }
+        )
+        self.operations = [
+            updated if item.skill_graph_operation_id == skill_graph_operation_id else item
+            for item in self.operations
+        ]
+        return TopologyApplyResult(allowed=True, operation=updated, blockers=[])
 
 
 class AsyncpgTopologyStore(AsyncpgPoolOwner):
@@ -437,6 +508,82 @@ class AsyncpgTopologyStore(AsyncpgPoolOwner):
             )
             return len(operation_rows) + len(trial_rows)
 
+    async def apply_operation(
+        self,
+        *,
+        workspace_key: str,
+        skill_graph_operation_id: UUID,
+        applied_by: str = "autoskill-sidecar",
+    ) -> TopologyApplyResult:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            operation_row = await conn.fetchrow(
+                """
+                SELECT o.*, w.external_key AS workspace_key
+                FROM autoskill.skill_graph_operations o
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE o.workspace_id = $1
+                  AND o.skill_graph_operation_id = $2
+                FOR UPDATE
+                """,
+                workspace_id,
+                skill_graph_operation_id,
+            )
+            if operation_row is None:
+                return TopologyApplyResult(
+                    allowed=False,
+                    operation=None,
+                    blockers=["topology operation not found"],
+                )
+            operation = SkillGraphOperationRecord.from_row(operation_row)
+            trial_rows = await conn.fetch(
+                """
+                SELECT t.*, w.external_key AS workspace_key
+                FROM autoskill.planned_topology_trials t
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE t.workspace_id = $1
+                  AND t.skill_graph_operation_id = $2
+                ORDER BY t.created_at ASC, t.planned_topology_trial_id ASC
+                """,
+                workspace_id,
+                skill_graph_operation_id,
+            )
+            trials = [PlannedTopologyTrialRecord.from_row(row) for row in trial_rows]
+            blockers = _topology_apply_blockers(operation, trials)
+            if blockers:
+                return TopologyApplyResult(
+                    allowed=False,
+                    operation=operation,
+                    blockers=blockers,
+                )
+            row = await conn.fetchrow(
+                """
+                UPDATE autoskill.skill_graph_operations o
+                SET status = 'applied',
+                    trial_summary = trial_summary || $3::jsonb,
+                    updated_at = now()
+                FROM autoskill.workspaces w
+                WHERE o.workspace_id = w.workspace_id
+                  AND o.workspace_id = $1
+                  AND o.skill_graph_operation_id = $2
+                RETURNING o.*, w.external_key AS workspace_key
+                """,
+                workspace_id,
+                skill_graph_operation_id,
+                _json(
+                    {
+                        "applied_by": applied_by,
+                        "applied_at": datetime.now(UTC).isoformat(),
+                    }
+                ),
+            )
+            return TopologyApplyResult(
+                allowed=True,
+                operation=SkillGraphOperationRecord.from_row(row),
+                blockers=[],
+            )
+
 
 def _json(value: dict[str, Any] | list[Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
@@ -473,3 +620,22 @@ def _object_ids(objects: list[dict[str, str]], object_type: str) -> list[UUID]:
         except ValueError:
             continue
     return values
+
+
+def _topology_apply_blockers(
+    operation: SkillGraphOperationRecord,
+    trials: list[PlannedTopologyTrialRecord],
+) -> list[str]:
+    blockers: list[str] = []
+    if operation.status in {"applied", "rolled_back"}:
+        blockers.append(f"topology operation already {operation.status}")
+    elif operation.status not in {"candidate", "trial", "accepted"}:
+        blockers.append(f"topology operation status is not applyable: {operation.status}")
+    if not trials:
+        blockers.append("topology operation requires at least one planned trial")
+    for trial in trials:
+        if trial.status != "passed":
+            blockers.append(
+                f"topology trial {trial.planned_topology_trial_id} is {trial.status}"
+            )
+    return blockers
