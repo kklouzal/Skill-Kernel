@@ -613,6 +613,9 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
     governance = MemoryGovernanceStore()
     retrieval = MemoryInvalidationStore()
     embeddings = MemoryInvalidationStore()
+    observability = MemoryObservabilityStore()
+    trace_id = uuid4()
+    span_id = uuid4()
     workspace_root = tmp_path / "workspace"
     staging_root = workspace_root / ".autoskill" / "staging"
     archive_root = workspace_root / ".autoskill" / "archive"
@@ -662,6 +665,8 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
             job_kind="revocations.rollback",
             idempotency_key="rollback:canary-skill",
             payload={"workspace_id": "dev-01"},
+            trace_id=trace_id,
+            span_id=span_id,
         )
         result = await run_worker_once(
             WorkerStores(
@@ -671,6 +676,7 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
                 embeddings=embeddings,
                 retrieval=retrieval,
                 governance=governance,
+                observability=observability,
                 workspace_root=workspace_root,
                 archive_root=archive_root,
             ),
@@ -707,6 +713,29 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
     }
     assert retrieval.calls == embeddings.calls
     assert retrieval.calls[0]["workspace_key"] == "dev-01"
+    assert [span.operation_kind for span in observability.started] == ["job", "revocation"]
+    revocation_span = observability.started[1]
+    assert revocation_span.trace_id == trace_id
+    assert revocation_span.parent_span_id == span_id
+    assert revocation_span.operation_name == "revocations.rollback"
+    assert revocation_span.safe_attributes == {
+        "source": "worker",
+        "job_id": str(result.job.job_id),
+        "job_kind": "revocations.rollback",
+        "limit": 10,
+    }
+    assert observability.finished[0]["status"] == "ok"
+    assert observability.finished[0]["safe_attributes"] == {
+        "scanned": 1,
+        "completed": 1,
+        "failed": 0,
+    }
+    assert observability.finished[0]["object_refs"] == [
+        {
+            "object_type": "revocation_request",
+            "object_id": str(revocation.revocation_request_id),
+        }
+    ]
 
 
 def test_mutation_worker_deletes_initial_create_on_rollback(tmp_path) -> None:

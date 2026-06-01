@@ -54,9 +54,13 @@ Deliverables:
 
 Acceptance:
 
-- sidecar outage does not block OpenClaw;
+- sidecar outage does not block OpenClaw; implemented with hook-level tests that
+  spool failed events without throwing;
 - only redacted payloads are persisted;
-- spool replay is idempotent; implemented as accepted-or-duplicate deletion from bounded JSONL spool.
+- spool replay is idempotent; implemented as accepted-or-duplicate deletion from
+  bounded JSONL spool, with replay failure isolated from the already-forwarded
+  current event;
+- concurrent capture appends all failed events to the bounded spool;
 - actual hook handlers import and forward redacted envelopes in the local smoke fixture.
 
 ## Phase 3 - Scheduler and Job Queue

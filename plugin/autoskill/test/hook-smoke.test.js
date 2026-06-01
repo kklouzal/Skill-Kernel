@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { captureEvent } from "../src/index.js";
+
 const captureHooks = [
   ["after-tool-call", "tool_call_end"],
   ["before-tool-call", "tool_call_start"],
@@ -71,6 +73,130 @@ test("capture hook handlers import and forward redacted envelopes", async () => 
       assert.equal(call.body.events[0].span_id, "00000000-0000-4000-8000-000000000002");
       assert.equal(call.body.events[0].payload.token, "[REDACTED]");
     }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("capture spools current event when sidecar ingest is unavailable", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("sidecar unavailable");
+  };
+
+  try {
+    const workspaceDir = await tempWorkspace();
+    const result = await captureEvent({
+      eventType: "message_received",
+      payload: { content: "hello" },
+      trust: "untrusted",
+      taint: ["message"],
+      hookContext: hookContext(workspaceDir),
+    });
+
+    assert.equal(result.captured, true);
+    assert.equal(result.forwarded, false);
+    assert.equal(result.spooled, true);
+
+    const spoolDir = path.join(workspaceDir, ".autoskill", "spool");
+    const files = await fs.readdir(spoolDir);
+    assert.equal(files.length, 1);
+    const lines = (await fs.readFile(path.join(spoolDir, files[0]), "utf8"))
+      .trim()
+      .split("\n");
+    assert.equal(lines.length, 1);
+    assert.equal(JSON.parse(lines[0]).event_type, "message_received");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("capture does not re-spool current event when old spool replay fails", async () => {
+  const originalFetch = globalThis.fetch;
+  const workspaceDir = await tempWorkspace();
+  const spoolDir = path.join(workspaceDir, ".autoskill", "spool");
+  await fs.mkdir(spoolDir, { recursive: true });
+  await fs.writeFile(
+    path.join(spoolDir, "2026-01-01.jsonl"),
+    `${JSON.stringify({
+      event_id: "old",
+      schema_version: 1,
+      workspace_id: "workspace-1",
+      event_type: "tool_call_end",
+      occurred_at: new Date().toISOString(),
+      source: "openclaw-plugin",
+      trust: "trusted",
+      taint: [],
+      redaction_state: "redacted",
+      payload_hash: "old",
+      payload: { id: "old" },
+    })}\n`,
+  );
+
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return Response.json({ accepted: 1, duplicate: 0, rejected: 0 });
+    }
+    throw new Error("replay failed");
+  };
+
+  try {
+    const result = await captureEvent({
+      eventType: "tool_call_end",
+      payload: { id: "current" },
+      trust: "trusted",
+      taint: ["tool"],
+      hookContext: hookContext(workspaceDir),
+    });
+
+    assert.equal(result.forwarded, true);
+    assert.equal(result.spooled, undefined);
+    assert.equal(result.replay.failed, 1);
+
+    const files = await fs.readdir(spoolDir);
+    assert.deepEqual(files, ["2026-01-01.jsonl"]);
+    const lines = (await fs.readFile(path.join(spoolDir, files[0]), "utf8"))
+      .trim()
+      .split("\n");
+    assert.equal(lines.length, 1);
+    assert.equal(JSON.parse(lines[0]).event_id, "old");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("concurrent capture appends all failed events to the spool", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("sidecar unavailable");
+  };
+
+  try {
+    const workspaceDir = await tempWorkspace();
+    const results = await Promise.all(
+      Array.from({ length: 10 }, (_, index) =>
+        captureEvent({
+          eventType: "tool_call_end",
+          payload: { id: `event-${index}` },
+          trust: "trusted",
+          taint: ["tool"],
+          hookContext: hookContext(workspaceDir),
+        }),
+      ),
+    );
+
+    assert.equal(results.every((result) => result.spooled === true), true);
+
+    const spoolDir = path.join(workspaceDir, ".autoskill", "spool");
+    const files = await fs.readdir(spoolDir);
+    assert.equal(files.length, 1);
+    const lines = (await fs.readFile(path.join(spoolDir, files[0]), "utf8"))
+      .trim()
+      .split("\n");
+    assert.equal(lines.length, 10);
+    assert.equal(new Set(lines.map((line) => JSON.parse(line).event_id)).size, 10);
   } finally {
     globalThis.fetch = originalFetch;
   }

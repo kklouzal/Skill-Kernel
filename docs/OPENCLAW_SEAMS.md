@@ -91,3 +91,8 @@ fixture there appears as `source='openclaw-workspace'`, `eligible=true`, and
 `modelVisible=true`. A paired fixture under `<workspaceDir>/.autoskill/archive`
 did not appear in normal or `--eligible` skill discovery, so the archive root is
 outside OpenClaw's runtime skill loader.
+
+Hook capture treats current-event forwarding and old-spool replay as separate
+failure domains. The current event is spooled only when its own ingest forwarding
+fails. Replay of older spool records is best-effort after a successful current
+forward and must not re-spool or report the current event as failed.

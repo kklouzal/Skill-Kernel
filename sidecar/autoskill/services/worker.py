@@ -583,47 +583,88 @@ async def _run_revocations_rollback(stores: WorkerStores, job: JobRecord) -> dic
 
     limit = _payload_int(job.payload, "limit", default=10, minimum=1, maximum=25)
     workspace = _payload_workspace(job)
-    processed: list[dict[str, Any]] = []
-    completed = 0
-    failed = 0
-    for _index in range(limit):
-        request = await stores.governance.claim_next_revocation_request(
-            workspace_key=workspace,
-            request_kind="rollback",
-            root_object_type="evolution_transaction",
-            worker_id=job.lease_owner,
-        )
-        if request is None:
-            break
-        try:
-            outcome = await _execute_rollback_revocation(stores, request)
-        except Exception as error:
-            failed += 1
-            summary = request.traversal_summary | {
-                "status": "failed",
-                "error": f"{type(error).__name__}: {error}",
-            }
-            await stores.governance.complete_revocation_request(
-                revocation_request_id=request.revocation_request_id,
-                status="failed",
-                traversal_summary=summary,
+    observability = stores.observability or NullObservabilityStore()
+    span = await observability.start_span(
+        workspace_key=workspace or job.workspace_key or "unknown",
+        trace_id=job.trace_id,
+        parent_span_id=job.span_id or job.parent_span_id,
+        operation_name="revocations.rollback",
+        operation_kind="revocation",
+        safe_attributes={
+            "source": "worker",
+            "job_id": str(job.job_id),
+            "job_kind": job.job_kind,
+            "limit": limit,
+        },
+        object_refs=[{"object_type": "job", "object_id": str(job.job_id)}],
+    )
+    try:
+        processed: list[dict[str, Any]] = []
+        completed = 0
+        failed = 0
+        for _index in range(limit):
+            request = await stores.governance.claim_next_revocation_request(
+                workspace_key=workspace,
+                request_kind="rollback",
+                root_object_type="evolution_transaction",
+                worker_id=job.lease_owner,
             )
-            processed.append(
-                {
-                    "revocation_request_id": str(request.revocation_request_id),
+            if request is None:
+                break
+            try:
+                outcome = await _execute_rollback_revocation(stores, request)
+            except Exception as error:
+                failed += 1
+                summary = request.traversal_summary | {
                     "status": "failed",
-                    "error": summary["error"],
+                    "error": f"{type(error).__name__}: {error}",
                 }
-            )
-            continue
-        completed += 1
-        processed.append(outcome)
-    return {
-        "scanned": len(processed),
-        "completed": completed,
-        "failed": failed,
-        "revocations": processed,
-    }
+                await stores.governance.complete_revocation_request(
+                    revocation_request_id=request.revocation_request_id,
+                    status="failed",
+                    traversal_summary=summary,
+                )
+                processed.append(
+                    {
+                        "revocation_request_id": str(request.revocation_request_id),
+                        "status": "failed",
+                        "error": summary["error"],
+                    }
+                )
+                continue
+            completed += 1
+            processed.append(outcome)
+        output = {
+            "scanned": len(processed),
+            "completed": completed,
+            "failed": failed,
+            "revocations": processed,
+        }
+    except Exception as error:
+        await observability.finish_span(
+            span_id=span.span_id,
+            status="error",
+            safe_attributes={"error": f"{type(error).__name__}: {error}"[:500]},
+        )
+        raise
+    await observability.finish_span(
+        span_id=span.span_id,
+        status="ok",
+        safe_attributes={
+            "scanned": output["scanned"],
+            "completed": output["completed"],
+            "failed": output["failed"],
+        },
+        object_refs=[
+            {
+                "object_type": "revocation_request",
+                "object_id": str(item["revocation_request_id"]),
+            }
+            for item in processed
+            if item.get("revocation_request_id")
+        ],
+    )
+    return output
 
 
 async def _run_writer_apply(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:

@@ -55,8 +55,6 @@ export async function captureEvent({ eventType, payload, trust, taint, hookConte
       timeoutMs: 500,
       authToken: config.ingestToken,
     });
-    await replayCapturedSpool(config);
-    return { captured: true, forwarded: true, eventId: envelope.event_id };
   } catch (error) {
     await appendSpool(config.spoolDir, envelope, { maxBytes: config.maxSpoolBytes });
     return {
@@ -67,15 +65,30 @@ export async function captureEvent({ eventType, payload, trust, taint, hookConte
       error: String(error?.message ?? error),
     };
   }
+
+  try {
+    const replay = await replayCapturedSpool(config);
+    return { captured: true, forwarded: true, eventId: envelope.event_id, replay };
+  } catch (error) {
+    return {
+      captured: true,
+      forwarded: true,
+      eventId: envelope.event_id,
+      replay: {
+        failed: true,
+        error: String(error?.message ?? error),
+      },
+    };
+  }
 }
 
 async function replayCapturedSpool(config) {
   if (replayInFlight) {
-    return;
+    return { skipped: true, reason: "already_running" };
   }
   replayInFlight = true;
   try {
-    await replaySpool(config.spoolDir, {
+    return await replaySpool(config.spoolDir, {
       batchSize: config.replayBatchSize,
       maxBytes: config.maxSpoolBytes,
       send: (events) =>

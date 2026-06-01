@@ -178,14 +178,15 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Validation passed for deterministic topology apply semantics: focused topology/admin tests passed 10 tests, full sidecar tests passed with 144 tests, plugin tests passed with 7 tests, and a real compose Postgres smoke blocked apply while trials were planned, then moved the operation to `applied` after all planned topology trials were marked passed.
 - Validation passed for the installed OpenClaw runtime-plugin seam: the AutoSkill plugin now uses `openclaw.plugin.json` plus `package.json#openclaw.extensions` instead of a metadata-only `.codex-plugin` bundle, registers typed hooks through `api.on(...)`, and `openclaw --dev plugins inspect autoskill --json --runtime` reports `imported=true`, `hookCount=11`, and no diagnostics when dev-profile `allowConversationAccess` and `allowPromptInjection` are enabled.
 - Validation passed for active skill root loading and archive invisibility: a dev-profile fixture under `/home/kklouzal/.openclaw/workspace-dev/skills/autoskill/v16-active-root-smoke/SKILL.md` appeared in `openclaw --dev skills list --json` as `source='openclaw-workspace'`, `eligible=true`, `modelVisible=true`, and `commandVisible=true`; a paired fixture under `/home/kklouzal/.openclaw/workspace-dev/.autoskill/archive/v16-archive-root-smoke/v1/SKILL.md` did not appear in normal or `--eligible` skill discovery, and both fixtures were removed after the smoke.
+- Validation passed for runtime hook spool failure/concurrency behavior: plugin tests now prove sidecar outage spools the current event without blocking capture, concurrent failed captures append all events to the bounded spool, and a failed replay of older spooled records no longer re-spools or misreports an already-forwarded current event; `npm test --prefix plugin/autoskill` passed with 11 tests.
+- Validation passed for mutation-worker revocation rollback tracing: `revocations.rollback` now starts a child `revocation` span under the claimed job span, records bounded safe attributes and processed revocation request refs, and focused/full worker tests prove trace/span propagation through rollback execution.
 
 ## Next Gates
 
-1. Run a live gateway spool replay/concurrency smoke against the runtime hook plugin path.
-2. Continue trace propagation through revocation and any queued semantic jobs that bypass the typed LLM client. Direct writer apply/rollback API calls now record content-safe trace spans; mutation worker writer/revocation paths still use job-level spans.
-3. Extend topology apply semantics from state transition to full downstream mutation orchestration. Topology apply now requires passed trials and can require activation readiness for associated skill versions before marking an operation `applied`.
-4. Add production embedding provider live validation once credentials/provider endpoint are configured.
-5. External-skill collision awareness now covers scan scheduling, profile-safe embeddings, duplicate-match recommendations, and broker shadow-risk telemetry without mutating external-owned files. Next external-skill work is explicit operator import/reuse review flows, not autonomous mutation.
+1. Continue trace propagation through any queued semantic jobs that bypass the typed LLM client. Direct writer apply/rollback API calls and mutation-worker revocation rollback now record content-safe spans; mutation-worker writer apply still uses job-level spans.
+2. Extend topology apply semantics from state transition to full downstream mutation orchestration. Topology apply now requires passed trials and can require activation readiness for associated skill versions before marking an operation `applied`.
+3. Add production embedding provider live validation once credentials/provider endpoint are configured.
+4. External-skill collision awareness now covers scan scheduling, profile-safe embeddings, duplicate-match recommendations, and broker shadow-risk telemetry without mutating external-owned files. Next external-skill work is explicit operator import/reuse review flows, not autonomous mutation.
 
 ## Known Risks
 
@@ -193,14 +194,14 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   hook coverage requires plugin entry hook policy to allow conversation access
   and prompt injection; production config still needs that explicit operator
   setting.
-- Spool replay is best-effort from capture hooks and still needs a live gateway smoke test under actual hook concurrency.
+- Spool replay is best-effort from capture hooks and covered by plugin-level outage, replay-failure, and concurrent-capture tests; a full production gateway run is still useful after operator config enables the plugin outside the dev profile.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
 - Worker health now includes persistent heartbeat records and long-running handlers can renew job leases; handlers still need workload-specific progress metadata once LLM/evaluation jobs become lengthy.
 - Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive evidence still needs aggregation logic beyond evaluator replay maturity records.
 - Embedding generation defaults to deterministic local hash embeddings until production provider settings are configured and live-validated; storage is still fixed to `vector(1536)` until a deliberate variable-dimension storage migration is designed.
 - Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and broader shadow-edge policy tuning remain pending.
 - External-skill awareness now includes read-only root scanning plus inventory/retrieval/matching; scan scheduling defaults, embedding generation for external descriptions, richer collision risk scoring, and explicit import recommendation flows remain pending.
-- v16 trace/profile/context APIs and schema exist; event/job/retrieval/evaluator/context-broker paths now propagate trace or context artifacts, LLM calls now have content-safe invocation audit rows, and direct writer apply/rollback APIs now record content-safe writer spans. Revocation rollback and queued semantic job paths still need deeper automatic trace/profile/context artifact records.
+- v16 trace/profile/context APIs and schema exist; event/job/retrieval/evaluator/context-broker paths now propagate trace or context artifacts, LLM calls now have content-safe invocation audit rows, direct writer apply/rollback APIs record content-safe writer spans, and mutation-worker revocation rollback records a content-safe child span. Queued semantic job paths still need deeper automatic trace/profile/context artifact records.
 - SkillGraphIR now has planner/API/store persistence with transactions, planned trials, revocation invalidation for operation/trial state, and deterministic apply state transitions after passed trials. Improve/compose/decompose still need full downstream mutation orchestration after accepted topology operations.
 - Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded or induced redacted intervention replay from explicit replay, attribution, canary, or broker outcome evidence.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints; mutation-worker apply exists but fails closed unless the queued job is explicitly policy-approved.
