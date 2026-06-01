@@ -95,6 +95,16 @@ export async function compactSpool(spoolDir, { maxBytes = 10 * 1024 * 1024 } = {
   return { bytes: Math.max(total, 0), files: sizes.length };
 }
 
+export async function getSpoolStats(spoolDir) {
+  const files = await listSpoolFiles(spoolDir);
+  let bytes = 0;
+  for (const file of files) {
+    const stat = await fs.stat(file);
+    bytes += stat.size;
+  }
+  return { files: files.length, bytes };
+}
+
 async function listSpoolFiles(spoolDir) {
   try {
     const entries = await fs.readdir(spoolDir, { withFileTypes: true });

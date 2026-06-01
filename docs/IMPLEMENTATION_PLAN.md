@@ -64,7 +64,7 @@ Acceptance:
 
 - jobs survive restart;
 - duplicate ticks do not duplicate jobs;
-- stuck leases recover.
+- stuck leases recover; implemented for expired leases with remaining attempts.
 
 ## Phase 4 - Evidence, Embeddings, Retrieval
 

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     schema_name: str = "autoskill"
     statement_timeout_ms: int = 30_000
     ingest_token: str | None = None
+    control_token: str | None = None
     active_root: Path = Path("skills/autoskill")
     archive_root: Path = Path(".autoskill/archive")
     staging_root: Path = Path(".autoskill/staging")

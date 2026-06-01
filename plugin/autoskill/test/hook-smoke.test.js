@@ -92,6 +92,35 @@ test("before-prompt-build hook imports and returns sidecar context hints", async
   }
 });
 
+test("plugin diagnostics reports spool and sidecar status", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, request) => {
+    assert.equal(url, "http://127.0.0.1:8765/v1/status");
+    assert.equal(request.method, "GET");
+    assert.equal(request.headers.authorization, "Bearer token-1");
+    return Response.json({
+      mode: "autonomous_guarded",
+      database_configured: true,
+      ingest_auth_configured: true,
+      control_auth_configured: false,
+      runtime_context_broker: {},
+      jobs: { queued: 1 },
+    });
+  };
+
+  try {
+    const workspaceDir = await tempWorkspace();
+    const { getPluginDiagnostics } = await import("../src/index.js");
+    const result = await getPluginDiagnostics(hookContext(workspaceDir));
+    assert.equal(result.enabled, true);
+    assert.equal(result.spool.files, 0);
+    assert.equal(result.sidecar.reachable, true);
+    assert.equal(result.sidecar.status.jobs.queued, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("every hook directory declares OpenClaw event metadata", async () => {
   const hooksRoot = new URL("../hooks/", import.meta.url);
   const entries = await fs.readdir(hooksRoot, { withFileTypes: true });

@@ -28,15 +28,18 @@ Phase 0/1 bootstrap.
 - OpenClaw plugin spool replay and byte-bound compaction are implemented.
 - Hook-package smoke tests import actual handlers, verify OpenClaw event metadata, and prove redacted envelope forwarding.
 - Real local Postgres validation passed via compose: migration applied, first ingest accepted, duplicate ingest deduped, payload stored redacted.
+- Plugin diagnostics report sidecar reachability/status and spool file/byte counts.
+- Sidecar job queue primitives are implemented: idempotent enqueue, lease claim, completion, status counts, and expired-lease recovery.
+- Real local Postgres job validation passed via compose: duplicate enqueue returned existing job, claim leased a job, completion marked success, expired lease was recovered and reclaimed.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
-2. Add plugin status/control diagnostic surface.
-3. Add sidecar job queue worker primitives.
-4. Add evidence-item derivation from captured events.
-5. Add retrieval policy and context-broker data access.
+2. Add scheduler tick primitives that create jobs from due schedules.
+3. Add evidence-item derivation from captured events.
+4. Add retrieval policy and context-broker data access.
+5. Add worker loop dispatch with risk/cost pool separation.
 
 ## Known Risks
 
@@ -44,3 +47,4 @@ Phase 0/1 bootstrap.
 - Spool replay is best-effort from capture hooks and still needs a live gateway smoke test under actual hook concurrency.
 - Message hook event aliases remain intentionally broad until live OpenClaw installed-plugin validation confirms current names.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
+- Job completion currently records terminal success/failure; retry backoff policy beyond expired-lease recovery is still pending.

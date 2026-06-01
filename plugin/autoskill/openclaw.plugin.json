@@ -12,8 +12,11 @@
     "properties": {
       "enabled": { "type": "boolean" },
       "sidecarUrl": { "type": "string" },
+      "ingestToken": { "type": "string" },
       "spoolDir": { "type": "string" },
       "workspaceId": { "type": "string" },
+      "replayBatchSize": { "type": "integer", "minimum": 1, "maximum": 500 },
+      "maxSpoolBytes": { "type": "integer", "minimum": 1024 },
       "captureRawConversation": { "type": "boolean" },
       "runtimeContextBroker": {
         "type": "object",
@@ -28,4 +31,3 @@
     }
   }
 }
-

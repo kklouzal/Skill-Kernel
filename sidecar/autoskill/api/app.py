@@ -4,17 +4,19 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from hmac import compare_digest
 from typing import Annotated
+from uuid import UUID
 
 from autoskill import __version__
 from autoskill.core.config import get_settings
 from autoskill.core.events import IngestRequest, IngestResult
 from autoskill.db.events import AsyncpgEventStore, EventStore, NullEventStore
+from autoskill.db.jobs import AsyncpgJobStore, JobStore, NullJobStore
 from autoskill.services.broker import (
     ContextHintRequest,
     ContextHintResponse,
     bootstrap_context_hint,
 )
-from fastapi import FastAPI, Header, HTTPException, status
+from fastapi import FastAPI, Header, HTTPException, Query, status
 from pydantic import BaseModel
 
 
@@ -28,7 +30,39 @@ class StatusResponse(BaseModel):
     mode: str
     database_configured: bool
     ingest_auth_configured: bool
+    control_auth_configured: bool
     runtime_context_broker: dict[str, object]
+    jobs: dict[str, int]
+
+
+class JobEnqueueRequest(BaseModel):
+    workspace_id: str
+    job_kind: str
+    idempotency_key: str
+    payload: dict[str, object] = {}
+    priority: int = 100
+    max_attempts: int = 5
+
+
+class JobEnqueueResponse(BaseModel):
+    created: bool
+    job: dict[str, object]
+
+
+class JobClaimRequest(BaseModel):
+    worker_id: str
+    lease_seconds: int = 300
+    job_kinds: list[str] | None = None
+
+
+class JobClaimResponse(BaseModel):
+    job: dict[str, object] | None
+
+
+class JobCompleteRequest(BaseModel):
+    worker_id: str
+    status: str
+    error: str | None = None
 
 
 def _build_event_store() -> EventStore:
@@ -39,6 +73,16 @@ def _build_event_store() -> EventStore:
             statement_timeout_ms=settings.statement_timeout_ms,
         )
     return NullEventStore()
+
+
+def _build_job_store() -> JobStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgJobStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullJobStore()
 
 
 def _require_ingest_auth(authorization: str | None) -> None:
@@ -54,17 +98,35 @@ def _require_ingest_auth(authorization: str | None) -> None:
         )
 
 
-def create_app(event_store: EventStore | None = None) -> FastAPI:
+def _require_control_auth(authorization: str | None) -> None:
+    settings = get_settings()
+    if not settings.control_token:
+        return
+
+    expected = f"Bearer {settings.control_token}"
+    if authorization is None or not compare_digest(authorization, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid control authorization",
+        )
+
+
+def create_app(
+    event_store: EventStore | None = None,
+    job_store: JobStore | None = None,
+) -> FastAPI:
     store = event_store or _build_event_store()
+    jobs = job_store or _build_job_store()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:
-            close = getattr(store, "close", None)
-            if close is not None:
-                await close()
+            for closeable in (store, jobs):
+                close = getattr(closeable, "close", None)
+                if close is not None:
+                    await close()
 
     app = FastAPI(
         title="SkillKernel AutoSkill Sidecar",
@@ -79,14 +141,17 @@ def create_app(event_store: EventStore | None = None) -> FastAPI:
     @app.get("/v1/status", response_model=StatusResponse)
     async def status() -> StatusResponse:
         settings = get_settings()
+        job_summary = await jobs.summary()
         return StatusResponse(
             mode=settings.mode.value,
             database_configured=bool(settings.database_url),
             ingest_auth_configured=bool(settings.ingest_token),
+            control_auth_configured=bool(settings.control_token),
             runtime_context_broker={
                 "timeout_ms": settings.runtime_context_timeout_ms,
                 "max_tokens": settings.max_context_hint_tokens,
             },
+            jobs=job_summary.counts,
         )
 
     @app.post("/v1/ingest/events", response_model=IngestResult)
@@ -112,8 +177,63 @@ def create_app(event_store: EventStore | None = None) -> FastAPI:
         return {"skills": []}
 
     @app.get("/v1/jobs")
-    async def list_jobs() -> dict[str, list[object]]:
-        return {"jobs": []}
+    async def list_jobs(
+        authorization: Annotated[str | None, Header()] = None,
+        status_filter: Annotated[str | None, Query(alias="status")] = None,
+        limit: int = 50,
+    ) -> dict[str, list[dict[str, object]]]:
+        _require_control_auth(authorization)
+        listed = await jobs.list_jobs(status=status_filter, limit=max(1, min(limit, 250)))
+        return {"jobs": [job.to_json() for job in listed]}
+
+    @app.post("/v1/jobs/enqueue", response_model=JobEnqueueResponse)
+    async def enqueue_job(
+        request: JobEnqueueRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> JobEnqueueResponse:
+        _require_control_auth(authorization)
+        result = await jobs.enqueue_job(
+            workspace_key=request.workspace_id,
+            job_kind=request.job_kind,
+            idempotency_key=request.idempotency_key,
+            payload=request.payload,
+            priority=request.priority,
+            max_attempts=request.max_attempts,
+        )
+        return JobEnqueueResponse(created=result.created, job=result.job.to_json())
+
+    @app.post("/v1/jobs/claim", response_model=JobClaimResponse)
+    async def claim_job(
+        request: JobClaimRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> JobClaimResponse:
+        _require_control_auth(authorization)
+        job = await jobs.claim_next_job(
+            worker_id=request.worker_id,
+            lease_seconds=request.lease_seconds,
+            job_kinds=request.job_kinds,
+        )
+        return JobClaimResponse(job=job.to_json() if job else None)
+
+    @app.post("/v1/jobs/{job_id}/complete")
+    async def complete_job(
+        job_id: UUID,
+        request: JobCompleteRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> dict[str, object | None]:
+        _require_control_auth(authorization)
+        if request.status not in {"succeeded", "failed"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="status must be succeeded or failed",
+            )
+        job = await jobs.complete_job(
+            job_id=job_id,
+            worker_id=request.worker_id,
+            status=request.status,
+            error=request.error,
+        )
+        return {"job": job.to_json() if job else None}
 
     @app.get("/v1/audit/recent")
     async def recent_audit() -> dict[str, list[object]]:

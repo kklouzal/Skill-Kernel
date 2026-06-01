@@ -79,11 +79,21 @@ CREATE TABLE IF NOT EXISTS autoskill.skill_versions (
   UNIQUE(skill_id, version)
 );
 
-ALTER TABLE autoskill.skills
-  ADD CONSTRAINT skills_active_version_fk
-  FOREIGN KEY (active_version_id)
-  REFERENCES autoskill.skill_versions(skill_version_id)
-  DEFERRABLE INITIALLY DEFERRED;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'skills_active_version_fk'
+      AND conrelid = 'autoskill.skills'::regclass
+  ) THEN
+    ALTER TABLE autoskill.skills
+      ADD CONSTRAINT skills_active_version_fk
+      FOREIGN KEY (active_version_id)
+      REFERENCES autoskill.skill_versions(skill_version_id)
+      DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS autoskill.compiled_files (
   compiled_file_id uuid PRIMARY KEY,

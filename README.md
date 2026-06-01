@@ -24,9 +24,12 @@ Implemented now:
 - sidecar API skeleton with health/status/ingest/context-hint endpoints;
 - DB-backed idempotent ingest for redacted event envelopes;
 - optional bearer-token auth for event ingest;
+- optional bearer-token auth for control/job APIs;
+- Postgres-backed job enqueue, idempotency, claim, completion, and expired-lease recovery primitives;
 - typed event envelope, SkillIR, scanner, compiler, redaction, audit hash, and path-contained writer primitives;
 - initial Postgres migration covering the core v9 control-plane tables;
 - OpenClaw plugin/hook package skeleton with local redaction, bounded spool, forwarding, and replay utilities;
+- OpenClaw plugin diagnostics for sidecar status and spool size;
 - hook-package smoke tests that import the actual handlers and verify forwarded redacted envelopes;
 - focused Python and Node tests for deterministic primitives.
 
@@ -34,7 +37,7 @@ Not implemented yet:
 
 - full installed-plugin proof against the live OpenClaw gateway;
 - pgvector-backed retrieval and embeddings;
-- durable scheduler worker loops;
+- scheduler ticks and durable worker dispatch loops;
 - LLM proposal operations;
 - evaluator/probe execution;
 - autonomous apply.

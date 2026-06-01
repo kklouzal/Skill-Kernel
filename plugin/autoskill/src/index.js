@@ -1,7 +1,7 @@
-import { fetchContextHint, forwardEvent, forwardEvents } from "./client/index.js";
+import { fetchContextHint, fetchStatus, forwardEvent, forwardEvents } from "./client/index.js";
 import { resolveConfig } from "./config.js";
 import { buildEventEnvelope } from "./event-envelope.js";
-import { appendSpool, replaySpool } from "./spool/index.js";
+import { appendSpool, getSpoolStats, replaySpool } from "./spool/index.js";
 
 let replayInFlight = false;
 
@@ -78,4 +78,37 @@ export async function maybeContextHint({ prompt, hookContext }) {
     }
     return undefined;
   }
+}
+
+export async function getPluginDiagnostics(hookContext) {
+  const config = resolveConfig(hookContext);
+  const spool = await getSpoolStats(config.spoolDir);
+  let sidecar = { reachable: false };
+  try {
+    sidecar = {
+      reachable: true,
+      status: await fetchStatus(config.sidecarUrl, {
+        timeoutMs: config.runtimeContextBroker.timeoutMs,
+        authToken: config.ingestToken,
+      }),
+    };
+  } catch (error) {
+    sidecar = {
+      reachable: false,
+      error: String(error?.message ?? error),
+    };
+  }
+  return {
+    enabled: config.enabled,
+    workspaceId: config.workspaceId,
+    sidecarUrl: config.sidecarUrl,
+    spool,
+    sidecar,
+    runtimeContextBroker: {
+      enabled: config.runtimeContextBroker.enabled,
+      maxTokens: config.runtimeContextBroker.maxTokens,
+      timeoutMs: config.runtimeContextBroker.timeoutMs,
+      failSoft: config.runtimeContextBroker.failSoft,
+    },
+  };
 }
