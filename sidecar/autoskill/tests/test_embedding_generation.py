@@ -48,10 +48,12 @@ class MemoryPendingEmbeddingStore:
         self,
         *,
         embedding_model: str,
+        embedding_profile_id=None,
         workspace_key: str | None = None,
         limit: int = 100,
     ) -> list[EmbeddingSourceText]:
         assert embedding_model
+        self.last_profile_id = embedding_profile_id
         assert workspace_key in {None, "dev-01"}
         return self.sources[:limit]
 
@@ -65,6 +67,7 @@ class MemoryPendingEmbeddingStore:
         embedding: list[float],
         text: str,
         skill_id=None,
+        embedding_profile_id=None,
     ) -> EmbeddingUpsertResult:
         assert len(embedding) == EMBEDDING_DIM
         assert any(value != 0.0 for value in embedding)
@@ -74,6 +77,7 @@ class MemoryPendingEmbeddingStore:
                 "object_type": object_type,
                 "object_id": object_id,
                 "embedding_model": embedding_model,
+                "embedding_profile_id": embedding_profile_id,
                 "skill_id": skill_id,
                 "text": text,
             }
@@ -86,6 +90,7 @@ class MemoryPendingEmbeddingStore:
                 object_type=object_type,
                 object_id=object_id,
                 skill_id=skill_id,
+                embedding_profile_id=embedding_profile_id,
                 embedding_model=embedding_model,
                 embedding_dim=EMBEDDING_DIM,
                 text_hash="stored-hash",
@@ -180,6 +185,7 @@ def test_generate_pending_embeddings_upserts_all_sources() -> None:
     assert result.updated == 0
     assert len(store.upserts) == 2
     assert store.upserts[0]["object_type"] == "evidence_item"
+    assert store.upserts[0]["embedding_profile_id"] is None
     assert store.upserts[1]["skill_id"] is not None
 
 
@@ -202,8 +208,10 @@ def test_generate_embeddings_api_runs_control_primitive() -> None:
 
 def test_generate_embeddings_api_uses_qualified_embedding_profile() -> None:
     store = MemoryPendingEmbeddingStore()
+    profile_id = uuid4()
     profile_store = MemoryEmbeddingProfileStore(
         profile=SimpleNamespace(
+            profile_id=profile_id,
             status="qualified",
             embedding_dim=1536,
             route_kind="hash",
@@ -227,7 +235,11 @@ def test_generate_embeddings_api_uses_qualified_embedding_profile() -> None:
 
     assert response.generated == 1
     assert response.embedding_model == "qualified-hash-profile"
+    assert response.embedding_profile_id == str(profile_id)
+    assert response.embedding_dim == 1536
     assert store.upserts[0]["embedding_model"] == "qualified-hash-profile"
+    assert store.upserts[0]["embedding_profile_id"] == profile_id
+    assert store.last_profile_id == profile_id
     assert profile_store.calls == [
         {"workspace_key": "dev-01", "profile_key": "embedding-default"}
     ]
@@ -236,6 +248,7 @@ def test_generate_embeddings_api_uses_qualified_embedding_profile() -> None:
 def test_generate_embeddings_api_rejects_unqualified_embedding_profile() -> None:
     profile_store = MemoryEmbeddingProfileStore(
         profile=SimpleNamespace(
+            profile_id=uuid4(),
             status="candidate",
             embedding_dim=1536,
             route_kind="hash",

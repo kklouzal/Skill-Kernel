@@ -81,6 +81,8 @@ class ModelProfileRecord:
     route_kind: str
     endpoint_ref: str | None
     timeout_seconds: float
+    thinking_level: str
+    thinking_fallback_policy: str
     status: str
     qualification: dict[str, Any]
     kind: Literal["model", "embedding"]
@@ -99,6 +101,8 @@ class ModelProfileRecord:
             "route_kind": self.route_kind,
             "endpoint_ref": self.endpoint_ref,
             "timeout_seconds": self.timeout_seconds,
+            "thinking_level": self.thinking_level,
+            "thinking_fallback_policy": self.thinking_fallback_policy,
             "status": self.status,
             "qualification": self.qualification,
             "kind": self.kind,
@@ -119,6 +123,8 @@ class ModelProfileRecord:
             route_kind=row["route_kind"],
             endpoint_ref=_row_get(row, "endpoint_ref"),
             timeout_seconds=float(row["timeout_seconds"]),
+            thinking_level=_row_get(row, "thinking_level") or "off",
+            thinking_fallback_policy=_row_get(row, "thinking_fallback_policy") or "omit",
             status=row["status"],
             qualification=_json_dict(row["qualification"]),
             kind="model",
@@ -139,6 +145,8 @@ class ModelProfileRecord:
             route_kind=row["route_kind"],
             endpoint_ref=_row_get(row, "endpoint_ref"),
             timeout_seconds=float(row["timeout_seconds"]),
+            thinking_level="off",
+            thinking_fallback_policy="omit",
             status=row["status"],
             qualification=_json_dict(row["qualification"]),
             kind="embedding",
@@ -187,8 +195,18 @@ class ProfileStore(Protocol):
         timeout_seconds: float = 60.0,
         status: str = "candidate",
         qualification: dict[str, Any] | None = None,
+        thinking_level: str = "off",
+        thinking_fallback_policy: str = "omit",
     ) -> ModelProfileRecord:
         """Create or update the configured text model access profile."""
+
+    async def get_model_profile(
+        self,
+        *,
+        workspace_key: str,
+        profile_key: str,
+    ) -> ModelProfileRecord | None:
+        """Fetch one text model profile for provider-qualified runtime use."""
 
     async def upsert_embedding_profile(
         self,
@@ -273,6 +291,8 @@ class NullProfileStore:
         timeout_seconds: float = 60.0,
         status: str = "candidate",
         qualification: dict[str, Any] | None = None,
+        thinking_level: str = "off",
+        thinking_fallback_policy: str = "omit",
     ) -> ModelProfileRecord:
         from uuid import uuid4
 
@@ -287,6 +307,8 @@ class NullProfileStore:
             route_kind=route_kind,
             endpoint_ref=endpoint_ref,
             timeout_seconds=timeout_seconds,
+            thinking_level=thinking_level,
+            thinking_fallback_policy=thinking_fallback_policy,
             status=status,
             qualification=qualification or {},
             kind="model",
@@ -294,6 +316,14 @@ class NullProfileStore:
             created_at=now,
             updated_at=now,
         )
+
+    async def get_model_profile(
+        self,
+        *,
+        workspace_key: str,
+        profile_key: str,
+    ) -> ModelProfileRecord | None:
+        return None
 
     async def upsert_embedding_profile(
         self,
@@ -322,6 +352,8 @@ class NullProfileStore:
             route_kind=route_kind,
             endpoint_ref=endpoint_ref,
             timeout_seconds=timeout_seconds,
+            thinking_level="off",
+            thinking_fallback_policy="omit",
             status=status,
             qualification=qualification or {},
             kind="embedding",
@@ -443,6 +475,8 @@ class AsyncpgProfileStore(AsyncpgPoolOwner):
         timeout_seconds: float = 60.0,
         status: str = "candidate",
         qualification: dict[str, Any] | None = None,
+        thinking_level: str = "off",
+        thinking_fallback_policy: str = "omit",
     ) -> ModelProfileRecord:
         pool = await self._get_pool()
         async with pool.acquire() as conn, conn.transaction():
@@ -458,20 +492,26 @@ class AsyncpgProfileStore(AsyncpgPoolOwner):
                   route_kind,
                   endpoint_ref,
                   timeout_seconds,
+                  thinking_level,
+                  thinking_fallback_policy,
                   status,
                   qualification
                 )
-                VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+                VALUES (
+                  gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb
+                )
                 ON CONFLICT (workspace_id, profile_key) DO UPDATE
                 SET provider = EXCLUDED.provider,
                     model = EXCLUDED.model,
                     route_kind = EXCLUDED.route_kind,
                     endpoint_ref = EXCLUDED.endpoint_ref,
                     timeout_seconds = EXCLUDED.timeout_seconds,
+                    thinking_level = EXCLUDED.thinking_level,
+                    thinking_fallback_policy = EXCLUDED.thinking_fallback_policy,
                     status = EXCLUDED.status,
                     qualification = EXCLUDED.qualification,
                     updated_at = now()
-                RETURNING *, $10::text AS workspace_key
+                RETURNING *, $12::text AS workspace_key
                 """,
                 workspace_id,
                 profile_key,
@@ -480,11 +520,35 @@ class AsyncpgProfileStore(AsyncpgPoolOwner):
                 route_kind,
                 endpoint_ref,
                 timeout_seconds,
+                thinking_level,
+                thinking_fallback_policy,
                 status,
                 _json(qualification or {}),
                 workspace_key,
             )
         return ModelProfileRecord.from_model_row(row)
+
+    async def get_model_profile(
+        self,
+        *,
+        workspace_key: str,
+        profile_key: str,
+    ) -> ModelProfileRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                SELECT *, $3::text AS workspace_key
+                FROM autoskill.model_profiles
+                WHERE workspace_id = $1
+                  AND profile_key = $2
+                """,
+                workspace_id,
+                profile_key,
+                workspace_key,
+            )
+        return ModelProfileRecord.from_model_row(row) if row else None
 
     async def upsert_embedding_profile(
         self,

@@ -1,6 +1,6 @@
 # SkillKernel Implementation Plan
 
-This plan mirrors section 27 of the v9 handoff and turns it into repo-level gates.
+This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
 ## Phase 0 - Confirm OpenClaw Seams
 
@@ -76,7 +76,7 @@ Acceptance:
 Deliverables:
 
 - evidence extractor; implemented for deterministic observed evidence derived from redacted raw events;
-- redacted embeddings; storage/search primitives, deterministic development generation worker, and configurable provider routing are implemented;
+- redacted embeddings; storage/search primitives, deterministic development generation worker, configurable provider routing, profile-scoped embedding ownership, and qualified-profile generation are implemented;
 - lexical + vector + metadata search; lexical evidence/body-index search and pgvector nearest search are implemented;
 - exact rerank; implemented as deterministic broker rerank over lexical score, query overlap, lifecycle, and graph edges;
 - active/archive matching; implemented in runtime broker and `/v1/skills/match` so archived matches are promotion candidates rather than injected hints or duplicate new skills;
@@ -88,6 +88,24 @@ Acceptance:
 - active and archived matches are considered before new skill creation;
 - ANN recall audit exists; implemented and validated against local Postgres;
 - retrieval decisions are logged.
+- same-object/same-model embeddings from different qualified profiles remain separate; implemented with `embedding_profile_id` storage, profile-scoped uniqueness, API propagation, and local Postgres smoke validation.
+
+## Phase 4.5 - Text Model Access and Invocation Audit
+
+Deliverables:
+
+- typed LLM client for semantic proposal jobs; implemented for one workspace/profile text profile per call;
+- model profile thinking-level and fallback policy; implemented on profile storage/API and recorded on invocation audit rows;
+- OpenAI-compatible `/chat/completions` route; implemented with bounded timeout and safe endpoint/API-key resolution;
+- OpenClaw text route; intentionally fail-closed as `unsupported` until a stable seam is available;
+- LLM invocation audit; implemented as content-safe `llm_invocations` rows with purpose, model/profile, route, trace/span, token estimates, status, error, and non-secret audit metadata.
+
+Acceptance:
+
+- LLM calls are proposal-engine calls only, with deterministic code owning policy/application;
+- unsupported OpenClaw text routing is audited and blocked instead of silently falling through;
+- API keys are never persisted in invocation audit metadata;
+- focused LLM client tests pass, full sidecar tests pass, and local Postgres smoke can persist an invocation audit row.
 
 ## Phase 5 - Runtime Context Broker
 

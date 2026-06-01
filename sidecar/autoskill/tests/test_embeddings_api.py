@@ -22,6 +22,7 @@ from fastapi import HTTPException
 class MemoryEmbeddingStore:
     def __init__(self) -> None:
         self.embedding: EmbeddingRecord | None = None
+        self.calls: list[dict[str, object]] = []
         self.closed = False
 
     async def close(self) -> None:
@@ -37,9 +38,17 @@ class MemoryEmbeddingStore:
         embedding: list[float],
         text: str,
         skill_id=None,
+        embedding_profile_id=None,
     ) -> EmbeddingUpsertResult:
         if len(embedding) != EMBEDDING_DIM:
             raise ValueError(f"embedding must have exactly {EMBEDDING_DIM} dimensions")
+        self.calls.append(
+            {
+                "method": "upsert",
+                "embedding_profile_id": embedding_profile_id,
+                "embedding_model": embedding_model,
+            }
+        )
         record = EmbeddingRecord(
             embedding_id=uuid4(),
             workspace_id=uuid4(),
@@ -47,6 +56,7 @@ class MemoryEmbeddingStore:
             object_type=object_type,
             object_id=object_id,
             skill_id=skill_id,
+            embedding_profile_id=embedding_profile_id,
             embedding_model=embedding_model,
             embedding_dim=EMBEDDING_DIM,
             text_hash="hash-1",
@@ -62,11 +72,19 @@ class MemoryEmbeddingStore:
         workspace_key: str,
         embedding_model: str,
         embedding: list[float],
+        embedding_profile_id=None,
         object_type: str | None = None,
         limit: int = 10,
     ) -> list[EmbeddingSearchCandidate]:
         if len(embedding) != EMBEDDING_DIM:
             raise ValueError(f"embedding must have exactly {EMBEDDING_DIM} dimensions")
+        self.calls.append(
+            {
+                "method": "search",
+                "embedding_profile_id": embedding_profile_id,
+                "embedding_model": embedding_model,
+            }
+        )
         if self.embedding is None:
             return []
         return [EmbeddingSearchCandidate(embedding=self.embedding, distance=0.0)]
@@ -76,6 +94,7 @@ class MemoryEmbeddingStore:
         *,
         workspace_key: str,
         embedding_model: str,
+        embedding_profile_id=None,
         object_type: str | None = None,
         sample_size: int = 10,
         k: int = 10,
@@ -123,7 +142,55 @@ def test_embeddings_api_upserts_and_searches() -> None:
 
     assert upserted.created is True
     assert upserted.embedding["object_id"] == str(object_id)
+    assert upserted.embedding["embedding_profile_id"] is None
     assert searched.candidates[0]["distance"] == 0.0
+
+
+def test_embeddings_api_can_scope_to_embedding_profile_id() -> None:
+    store = MemoryEmbeddingStore()
+    app = create_app(embedding_store=store)
+    upsert_route = next(route for route in app.routes if route.path == "/v1/embeddings/upsert")
+    search_route = next(route for route in app.routes if route.path == "/v1/embeddings/search")
+    object_id = uuid4()
+    profile_id = uuid4()
+    vector = [0.0] * EMBEDDING_DIM
+    vector[0] = 1.0
+
+    async def run() -> None:
+        await upsert_route.endpoint(
+            request=EmbeddingUpsertRequest(
+                workspace_id="dev-01",
+                object_type="evidence_item",
+                object_id=object_id,
+                embedding_model="shared-model-name",
+                embedding_profile_id=profile_id,
+                embedding=vector,
+                text="redacted evidence summary",
+            )
+        )
+        await search_route.endpoint(
+            request=EmbeddingSearchRequest(
+                workspace_id="dev-01",
+                embedding_model="shared-model-name",
+                embedding_profile_id=profile_id,
+                embedding=vector,
+            )
+        )
+
+    asyncio.run(run())
+
+    assert store.calls == [
+        {
+            "method": "upsert",
+            "embedding_profile_id": profile_id,
+            "embedding_model": "shared-model-name",
+        },
+        {
+            "method": "search",
+            "embedding_profile_id": profile_id,
+            "embedding_model": "shared-model-name",
+        },
+    ]
 
 
 def test_embeddings_api_runs_recall_audit() -> None:

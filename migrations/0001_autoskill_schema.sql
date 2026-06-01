@@ -205,6 +205,10 @@ CREATE TABLE IF NOT EXISTS autoskill.model_profiles (
   route_kind text NOT NULL CHECK (route_kind IN ('openclaw','openai_compatible')),
   endpoint_ref text,
   timeout_seconds double precision NOT NULL DEFAULT 60,
+  thinking_level text NOT NULL DEFAULT 'off'
+    CHECK (thinking_level IN ('off','minimal','low','medium','high','xhigh','adaptive','max')),
+  thinking_fallback_policy text NOT NULL DEFAULT 'omit'
+    CHECK (thinking_fallback_policy IN ('strict','downgrade','omit')),
   status text NOT NULL DEFAULT 'candidate'
     CHECK (status IN ('candidate','qualified','failed','disabled')),
   qualification jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -212,6 +216,52 @@ CREATE TABLE IF NOT EXISTS autoskill.model_profiles (
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(workspace_id, profile_key)
 );
+
+ALTER TABLE autoskill.model_profiles
+  ADD COLUMN IF NOT EXISTS thinking_level text NOT NULL DEFAULT 'off';
+
+ALTER TABLE autoskill.model_profiles
+  ADD COLUMN IF NOT EXISTS thinking_fallback_policy text NOT NULL DEFAULT 'omit';
+
+ALTER TABLE autoskill.model_profiles
+  DROP CONSTRAINT IF EXISTS model_profiles_thinking_level_check;
+
+ALTER TABLE autoskill.model_profiles
+  ADD CONSTRAINT model_profiles_thinking_level_check
+  CHECK (thinking_level IN ('off','minimal','low','medium','high','xhigh','adaptive','max'));
+
+ALTER TABLE autoskill.model_profiles
+  DROP CONSTRAINT IF EXISTS model_profiles_thinking_fallback_policy_check;
+
+ALTER TABLE autoskill.model_profiles
+  ADD CONSTRAINT model_profiles_thinking_fallback_policy_check
+  CHECK (thinking_fallback_policy IN ('strict','downgrade','omit'));
+
+CREATE TABLE IF NOT EXISTS autoskill.llm_invocations (
+  llm_invocation_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  trace_id uuid,
+  span_id uuid,
+  purpose text NOT NULL,
+  profile_key text NOT NULL,
+  model_profile_id uuid REFERENCES autoskill.model_profiles(model_profile_id),
+  route_kind text NOT NULL CHECK (route_kind IN ('openclaw','openai_compatible')),
+  provider text NOT NULL,
+  model text NOT NULL,
+  requested_thinking_level text,
+  effective_thinking_level text,
+  thinking_fallback_policy text NOT NULL DEFAULT 'omit',
+  thinking_downgraded boolean NOT NULL DEFAULT false,
+  prompt_token_estimate integer NOT NULL DEFAULT 0,
+  output_token_estimate integer NOT NULL DEFAULT 0,
+  status text NOT NULL CHECK (status IN ('ok','error','timeout','unsupported')),
+  error text,
+  audit jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS llm_invocations_workspace_created_idx
+  ON autoskill.llm_invocations(workspace_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS autoskill.embedding_profiles (
   embedding_profile_id uuid PRIMARY KEY,
@@ -375,13 +425,28 @@ CREATE TABLE IF NOT EXISTS autoskill.embeddings (
   object_type text NOT NULL,
   object_id uuid NOT NULL,
   skill_id uuid REFERENCES autoskill.skills(skill_id),
+  embedding_profile_id uuid REFERENCES autoskill.embedding_profiles(embedding_profile_id),
   embedding_model text NOT NULL,
   embedding_dim integer NOT NULL,
   embedding vector(1536) NOT NULL,
   text_hash text NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (object_type, object_id, embedding_model)
+  created_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE autoskill.embeddings
+  ADD COLUMN IF NOT EXISTS embedding_profile_id uuid
+  REFERENCES autoskill.embedding_profiles(embedding_profile_id);
+
+ALTER TABLE autoskill.embeddings
+  DROP CONSTRAINT IF EXISTS embeddings_object_type_object_id_embedding_model_key;
+
+CREATE UNIQUE INDEX IF NOT EXISTS embeddings_object_model_unique_idx
+  ON autoskill.embeddings(workspace_id, object_type, object_id, embedding_model)
+  WHERE embedding_profile_id IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS embeddings_object_profile_unique_idx
+  ON autoskill.embeddings(workspace_id, object_type, object_id, embedding_profile_id)
+  WHERE embedding_profile_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS autoskill.schedules (
   schedule_id uuid PRIMARY KEY,

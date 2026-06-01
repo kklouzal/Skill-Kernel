@@ -2,17 +2,17 @@
 
 Managed durable work item: `skillkernel-autoskill-v1`
 
-Goal: implement OpenClaw AutoSkill Manager from the v9 closed-design handoff until production acceptance criteria are satisfied.
+Goal: implement SkillKernel / OpenClaw AutoSkill Manager from the v16 coherence-closed implementation handoff until production acceptance criteria are satisfied.
 
 Owner: Claudia front-stage; `codex-worker` may be used for bounded coding/debugging slices.
 
 Canonical path: `/Warehouse/SkillKernel`
 
-Guiding document: `openclaw-autoskill-ultimate-v9-closed-design-handoff.md`
+Guiding document: `skillkernel-openclaw-autoskill-ultimate-v16-coherence-closed-implementation-handoff.md`
 
 ## Current Phase
 
-Phase 10/11 v14 substrate buildout.
+Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
@@ -133,6 +133,8 @@ Phase 10/11 v14 substrate buildout.
 - Propose-only topology operation planners are implemented for `improve`, `compose`, and `decompose`: planners validate effect compatibility, emit deterministic SkillGraphIR only when gates pass, produce stable plan hashes/idempotency keys, include rollback-aware transaction metadata, and create planned trial metadata without DB writes or runtime file activation.
 - Topology proposal persistence is implemented: `/v1/topology/propose` records propose-only `improve`/`compose`/`decompose` plans into `skill_graph_operations`, starts an idempotent evolution transaction, records rollback-aware transaction items, writes `planned_topology_trials`, and links evidence/transactions/operations/trials through provenance without activating runtime files.
 - Embedding profile qualification is wired into embedding generation: `/v1/embeddings/generate` can target an `embedding_profile_key`, requires the profile to be `qualified`, validates the 1536-dimension contract, and routes generation through the profile model/provider instead of ad hoc settings.
+- Embeddings are now profile-owned, not only model-string-owned: `autoskill.embeddings` stores `embedding_profile_id`, profile-scoped uniqueness prevents collisions between two qualified profiles using the same model string, API upsert/search/recall/generation paths accept or propagate profile IDs, and profile-scoped Postgres smoke validation proved same-object/same-model records remain separate.
+- Typed LLM client and invocation audit substrate are implemented: model profiles include thinking-level/fallback policy, `LLMClient` fetches one workspace/profile text profile, routes `openai_compatible` calls through bounded `/chat/completions`, records content-safe `llm_invocations` rows with trace/span/token estimates/status/errors/thinking decisions, and fails the unstable `openclaw` route closed as `unsupported`.
 - Runtime context-loadability gates are now attached to compiled skill artifacts: staged writer manifests include `runtime_skill_body` loadability metadata, scanner/equivalence/token-budget statuses, token counts, and text hashes; writer apply rejects manifests without passed context gates, and candidate persistence records matching `skill_md` context artifacts for inactive candidate versions.
 - External-skill scanner job wiring is implemented: read-only skill roots can be passed to the worker entrypoint, `external_skills.scan` inventories `*/SKILL.md` files without storing raw root paths, hashes roots/files, parses public name/description frontmatter, and quarantines scanner-blocked external skills.
 - Expanded rollback revocation invalidation now marks retrieval logs and context-governance records in addition to deleting body-index documents and embeddings, so rollback summaries report `retrieval_logs_invalidated` and `context_records_invalidated` derived-state counts.
@@ -144,6 +146,7 @@ Phase 10/11 v14 substrate buildout.
 - Validation passed for the worker/retrieval/context governance slice: focused worker/broker/retrieval tests passed, `uv run ruff check sidecar` passed, and `uv run pytest -q` passed with 111 tests.
 - Validation passed for the propose-only topology planner slice: `uv run pytest -q sidecar/autoskill/tests/test_topology_services.py` passed 6 tests, `uv run ruff check sidecar/autoskill/services/topology.py sidecar/autoskill/tests/test_topology_services.py` passed, and `uv run pytest -q` passed with 117 tests.
 - Validation passed for embedding profile qualification slice: focused embedding-generation tests passed 7 tests and focused ruff checks passed.
+- Validation passed for v16 model/embedding profile ownership slice: focused LLM/profile/embedding tests passed 19 tests, `uv run ruff check sidecar/autoskill` passed, `uv run pytest -q sidecar/autoskill/tests` passed with 131 tests, `uv run python -m compileall -q sidecar/autoskill` passed, `git diff --check` passed, `npm test --prefix plugin/autoskill` passed with 7 tests, and a compose Postgres smoke applied migrations twice, persisted profile-scoped same-model embeddings, and wrote an LLM invocation audit row.
 - Validation passed for expanded revocation invalidation slice: focused worker/embedding tests passed 25 tests, `uv run ruff check sidecar` passed, and `uv run pytest -q` passed with 120 tests.
 - Validation passed for the topology persistence slice: focused topology/admin tests passed 12 tests, `uv run ruff check sidecar` passed, `uv run pytest -q` passed with 123 tests, `uv run python -m compileall -q sidecar/autoskill` passed, `git diff --check` passed, and a fresh compose Postgres migration plus topology persistence smoke recorded one candidate compose operation with three planned trials.
 - Validation passed for topology rollback invalidation wiring: focused worker/topology/admin tests passed 30 tests, focused ruff checks passed, and a fresh compose Postgres smoke invalidated one topology operation plus three planned trials (`operation_status='rolled_back'`, all trial statuses `retired`).
@@ -158,7 +161,7 @@ Phase 10/11 v14 substrate buildout.
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
-2. Continue trace propagation through writer, rollback, revocation, and model/embedding call paths.
+2. Continue trace propagation through writer, rollback, revocation, and semantic model-call job paths.
 3. Wire executor/model profiles into evaluation, broker routing, activation gates, and profile qualification probes.
 4. Add marginal-value outcome update paths for token-ledger trials.
 5. Add expanded derived-state revoke handlers for skill graph edges, lifecycle state, and evidence-maturity rows.
@@ -173,10 +176,10 @@ Phase 10/11 v14 substrate buildout.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
 - Worker health now includes persistent heartbeat records and long-running handlers can renew job leases; handlers still need workload-specific progress metadata once LLM/evaluation jobs become lengthy.
 - Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive evidence still needs aggregation logic beyond evaluator replay maturity records.
-- Embedding generation defaults to deterministic local hash embeddings until production provider settings are configured and live-validated.
+- Embedding generation defaults to deterministic local hash embeddings until production provider settings are configured and live-validated; storage is still fixed to `vector(1536)` until a deliberate variable-dimension storage migration is designed.
 - Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and broader shadow-edge policy tuning remain pending.
 - External-skill awareness now includes read-only root scanning plus inventory/retrieval/matching; scan scheduling defaults, embedding generation for external descriptions, richer collision risk scoring, and explicit import recommendation flows remain pending.
-- v14 trace/profile/context APIs and schema exist; event/job/retrieval/evaluator/context-broker paths now propagate trace or context artifacts, while writer rollback/revocation and model/embedding call paths still need deeper automatic trace/profile/context artifact records.
+- v16 trace/profile/context APIs and schema exist; event/job/retrieval/evaluator/context-broker paths now propagate trace or context artifacts, LLM calls now have content-safe invocation audit rows, while writer rollback/revocation and semantic model-call job paths still need deeper automatic trace/profile/context artifact records.
 - SkillGraphIR now has propose-only planner/API/store persistence with transactions, planned trials, and revocation invalidation for operation/trial state, but improve/compose/decompose still need evaluator execution and apply semantics for accepted topology operations.
 - Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded or induced redacted intervention replay from explicit replay, attribution, canary, or broker outcome evidence.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints; mutation-worker apply exists but fails closed unless the queued job is explicitly policy-approved.

@@ -6,6 +6,7 @@ from hashlib import sha256
 from math import sqrt
 from typing import Protocol
 from urllib import request
+from uuid import UUID
 
 from autoskill.db.embeddings import EMBEDDING_DIM, EmbeddingStore
 
@@ -14,19 +15,26 @@ DEFAULT_EMBEDDING_MODEL = "autoskill-hash-embedding.v1"
 
 class TextEmbedder(Protocol):
     model: str
+    embedding_dim: int
 
     def embed(self, text: str) -> list[float]:
         """Return one fixed-dimension embedding for already-redacted text."""
 
 
 class HashingTextEmbedder:
-    def __init__(self, *, model: str = DEFAULT_EMBEDDING_MODEL) -> None:
+    def __init__(
+        self,
+        *,
+        model: str = DEFAULT_EMBEDDING_MODEL,
+        embedding_dim: int = EMBEDDING_DIM,
+    ) -> None:
         self.model = model
+        self.embedding_dim = embedding_dim
 
     def embed(self, text: str) -> list[float]:
         values: list[float] = []
         seed = text.encode("utf-8")
-        for index in range(EMBEDDING_DIM):
+        for index in range(self.embedding_dim):
             digest = sha256(seed + b"\0" + str(index).encode("ascii")).digest()
             integer = int.from_bytes(digest[:8], "big", signed=False)
             values.append((integer / ((1 << 64) - 1)) * 2.0 - 1.0)
@@ -45,11 +53,13 @@ class OpenAICompatibleTextEmbedder:
         base_url: str,
         api_key: str,
         model: str,
+        embedding_dim: int = EMBEDDING_DIM,
         timeout_seconds: float = 30.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
+        self.embedding_dim = embedding_dim
         self.timeout_seconds = timeout_seconds
 
     def embed(self, text: str) -> list[float]:
@@ -66,9 +76,10 @@ class OpenAICompatibleTextEmbedder:
         with request.urlopen(http_request, timeout=self.timeout_seconds) as response:
             body = json.loads(response.read().decode("utf-8"))
         embedding = body["data"][0]["embedding"]
-        if len(embedding) != EMBEDDING_DIM:
+        if len(embedding) != self.embedding_dim:
             raise ValueError(
-                f"embedding provider returned {len(embedding)} dimensions; expected {EMBEDDING_DIM}"
+                "embedding provider returned "
+                f"{len(embedding)} dimensions; expected {self.embedding_dim}"
             )
         return [float(value) for value in embedding]
 
@@ -89,6 +100,7 @@ def build_text_embedder_from_settings(settings: object) -> TextEmbedder:
             base_url=str(base_url),
             api_key=str(api_key),
             model=model,
+            embedding_dim=EMBEDDING_DIM,
             timeout_seconds=float(getattr(settings, "embedding_timeout_seconds", 30.0)),
         )
     raise ValueError(f"unsupported embedding provider: {provider}")
@@ -101,6 +113,8 @@ class EmbeddingGenerationResult:
     created: int
     updated: int
     embedding_model: str
+    embedding_profile_id: str | None
+    embedding_dim: int
     sources: list[dict[str, object]]
 
     def to_json(self) -> dict[str, object]:
@@ -110,6 +124,8 @@ class EmbeddingGenerationResult:
             "created": self.created,
             "updated": self.updated,
             "embedding_model": self.embedding_model,
+            "embedding_profile_id": self.embedding_profile_id,
+            "embedding_dim": self.embedding_dim,
             "sources": self.sources,
         }
 
@@ -119,6 +135,7 @@ async def generate_pending_embeddings(
     *,
     embedder: TextEmbedder | None = None,
     embedding_model: str | None = None,
+    embedding_profile_id: UUID | None = None,
     workspace_key: str | None = None,
     limit: int = 100,
 ) -> EmbeddingGenerationResult:
@@ -126,6 +143,7 @@ async def generate_pending_embeddings(
     model = embedding_model or selected_embedder.model
     sources = await store.list_unembedded_sources(
         embedding_model=model,
+        embedding_profile_id=embedding_profile_id,
         workspace_key=workspace_key,
         limit=limit,
     )
@@ -142,6 +160,7 @@ async def generate_pending_embeddings(
             embedding_model=model,
             embedding=selected_embedder.embed(source.text),
             text=source.text,
+            embedding_profile_id=embedding_profile_id,
         )
         if result.created:
             created += 1
@@ -155,5 +174,7 @@ async def generate_pending_embeddings(
         created=created,
         updated=updated,
         embedding_model=model,
+        embedding_profile_id=str(embedding_profile_id) if embedding_profile_id else None,
+        embedding_dim=selected_embedder.embedding_dim,
         sources=source_summaries,
     )

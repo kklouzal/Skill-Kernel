@@ -23,6 +23,7 @@ class EmbeddingRecord:
     object_type: str
     object_id: UUID
     skill_id: UUID | None
+    embedding_profile_id: UUID | None
     embedding_model: str
     embedding_dim: int
     text_hash: str
@@ -37,6 +38,7 @@ class EmbeddingRecord:
             object_type=row["object_type"],
             object_id=row["object_id"],
             skill_id=_row_get(row, "skill_id"),
+            embedding_profile_id=_row_get(row, "embedding_profile_id"),
             embedding_model=row["embedding_model"],
             embedding_dim=row["embedding_dim"],
             text_hash=row["text_hash"],
@@ -51,6 +53,9 @@ class EmbeddingRecord:
             "object_type": self.object_type,
             "object_id": str(self.object_id),
             "skill_id": str(self.skill_id) if self.skill_id else None,
+            "embedding_profile_id": (
+                str(self.embedding_profile_id) if self.embedding_profile_id else None
+            ),
             "embedding_model": self.embedding_model,
             "embedding_dim": self.embedding_dim,
             "text_hash": self.text_hash,
@@ -128,6 +133,7 @@ class EmbeddingStore(Protocol):
         self,
         *,
         embedding_model: str,
+        embedding_profile_id: UUID | None = None,
         workspace_key: str | None = None,
         limit: int = 100,
     ) -> list[EmbeddingSourceText]:
@@ -143,6 +149,7 @@ class EmbeddingStore(Protocol):
         embedding: list[float],
         text: str,
         skill_id: UUID | None = None,
+        embedding_profile_id: UUID | None = None,
     ) -> EmbeddingUpsertResult:
         """Create or replace one embedding record."""
 
@@ -152,6 +159,7 @@ class EmbeddingStore(Protocol):
         workspace_key: str,
         embedding_model: str,
         embedding: list[float],
+        embedding_profile_id: UUID | None = None,
         object_type: str | None = None,
         limit: int = 10,
     ) -> list[EmbeddingSearchCandidate]:
@@ -170,6 +178,7 @@ class EmbeddingStore(Protocol):
         *,
         workspace_key: str,
         embedding_model: str,
+        embedding_profile_id: UUID | None = None,
         object_type: str | None = None,
         sample_size: int = 10,
         k: int = 10,
@@ -183,6 +192,7 @@ class NullEmbeddingStore:
         self,
         *,
         embedding_model: str,
+        embedding_profile_id: UUID | None = None,
         workspace_key: str | None = None,
         limit: int = 100,
     ) -> list[EmbeddingSourceText]:
@@ -198,6 +208,7 @@ class NullEmbeddingStore:
         embedding: list[float],
         text: str,
         skill_id: UUID | None = None,
+        embedding_profile_id: UUID | None = None,
     ) -> EmbeddingUpsertResult:
         _validate_embedding(embedding)
         now = datetime.now(UTC)
@@ -208,6 +219,7 @@ class NullEmbeddingStore:
             object_type=object_type,
             object_id=object_id,
             skill_id=skill_id,
+            embedding_profile_id=embedding_profile_id,
             embedding_model=embedding_model,
             embedding_dim=EMBEDDING_DIM,
             text_hash=sha256_text(text),
@@ -221,6 +233,7 @@ class NullEmbeddingStore:
         workspace_key: str,
         embedding_model: str,
         embedding: list[float],
+        embedding_profile_id: UUID | None = None,
         object_type: str | None = None,
         limit: int = 10,
     ) -> list[EmbeddingSearchCandidate]:
@@ -240,6 +253,7 @@ class NullEmbeddingStore:
         *,
         workspace_key: str,
         embedding_model: str,
+        embedding_profile_id: UUID | None = None,
         object_type: str | None = None,
         sample_size: int = 10,
         k: int = 10,
@@ -262,6 +276,7 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
         self,
         *,
         embedding_model: str,
+        embedding_profile_id: UUID | None = None,
         workspace_key: str | None = None,
         limit: int = 100,
     ) -> list[EmbeddingSourceText]:
@@ -300,14 +315,19 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                 LEFT JOIN autoskill.embeddings existing
                   ON existing.object_type = s.object_type
                  AND existing.object_id = s.object_id
-                 AND existing.embedding_model = $2
+                 AND (
+                   ($3::uuid IS NOT NULL AND existing.embedding_profile_id = $3)
+                   OR ($3::uuid IS NULL AND existing.embedding_profile_id IS NULL
+                     AND existing.embedding_model = $2)
+                 )
                  AND existing.text_hash = s.text_hash
                 WHERE existing.embedding_id IS NULL
                 ORDER BY s.created_at ASC, s.object_type ASC
-                LIMIT $3
+                LIMIT $4
                 """,
                 workspace_key,
                 embedding_model,
+                embedding_profile_id,
                 limit,
             )
             return [EmbeddingSourceText.from_row(row) for row in rows]
@@ -322,30 +342,41 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
         embedding: list[float],
         text: str,
         skill_id: UUID | None = None,
+        embedding_profile_id: UUID | None = None,
     ) -> EmbeddingUpsertResult:
         _validate_embedding(embedding)
         pool = await self._get_pool()
         async with pool.acquire() as conn, conn.transaction():
             workspace_id = await ensure_workspace(conn, workspace_key)
+            conflict_target = (
+                "(workspace_id, object_type, object_id, embedding_profile_id) "
+                "WHERE embedding_profile_id IS NOT NULL"
+                if embedding_profile_id is not None
+                else "(workspace_id, object_type, object_id, embedding_model) "
+                "WHERE embedding_profile_id IS NULL"
+            )
             row = await conn.fetchrow(
-                """
+                f"""
                 INSERT INTO autoskill.embeddings (
                   embedding_id,
                   workspace_id,
                   object_type,
                   object_id,
                   skill_id,
+                  embedding_profile_id,
                   embedding_model,
                   embedding_dim,
                   embedding,
                   text_hash
                 )
                 VALUES (
-                  gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7::vector, $8
+                  gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8::vector, $9
                 )
-                ON CONFLICT (object_type, object_id, embedding_model) DO UPDATE
+                ON CONFLICT {conflict_target} DO UPDATE
                 SET embedding = EXCLUDED.embedding,
                     embedding_dim = EXCLUDED.embedding_dim,
+                    embedding_profile_id = EXCLUDED.embedding_profile_id,
+                    embedding_model = EXCLUDED.embedding_model,
                     text_hash = EXCLUDED.text_hash
                 RETURNING *, (xmax = 0) AS created
                 """,
@@ -353,6 +384,7 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                 object_type,
                 object_id,
                 skill_id,
+                embedding_profile_id,
                 embedding_model,
                 EMBEDDING_DIM,
                 _vector_literal(embedding),
@@ -369,6 +401,7 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
         workspace_key: str,
         embedding_model: str,
         embedding: list[float],
+        embedding_profile_id: UUID | None = None,
         object_type: str | None = None,
         limit: int = 10,
     ) -> list[EmbeddingSearchCandidate]:
@@ -383,14 +416,19 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                 FROM autoskill.embeddings e
                 JOIN autoskill.workspaces w USING (workspace_id)
                 WHERE w.external_key = $1
-                  AND e.embedding_model = $2
-                  AND ($4::text IS NULL OR e.object_type = $4)
+                  AND (
+                    ($4::uuid IS NOT NULL AND e.embedding_profile_id = $4)
+                    OR ($4::uuid IS NULL AND e.embedding_profile_id IS NULL
+                      AND e.embedding_model = $2)
+                  )
+                  AND ($5::text IS NULL OR e.object_type = $5)
                 ORDER BY e.embedding <=> $3::vector
-                LIMIT $5
+                LIMIT $6
                 """,
                 workspace_key,
                 embedding_model,
                 _vector_literal(embedding),
+                embedding_profile_id,
                 object_type,
                 limit,
             )
@@ -453,6 +491,7 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
         *,
         workspace_key: str,
         embedding_model: str,
+        embedding_profile_id: UUID | None = None,
         object_type: str | None = None,
         sample_size: int = 10,
         k: int = 10,
@@ -470,13 +509,18 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                 FROM autoskill.embeddings e
                 JOIN autoskill.workspaces w USING (workspace_id)
                 WHERE w.external_key = $1
-                  AND e.embedding_model = $2
-                  AND ($3::text IS NULL OR e.object_type = $3)
+                  AND (
+                    ($3::uuid IS NOT NULL AND e.embedding_profile_id = $3)
+                    OR ($3::uuid IS NULL AND e.embedding_profile_id IS NULL
+                      AND e.embedding_model = $2)
+                  )
+                  AND ($4::text IS NULL OR e.object_type = $4)
                 ORDER BY e.created_at DESC, e.embedding_id ASC
-                LIMIT $4
+                LIMIT $5
                 """,
                 workspace_key,
                 embedding_model,
+                embedding_profile_id,
                 object_type,
                 sample_limit,
             )
@@ -485,6 +529,7 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                     conn,
                     workspace_key=workspace_key,
                     embedding_model=embedding_model,
+                    embedding_profile_id=embedding_profile_id,
                     embedding=str(sample["embedding"]),
                     object_type=object_type,
                     limit=result_limit,
@@ -494,6 +539,7 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                     conn,
                     workspace_key=workspace_key,
                     embedding_model=embedding_model,
+                    embedding_profile_id=embedding_profile_id,
                     embedding=str(sample["embedding"]),
                     object_type=object_type,
                     limit=result_limit,
@@ -536,6 +582,7 @@ async def _nearest_embedding_ids(
     *,
     workspace_key: str,
     embedding_model: str,
+    embedding_profile_id: UUID | None,
     embedding: str,
     object_type: str | None,
     limit: int,
@@ -553,14 +600,19 @@ async def _nearest_embedding_ids(
         FROM autoskill.embeddings e
         JOIN autoskill.workspaces w USING (workspace_id)
         WHERE w.external_key = $1
-          AND e.embedding_model = $2
-          AND ($4::text IS NULL OR e.object_type = $4)
+          AND (
+            ($4::uuid IS NOT NULL AND e.embedding_profile_id = $4)
+            OR ($4::uuid IS NULL AND e.embedding_profile_id IS NULL
+              AND e.embedding_model = $2)
+          )
+          AND ($5::text IS NULL OR e.object_type = $5)
         ORDER BY e.embedding <=> $3::vector
-        LIMIT $5
+        LIMIT $6
         """,
         workspace_key,
         embedding_model,
         embedding,
+        embedding_profile_id,
         object_type,
         limit,
     )

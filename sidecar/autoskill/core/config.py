@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     runtime_context_broker_enabled: bool = False
     runtime_context_timeout_ms: int = 150
     max_context_hint_tokens: int = 800
+    llm_api_base_url: str | None = None
+    llm_api_key: str | None = None
     embedding_provider: str = "hash"
     embedding_model: str = "autoskill-hash-embedding.v1"
     embedding_api_base_url: str | None = None

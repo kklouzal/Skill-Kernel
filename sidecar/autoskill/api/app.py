@@ -269,6 +269,8 @@ class ModelProfileUpsertRequest(BaseModel):
     route_kind: str
     endpoint_ref: str | None = None
     timeout_seconds: float = 60.0
+    thinking_level: str = "off"
+    thinking_fallback_policy: str = "omit"
     status: str = "candidate"
     qualification: dict[str, object] = Field(default_factory=dict)
 
@@ -743,6 +745,7 @@ class EmbeddingUpsertRequest(BaseModel):
     embedding: list[float]
     text: str
     skill_id: UUID | None = None
+    embedding_profile_id: UUID | None = None
 
 
 class EmbeddingUpsertResponse(BaseModel):
@@ -754,6 +757,7 @@ class EmbeddingSearchRequest(BaseModel):
     workspace_id: str
     embedding_model: str
     embedding: list[float]
+    embedding_profile_id: UUID | None = None
     object_type: str | None = None
     limit: int = 10
 
@@ -765,6 +769,7 @@ class EmbeddingSearchResponse(BaseModel):
 class EmbeddingRecallAuditRequest(BaseModel):
     workspace_id: str
     embedding_model: str = "autoskill-hash-embedding"
+    embedding_profile_id: UUID | None = None
     object_type: str | None = None
     sample_size: int = 10
     k: int = 10
@@ -792,6 +797,8 @@ class EmbeddingGenerateResponse(BaseModel):
     created: int
     updated: int
     embedding_model: str
+    embedding_profile_id: str | None = None
+    embedding_dim: int
     sources: list[dict[str, object]]
 
 
@@ -1073,8 +1080,9 @@ def _embedder_from_profile(profile: object, settings: object):
         )
     route_kind = str(getattr(profile, "route_kind", ""))
     model = str(profile.model)
+    embedding_dim = int(getattr(profile, "embedding_dim", 1536))
     if route_kind == "hash":
-        return HashingTextEmbedder(model=model)
+        return HashingTextEmbedder(model=model, embedding_dim=embedding_dim)
     if route_kind == "openai_compatible":
         base_url = getattr(profile, "endpoint_ref", None) or getattr(
             settings,
@@ -1091,6 +1099,7 @@ def _embedder_from_profile(profile: object, settings: object):
             base_url=str(base_url),
             api_key=str(api_key),
             model=model,
+            embedding_dim=embedding_dim,
             timeout_seconds=float(getattr(profile, "timeout_seconds", 30.0)),
         )
     raise HTTPException(
@@ -1727,6 +1736,8 @@ def create_app(
             route_kind=request.route_kind,
             endpoint_ref=request.endpoint_ref,
             timeout_seconds=request.timeout_seconds,
+            thinking_level=request.thinking_level,
+            thinking_fallback_policy=request.thinking_fallback_policy,
             status=request.status,
             qualification=request.qualification,
         )
@@ -2310,6 +2321,7 @@ def create_app(
                 embedding=request.embedding,
                 text=request.text,
                 skill_id=request.skill_id,
+                embedding_profile_id=request.embedding_profile_id,
             )
         except ValueError as error:
             raise HTTPException(
@@ -2332,6 +2344,7 @@ def create_app(
                 workspace_key=request.workspace_id,
                 embedding_model=request.embedding_model,
                 embedding=request.embedding,
+                embedding_profile_id=request.embedding_profile_id,
                 object_type=request.object_type,
                 limit=max(1, min(request.limit, 50)),
             )
@@ -2353,6 +2366,7 @@ def create_app(
         result = await embeddings.audit_recall(
             workspace_key=request.workspace_id,
             embedding_model=request.embedding_model,
+            embedding_profile_id=request.embedding_profile_id,
             object_type=request.object_type,
             sample_size=max(1, min(request.sample_size, 100)),
             k=max(1, min(request.k, 100)),
@@ -2384,6 +2398,7 @@ def create_app(
                 )
             embedder = _embedder_from_profile(profile, settings)
             embedding_model = profile.model
+            embedding_profile_id = profile.profile_id
         else:
             try:
                 embedder = build_text_embedder_from_settings(settings)
@@ -2393,11 +2408,13 @@ def create_app(
                     detail=str(error),
                 ) from error
             embedding_model = request.embedding_model
+            embedding_profile_id = None
         result = await generate_pending_embeddings(
             embeddings,
             embedder=embedder,
             workspace_key=request.workspace_id,
             embedding_model=embedding_model,
+            embedding_profile_id=embedding_profile_id,
             limit=max(1, min(request.limit, 500)),
         )
         return EmbeddingGenerateResponse(**result.to_json())
