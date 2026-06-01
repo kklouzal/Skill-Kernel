@@ -25,6 +25,25 @@ class SupportArtifact(BaseModel):
     kind: Literal["script", "template", "fixture", "manifest", "asset"]
     sha256: str | None = None
     capabilities: list[str] = Field(default_factory=list)
+    load_policy: Literal[
+        "never_loaded",
+        "agent_may_read",
+        "broker_excerpt_only",
+        "script_only",
+        "probe_only",
+        "operator_only",
+    ] = "never_loaded"
+
+
+class EffectSignature(BaseModel):
+    outputs: list[str] = Field(default_factory=list)
+    effects: list[str] = Field(default_factory=list)
+    state_delta: list[str] = Field(default_factory=list)
+    side_effects: list[str] = Field(default_factory=list)
+    termination: list[str] = Field(default_factory=list)
+    idempotency: Literal["idempotent", "retry_safe", "not_retry_safe", "unknown"] = "unknown"
+    unsafe_when: list[str] = Field(default_factory=list)
+    failure_modes: list[str] = Field(default_factory=list)
 
 
 class SkillIR(BaseModel):
@@ -38,9 +57,17 @@ class SkillIR(BaseModel):
     inputs: list[str] = Field(default_factory=list)
     preconditions: list[str] = Field(default_factory=list)
     steps: list[str]
+    outputs: list[str] = Field(default_factory=list)
+    effects: list[str] = Field(default_factory=list)
+    state_delta: list[str] = Field(default_factory=list)
+    side_effects: list[str] = Field(default_factory=list)
+    termination: list[str] = Field(default_factory=list)
+    idempotency: Literal["idempotent", "retry_safe", "not_retry_safe", "unknown"] = "unknown"
+    unsafe_when: list[str] = Field(default_factory=list)
     tool_templates: list[ToolTemplate] = Field(default_factory=list)
     verification: list[str]
     failure_handling: list[str]
+    failure_modes: list[str] = Field(default_factory=list)
     do_not_use_when: list[str] = Field(default_factory=list)
     never: list[str]
     dependencies: list[str] = Field(default_factory=list)
@@ -51,6 +78,19 @@ class SkillIR(BaseModel):
     required_capabilities: list[str] = Field(default_factory=list)
     risk_notes: list[str] = Field(default_factory=list)
     compiler_version: str = "autoskill-compiler.v1"
+
+    @property
+    def effect_signature(self) -> EffectSignature:
+        return EffectSignature(
+            outputs=self.outputs,
+            effects=self.effects,
+            state_delta=self.state_delta,
+            side_effects=self.side_effects,
+            termination=self.termination,
+            idempotency=self.idempotency,
+            unsafe_when=self.unsafe_when,
+            failure_modes=self.failure_modes,
+        )
 
     @field_validator("slug", "name")
     @classmethod
@@ -75,6 +115,8 @@ class SkillIR(BaseModel):
         required_lists = {
             "applicability": self.applicability,
             "steps": self.steps,
+            "outputs": self.outputs,
+            "effects": self.effects,
             "verification": self.verification,
             "failure_handling": self.failure_handling,
             "never": self.never,
@@ -83,4 +125,3 @@ class SkillIR(BaseModel):
         if missing:
             raise ValueError(f"missing required SkillIR sections: {', '.join(missing)}")
         return self
-

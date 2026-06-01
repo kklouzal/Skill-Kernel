@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS autoskill.workspaces (
 CREATE TABLE IF NOT EXISTS autoskill.raw_events (
   event_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  trace_id uuid,
+  span_id uuid,
+  parent_span_id uuid,
   session_id text,
   turn_id text,
   event_type text NOT NULL,
@@ -29,6 +32,15 @@ CREATE TABLE IF NOT EXISTS autoskill.raw_events (
   openclaw_version text,
   inserted_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE autoskill.raw_events
+  ADD COLUMN IF NOT EXISTS trace_id uuid;
+
+ALTER TABLE autoskill.raw_events
+  ADD COLUMN IF NOT EXISTS span_id uuid;
+
+ALTER TABLE autoskill.raw_events
+  ADD COLUMN IF NOT EXISTS parent_span_id uuid;
 
 CREATE TABLE IF NOT EXISTS autoskill.evidence_items (
   evidence_id uuid PRIMARY KEY,
@@ -125,6 +137,17 @@ CREATE TABLE IF NOT EXISTS autoskill.support_artifacts (
   kind text NOT NULL,
   sha256 text NOT NULL,
   capabilities text[] NOT NULL DEFAULT '{}',
+  load_policy text NOT NULL DEFAULT 'never_loaded'
+    CHECK (
+      load_policy IN (
+        'never_loaded',
+        'agent_may_read',
+        'broker_excerpt_only',
+        'script_only',
+        'probe_only',
+        'operator_only'
+      )
+    ),
   manifest jsonb NOT NULL DEFAULT '{}'::jsonb,
   active boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now()
@@ -154,17 +177,83 @@ CREATE TABLE IF NOT EXISTS autoskill.probes (
   UNIQUE(workspace_id, probe_hash)
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.executor_profiles (
+  executor_profile_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  profile_key text NOT NULL,
+  model_family text,
+  agent_backend text,
+  sandbox text,
+  os_name text,
+  available_tools text[] NOT NULL DEFAULT '{}',
+  available_binaries text[] NOT NULL DEFAULT '{}',
+  permissions jsonb NOT NULL DEFAULT '{}'::jsonb,
+  api_contracts jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status text NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active','inactive','quarantined')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(workspace_id, profile_key)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.model_profiles (
+  model_profile_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  profile_key text NOT NULL,
+  provider text NOT NULL,
+  model text NOT NULL,
+  route_kind text NOT NULL CHECK (route_kind IN ('openclaw','openai_compatible')),
+  endpoint_ref text,
+  timeout_seconds double precision NOT NULL DEFAULT 60,
+  status text NOT NULL DEFAULT 'candidate'
+    CHECK (status IN ('candidate','qualified','failed','disabled')),
+  qualification jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(workspace_id, profile_key)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.embedding_profiles (
+  embedding_profile_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  profile_key text NOT NULL,
+  provider text NOT NULL,
+  model text NOT NULL,
+  route_kind text NOT NULL CHECK (route_kind IN ('hash','openclaw','openai_compatible')),
+  embedding_dim integer NOT NULL,
+  endpoint_ref text,
+  timeout_seconds double precision NOT NULL DEFAULT 30,
+  status text NOT NULL DEFAULT 'candidate'
+    CHECK (status IN ('candidate','qualified','failed','disabled')),
+  qualification jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(workspace_id, profile_key)
+);
+
 CREATE TABLE IF NOT EXISTS autoskill.evaluations (
   evaluation_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  trace_id uuid,
+  span_id uuid,
+  parent_span_id uuid,
   skill_version_id uuid REFERENCES autoskill.skill_versions(skill_version_id),
   broker_policy_version_id uuid,
-  executor_profile_id uuid,
+  executor_profile_id uuid REFERENCES autoskill.executor_profiles(executor_profile_id),
   category text NOT NULL,
   status text NOT NULL,
   result jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE autoskill.evaluations
+  ADD COLUMN IF NOT EXISTS trace_id uuid;
+
+ALTER TABLE autoskill.evaluations
+  ADD COLUMN IF NOT EXISTS span_id uuid;
+
+ALTER TABLE autoskill.evaluations
+  ADD COLUMN IF NOT EXISTS parent_span_id uuid;
 
 CREATE TABLE IF NOT EXISTS autoskill.broker_policy_versions (
   broker_policy_version_id uuid PRIMARY KEY,
@@ -181,6 +270,9 @@ CREATE TABLE IF NOT EXISTS autoskill.broker_policy_versions (
 CREATE TABLE IF NOT EXISTS autoskill.retrieval_logs (
   retrieval_log_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  trace_id uuid,
+  span_id uuid,
+  parent_span_id uuid,
   session_id text,
   turn_id text,
   broker_policy_version_id uuid REFERENCES autoskill.broker_policy_versions(broker_policy_version_id),
@@ -191,6 +283,15 @@ CREATE TABLE IF NOT EXISTS autoskill.retrieval_logs (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE autoskill.retrieval_logs
+  ADD COLUMN IF NOT EXISTS trace_id uuid;
+
+ALTER TABLE autoskill.retrieval_logs
+  ADD COLUMN IF NOT EXISTS span_id uuid;
+
+ALTER TABLE autoskill.retrieval_logs
+  ADD COLUMN IF NOT EXISTS parent_span_id uuid;
 
 CREATE TABLE IF NOT EXISTS autoskill.body_index_documents (
   body_index_document_id uuid PRIMARY KEY,
@@ -204,6 +305,50 @@ CREATE TABLE IF NOT EXISTS autoskill.body_index_documents (
   taint text[] NOT NULL DEFAULT '{}',
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (workspace_id, skill_version_id, document_kind, text_hash)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.context_artifacts (
+  context_artifact_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  artifact_kind text NOT NULL CHECK (artifact_kind IN (
+    'skill_md','frontmatter_description','broker_hint','support_excerpt',
+    'tool_template','verification_instruction','failure_instruction',
+    'component_reference'
+  )),
+  source_object_type text NOT NULL,
+  source_object_id uuid,
+  skill_id uuid REFERENCES autoskill.skills(skill_id),
+  skill_version_id uuid REFERENCES autoskill.skill_versions(skill_version_id),
+  broker_policy_version_id uuid REFERENCES autoskill.broker_policy_versions(broker_policy_version_id),
+  text_hash text NOT NULL,
+  token_count integer NOT NULL,
+  max_tokens integer NOT NULL,
+  semantic_density_score double precision,
+  safety_status text NOT NULL DEFAULT 'pending',
+  equivalence_status text NOT NULL DEFAULT 'pending',
+  budget_status text NOT NULL DEFAULT 'pending',
+  shadowing_status text NOT NULL DEFAULT 'pending',
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(workspace_id, artifact_kind, source_object_type, source_object_id, text_hash)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.context_token_ledgers (
+  context_token_ledger_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  context_artifact_id uuid REFERENCES autoskill.context_artifacts(context_artifact_id),
+  skill_id uuid REFERENCES autoskill.skills(skill_id),
+  skill_version_id uuid REFERENCES autoskill.skill_versions(skill_version_id),
+  broker_policy_version_id uuid REFERENCES autoskill.broker_policy_versions(broker_policy_version_id),
+  session_id text,
+  turn_id text,
+  visibility_state text NOT NULL CHECK (visibility_state IN (
+    'no_skill','defer_skill','skill_hidden','skill_visible','sibling_bundle'
+  )),
+  token_count integer NOT NULL,
+  outcome text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS autoskill.external_skill_inventory (
@@ -253,6 +398,9 @@ CREATE TABLE IF NOT EXISTS autoskill.schedules (
 CREATE TABLE IF NOT EXISTS autoskill.jobs (
   job_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  trace_id uuid,
+  span_id uuid,
+  parent_span_id uuid,
   job_kind text NOT NULL,
   status text NOT NULL DEFAULT 'queued',
   idempotency_key text NOT NULL,
@@ -267,6 +415,15 @@ CREATE TABLE IF NOT EXISTS autoskill.jobs (
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(workspace_id, idempotency_key)
 );
+
+ALTER TABLE autoskill.jobs
+  ADD COLUMN IF NOT EXISTS trace_id uuid;
+
+ALTER TABLE autoskill.jobs
+  ADD COLUMN IF NOT EXISTS span_id uuid;
+
+ALTER TABLE autoskill.jobs
+  ADD COLUMN IF NOT EXISTS parent_span_id uuid;
 
 CREATE TABLE IF NOT EXISTS autoskill.job_attempts (
   job_attempt_id uuid PRIMARY KEY,
@@ -344,6 +501,15 @@ ALTER TABLE autoskill.evolution_transactions
 
 ALTER TABLE autoskill.evolution_transactions
   ADD COLUMN IF NOT EXISTS created_by_job_id uuid REFERENCES autoskill.jobs(job_id);
+
+ALTER TABLE autoskill.evolution_transactions
+  ADD COLUMN IF NOT EXISTS trace_id uuid;
+
+ALTER TABLE autoskill.evolution_transactions
+  ADD COLUMN IF NOT EXISTS span_id uuid;
+
+ALTER TABLE autoskill.evolution_transactions
+  ADD COLUMN IF NOT EXISTS parent_span_id uuid;
 
 ALTER TABLE autoskill.evolution_transactions
   ADD COLUMN IF NOT EXISTS policy_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb;
@@ -486,6 +652,9 @@ CREATE TABLE IF NOT EXISTS autoskill.control_flow_events (
 CREATE TABLE IF NOT EXISTS autoskill.revocation_requests (
   revocation_request_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  trace_id uuid,
+  span_id uuid,
+  parent_span_id uuid,
   request_kind text NOT NULL,
   root_object_type text NOT NULL,
   root_object_id uuid NOT NULL,
@@ -495,6 +664,15 @@ CREATE TABLE IF NOT EXISTS autoskill.revocation_requests (
   created_at timestamptz NOT NULL DEFAULT now(),
   completed_at timestamptz
 );
+
+ALTER TABLE autoskill.revocation_requests
+  ADD COLUMN IF NOT EXISTS trace_id uuid;
+
+ALTER TABLE autoskill.revocation_requests
+  ADD COLUMN IF NOT EXISTS span_id uuid;
+
+ALTER TABLE autoskill.revocation_requests
+  ADD COLUMN IF NOT EXISTS parent_span_id uuid;
 
 CREATE TABLE IF NOT EXISTS autoskill.audit_records (
   audit_id uuid PRIMARY KEY,
@@ -571,11 +749,160 @@ CREATE TABLE IF NOT EXISTS autoskill.drift_events (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.trace_spans (
+  trace_id uuid NOT NULL,
+  span_id uuid PRIMARY KEY,
+  parent_span_id uuid REFERENCES autoskill.trace_spans(span_id),
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  operation_name text NOT NULL,
+  operation_kind text NOT NULL CHECK (operation_kind IN (
+    'plugin_capture','ingest','redaction','evidence','memory','retrieval','broker',
+    'llm_call','embedding_call','scanner','evaluator','compiler','writer',
+    'scheduler','job','evolution','rollback','archive','promotion','tool_attribution'
+  )),
+  started_at timestamptz NOT NULL DEFAULT now(),
+  ended_at timestamptz,
+  status text NOT NULL CHECK (
+    status IN ('running','ok','error','timeout','denied','quarantined','rolled_back')
+  ),
+  safe_attributes jsonb NOT NULL DEFAULT '{}'::jsonb,
+  object_refs jsonb NOT NULL DEFAULT '[]'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.trace_span_links (
+  from_span_id uuid NOT NULL REFERENCES autoskill.trace_spans(span_id),
+  to_span_id uuid NOT NULL REFERENCES autoskill.trace_spans(span_id),
+  link_type text NOT NULL CHECK (
+    link_type IN ('batch_input','causal','rollback','revocation','trial','counterfactual')
+  ),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (from_span_id, to_span_id, link_type)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.diagnostic_momentum (
+  diagnostic_momentum_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_id uuid REFERENCES autoskill.skills(skill_id),
+  skill_version_id uuid REFERENCES autoskill.skill_versions(skill_version_id),
+  executor_profile_id uuid REFERENCES autoskill.executor_profiles(executor_profile_id),
+  issue_signature_hash text NOT NULL,
+  diagnostic_kind text NOT NULL CHECK (diagnostic_kind IN (
+    'tool_failure','user_correction','probe_failure','drift','retrieval_shadowing',
+    'false_positive_load','ignored_load','semantic_loss','context_overhead',
+    'composition_gap','decomposition_gap','security_finding','other'
+  )),
+  root_cause_hypothesis text NOT NULL,
+  suggested_change_direction text NOT NULL,
+  evidence_count integer NOT NULL DEFAULT 0,
+  contrastive_support_count integer NOT NULL DEFAULT 0,
+  counterevidence_count integer NOT NULL DEFAULT 0,
+  momentum_score double precision NOT NULL DEFAULT 0,
+  risk_score double precision NOT NULL DEFAULT 0,
+  status text NOT NULL CHECK (
+    status IN ('accumulating','ready_for_probe','ready_for_patch','patched','rejected','revoked')
+  ),
+  first_seen_at timestamptz NOT NULL DEFAULT now(),
+  last_seen_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (
+    workspace_id,
+    skill_id,
+    executor_profile_id,
+    issue_signature_hash,
+    diagnostic_kind
+  )
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.skill_graph_operations (
+  skill_graph_operation_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  operation_kind text NOT NULL CHECK (
+    operation_kind IN ('create','improve','compose','decompose','merge','archive','promote')
+  ),
+  status text NOT NULL DEFAULT 'candidate' CHECK (
+    status IN ('candidate','trial','accepted','rejected','applied','rolled_back')
+  ),
+  subject_skill_ids uuid[] NOT NULL DEFAULT '{}',
+  output_skill_ids uuid[] NOT NULL DEFAULT '{}',
+  skill_graph_ir jsonb NOT NULL DEFAULT '{}'::jsonb,
+  evidence_ids uuid[] NOT NULL DEFAULT '{}',
+  effect_coverage jsonb NOT NULL DEFAULT '{}'::jsonb,
+  trial_summary jsonb NOT NULL DEFAULT '{}'::jsonb,
+  evolution_transaction_id uuid REFERENCES autoskill.evolution_transactions(evolution_transaction_id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.skill_usage_windows (
+  skill_usage_window_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  session_id text,
+  turn_id text,
+  skill_ids uuid[] NOT NULL DEFAULT '{}',
+  sequence_signature_hash text NOT NULL,
+  outcome text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  observed_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.skill_co_usage_edges (
+  skill_co_usage_edge_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  left_skill_id uuid NOT NULL REFERENCES autoskill.skills(skill_id),
+  right_skill_id uuid NOT NULL REFERENCES autoskill.skills(skill_id),
+  co_usage_count integer NOT NULL DEFAULT 0,
+  success_count integer NOT NULL DEFAULT 0,
+  failure_count integer NOT NULL DEFAULT 0,
+  sequence_count integer NOT NULL DEFAULT 0,
+  last_seen_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(workspace_id, left_skill_id, right_skill_id)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.skill_usage_clusters (
+  skill_usage_cluster_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  cluster_key text NOT NULL,
+  skill_ids uuid[] NOT NULL DEFAULT '{}',
+  evidence_ids uuid[] NOT NULL DEFAULT '{}',
+  support_count integer NOT NULL DEFAULT 0,
+  recommended_operation text CHECK (
+    recommended_operation IN ('create','improve','compose','decompose','merge','archive','promote')
+  ),
+  status text NOT NULL DEFAULT 'observed',
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(workspace_id, cluster_key)
+);
+
 CREATE INDEX IF NOT EXISTS environment_contracts_status_idx
   ON autoskill.environment_contracts(workspace_id, status);
 
 CREATE INDEX IF NOT EXISTS drift_events_workspace_time_idx
   ON autoskill.drift_events(workspace_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS trace_spans_trace_idx
+  ON autoskill.trace_spans (workspace_id, trace_id, started_at);
+
+CREATE INDEX IF NOT EXISTS diagnostic_momentum_ready_idx
+  ON autoskill.diagnostic_momentum (
+    workspace_id,
+    status,
+    momentum_score DESC,
+    last_seen_at DESC
+  );
+
+CREATE INDEX IF NOT EXISTS context_artifacts_workspace_kind_idx
+  ON autoskill.context_artifacts(workspace_id, artifact_kind, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS context_token_ledgers_workspace_visibility_idx
+  ON autoskill.context_token_ledgers(workspace_id, visibility_state, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS skill_graph_operations_workspace_status_idx
+  ON autoskill.skill_graph_operations(workspace_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS skill_usage_windows_workspace_time_idx
+  ON autoskill.skill_usage_windows(workspace_id, observed_at DESC);
 
 CREATE INDEX IF NOT EXISTS raw_events_workspace_time_idx
   ON autoskill.raw_events(workspace_id, occurred_at DESC);

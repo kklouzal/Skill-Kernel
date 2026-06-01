@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import textwrap
 from dataclasses import dataclass
+from math import ceil
 
 from autoskill.core.hashing import sha256_text
 from autoskill.core.skillir import SkillIR
 from autoskill.services.scanner import ScannerFinding, has_blocking_findings, scan_text
+
+DEFAULT_MAX_CONTEXT_TOKENS = 1200
 
 
 @dataclass(frozen=True)
@@ -13,10 +16,19 @@ class CompiledSkill:
     skill_md: str
     sha256: str
     scanner_findings: list[ScannerFinding]
+    estimated_tokens: int
+    max_context_tokens: int
 
     @property
     def ok(self) -> bool:
-        return not has_blocking_findings(self.scanner_findings)
+        return (
+            not has_blocking_findings(self.scanner_findings)
+            and self.estimated_tokens <= self.max_context_tokens
+        )
+
+    @property
+    def token_over_budget(self) -> bool:
+        return self.estimated_tokens > self.max_context_tokens
 
 
 def _bullets(items: list[str]) -> str:
@@ -74,6 +86,12 @@ def render_skill_md(skill: SkillIR) -> str:
         ## DO
         {_bullets(skill.steps)}
 
+        ## OUTPUTS
+        {_bullets(skill.outputs)}
+
+        ## EFFECTS
+        {_bullets(skill.effects)}
+
         ## TOOL TEMPLATES
         {_tool_templates(skill)}
 
@@ -93,8 +111,26 @@ def render_skill_md(skill: SkillIR) -> str:
     return f"{frontmatter}\n{body}".strip() + "\n"
 
 
-def compile_skill(skill: SkillIR) -> CompiledSkill:
+def compile_skill(
+    skill: SkillIR,
+    *,
+    max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
+) -> CompiledSkill:
     content = render_skill_md(skill)
-    findings = scan_text(content)
-    return CompiledSkill(skill_md=content, sha256=sha256_text(content), scanner_findings=findings)
+    # Generated runtime text is only the prompt-facing projection. Scan the full
+    # SkillIR too, because non-rendered fields can still affect routing and future
+    # generated artifacts.
+    skill_ir_text = skill.model_dump_json(by_alias=True)
+    findings = [*scan_text(content), *scan_text(skill_ir_text)]
+    return CompiledSkill(
+        skill_md=content,
+        sha256=sha256_text(content),
+        scanner_findings=findings,
+        estimated_tokens=_estimate_tokens(content),
+        max_context_tokens=max(1, max_context_tokens),
+    )
 
+
+def _estimate_tokens(text: str) -> int:
+    # Conservative local estimate; real provider tokenizers can replace this later.
+    return ceil(len(text) / 4)

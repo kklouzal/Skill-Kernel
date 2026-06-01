@@ -16,7 +16,17 @@ from autoskill.core.hashing import sha256_text
 from autoskill.db.attribution import AsyncpgAttributionStore, AttributionStore, NullAttributionStore
 from autoskill.db.audit import AsyncpgAuditStore, AuditStore, NullAuditStore
 from autoskill.db.candidates import AsyncpgCandidateStore, CandidateStore, NullCandidateStore
+from autoskill.db.context import (
+    AsyncpgContextGovernanceStore,
+    ContextGovernanceStore,
+    NullContextGovernanceStore,
+)
 from autoskill.db.contracts import AsyncpgContractStore, ContractStore, NullContractStore
+from autoskill.db.diagnostics import (
+    AsyncpgDiagnosticMomentumStore,
+    DiagnosticMomentumStore,
+    NullDiagnosticMomentumStore,
+)
 from autoskill.db.embeddings import AsyncpgEmbeddingStore, EmbeddingStore, NullEmbeddingStore
 from autoskill.db.evaluations import AsyncpgEvaluationStore, EvaluationStore, NullEvaluationStore
 from autoskill.db.events import AsyncpgEventStore, EventStore, NullEventStore
@@ -30,6 +40,12 @@ from autoskill.db.external_skills import (
 from autoskill.db.governance import AsyncpgGovernanceStore, GovernanceStore, NullGovernanceStore
 from autoskill.db.jobs import AsyncpgJobStore, JobStore, NullJobStore
 from autoskill.db.lifecycle import AsyncpgLifecycleStore, LifecycleStore, NullLifecycleStore
+from autoskill.db.observability import (
+    AsyncpgObservabilityStore,
+    NullObservabilityStore,
+    ObservabilityStore,
+)
+from autoskill.db.profiles import AsyncpgProfileStore, NullProfileStore, ProfileStore
 from autoskill.db.retrieval import AsyncpgRetrievalStore, NullRetrievalStore, RetrievalStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore, NullSchedulerStore, SchedulerStore
 from autoskill.db.skills import AsyncpgSkillStore, NullSkillStore, SkillStore
@@ -61,7 +77,7 @@ from autoskill.services.writer import (
 )
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi import status as http_status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class HealthResponse(BaseModel):
@@ -156,6 +172,134 @@ class WorkerHealthResponse(BaseModel):
     jobs_by_kind: dict[str, dict[str, int]]
     jobs_by_pool: dict[str, dict[str, int]]
     workers: list[dict[str, object]]
+
+
+class TraceSpanStartRequest(BaseModel):
+    workspace_id: str
+    operation_name: str
+    operation_kind: str
+    trace_id: UUID | None = None
+    parent_span_id: UUID | None = None
+    safe_attributes: dict[str, object] = Field(default_factory=dict)
+    object_refs: list[dict[str, object]] = Field(default_factory=list)
+
+
+class TraceSpanFinishRequest(BaseModel):
+    status: str = "ok"
+    safe_attributes: dict[str, object] = Field(default_factory=dict)
+    object_refs: list[dict[str, object]] = Field(default_factory=list)
+
+
+class TraceSpanResponse(BaseModel):
+    span: dict[str, object] | None
+
+
+class TraceListResponse(BaseModel):
+    spans: list[dict[str, object]]
+
+
+class DiagnosticSignalRequest(BaseModel):
+    workspace_id: str
+    diagnostic_kind: str
+    root_cause_hypothesis: str
+    suggested_change_direction: str
+    skill_id: UUID | None = None
+    skill_version_id: UUID | None = None
+    executor_profile_id: UUID | None = None
+    evidence_delta: int = 1
+    contrastive_support_delta: int = 0
+    counterevidence_delta: int = 0
+    risk_score: float = 0.0
+    issue_signature: dict[str, object] = Field(default_factory=dict)
+
+
+class DiagnosticMomentumResponse(BaseModel):
+    momentum: dict[str, object]
+
+
+class DiagnosticMomentumListResponse(BaseModel):
+    momentum: list[dict[str, object]]
+
+
+class ExecutorProfileUpsertRequest(BaseModel):
+    workspace_id: str
+    profile_key: str
+    model_family: str | None = None
+    agent_backend: str | None = None
+    sandbox: str | None = None
+    os_name: str | None = None
+    available_tools: list[str] = Field(default_factory=list)
+    available_binaries: list[str] = Field(default_factory=list)
+    permissions: dict[str, object] = Field(default_factory=dict)
+    api_contracts: dict[str, object] = Field(default_factory=dict)
+    status: str = "active"
+
+
+class ExecutorProfileResponse(BaseModel):
+    profile: dict[str, object]
+
+
+class ExecutorProfileListResponse(BaseModel):
+    profiles: list[dict[str, object]]
+
+
+class ModelProfileUpsertRequest(BaseModel):
+    workspace_id: str
+    profile_key: str
+    provider: str
+    model: str
+    route_kind: str
+    endpoint_ref: str | None = None
+    timeout_seconds: float = 60.0
+    status: str = "candidate"
+    qualification: dict[str, object] = Field(default_factory=dict)
+
+
+class EmbeddingProfileUpsertRequest(ModelProfileUpsertRequest):
+    embedding_dim: int = 1536
+    timeout_seconds: float = 30.0
+
+
+class ModelProfileResponse(BaseModel):
+    profile: dict[str, object]
+
+
+class ContextArtifactRecordRequest(BaseModel):
+    workspace_id: str
+    artifact_kind: str
+    source_object_type: str
+    text: str
+    max_tokens: int
+    source_object_id: UUID | None = None
+    skill_id: UUID | None = None
+    skill_version_id: UUID | None = None
+    broker_policy_version_id: UUID | None = None
+    safety_status: str = "pending"
+    equivalence_status: str = "pending"
+    shadowing_status: str = "pending"
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class ContextArtifactResponse(BaseModel):
+    artifact: dict[str, object]
+
+
+class ContextTokenLedgerRequest(BaseModel):
+    workspace_id: str
+    visibility_state: str
+    token_count: int
+    context_artifact_id: UUID | None = None
+    skill_id: UUID | None = None
+    skill_version_id: UUID | None = None
+    broker_policy_version_id: UUID | None = None
+    session_id: str | None = None
+    turn_id: str | None = None
+    outcome: str | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class ContextTokenLedgerResponse(BaseModel):
+    ledger: dict[str, object]
 
 
 class ContextCacheInvalidateRequest(BaseModel):
@@ -750,6 +894,46 @@ def _build_governance_store() -> GovernanceStore:
     return NullGovernanceStore()
 
 
+def _build_observability_store() -> ObservabilityStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgObservabilityStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullObservabilityStore()
+
+
+def _build_diagnostic_store() -> DiagnosticMomentumStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgDiagnosticMomentumStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullDiagnosticMomentumStore()
+
+
+def _build_profile_store() -> ProfileStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgProfileStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullProfileStore()
+
+
+def _build_context_governance_store() -> ContextGovernanceStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgContextGovernanceStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullContextGovernanceStore()
+
+
 def _build_lifecycle_store(governance: GovernanceStore) -> LifecycleStore:
     settings = get_settings()
     if settings.database_url:
@@ -861,6 +1045,10 @@ def create_app(
     contract_store: ContractStore | None = None,
     governance_store: GovernanceStore | None = None,
     lifecycle_store: LifecycleStore | None = None,
+    observability_store: ObservabilityStore | None = None,
+    diagnostic_store: DiagnosticMomentumStore | None = None,
+    profile_store: ProfileStore | None = None,
+    context_governance_store: ContextGovernanceStore | None = None,
     writer_workspace_root: Path | None = None,
 ) -> FastAPI:
     store = event_store or _build_event_store()
@@ -879,6 +1067,10 @@ def create_app(
     contracts = contract_store or _build_contract_store()
     governance = governance_store or _build_governance_store()
     lifecycle = lifecycle_store or _build_lifecycle_store(governance)
+    observability = observability_store or _build_observability_store()
+    diagnostics = diagnostic_store or _build_diagnostic_store()
+    profiles = profile_store or _build_profile_store()
+    context_governance = context_governance_store or _build_context_governance_store()
     broker_cache = ContextHintCache()
 
     @asynccontextmanager
@@ -903,6 +1095,10 @@ def create_app(
                 contracts,
                 governance,
                 lifecycle,
+                observability,
+                diagnostics,
+                profiles,
+                context_governance,
             ):
                 close = getattr(closeable, "close", None)
                 if close is not None:
@@ -1209,6 +1405,209 @@ def create_app(
             },
         )
         return WorkerHealthResponse(**summary.to_json())
+
+    @app.post("/v1/trace/spans", response_model=TraceSpanResponse)
+    async def start_trace_span(
+        request: TraceSpanStartRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> TraceSpanResponse:
+        _require_control_auth(authorization)
+        span = await observability.start_span(
+            workspace_key=request.workspace_id,
+            operation_name=request.operation_name,
+            operation_kind=request.operation_kind,
+            trace_id=request.trace_id,
+            parent_span_id=request.parent_span_id,
+            safe_attributes=request.safe_attributes,
+            object_refs=request.object_refs,
+        )
+        return TraceSpanResponse(span=span.to_json())
+
+    @app.post("/v1/trace/spans/{span_id}/finish", response_model=TraceSpanResponse)
+    async def finish_trace_span(
+        span_id: UUID,
+        request: TraceSpanFinishRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> TraceSpanResponse:
+        _require_control_auth(authorization)
+        span = await observability.finish_span(
+            span_id=span_id,
+            status=request.status,  # type: ignore[arg-type]
+            safe_attributes=request.safe_attributes,
+            object_refs=request.object_refs,
+        )
+        return TraceSpanResponse(span=span.to_json() if span else None)
+
+    @app.get("/v1/trace/{trace_id}", response_model=TraceListResponse)
+    async def list_trace_spans(
+        trace_id: UUID,
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str = "default",
+        limit: int = 100,
+    ) -> TraceListResponse:
+        _require_control_auth(authorization)
+        spans = await observability.list_trace(
+            workspace_key=workspace_id,
+            trace_id=trace_id,
+            limit=max(1, min(limit, 500)),
+        )
+        return TraceListResponse(spans=[span.to_json() for span in spans])
+
+    @app.post("/v1/diagnostics/momentum", response_model=DiagnosticMomentumResponse)
+    async def record_diagnostic_signal(
+        request: DiagnosticSignalRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> DiagnosticMomentumResponse:
+        _require_control_auth(authorization)
+        momentum = await diagnostics.record_signal(
+            workspace_key=request.workspace_id,
+            diagnostic_kind=request.diagnostic_kind,
+            root_cause_hypothesis=request.root_cause_hypothesis,
+            suggested_change_direction=request.suggested_change_direction,
+            skill_id=request.skill_id,
+            skill_version_id=request.skill_version_id,
+            executor_profile_id=request.executor_profile_id,
+            evidence_delta=request.evidence_delta,
+            contrastive_support_delta=request.contrastive_support_delta,
+            counterevidence_delta=request.counterevidence_delta,
+            risk_score=request.risk_score,
+            issue_signature=request.issue_signature,
+        )
+        return DiagnosticMomentumResponse(momentum=momentum.to_json())
+
+    @app.get("/v1/diagnostics/momentum", response_model=DiagnosticMomentumListResponse)
+    async def list_diagnostic_momentum(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str = "default",
+        min_momentum_score: float = 2.0,
+        limit: int = 100,
+    ) -> DiagnosticMomentumListResponse:
+        _require_control_auth(authorization)
+        records = await diagnostics.list_ready(
+            workspace_key=workspace_id,
+            min_momentum_score=min_momentum_score,
+            limit=max(1, min(limit, 500)),
+        )
+        return DiagnosticMomentumListResponse(momentum=[record.to_json() for record in records])
+
+    @app.post("/v1/profiles/executors", response_model=ExecutorProfileResponse)
+    async def upsert_executor_profile(
+        request: ExecutorProfileUpsertRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ExecutorProfileResponse:
+        _require_control_auth(authorization)
+        profile = await profiles.upsert_executor_profile(
+            workspace_key=request.workspace_id,
+            profile_key=request.profile_key,
+            model_family=request.model_family,
+            agent_backend=request.agent_backend,
+            sandbox=request.sandbox,
+            os_name=request.os_name,
+            available_tools=request.available_tools,
+            available_binaries=request.available_binaries,
+            permissions=request.permissions,
+            api_contracts=request.api_contracts,
+            status=request.status,
+        )
+        return ExecutorProfileResponse(profile=profile.to_json())
+
+    @app.get("/v1/profiles/executors", response_model=ExecutorProfileListResponse)
+    async def list_executor_profiles(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str = "default",
+        status: str | None = None,
+        limit: int = 100,
+    ) -> ExecutorProfileListResponse:
+        _require_control_auth(authorization)
+        listed = await profiles.list_executor_profiles(
+            workspace_key=workspace_id,
+            status=status,
+            limit=max(1, min(limit, 500)),
+        )
+        return ExecutorProfileListResponse(profiles=[profile.to_json() for profile in listed])
+
+    @app.post("/v1/profiles/models", response_model=ModelProfileResponse)
+    async def upsert_model_profile(
+        request: ModelProfileUpsertRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ModelProfileResponse:
+        _require_control_auth(authorization)
+        profile = await profiles.upsert_model_profile(
+            workspace_key=request.workspace_id,
+            profile_key=request.profile_key,
+            provider=request.provider,
+            model=request.model,
+            route_kind=request.route_kind,
+            endpoint_ref=request.endpoint_ref,
+            timeout_seconds=request.timeout_seconds,
+            status=request.status,
+            qualification=request.qualification,
+        )
+        return ModelProfileResponse(profile=profile.to_json())
+
+    @app.post("/v1/profiles/embeddings", response_model=ModelProfileResponse)
+    async def upsert_embedding_profile(
+        request: EmbeddingProfileUpsertRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ModelProfileResponse:
+        _require_control_auth(authorization)
+        profile = await profiles.upsert_embedding_profile(
+            workspace_key=request.workspace_id,
+            profile_key=request.profile_key,
+            provider=request.provider,
+            model=request.model,
+            route_kind=request.route_kind,
+            embedding_dim=request.embedding_dim,
+            endpoint_ref=request.endpoint_ref,
+            timeout_seconds=request.timeout_seconds,
+            status=request.status,
+            qualification=request.qualification,
+        )
+        return ModelProfileResponse(profile=profile.to_json())
+
+    @app.post("/v1/context/artifacts", response_model=ContextArtifactResponse)
+    async def record_context_artifact(
+        request: ContextArtifactRecordRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ContextArtifactResponse:
+        _require_control_auth(authorization)
+        artifact = await context_governance.record_artifact(
+            workspace_key=request.workspace_id,
+            artifact_kind=request.artifact_kind,
+            source_object_type=request.source_object_type,
+            text=request.text,
+            max_tokens=request.max_tokens,
+            source_object_id=request.source_object_id,
+            skill_id=request.skill_id,
+            skill_version_id=request.skill_version_id,
+            broker_policy_version_id=request.broker_policy_version_id,
+            safety_status=request.safety_status,
+            equivalence_status=request.equivalence_status,
+            shadowing_status=request.shadowing_status,
+            metadata=request.metadata,
+        )
+        return ContextArtifactResponse(artifact=artifact.to_json())
+
+    @app.post("/v1/context/token-ledger", response_model=ContextTokenLedgerResponse)
+    async def record_context_token_ledger(
+        request: ContextTokenLedgerRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ContextTokenLedgerResponse:
+        _require_control_auth(authorization)
+        ledger = await context_governance.record_token_ledger(
+            workspace_key=request.workspace_id,
+            visibility_state=request.visibility_state,
+            token_count=request.token_count,
+            context_artifact_id=request.context_artifact_id,
+            skill_id=request.skill_id,
+            skill_version_id=request.skill_version_id,
+            broker_policy_version_id=request.broker_policy_version_id,
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            outcome=request.outcome,
+            metadata=request.metadata,
+        )
+        return ContextTokenLedgerResponse(ledger=ledger.to_json())
 
     @app.get("/v1/evidence")
     async def list_evidence(

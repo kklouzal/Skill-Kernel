@@ -2,7 +2,16 @@ import asyncio
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from autoskill.api.app import create_app
+from autoskill.api.app import (
+    ContextArtifactRecordRequest,
+    ContextTokenLedgerRequest,
+    DiagnosticSignalRequest,
+    EmbeddingProfileUpsertRequest,
+    ExecutorProfileUpsertRequest,
+    ModelProfileUpsertRequest,
+    TraceSpanStartRequest,
+    create_app,
+)
 from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.db.skills import SkillRecord
 
@@ -122,3 +131,89 @@ def test_audit_recent_endpoint_returns_records_and_chain_status() -> None:
 
     assert response.chain_valid is True
     assert [record["action"] for record in response.audit] == ["activate", "create"]
+
+
+def test_v14_trace_diagnostics_profiles_and_context_surfaces() -> None:
+    app = create_app()
+    routes = {
+        (route.path, next(iter(route.methods - {"HEAD", "OPTIONS"}))): route
+        for route in app.routes
+        if hasattr(route, "methods")
+    }
+
+    async def run():
+        trace = await routes[("/v1/trace/spans", "POST")].endpoint(
+            request=TraceSpanStartRequest(
+                workspace_id="dev-01",
+                operation_name="test.trace",
+                operation_kind="ingest",
+                safe_attributes={"payload": "redacted"},
+            )
+        )
+        profile = await routes[("/v1/profiles/executors", "POST")].endpoint(
+            request=ExecutorProfileUpsertRequest(
+                workspace_id="dev-01",
+                profile_key="codex-dev",
+                agent_backend="codex",
+                sandbox="danger-full-access",
+                available_tools=["exec"],
+            )
+        )
+        model = await routes[("/v1/profiles/models", "POST")].endpoint(
+            request=ModelProfileUpsertRequest(
+                workspace_id="dev-01",
+                profile_key="text-default",
+                provider="openclaw",
+                model="configured-text-model",
+                route_kind="openclaw",
+                status="qualified",
+            )
+        )
+        embedding = await routes[("/v1/profiles/embeddings", "POST")].endpoint(
+            request=EmbeddingProfileUpsertRequest(
+                workspace_id="dev-01",
+                profile_key="embedding-default",
+                provider="hash",
+                model="autoskill-hash-embedding.v1",
+                route_kind="hash",
+                embedding_dim=1536,
+                status="qualified",
+            )
+        )
+        momentum = await routes[("/v1/diagnostics/momentum", "POST")].endpoint(
+            request=DiagnosticSignalRequest(
+                workspace_id="dev-01",
+                diagnostic_kind="probe_failure",
+                root_cause_hypothesis="Probe failed repeatedly.",
+                suggested_change_direction="Add a narrower verification step.",
+                evidence_delta=2,
+            )
+        )
+        artifact = await routes[("/v1/context/artifacts", "POST")].endpoint(
+            request=ContextArtifactRecordRequest(
+                workspace_id="dev-01",
+                artifact_kind="broker_hint",
+                source_object_type="broker_policy",
+                text="Use only when directly relevant.",
+                max_tokens=20,
+                safety_status="passed",
+            )
+        )
+        ledger = await routes[("/v1/context/token-ledger", "POST")].endpoint(
+            request=ContextTokenLedgerRequest(
+                workspace_id="dev-01",
+                visibility_state="skill_visible",
+                token_count=artifact.artifact["token_count"],
+            )
+        )
+        return trace, profile, model, embedding, momentum, artifact, ledger
+
+    trace, profile, model, embedding, momentum, artifact, ledger = asyncio.run(run())
+
+    assert trace.span["operation_kind"] == "ingest"
+    assert profile.profile["profile_key"] == "codex-dev"
+    assert model.profile["kind"] == "model"
+    assert embedding.profile["embedding_dim"] == 1536
+    assert momentum.momentum["status"] == "ready_for_probe"
+    assert artifact.artifact["budget_status"] == "passed"
+    assert ledger.ledger["visibility_state"] == "skill_visible"

@@ -98,6 +98,22 @@ def _proposal_from_opportunity(candidate: OpportunityCandidate) -> CandidateSkil
             "Draft the smallest procedural skill that covers the recurring workflow.",
             "Add verification and failure handling before any staged activation attempt.",
         ],
+        outputs=[
+            "A propose-only SkillIR candidate with cited evidence and planned probes.",
+        ],
+        effects=[
+            "Records reusable procedure intent without activating runtime skill files.",
+        ],
+        state_delta=[
+            "May create inactive candidate rows, body-index documents, probes, and evaluations.",
+        ],
+        side_effects=[
+            "Does not mutate active or archived skill roots.",
+        ],
+        termination=[
+            "Stop after candidate persistence and proposal-gate probe planning.",
+        ],
+        idempotency="retry_safe",
         verification=[
             "Every proposed runtime instruction is traceable to cited evidence IDs.",
             "Scanner findings are non-blocking before the proposal can advance.",
@@ -107,6 +123,10 @@ def _proposal_from_opportunity(candidate: OpportunityCandidate) -> CandidateSkil
             "Skip creation when active matches cover the workflow.",
             "Prefer archived promotion when archived matches cover the workflow.",
             "Leave the opportunity as evidence-only when scanner or provenance checks fail.",
+        ],
+        failure_modes=[
+            "Observed evidence is insufficient for intervention validation.",
+            "Active or archived skill matching finds a better reuse path.",
         ],
         do_not_use_when=[
             "The workflow is one-off, user-specific, or lacks repeated evidence.",
