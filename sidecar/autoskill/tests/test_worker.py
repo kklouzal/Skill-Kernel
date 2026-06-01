@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+from uuid import uuid4
 
 from autoskill.api.app import WorkerRunOnceRequest, create_app
 from autoskill.db.evaluations import EvaluationRunResult
@@ -12,7 +13,9 @@ from autoskill.services.worker import (
     run_worker_loop,
     run_worker_once,
 )
+from autoskill.services.writer import apply_staged_manifest_with_governance, stage_compiled_skill
 from autoskill.tests.test_embedding_generation import MemoryPendingEmbeddingStore
+from autoskill.tests.test_governance import MemoryGovernanceStore
 from autoskill.tests.test_jobs_api import MemoryJobStore
 
 
@@ -258,6 +261,83 @@ def test_worker_health_reports_pool_concurrency_and_job_counts() -> None:
     assert health["jobs_by_kind"]["evidence.derive"] == {"queued": 1}
     assert health["jobs_by_pool"]["maintenance"] == {"queued": 1}
     assert health["jobs_by_pool"]["scheduler"] == {"queued": 1}
+
+
+def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
+    jobs = MemoryJobStore()
+    governance = MemoryGovernanceStore()
+    workspace_root = tmp_path / "workspace"
+    staging_root = workspace_root / ".autoskill" / "staging"
+    archive_root = workspace_root / ".autoskill" / "archive"
+    active_root = workspace_root / "skills" / "autoskill" / "canary-skill"
+    active_root.mkdir(parents=True)
+    (active_root / "SKILL.md").write_text("WHEN old\nDO stable behavior\n", encoding="utf-8")
+
+    async def run():
+        apply_transaction = await governance.start_transaction(
+            workspace_key="dev-01",
+            transaction_kind="compile",
+            idempotency_key="apply:canary-skill",
+            plan_hash="apply-plan",
+        )
+        staged = stage_compiled_skill(
+            staging_root,
+            staging_id=uuid4(),
+            skill_version_id=uuid4(),
+            slug="canary-skill",
+            compiled_skill_md="WHEN new\nDO regressed behavior\n",
+        )
+        await apply_staged_manifest_with_governance(
+            governance,
+            evolution_transaction_id=apply_transaction.transaction.evolution_transaction_id,
+            staging_root=staging_root,
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            manifest_relative_path=staged.manifest_relative_path,
+        )
+        revocation = await governance.request_revocation(
+            workspace_key="dev-01",
+            request_kind="rollback",
+            root_object_type="evolution_transaction",
+            root_object_id=apply_transaction.transaction.evolution_transaction_id,
+            traversal_summary={"source": "critical_canary"},
+        )
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="revocations.rollback",
+            idempotency_key="rollback:canary-skill",
+            payload={"workspace_id": "dev-01"},
+        )
+        result = await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=MemoryPendingEmbeddingStore(),
+                governance=governance,
+                workspace_root=workspace_root,
+                archive_root=archive_root,
+            ),
+            worker_id="mutation-worker",
+            pool="mutation",
+        )
+        return result, revocation
+
+    result, revocation = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["completed"] == 1
+    assert (active_root / "SKILL.md").read_text(encoding="utf-8") == (
+        "WHEN old\nDO stable behavior\n"
+    )
+    completed = next(
+        request
+        for request in governance.revocations
+        if request.revocation_request_id == revocation.revocation_request_id
+    )
+    assert completed.status == "completed"
+    assert completed.traversal_summary["source"] == "critical_canary"
+    assert "rollback_transaction_id" in completed.traversal_summary
 
 
 def test_worker_run_once_dispatches_evaluation_job() -> None:

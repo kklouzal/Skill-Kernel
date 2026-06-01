@@ -297,6 +297,13 @@ class GovernanceStore(Protocol):
     ) -> EvolutionTransactionItemRecord:
         """Record a transaction item with rollback metadata."""
 
+    async def list_transaction_items(
+        self,
+        *,
+        evolution_transaction_id: UUID,
+    ) -> list[EvolutionTransactionItemRecord]:
+        """Return transaction items newest-first for rollback planning."""
+
     async def record_provenance_edge(
         self,
         *,
@@ -331,6 +338,25 @@ class GovernanceStore(Protocol):
         created_by_job_id: UUID | None = None,
     ) -> RevocationRequestRecord:
         """Queue a rollback/retention/quarantine revocation traversal."""
+
+    async def claim_next_revocation_request(
+        self,
+        *,
+        workspace_key: str | None = None,
+        request_kind: str = "rollback",
+        root_object_type: str | None = None,
+        worker_id: str | None = None,
+    ) -> RevocationRequestRecord | None:
+        """Claim one queued revocation request for deterministic worker processing."""
+
+    async def complete_revocation_request(
+        self,
+        *,
+        revocation_request_id: UUID,
+        status: str,
+        traversal_summary: dict[str, Any],
+    ) -> RevocationRequestRecord | None:
+        """Mark a claimed revocation request completed or failed."""
 
 
 class NullGovernanceStore:
@@ -423,6 +449,13 @@ class NullGovernanceStore:
             created_at=datetime.now(UTC),
         )
 
+    async def list_transaction_items(
+        self,
+        *,
+        evolution_transaction_id: UUID,
+    ) -> list[EvolutionTransactionItemRecord]:
+        return []
+
     async def record_provenance_edge(
         self,
         *,
@@ -498,6 +531,25 @@ class NullGovernanceStore:
             created_at=datetime.now(UTC),
             completed_at=None,
         )
+
+    async def claim_next_revocation_request(
+        self,
+        *,
+        workspace_key: str | None = None,
+        request_kind: str = "rollback",
+        root_object_type: str | None = None,
+        worker_id: str | None = None,
+    ) -> RevocationRequestRecord | None:
+        return None
+
+    async def complete_revocation_request(
+        self,
+        *,
+        revocation_request_id: UUID,
+        status: str,
+        traversal_summary: dict[str, Any],
+    ) -> RevocationRequestRecord | None:
+        return None
 
 
 class AsyncpgGovernanceStore(AsyncpgPoolOwner):
@@ -639,6 +691,24 @@ class AsyncpgGovernanceStore(AsyncpgPoolOwner):
                 _json(rollback_action or {}),
             )
             return EvolutionTransactionItemRecord.from_row(row)
+
+    async def list_transaction_items(
+        self,
+        *,
+        evolution_transaction_id: UUID,
+    ) -> list[EvolutionTransactionItemRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT *
+                FROM autoskill.evolution_transaction_items
+                WHERE evolution_transaction_id = $1
+                ORDER BY created_at DESC, transaction_item_id DESC
+                """,
+                evolution_transaction_id,
+            )
+            return [EvolutionTransactionItemRecord.from_row(row) for row in rows]
 
     async def record_provenance_edge(
         self,
@@ -861,6 +931,73 @@ class AsyncpgGovernanceStore(AsyncpgPoolOwner):
                 created_by_job_id,
             )
             return RevocationRequestRecord.from_row({**dict(row), "workspace_key": workspace_key})
+
+    async def claim_next_revocation_request(
+        self,
+        *,
+        workspace_key: str | None = None,
+        request_kind: str = "rollback",
+        root_object_type: str | None = None,
+        worker_id: str | None = None,
+    ) -> RevocationRequestRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                """
+                WITH candidate AS (
+                  SELECT rr.revocation_request_id
+                  FROM autoskill.revocation_requests rr
+                  JOIN autoskill.workspaces w ON w.workspace_id = rr.workspace_id
+                  WHERE rr.status = 'queued'
+                    AND rr.request_kind = $2
+                    AND ($1::text IS NULL OR w.external_key = $1)
+                    AND ($3::text IS NULL OR rr.root_object_type = $3)
+                  ORDER BY rr.created_at ASC, rr.revocation_request_id ASC
+                  FOR UPDATE SKIP LOCKED
+                  LIMIT 1
+                )
+                UPDATE autoskill.revocation_requests rr
+                SET status = 'processing',
+                    traversal_summary = rr.traversal_summary || $4::jsonb
+                FROM candidate, autoskill.workspaces w
+                WHERE rr.revocation_request_id = candidate.revocation_request_id
+                  AND w.workspace_id = rr.workspace_id
+                RETURNING rr.*, w.external_key AS workspace_key
+                """,
+                workspace_key,
+                request_kind,
+                root_object_type,
+                _json({"claimed_by": worker_id} if worker_id else {}),
+            )
+            return RevocationRequestRecord.from_row(row) if row else None
+
+    async def complete_revocation_request(
+        self,
+        *,
+        revocation_request_id: UUID,
+        status: str,
+        traversal_summary: dict[str, Any],
+    ) -> RevocationRequestRecord | None:
+        if status not in {"completed", "failed"}:
+            raise ValueError("revocation status must be completed or failed")
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE autoskill.revocation_requests rr
+                SET status = $2,
+                    traversal_summary = $3::jsonb,
+                    completed_at = now()
+                FROM autoskill.workspaces w
+                WHERE rr.workspace_id = w.workspace_id
+                  AND rr.revocation_request_id = $1
+                RETURNING rr.*, w.external_key AS workspace_key
+                """,
+                revocation_request_id,
+                status,
+                _json(traversal_summary),
+            )
+            return RevocationRequestRecord.from_row(row) if row else None
 
 
 def _json_dict(value: object) -> dict[str, Any]:

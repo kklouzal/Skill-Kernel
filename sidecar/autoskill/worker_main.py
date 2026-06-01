@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import signal
+from pathlib import Path
 
 from autoskill.core.config import Settings, get_settings
 from autoskill.db.embeddings import AsyncpgEmbeddingStore
 from autoskill.db.evaluations import AsyncpgEvaluationStore
 from autoskill.db.evidence import AsyncpgEvidenceStore
+from autoskill.db.governance import AsyncpgGovernanceStore
 from autoskill.db.jobs import AsyncpgJobStore
 from autoskill.db.retrieval import AsyncpgRetrievalStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore
@@ -44,12 +46,17 @@ async def run_worker(args: argparse.Namespace) -> int:
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
     )
+    governance = AsyncpgGovernanceStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(signum, stop_event.set)
 
     try:
+        workspace_root, archive_root = _writer_worker_roots(settings, args.workspace_root)
         summary = await run_worker_loop(
             WorkerStores(
                 jobs=jobs,
@@ -58,7 +65,10 @@ async def run_worker(args: argparse.Namespace) -> int:
                 embeddings=embeddings,
                 evaluations=evaluations,
                 retrieval=retrieval,
+                governance=governance,
                 embedder=build_text_embedder_from_settings(settings),
+                workspace_root=workspace_root,
+                archive_root=archive_root,
             ),
             WorkerLoopConfig(
                 worker_id=args.worker_id,
@@ -78,6 +88,7 @@ async def run_worker(args: argparse.Namespace) -> int:
         await embeddings.close()
         await evaluations.close()
         await retrieval.close()
+        await governance.close()
 
 
 def parse_args() -> argparse.Namespace:
@@ -91,6 +102,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--concurrency", type=int, default=None)
     parser.add_argument("--lease-seconds", type=int, default=300)
     parser.add_argument("--idle-sleep-seconds", type=float, default=1.0)
+    parser.add_argument("--workspace-root", type=Path, default=Path.cwd())
     return parser.parse_args()
 
 
@@ -100,6 +112,26 @@ def _configured_concurrency(settings: Settings, pool: WorkerPool) -> int:
     if pool == "mutation":
         return settings.worker_mutation_concurrency
     return settings.worker_maintenance_concurrency
+
+
+def _writer_worker_roots(settings: Settings, workspace_root: Path) -> tuple[Path, Path]:
+    root = workspace_root.resolve()
+    active_root = (
+        settings.active_root if settings.active_root.is_absolute() else root / settings.active_root
+    ).resolve()
+    expected_active_root = (root / "skills" / "autoskill").resolve()
+    if active_root != expected_active_root:
+        raise SystemExit("mutation worker requires AUTOSKILL_ACTIVE_ROOT=skills/autoskill")
+    archive_root = (
+        settings.archive_root
+        if settings.archive_root.is_absolute()
+        else root / settings.archive_root
+    ).resolve()
+    try:
+        archive_root.relative_to(root)
+    except ValueError as error:
+        raise SystemExit("mutation worker archive root must stay under workspace root") from error
+    return root, archive_root
 
 
 def main() -> None:

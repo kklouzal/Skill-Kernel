@@ -111,6 +111,17 @@ class MemoryGovernanceStore:
         self.items.append(item)
         return item
 
+    async def list_transaction_items(
+        self,
+        *,
+        evolution_transaction_id: UUID,
+    ) -> list[EvolutionTransactionItemRecord]:
+        return [
+            item
+            for item in reversed(self.items)
+            if item.evolution_transaction_id == evolution_transaction_id
+        ]
+
     async def record_provenance_edge(
         self,
         *,
@@ -229,6 +240,59 @@ class MemoryGovernanceStore:
         )
         self.revocations.append(request)
         return request
+
+    async def claim_next_revocation_request(
+        self,
+        *,
+        workspace_key: str | None = None,
+        request_kind: str = "rollback",
+        root_object_type: str | None = None,
+        worker_id: str | None = None,
+    ) -> RevocationRequestRecord | None:
+        for index, request in enumerate(self.revocations):
+            if request.status != "queued" or request.request_kind != request_kind:
+                continue
+            if workspace_key is not None and request.workspace_key != workspace_key:
+                continue
+            if root_object_type is not None and request.root_object_type != root_object_type:
+                continue
+            updated = RevocationRequestRecord(
+                **(
+                    request.__dict__
+                    | {
+                        "status": "processing",
+                        "traversal_summary": request.traversal_summary
+                        | ({"claimed_by": worker_id} if worker_id else {}),
+                    }
+                )
+            )
+            self.revocations[index] = updated
+            return updated
+        return None
+
+    async def complete_revocation_request(
+        self,
+        *,
+        revocation_request_id: UUID,
+        status: str,
+        traversal_summary: dict[str, object],
+    ) -> RevocationRequestRecord | None:
+        for index, request in enumerate(self.revocations):
+            if request.revocation_request_id != revocation_request_id:
+                continue
+            updated = RevocationRequestRecord(
+                **(
+                    request.__dict__
+                    | {
+                        "status": status,
+                        "traversal_summary": traversal_summary,
+                        "completed_at": datetime.now(UTC),
+                    }
+                )
+            )
+            self.revocations[index] = updated
+            return updated
+        return None
 
 
 def test_governance_api_records_transaction_item_and_revocation() -> None:

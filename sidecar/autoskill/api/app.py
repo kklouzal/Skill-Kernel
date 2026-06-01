@@ -630,6 +630,31 @@ def _writer_roots(workspace_root: Path | None = None) -> tuple[Path, Path, Path]
     return root, staging_root, archive_root
 
 
+def _worker_stores(
+    *,
+    jobs: JobStore,
+    scheduler: SchedulerStore,
+    evidence: EvidenceStore,
+    embeddings: EmbeddingStore,
+    retrieval: RetrievalStore,
+    evaluations: EvaluationStore,
+    governance: GovernanceStore,
+    writer_workspace_root: Path | None = None,
+) -> WorkerStores:
+    workspace_root, _staging_root, archive_root = _writer_roots(writer_workspace_root)
+    return WorkerStores(
+        jobs=jobs,
+        scheduler=scheduler,
+        evidence=evidence,
+        embeddings=embeddings,
+        retrieval=retrieval,
+        evaluations=evaluations,
+        governance=governance,
+        workspace_root=workspace_root,
+        archive_root=archive_root,
+    )
+
+
 def create_app(
     event_store: EventStore | None = None,
     job_store: JobStore | None = None,
@@ -852,13 +877,15 @@ def create_app(
                 detail="pool must be scheduler, maintenance, or mutation",
             )
         result: WorkerRunResult = await run_worker_once(
-            WorkerStores(
+            _worker_stores(
                 jobs=jobs,
                 scheduler=scheduler,
                 evidence=evidence,
                 embeddings=embeddings,
                 retrieval=retrieval,
                 evaluations=evaluations,
+                governance=governance,
+                writer_workspace_root=writer_workspace_root,
             ),
             worker_id=request.worker_id,
             pool=request.pool,

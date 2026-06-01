@@ -4,16 +4,21 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
+from uuid import UUID
 
+from autoskill.core.hashing import sha256_json
 from autoskill.db.embeddings import EmbeddingStore
 from autoskill.db.evaluations import EvaluationStore
 from autoskill.db.evidence import EvidenceStore
+from autoskill.db.governance import GovernanceStore, RevocationRequestRecord
 from autoskill.db.jobs import JobRecord, JobStore
 from autoskill.db.retrieval import RetrievalStore
 from autoskill.db.scheduler import SchedulerStore
 from autoskill.services.embedding_generation import TextEmbedder, generate_pending_embeddings
 from autoskill.services.opportunity import mine_opportunities
+from autoskill.services.writer import rollback_active_skill_with_governance
 
 WorkerPool = Literal["scheduler", "maintenance", "mutation"]
 
@@ -104,7 +109,10 @@ class WorkerStores:
     embeddings: EmbeddingStore
     retrieval: RetrievalStore | None = None
     evaluations: EvaluationStore | None = None
+    governance: GovernanceStore | None = None
     embedder: TextEmbedder | None = None
+    workspace_root: Path | None = None
+    archive_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -316,6 +324,137 @@ async def _run_evaluation_proposal_gates(
     return result.to_json()
 
 
+async def _run_revocations_rollback(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
+    if stores.governance is None:
+        raise ValueError("governance store is required for rollback revocations")
+    if stores.workspace_root is None or stores.archive_root is None:
+        raise ValueError("writer roots are required for rollback revocations")
+
+    limit = _payload_int(job.payload, "limit", default=10, minimum=1, maximum=25)
+    workspace = _payload_workspace(job)
+    processed: list[dict[str, Any]] = []
+    completed = 0
+    failed = 0
+    for _index in range(limit):
+        request = await stores.governance.claim_next_revocation_request(
+            workspace_key=workspace,
+            request_kind="rollback",
+            root_object_type="evolution_transaction",
+            worker_id=job.lease_owner,
+        )
+        if request is None:
+            break
+        try:
+            outcome = await _execute_rollback_revocation(stores, request)
+        except Exception as error:
+            failed += 1
+            summary = request.traversal_summary | {
+                "status": "failed",
+                "error": f"{type(error).__name__}: {error}",
+            }
+            await stores.governance.complete_revocation_request(
+                revocation_request_id=request.revocation_request_id,
+                status="failed",
+                traversal_summary=summary,
+            )
+            processed.append(
+                {
+                    "revocation_request_id": str(request.revocation_request_id),
+                    "status": "failed",
+                    "error": summary["error"],
+                }
+            )
+            continue
+        completed += 1
+        processed.append(outcome)
+    return {
+        "scanned": len(processed),
+        "completed": completed,
+        "failed": failed,
+        "revocations": processed,
+    }
+
+
+async def _execute_rollback_revocation(
+    stores: WorkerStores,
+    request: RevocationRequestRecord,
+) -> dict[str, Any]:
+    if request.workspace_key is None:
+        raise ValueError("revocation request is missing workspace key")
+    if request.root_object_type != "evolution_transaction":
+        raise ValueError("rollback revocations require an evolution_transaction root")
+
+    rollback_action = await _rollback_action_for_transaction(
+        stores.governance,
+        request.root_object_id,
+    )
+    if rollback_action.get("operation") != "restore_archive_manifest":
+        raise ValueError("rollback action does not reference a restorable archive manifest")
+    archive_manifest_relative_path = str(rollback_action["archive_manifest_relative_path"])
+    started = await stores.governance.start_transaction(
+        workspace_key=request.workspace_key,
+        transaction_kind="rollback_skill",
+        idempotency_key=f"revocation:{request.revocation_request_id}:rollback",
+        plan_hash=sha256_json(
+            {
+                "revocation_request_id": str(request.revocation_request_id),
+                "root_object_id": str(request.root_object_id),
+                "archive_manifest_relative_path": archive_manifest_relative_path,
+            }
+        ),
+        actor="autoskill-mutation-worker",
+        cause={
+            "source": "revocation_request",
+            "revocation_request_id": str(request.revocation_request_id),
+            "root_object_type": request.root_object_type,
+            "root_object_id": str(request.root_object_id),
+        },
+        rollback_of_transaction_id=request.root_object_id,
+    )
+    artifact = await rollback_active_skill_with_governance(
+        stores.governance,
+        evolution_transaction_id=started.transaction.evolution_transaction_id,
+        workspace_root=stores.workspace_root,
+        archive_root=stores.archive_root,
+        archive_manifest_relative_path=archive_manifest_relative_path,
+    )
+    summary = request.traversal_summary | {
+        "status": "completed",
+        "rollback_transaction_id": str(started.transaction.evolution_transaction_id),
+        "archive_manifest_relative_path": archive_manifest_relative_path,
+        "artifact": artifact.to_json(),
+    }
+    await stores.governance.complete_revocation_request(
+        revocation_request_id=request.revocation_request_id,
+        status="completed",
+        traversal_summary=summary,
+    )
+    return {
+        "revocation_request_id": str(request.revocation_request_id),
+        "status": "completed",
+        "rollback_transaction_id": str(started.transaction.evolution_transaction_id),
+        "active_relative_path": artifact.active_relative_path,
+    }
+
+
+async def _rollback_action_for_transaction(
+    governance: GovernanceStore,
+    evolution_transaction_id: UUID,
+) -> dict[str, Any]:
+    items = await governance.list_transaction_items(
+        evolution_transaction_id=evolution_transaction_id,
+    )
+    for item in items:
+        if item.item_kind != "compiled_skill_file":
+            continue
+        if item.activation_state != "active":
+            continue
+        operation = item.rollback_action.get("operation")
+        if operation:
+            return item.rollback_action
+    raise ValueError("no active compiled skill rollback action found")
+
+
 def _job_kinds_for_pool(pool: WorkerPool) -> list[str]:
     return [
         definition.kind
@@ -368,5 +507,10 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "evaluations.run",
         "maintenance",
         _run_evaluation_proposal_gates,
+    ),
+    "revocations.rollback": JobDefinition(
+        "revocations.rollback",
+        "mutation",
+        _run_revocations_rollback,
     ),
 }
