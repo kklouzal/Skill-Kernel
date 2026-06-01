@@ -117,9 +117,12 @@ class MemoryJobStore:
 
     async def summary(self) -> JobQueueSummary:
         counts: dict[str, int] = {}
+        by_kind: dict[str, dict[str, int]] = {}
         for job in self.jobs.values():
             counts[job.status] = counts.get(job.status, 0) + 1
-        return JobQueueSummary(counts=counts)
+            kind_counts = by_kind.setdefault(job.job_kind, {})
+            kind_counts[job.status] = kind_counts.get(job.status, 0) + 1
+        return JobQueueSummary(counts=counts, by_kind=by_kind)
 
 
 def _replace_job(job: JobRecord, **updates: object) -> JobRecord:

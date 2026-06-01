@@ -7,6 +7,7 @@ from autoskill.db.scheduler import SchedulerTickResult
 from autoskill.services.worker import (
     WorkerLoopConfig,
     WorkerStores,
+    build_worker_health,
     run_worker_loop,
     run_worker_once,
 )
@@ -198,3 +199,62 @@ def test_worker_loop_stops_on_event_while_idle() -> None:
 
     assert summary.iterations == 0
     assert summary.stopped is True
+
+
+def test_worker_health_reports_pool_concurrency_and_job_counts() -> None:
+    jobs = MemoryJobStore()
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="evidence.derive",
+            idempotency_key="derive:health",
+        )
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="scheduler.tick",
+            idempotency_key="tick:health",
+        )
+        return await build_worker_health(
+            jobs,
+            concurrency_by_pool={
+                "scheduler": 1,
+                "maintenance": 4,
+                "mutation": 1,
+            },
+        )
+
+    health = asyncio.run(run()).to_json()
+
+    maintenance = next(pool for pool in health["pools"] if pool["pool"] == "maintenance")
+    assert maintenance["concurrency"] == 4
+    assert "evidence.derive" in maintenance["job_kinds"]
+    assert health["jobs_by_status"] == {"queued": 2}
+    assert health["jobs_by_kind"]["evidence.derive"] == {"queued": 1}
+    assert health["jobs_by_pool"]["maintenance"] == {"queued": 1}
+    assert health["jobs_by_pool"]["scheduler"] == {"queued": 1}
+
+
+def test_worker_health_api_uses_configured_pool_concurrency(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOSKILL_WORKER_MAINTENANCE_CONCURRENCY", "5")
+    from autoskill.core.config import get_settings
+
+    get_settings.cache_clear()
+    jobs = MemoryJobStore()
+    app = create_app(job_store=jobs)
+    route = next(route for route in app.routes if route.path == "/v1/workers/health")
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="opportunities.mine",
+            idempotency_key="mine:health",
+        )
+        return await route.endpoint()
+
+    response = asyncio.run(run())
+    maintenance = next(pool for pool in response.pools if pool["pool"] == "maintenance")
+
+    assert maintenance["concurrency"] == 5
+    assert response.jobs_by_pool["maintenance"] == {"queued": 1}
+    get_settings.cache_clear()

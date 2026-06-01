@@ -29,7 +29,12 @@ from autoskill.services.embedding_generation import (
 )
 from autoskill.services.matching import SkillMatchRequest, match_existing_skills
 from autoskill.services.opportunity import mine_opportunities
-from autoskill.services.worker import WorkerRunResult, WorkerStores, run_worker_once
+from autoskill.services.worker import (
+    WorkerRunResult,
+    WorkerStores,
+    build_worker_health,
+    run_worker_once,
+)
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi import status as http_status
 from pydantic import BaseModel
@@ -48,6 +53,7 @@ class StatusResponse(BaseModel):
     control_auth_configured: bool
     runtime_context_broker: dict[str, object]
     jobs: dict[str, int]
+    workers: dict[str, object]
 
 
 class JobEnqueueRequest(BaseModel):
@@ -113,6 +119,13 @@ class WorkerRunOnceResponse(BaseModel):
     status: str
     output: dict[str, object] | None = None
     error: str | None = None
+
+
+class WorkerHealthResponse(BaseModel):
+    pools: list[dict[str, object]]
+    jobs_by_status: dict[str, int]
+    jobs_by_kind: dict[str, dict[str, int]]
+    jobs_by_pool: dict[str, dict[str, int]]
 
 
 class EvidenceDeriveRequest(BaseModel):
@@ -335,6 +348,14 @@ def create_app(
     async def status() -> StatusResponse:
         settings = get_settings()
         job_summary = await jobs.summary()
+        worker_health = await build_worker_health(
+            jobs,
+            concurrency_by_pool={
+                "scheduler": settings.worker_scheduler_concurrency,
+                "maintenance": settings.worker_maintenance_concurrency,
+                "mutation": settings.worker_mutation_concurrency,
+            },
+        )
         return StatusResponse(
             mode=settings.mode.value,
             database_configured=bool(settings.database_url),
@@ -346,6 +367,7 @@ def create_app(
                 "max_tokens": settings.max_context_hint_tokens,
             },
             jobs=job_summary.counts,
+            workers=worker_health.to_json(),
         )
 
     @app.post("/v1/ingest/events", response_model=IngestResult)
@@ -497,6 +519,22 @@ def create_app(
             lease_seconds=max(1, min(request.lease_seconds, 3600)),
         )
         return WorkerRunOnceResponse(**result.to_json())
+
+    @app.get("/v1/workers/health", response_model=WorkerHealthResponse)
+    async def worker_health(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> WorkerHealthResponse:
+        _require_control_auth(authorization)
+        settings = get_settings()
+        summary = await build_worker_health(
+            jobs,
+            concurrency_by_pool={
+                "scheduler": settings.worker_scheduler_concurrency,
+                "maintenance": settings.worker_maintenance_concurrency,
+                "mutation": settings.worker_mutation_concurrency,
+            },
+        )
+        return WorkerHealthResponse(**summary.to_json())
 
     @app.get("/v1/evidence")
     async def list_evidence(

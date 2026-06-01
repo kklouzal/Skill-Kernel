@@ -66,6 +66,36 @@ class WorkerLoopSummary:
 
 
 @dataclass(frozen=True)
+class WorkerPoolConfig:
+    pool: WorkerPool
+    concurrency: int
+    job_kinds: list[str]
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "pool": self.pool,
+            "concurrency": self.concurrency,
+            "job_kinds": self.job_kinds,
+        }
+
+
+@dataclass(frozen=True)
+class WorkerHealthSummary:
+    pools: list[WorkerPoolConfig]
+    jobs_by_status: dict[str, int]
+    jobs_by_kind: dict[str, dict[str, int]]
+    jobs_by_pool: dict[str, dict[str, int]]
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "pools": [pool.to_json() for pool in self.pools],
+            "jobs_by_status": self.jobs_by_status,
+            "jobs_by_kind": self.jobs_by_kind,
+            "jobs_by_pool": self.jobs_by_pool,
+        }
+
+
+@dataclass(frozen=True)
 class WorkerStores:
     jobs: JobStore
     scheduler: SchedulerStore
@@ -182,6 +212,37 @@ async def run_worker_loop(
         failed=failed,
         idle=idle,
         stopped=bool(stop_event and stop_event.is_set()),
+    )
+
+
+async def build_worker_health(
+    jobs: JobStore,
+    *,
+    concurrency_by_pool: dict[WorkerPool, int],
+) -> WorkerHealthSummary:
+    summary = await jobs.summary()
+    pools = [
+        WorkerPoolConfig(
+            pool=pool,
+            concurrency=max(1, concurrency_by_pool.get(pool, 1)),
+            job_kinds=_job_kinds_for_pool(pool),
+        )
+        for pool in ("scheduler", "maintenance", "mutation")
+    ]
+    jobs_by_pool: dict[str, dict[str, int]] = {pool.pool: {} for pool in pools}
+    kind_to_pool = {
+        definition.kind: definition.pool for definition in JOB_DEFINITIONS.values()
+    }
+    for job_kind, status_counts in summary.by_kind.items():
+        pool = kind_to_pool.get(job_kind, "unknown")
+        pool_counts = jobs_by_pool.setdefault(pool, {})
+        for status, count in status_counts.items():
+            pool_counts[status] = pool_counts.get(status, 0) + count
+    return WorkerHealthSummary(
+        pools=pools,
+        jobs_by_status=summary.counts,
+        jobs_by_kind=summary.by_kind,
+        jobs_by_pool=jobs_by_pool,
     )
 
 

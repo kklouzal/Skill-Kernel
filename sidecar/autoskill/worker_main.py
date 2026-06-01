@@ -4,14 +4,14 @@ import argparse
 import asyncio
 import signal
 
-from autoskill.core.config import get_settings
+from autoskill.core.config import Settings, get_settings
 from autoskill.db.embeddings import AsyncpgEmbeddingStore
 from autoskill.db.evidence import AsyncpgEvidenceStore
 from autoskill.db.jobs import AsyncpgJobStore
 from autoskill.db.retrieval import AsyncpgRetrievalStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore
 from autoskill.services.embedding_generation import build_text_embedder_from_settings
-from autoskill.services.worker import WorkerLoopConfig, WorkerStores, run_worker_loop
+from autoskill.services.worker import WorkerLoopConfig, WorkerPool, WorkerStores, run_worker_loop
 
 
 async def run_worker(args: argparse.Namespace) -> int:
@@ -57,7 +57,7 @@ async def run_worker(args: argparse.Namespace) -> int:
             WorkerLoopConfig(
                 worker_id=args.worker_id,
                 pool=args.pool,
-                concurrency=args.concurrency,
+                concurrency=args.concurrency or _configured_concurrency(settings, args.pool),
                 lease_seconds=args.lease_seconds,
                 idle_sleep_seconds=args.idle_sleep_seconds,
             ),
@@ -81,10 +81,18 @@ def parse_args() -> argparse.Namespace:
         choices=["scheduler", "maintenance", "mutation"],
         default="maintenance",
     )
-    parser.add_argument("--concurrency", type=int, default=1)
+    parser.add_argument("--concurrency", type=int, default=None)
     parser.add_argument("--lease-seconds", type=int, default=300)
     parser.add_argument("--idle-sleep-seconds", type=float, default=1.0)
     return parser.parse_args()
+
+
+def _configured_concurrency(settings: Settings, pool: WorkerPool) -> int:
+    if pool == "scheduler":
+        return settings.worker_scheduler_concurrency
+    if pool == "mutation":
+        return settings.worker_mutation_concurrency
+    return settings.worker_maintenance_concurrency
 
 
 def main() -> None:

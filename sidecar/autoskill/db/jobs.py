@@ -85,6 +85,7 @@ class JobEnqueueResult:
 @dataclass(frozen=True)
 class JobQueueSummary:
     counts: dict[str, int]
+    by_kind: dict[str, dict[str, int]]
 
 
 class JobStore(Protocol):
@@ -182,7 +183,7 @@ class NullJobStore:
         return []
 
     async def summary(self) -> JobQueueSummary:
-        return JobQueueSummary(counts={})
+        return JobQueueSummary(counts={}, by_kind={})
 
 
 class AsyncpgJobStore(AsyncpgPoolOwner):
@@ -365,14 +366,28 @@ class AsyncpgJobStore(AsyncpgPoolOwner):
     async def summary(self) -> JobQueueSummary:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
+            status_rows = await conn.fetch(
                 """
                 SELECT status, count(*)::int AS count
                 FROM autoskill.jobs
                 GROUP BY status
                 """
             )
-            return JobQueueSummary(counts={row["status"]: row["count"] for row in rows})
+            kind_rows = await conn.fetch(
+                """
+                SELECT job_kind, status, count(*)::int AS count
+                FROM autoskill.jobs
+                GROUP BY job_kind, status
+                ORDER BY job_kind, status
+                """
+            )
+            by_kind: dict[str, dict[str, int]] = {}
+            for row in kind_rows:
+                by_kind.setdefault(row["job_kind"], {})[row["status"]] = row["count"]
+            return JobQueueSummary(
+                counts={row["status"]: row["count"] for row in status_rows},
+                by_kind=by_kind,
+            )
 
 
 async def _recover_expired_leases(conn: asyncpg.Connection) -> None:

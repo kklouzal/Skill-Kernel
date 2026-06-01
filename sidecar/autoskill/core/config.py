@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     embedding_api_base_url: str | None = None
     embedding_api_key: str | None = None
     embedding_timeout_seconds: float = 30.0
+    worker_scheduler_concurrency: int = 1
+    worker_maintenance_concurrency: int = 2
+    worker_mutation_concurrency: int = 1
     allow_support_scripts: bool = True
     allow_network_in_generated_skills: bool = False
     allow_shell_in_generated_skills: bool = False
