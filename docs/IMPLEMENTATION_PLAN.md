@@ -114,14 +114,14 @@ Deliverables:
 - inactive candidate skill/version persistence with body-level indexing; implemented for propose-only candidates without writing runtime files;
 - scanner;
 - probe generator; implemented as deterministic target, no-skill-control, and regression probe plans for persisted candidates;
-- evaluator; proposal-gate evaluation rows are planned, concrete probe execution remains pending.
+- evaluator; implemented as deterministic proposal-gate execution that records target, no-skill-control, and regression probe results while requiring intervention replay before activation.
 
 Acceptance:
 
 - candidates require grounded evidence; proposal scaffolds carry cited evidence IDs, skip active/archive duplicates, and persist inactive candidate revisions only;
 - self-feedback-only changes fail;
 - malicious artifacts are rejected;
-- evaluator reports target, regression, and no-skill results; planned rows exist, execution remains pending.
+- evaluator reports target, regression, and no-skill results; no-skill-control remains `needs_intervention` until real intervention/counterfactual replay exists.
 
 ## Phase 7 - Deterministic Writer and Rollback
 

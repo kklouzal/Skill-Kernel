@@ -13,6 +13,7 @@ from autoskill.core.events import IngestRequest, IngestResult
 from autoskill.db.attribution import AsyncpgAttributionStore, AttributionStore, NullAttributionStore
 from autoskill.db.candidates import AsyncpgCandidateStore, CandidateStore, NullCandidateStore
 from autoskill.db.embeddings import AsyncpgEmbeddingStore, EmbeddingStore, NullEmbeddingStore
+from autoskill.db.evaluations import AsyncpgEvaluationStore, EvaluationStore, NullEvaluationStore
 from autoskill.db.events import AsyncpgEventStore, EventStore, NullEventStore
 from autoskill.db.evidence import AsyncpgEvidenceStore, EvidenceStore, NullEvidenceStore
 from autoskill.db.jobs import AsyncpgJobStore, JobStore, NullJobStore
@@ -168,6 +169,21 @@ class CandidateProposalResponse(BaseModel):
     skipped: int
     proposals: list[dict[str, object]]
     persistence: dict[str, object] | None = None
+
+
+class EvaluationRunRequest(BaseModel):
+    workspace_id: str | None = None
+    limit: int = 50
+
+
+class EvaluationRunResponse(BaseModel):
+    scanned: int
+    evaluated: int
+    blocked: int
+    failed: int
+    needs_intervention: int
+    passed: int
+    evaluations: list[dict[str, object]]
 
 
 class ShadowingDetectRequest(BaseModel):
@@ -332,6 +348,16 @@ def _build_candidate_store() -> CandidateStore:
     return NullCandidateStore()
 
 
+def _build_evaluation_store() -> EvaluationStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgEvaluationStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullEvaluationStore()
+
+
 def _require_ingest_auth(authorization: str | None) -> None:
     settings = get_settings()
     if not settings.ingest_token:
@@ -367,6 +393,7 @@ def create_app(
     embedding_store: EmbeddingStore | None = None,
     attribution_store: AttributionStore | None = None,
     candidate_store: CandidateStore | None = None,
+    evaluation_store: EvaluationStore | None = None,
 ) -> FastAPI:
     store = event_store or _build_event_store()
     jobs = job_store or _build_job_store()
@@ -376,6 +403,7 @@ def create_app(
     embeddings = embedding_store or _build_embedding_store()
     attribution = attribution_store or _build_attribution_store()
     candidates = candidate_store or _build_candidate_store()
+    evaluations = evaluation_store or _build_evaluation_store()
     broker_cache = ContextHintCache()
 
     @asynccontextmanager
@@ -392,6 +420,7 @@ def create_app(
                 embeddings,
                 attribution,
                 candidates,
+                evaluations,
             ):
                 close = getattr(closeable, "close", None)
                 if close is not None:
@@ -576,6 +605,7 @@ def create_app(
                 evidence=evidence,
                 embeddings=embeddings,
                 retrieval=retrieval,
+                evaluations=evaluations,
             ),
             worker_id=request.worker_id,
             pool=request.pool,
@@ -666,6 +696,18 @@ def create_app(
             )
             payload["persistence"] = persistence.to_json()
         return CandidateProposalResponse(**payload)
+
+    @app.post("/v1/evaluations/run", response_model=EvaluationRunResponse)
+    async def run_evaluations(
+        request: EvaluationRunRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> EvaluationRunResponse:
+        _require_control_auth(authorization)
+        result = await evaluations.run_pending_proposal_gates(
+            workspace_key=request.workspace_id,
+            limit=max(1, min(request.limit, 250)),
+        )
+        return EvaluationRunResponse(**result.to_json())
 
     @app.post("/v1/shadowing/detect", response_model=ShadowingDetectResponse)
     async def detect_shadowing(

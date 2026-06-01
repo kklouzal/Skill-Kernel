@@ -6,6 +6,7 @@ import signal
 
 from autoskill.core.config import Settings, get_settings
 from autoskill.db.embeddings import AsyncpgEmbeddingStore
+from autoskill.db.evaluations import AsyncpgEvaluationStore
 from autoskill.db.evidence import AsyncpgEvidenceStore
 from autoskill.db.jobs import AsyncpgJobStore
 from autoskill.db.retrieval import AsyncpgRetrievalStore
@@ -35,6 +36,10 @@ async def run_worker(args: argparse.Namespace) -> int:
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
     )
+    evaluations = AsyncpgEvaluationStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
     retrieval = AsyncpgRetrievalStore(
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
@@ -51,6 +56,7 @@ async def run_worker(args: argparse.Namespace) -> int:
                 scheduler=scheduler,
                 evidence=evidence,
                 embeddings=embeddings,
+                evaluations=evaluations,
                 retrieval=retrieval,
                 embedder=build_text_embedder_from_settings(settings),
             ),
@@ -70,6 +76,7 @@ async def run_worker(args: argparse.Namespace) -> int:
         await scheduler.close()
         await evidence.close()
         await embeddings.close()
+        await evaluations.close()
         await retrieval.close()
 
 

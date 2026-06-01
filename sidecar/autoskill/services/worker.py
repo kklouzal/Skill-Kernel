@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from autoskill.db.embeddings import EmbeddingStore
+from autoskill.db.evaluations import EvaluationStore
 from autoskill.db.evidence import EvidenceStore
 from autoskill.db.jobs import JobRecord, JobStore
 from autoskill.db.retrieval import RetrievalStore
@@ -102,6 +103,7 @@ class WorkerStores:
     evidence: EvidenceStore
     embeddings: EmbeddingStore
     retrieval: RetrievalStore | None = None
+    evaluations: EvaluationStore | None = None
     embedder: TextEmbedder | None = None
 
 
@@ -300,6 +302,20 @@ async def _run_opportunity_mine(stores: WorkerStores, job: JobRecord) -> dict[st
     return result.to_json()
 
 
+async def _run_evaluation_proposal_gates(
+    stores: WorkerStores,
+    job: JobRecord,
+) -> dict[str, Any]:
+    if stores.evaluations is None:
+        raise ValueError("evaluation store is required for proposal-gate evaluation")
+    limit = _payload_int(job.payload, "limit", default=50, minimum=1, maximum=250)
+    result = await stores.evaluations.run_pending_proposal_gates(
+        workspace_key=_payload_workspace(job),
+        limit=limit,
+    )
+    return result.to_json()
+
+
 def _job_kinds_for_pool(pool: WorkerPool) -> list[str]:
     return [
         definition.kind
@@ -347,5 +363,10 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "opportunities.mine",
         "maintenance",
         _run_opportunity_mine,
+    ),
+    "evaluations.run": JobDefinition(
+        "evaluations.run",
+        "maintenance",
+        _run_evaluation_proposal_gates,
     ),
 }
