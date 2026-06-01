@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import pytest
 from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope
@@ -26,6 +28,8 @@ class MemoryEventStore:
 def event() -> EventEnvelope:
     return EventEnvelope(
         workspace_id="dev-01",
+        trace_id=uuid4(),
+        span_id=uuid4(),
         session_id="session-1",
         turn_id="turn-1",
         event_type="tool_call_end",
@@ -47,3 +51,5 @@ async def test_event_store_ingest_is_idempotent() -> None:
     assert len(store.events) == 1
     assert store.events[0].payload["token"] == "[REDACTED]"
     assert store.events[0].payload_hash
+    assert store.events[0].trace_id
+    assert store.events[0].span_id

@@ -26,6 +26,8 @@ function hookContext(workspaceDir) {
     agentId: "agent-1",
     sessionId: "session-1",
     turnId: "turn-1",
+    traceId: "00000000-0000-4000-8000-000000000001",
+    spanId: "00000000-0000-4000-8000-000000000002",
     openclawVersion: "test-openclaw",
     config: {
       autoskill: {
@@ -65,6 +67,8 @@ test("capture hook handlers import and forward redacted envelopes", async () => 
       assert.equal(call.body.events.length, 1);
       assert.equal(call.body.events[0].event_type, eventType);
       assert.equal(call.body.events[0].workspace_id, "workspace-1");
+      assert.equal(call.body.events[0].trace_id, "00000000-0000-4000-8000-000000000001");
+      assert.equal(call.body.events[0].span_id, "00000000-0000-4000-8000-000000000002");
       assert.equal(call.body.events[0].payload.token, "[REDACTED]");
     }
   } finally {

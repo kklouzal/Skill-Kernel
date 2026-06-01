@@ -65,6 +65,9 @@ async def _insert_event(conn: asyncpg.Connection, workspace_id: UUID, event: Eve
         INSERT INTO autoskill.raw_events (
           event_id,
           workspace_id,
+          trace_id,
+          span_id,
+          parent_span_id,
           session_id,
           turn_id,
           event_type,
@@ -78,12 +81,18 @@ async def _insert_event(conn: asyncpg.Connection, workspace_id: UUID, event: Eve
           plugin_version,
           openclaw_version
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14)
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+          $11, $12, $13, $14::jsonb, $15, $16
+        )
         ON CONFLICT (event_id) DO NOTHING
         RETURNING event_id
         """,
         event.event_id,
         workspace_id,
+        event.trace_id,
+        event.span_id,
+        event.parent_span_id,
         event.session_id,
         event.turn_id,
         event.event_type,

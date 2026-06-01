@@ -14,6 +14,9 @@ class EventEnvelope(BaseModel):
     event_id: UUID = Field(default_factory=uuid4)
     schema_version: int = 1
     workspace_id: str
+    trace_id: UUID | None = None
+    span_id: UUID | None = None
+    parent_span_id: UUID | None = None
     agent_id: str | None = None
     session_id: str | None = None
     turn_id: str | None = None
@@ -54,4 +57,3 @@ class IngestResult(BaseModel):
     accepted: int
     duplicate: int = 0
     rejected: int = 0
-
