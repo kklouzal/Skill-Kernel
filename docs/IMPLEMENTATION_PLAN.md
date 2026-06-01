@@ -65,6 +65,7 @@ Acceptance:
 - jobs survive restart;
 - duplicate ticks do not duplicate jobs; implemented with schedule-run idempotency keys;
 - stuck leases recover; implemented for expired leases with remaining attempts;
+- failed attempts back off and terminally fail at `max_attempts`;
 - maintenance worker can claim and complete deterministic evidence/embedding jobs.
 
 ## Phase 4 - Evidence, Embeddings, Retrieval

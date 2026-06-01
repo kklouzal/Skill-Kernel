@@ -298,13 +298,23 @@ class AsyncpgJobStore(AsyncpgPoolOwner):
     ) -> JobRecord | None:
         pool = await self._get_pool()
         async with pool.acquire() as conn, conn.transaction():
-            next_status = "succeeded" if status == "succeeded" else "failed"
             row = await conn.fetchrow(
                 """
                 UPDATE autoskill.jobs
-                SET status = $3,
+                SET status = CASE
+                      WHEN $3 = 'succeeded' THEN 'succeeded'
+                      WHEN attempts < max_attempts THEN 'queued'
+                      ELSE 'failed'
+                    END,
                     lease_owner = NULL,
                     lease_expires_at = NULL,
+                    available_at = CASE
+                      WHEN $3 = 'failed' AND attempts < max_attempts
+                        THEN now() + make_interval(
+                          secs => LEAST(3600, (30 * POWER(2, GREATEST(attempts - 1, 0)))::int)
+                        )
+                      ELSE available_at
+                    END,
                     updated_at = now()
                 WHERE job_id = $1
                   AND lease_owner = $2
@@ -313,7 +323,7 @@ class AsyncpgJobStore(AsyncpgPoolOwner):
                 """,
                 job_id,
                 worker_id,
-                next_status,
+                status,
             )
             if row is None:
                 return None
@@ -376,6 +386,18 @@ async def _recover_expired_leases(conn: asyncpg.Connection) -> None:
         WHERE status = 'leased'
           AND lease_expires_at < now()
           AND attempts < max_attempts
+        """
+    )
+    await conn.execute(
+        """
+        UPDATE autoskill.jobs
+        SET status = 'failed',
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            updated_at = now()
+        WHERE status = 'leased'
+          AND lease_expires_at < now()
+          AND attempts >= max_attempts
         """
     )
 
