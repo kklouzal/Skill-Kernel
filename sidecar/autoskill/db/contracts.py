@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -238,7 +240,7 @@ def _contracts_from_skill_ir(skill_ir: dict[str, Any]) -> list[dict[str, Any]]:
         if not name or not expectation:
             continue
         probe = str(item.get("probe") or "").strip()
-        validation_method = "static_path_exists" if probe.startswith("static:exists:") else "manual"
+        validation_method = _validation_method_for_probe(probe)
         contracts.append(
             {
                 "contract_type": str(item.get("kind") or "environment"),
@@ -260,7 +262,32 @@ def _check_contract(row: asyncpg.Record) -> tuple[str, str]:
         if path.exists():
             return "valid", f"path exists: {path}"
         return "violated", f"path missing: {path}"
+    if probe.startswith("static:which:"):
+        command = probe.removeprefix("static:which:").strip()
+        if not command or "/" in command:
+            return "unknown", "command probe is empty or not a bare executable name"
+        resolved = shutil.which(command)
+        if resolved:
+            return "valid", f"command found: {command}"
+        return "violated", f"command missing: {command}"
+    if probe.startswith("static:env:"):
+        env_name = probe.removeprefix("static:env:").strip()
+        if not env_name or not env_name.replace("_", "").isalnum():
+            return "unknown", "environment probe is empty or invalid"
+        if os.environ.get(env_name):
+            return "valid", f"environment variable set: {env_name}"
+        return "violated", f"environment variable missing: {env_name}"
     return "unknown", "no deterministic validation probe configured"
+
+
+def _validation_method_for_probe(probe: str) -> str:
+    if probe.startswith("static:exists:"):
+        return "static_path_exists"
+    if probe.startswith("static:which:"):
+        return "static_command_exists"
+    if probe.startswith("static:env:"):
+        return "static_env_present"
+    return "manual"
 
 
 def _json_dict(value: object) -> dict[str, Any]:

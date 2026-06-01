@@ -189,7 +189,7 @@ Acceptance:
 Deliverables:
 
 - contract extraction; implemented for SkillIR `environment_contracts` into DB-backed environment contract rows;
-- drift checks; implemented as a deterministic first pass for static path-existence probes with drift event creation;
+- drift checks; implemented as a deterministic first pass for static path-existence, bare-command availability, and required-env probes with drift event creation;
 - localized repair;
 - skill graph maintenance;
 - audit and retrieval policy reviews;

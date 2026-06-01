@@ -96,6 +96,7 @@ Phase 6/7 control-plane buildout.
 - Real local Postgres promotion/merge/budget validation passed via compose: a retrieval-recurring archived skill promoted to active, an explicit duplicate edge archived the lower-utility skill, a harmful low-utility active skill archived, active-budget overflow archived, and curation actions recorded `promote_archive`, `merge_duplicate`, `archive`, and `enforce_active_budget`.
 - Phase 9 contract/drift primitives are implemented as a deterministic first pass: SkillIR `environment_contracts` persist into DB contract rows, `contracts.extract` and `drift.check` worker jobs/API endpoints are wired, static path-existence probes update contract status, and violated contracts create drift events with repair-candidate metadata.
 - Real local Postgres contract/drift validation passed via compose: migration applied, a SkillIR path contract was extracted, the missing path was marked violated, and a drift event was recorded.
+- Phase 9 deterministic drift probes now cover static path existence, bare executable availability (`static:which:<command>`), and required environment presence (`static:env:<NAME>`) without executing arbitrary shell commands.
 - ANN/vector recall audit is implemented: `/v1/embeddings/recall-audit` compares index-preferred nearest-neighbor results against exact pgvector ordering for a bounded sample and reports min/average recall plus per-sample failures.
 - Real local Postgres recall-audit validation passed via compose with two stored embeddings and perfect recall against exact ordering.
 - Persistent worker heartbeat records are implemented: worker loops upsert `worker_heartbeats`, `/v1/workers/health` includes recently observed workers, and heartbeat summaries track loop iterations/claimed/succeeded/failed/idle counts.
@@ -113,7 +114,7 @@ Phase 6/7 control-plane buildout.
 6. Add active-cache invalidation and expanded derived-state revoke handlers for frozen skills and non-body-index transaction-derived artifacts.
 7. Add mutation-worker apply orchestration only after autonomous apply policy and intervention replay gates are ready.
 8. Extend Phase 8 beyond deterministic promotion/archive/merge/budget curation: split support, guarded improvement planning, promotion evaluator gates, and active-bank optimization beyond utility ordering.
-9. Expand Phase 9 beyond static path checks: CLI/package/API/schema/service probes, false-positive controls, drift probes, and localized repair proposal generation.
+9. Expand Phase 9 beyond static path/command/env checks: package/API/schema/service probes, false-positive controls, drift probe lifecycle, and localized repair proposal generation.
 
 ## Known Risks
 
@@ -121,7 +122,7 @@ Phase 6/7 control-plane buildout.
 - Spool replay is best-effort from capture hooks and still needs a live gateway smoke test under actual hook concurrency.
 - Message hook event aliases remain intentionally broad until live OpenClaw installed-plugin validation confirms current names.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
-- Worker health is summary-based from the job table; persistent per-worker heartbeat records are still pending and should be added before long-running LLM/evaluation jobs exceed one lease interval.
+- Worker health now includes persistent heartbeat records; lease renewal is still pending for future handlers that exceed one lease interval.
 - Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive/intervention evidence still needs aggregation logic.
 - Embedding generation defaults to deterministic local hash embeddings until production provider settings are configured and live-validated.
 - Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and shadow-edge/probe generation from attribution events are still pending.
@@ -129,4 +130,4 @@ Phase 6/7 control-plane buildout.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints, but mutation-worker orchestration still needs end-to-end caller wiring before autonomous apply is allowed.
 - Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, and invalidates body-index/embedding objects from traversal summaries; broader revoke handlers are still pending.
 - Utility rollups are deterministic v1 scoring, not full marginal-value/intervention scoring yet; curation now handles archived promotion, explicit duplicate merge/archive, low-utility archive, and active-budget overflow, while split support, promotion evaluator gates, and guarded improvement planning remain pending.
-- Contract/drift checks are deterministic v1 path probes only; broader contract types and repair execution remain pending.
+- Contract/drift checks are deterministic v1 path/command/env probes only; package/API/schema/service probes and repair execution remain pending.
