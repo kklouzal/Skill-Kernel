@@ -668,40 +668,84 @@ async def _run_revocations_rollback(stores: WorkerStores, job: JobRecord) -> dic
 
 
 async def _run_writer_apply(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
-    if stores.governance is None:
-        raise ValueError("governance store is required for writer apply")
-    if stores.workspace_root is None or stores.archive_root is None:
-        raise ValueError("writer roots are required for writer apply")
-    if not bool(job.payload.get("policy_approved")):
-        raise ValueError("writer apply requires explicit policy_approved=true")
-    transaction_id = _payload_uuid(job.payload, "evolution_transaction_id")
-    manifest_relative_path = _payload_str(job.payload, "manifest_relative_path")
-    if transaction_id is None or not manifest_relative_path:
-        raise ValueError(
-            "writer apply requires evolution_transaction_id and manifest_relative_path"
+    observability = stores.observability or NullObservabilityStore()
+    workspace = _payload_workspace(job) or job.workspace_key or "unknown"
+    span = await observability.start_span(
+        workspace_key=workspace,
+        trace_id=job.trace_id,
+        parent_span_id=job.span_id or job.parent_span_id,
+        operation_name="writer.apply",
+        operation_kind="writer",
+        safe_attributes={
+            "source": "worker",
+            "job_id": str(job.job_id),
+            "job_kind": job.job_kind,
+            "policy_approved": bool(job.payload.get("policy_approved")),
+            "activation_gate_required": bool(job.payload.get("activation_gate_required")),
+            "has_manifest_relative_path": bool(job.payload.get("manifest_relative_path")),
+        },
+        object_refs=[{"object_type": "job", "object_id": str(job.job_id)}],
+    )
+    try:
+        if stores.governance is None:
+            raise ValueError("governance store is required for writer apply")
+        if stores.workspace_root is None or stores.archive_root is None:
+            raise ValueError("writer roots are required for writer apply")
+        if not bool(job.payload.get("policy_approved")):
+            raise ValueError("writer apply requires explicit policy_approved=true")
+        transaction_id = _payload_uuid(job.payload, "evolution_transaction_id")
+        manifest_relative_path = _payload_str(job.payload, "manifest_relative_path")
+        if transaction_id is None or not manifest_relative_path:
+            raise ValueError(
+                "writer apply requires evolution_transaction_id and manifest_relative_path"
+            )
+        staging_root = stores.workspace_root / ".autoskill" / "staging"
+        activation_readiness = await _check_writer_activation_gate(
+            stores,
+            job,
+            staging_root=staging_root,
+            manifest_relative_path=manifest_relative_path,
         )
-    staging_root = stores.workspace_root / ".autoskill" / "staging"
-    activation_readiness = await _check_writer_activation_gate(
-        stores,
-        job,
-        staging_root=staging_root,
-        manifest_relative_path=manifest_relative_path,
+        artifact = await apply_staged_manifest_with_governance(
+            stores.governance,
+            evolution_transaction_id=transaction_id,
+            staging_root=staging_root,
+            workspace_root=stores.workspace_root,
+            archive_root=stores.archive_root,
+            manifest_relative_path=manifest_relative_path,
+        )
+        output = {
+            "artifact": artifact.to_json(),
+            "policy_approved": True,
+            "activation_gate": (
+                activation_readiness.to_json() if activation_readiness is not None else None
+            ),
+        }
+    except Exception as error:
+        await observability.finish_span(
+            span_id=span.span_id,
+            status="error",
+            safe_attributes={"error": f"{type(error).__name__}: {error}"[:500]},
+        )
+        raise
+    await observability.finish_span(
+        span_id=span.span_id,
+        status="ok",
+        safe_attributes={
+            "active_relative_path": output["artifact"]["active_relative_path"],
+            "manifest_sha256": output["artifact"]["manifest_sha256"],
+            "activation_gate_allowed": (
+                output["activation_gate"]["allowed"]
+                if output["activation_gate"] is not None
+                else None
+            ),
+        },
+        object_refs=[
+            {"object_type": "job", "object_id": str(job.job_id)},
+            {"object_type": "evolution_transaction", "object_id": str(transaction_id)},
+        ],
     )
-    artifact = await apply_staged_manifest_with_governance(
-        stores.governance,
-        evolution_transaction_id=transaction_id,
-        staging_root=staging_root,
-        workspace_root=stores.workspace_root,
-        archive_root=stores.archive_root,
-        manifest_relative_path=manifest_relative_path,
-    )
-    return {
-        "artifact": artifact.to_json(),
-        "policy_approved": True,
-        "activation_gate": (
-            activation_readiness.to_json() if activation_readiness is not None else None
-        ),
-    }
+    return output
 
 
 async def _check_writer_activation_gate(

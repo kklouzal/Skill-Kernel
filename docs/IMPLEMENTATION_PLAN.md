@@ -224,6 +224,7 @@ Acceptance:
 - rollback restores the previous effective state;
 - canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed mutation-worker rollback execution, initial-create active-path deletion rollback, body-index/embedding/retrieval/context/topology/evaluator/attribution/governance invalidation, active broker-cache invalidation, and fail-closed policy-approved mutation-worker writer apply orchestration are implemented.
 - long-running job leases renew while handlers are still running; implemented in the job store, worker execution wrapper, and control API with focused tests.
+- mutation-worker `writer.apply` and `revocations.rollback` handlers record content-safe child trace spans under their claimed job spans, including bounded success/error metadata and object refs without compiled skill text.
 
 ## Phase 8 - Autonomous Improvement and Curation
 

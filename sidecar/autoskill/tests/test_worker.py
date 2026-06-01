@@ -415,8 +415,8 @@ def test_worker_run_once_records_error_trace_span() -> None:
     result = asyncio.run(run())
 
     assert result.status == "failed"
-    assert len(observability.started) == 1
-    assert observability.started[0].operation_name == "writer.apply"
+    assert [span.operation_kind for span in observability.started] == ["job", "writer"]
+    assert observability.started[1].operation_name == "writer.apply"
     assert observability.finished[0]["status"] == "error"
     assert "writer roots are required" in observability.finished[0]["safe_attributes"]["error"]
 
@@ -943,20 +943,26 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
     jobs = MemoryJobStore()
     governance = MemoryGovernanceStore()
     activation_gate = MemoryActivationGateStore()
+    observability = MemoryObservabilityStore()
+    trace_id = uuid4()
+    span_id = uuid4()
     workspace_root = tmp_path / "workspace"
     staging_root = workspace_root / ".autoskill" / "staging"
     archive_root = workspace_root / ".autoskill" / "archive"
     active_root = workspace_root / "skills" / "autoskill" / "approved-skill"
     skill_version_id = uuid4()
     executor_profile_id = uuid4()
+    transaction_id = None
 
     async def run():
+        nonlocal transaction_id
         transaction = await governance.start_transaction(
             workspace_key="dev-01",
             transaction_kind="compile",
             idempotency_key="apply:approved-skill",
             plan_hash="apply-plan",
         )
+        transaction_id = transaction.transaction.evolution_transaction_id
         staged = stage_compiled_skill(
             staging_root,
             staging_id=uuid4(),
@@ -975,6 +981,8 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
                 "evolution_transaction_id": str(transaction.transaction.evolution_transaction_id),
                 "manifest_relative_path": staged.manifest_relative_path,
             },
+            trace_id=trace_id,
+            span_id=span_id,
         )
         return await run_worker_once(
             WorkerStores(
@@ -984,6 +992,7 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
                 embeddings=MemoryPendingEmbeddingStore(),
                 governance=governance,
                 activation_gate=activation_gate,
+                observability=observability,
                 workspace_root=workspace_root,
                 archive_root=archive_root,
             ),
@@ -1000,6 +1009,32 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
     assert (active_root / "SKILL.md").read_text(encoding="utf-8") == (
         "WHEN approved\nDO safe behavior\n"
     )
+    assert [span.operation_kind for span in observability.started] == ["job", "writer"]
+    writer_span = observability.started[1]
+    assert writer_span.trace_id == trace_id
+    assert writer_span.parent_span_id == span_id
+    assert writer_span.operation_name == "writer.apply"
+    assert writer_span.safe_attributes == {
+        "source": "worker",
+        "job_id": str(result.job.job_id),
+        "job_kind": "writer.apply",
+        "policy_approved": True,
+        "activation_gate_required": True,
+        "has_manifest_relative_path": True,
+    }
+    assert observability.finished[0]["status"] == "ok"
+    assert observability.finished[0]["safe_attributes"] == {
+        "active_relative_path": "skills/autoskill/approved-skill",
+        "manifest_sha256": result.output["artifact"]["manifest_sha256"],
+        "activation_gate_allowed": True,
+    }
+    assert observability.finished[0]["object_refs"] == [
+        {"object_type": "job", "object_id": str(result.job.job_id)},
+        {
+            "object_type": "evolution_transaction",
+            "object_id": str(transaction_id),
+        },
+    ]
     assert activation_gate.calls == [
         {
             "workspace_key": "dev-01",
