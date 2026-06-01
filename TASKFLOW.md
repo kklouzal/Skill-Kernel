@@ -148,6 +148,7 @@ Phase 10/11 v14 substrate buildout.
 - Validation passed for evaluator trace propagation: focused evaluator/worker tests passed 24 tests, `uv run ruff check sidecar` passed, `uv run pytest` passed with 127 tests, `uv run python -m compileall -q sidecar` passed, `git diff --check` passed, and a fresh compose Postgres smoke persisted a closed `evaluator` trace span with safe count metadata.
 - Validation passed for compiled context-loadability gates: focused writer/candidate tests passed 21 tests, focused ruff checks passed, and a fresh compose Postgres smoke persisted a candidate `skill_md` context artifact with `runtime_skill_body`, passed safety/equivalence/budget gates, and `269/1200` token usage.
 - Validation passed for external-skill scanner wiring: focused external-skill tests covered root hashing, no raw path persistence, frontmatter extraction, and scanner-blocked quarantine; full `uv run pytest` passed with 127 tests.
+- Validation passed for the combined v14 context/evaluator/external inventory smoke: fresh compose Postgres migration persisted a passed context gate, one traced proposal-gate evaluation, one closed evaluator trace span, and one visible external-skill inventory row without raw root path persistence.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
