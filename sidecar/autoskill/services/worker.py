@@ -351,6 +351,20 @@ async def _run_curation(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
         workspace_key=workspace,
         archive_threshold=float(job.payload.get("archive_threshold", -1.0)),
         max_archive=_payload_int(job.payload, "max_archive", default=5, minimum=0, maximum=100),
+        promotion_min_retrieval=_payload_int(
+            job.payload,
+            "promotion_min_retrieval",
+            default=3,
+            minimum=1,
+            maximum=1000,
+        ),
+        max_promote=_payload_int(job.payload, "max_promote", default=3, minimum=0, maximum=100),
+        active_budget=(
+            None
+            if job.payload.get("active_budget") is None
+            else _payload_int(job.payload, "active_budget", default=100, minimum=1, maximum=1000)
+        ),
+        max_merge=_payload_int(job.payload, "max_merge", default=5, minimum=0, maximum=100),
     )
     return result.to_json()
 

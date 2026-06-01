@@ -3,9 +3,15 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from autoskill.api.app import EmbeddingSearchRequest, EmbeddingUpsertRequest, create_app
+from autoskill.api.app import (
+    EmbeddingRecallAuditRequest,
+    EmbeddingSearchRequest,
+    EmbeddingUpsertRequest,
+    create_app,
+)
 from autoskill.db.embeddings import (
     EMBEDDING_DIM,
+    EmbeddingRecallAuditResult,
     EmbeddingRecord,
     EmbeddingSearchCandidate,
     EmbeddingUpsertResult,
@@ -65,6 +71,24 @@ class MemoryEmbeddingStore:
             return []
         return [EmbeddingSearchCandidate(embedding=self.embedding, distance=0.0)]
 
+    async def audit_recall(
+        self,
+        *,
+        workspace_key: str,
+        embedding_model: str,
+        object_type: str | None = None,
+        sample_size: int = 10,
+        k: int = 10,
+        min_recall: float = 0.95,
+    ) -> EmbeddingRecallAuditResult:
+        return EmbeddingRecallAuditResult(
+            sampled=1,
+            k=k,
+            min_recall=1.0,
+            avg_recall=1.0,
+            failures=[],
+        )
+
 
 def test_embeddings_api_upserts_and_searches() -> None:
     store = MemoryEmbeddingStore()
@@ -100,6 +124,28 @@ def test_embeddings_api_upserts_and_searches() -> None:
     assert upserted.created is True
     assert upserted.embedding["object_id"] == str(object_id)
     assert searched.candidates[0]["distance"] == 0.0
+
+
+def test_embeddings_api_runs_recall_audit() -> None:
+    store = MemoryEmbeddingStore()
+    app = create_app(embedding_store=store)
+    audit_route = next(route for route in app.routes if route.path == "/v1/embeddings/recall-audit")
+
+    async def run():
+        return await audit_route.endpoint(
+            request=EmbeddingRecallAuditRequest(
+                workspace_id="dev-01",
+                embedding_model="test-embedding-model",
+                sample_size=3,
+                k=5,
+            )
+        )
+
+    response = asyncio.run(run())
+
+    assert response.sampled == 1
+    assert response.k == 5
+    assert response.failures == []
 
 
 def test_embeddings_api_rejects_wrong_dimensions() -> None:

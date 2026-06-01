@@ -223,11 +223,17 @@ class CurationRunRequest(BaseModel):
     workspace_id: str
     archive_threshold: float = -1.0
     max_archive: int = 5
+    promotion_min_retrieval: int = 3
+    max_promote: int = 3
+    active_budget: int | None = None
+    max_merge: int = 5
 
 
 class CurationRunResponse(BaseModel):
     scanned: int
     archived: int
+    promoted: int
+    merged: int
     actions: list[dict[str, object]]
 
 
@@ -506,6 +512,23 @@ class EmbeddingSearchRequest(BaseModel):
 
 class EmbeddingSearchResponse(BaseModel):
     candidates: list[dict[str, object]]
+
+
+class EmbeddingRecallAuditRequest(BaseModel):
+    workspace_id: str
+    embedding_model: str = "autoskill-hash-embedding"
+    object_type: str | None = None
+    sample_size: int = 10
+    k: int = 10
+    min_recall: float = 0.95
+
+
+class EmbeddingRecallAuditResponse(BaseModel):
+    sampled: int
+    k: int
+    min_recall: float
+    avg_recall: float
+    failures: list[dict[str, object]]
 
 
 class EmbeddingGenerateRequest(BaseModel):
@@ -1181,6 +1204,12 @@ def create_app(
             workspace_key=request.workspace_id,
             archive_threshold=request.archive_threshold,
             max_archive=max(0, min(request.max_archive, 100)),
+            promotion_min_retrieval=max(1, min(request.promotion_min_retrieval, 1000)),
+            max_promote=max(0, min(request.max_promote, 100)),
+            active_budget=(
+                None if request.active_budget is None else max(1, min(request.active_budget, 1000))
+            ),
+            max_merge=max(0, min(request.max_merge, 100)),
         )
         return CurationRunResponse(**result.to_json())
 
@@ -1538,6 +1567,22 @@ def create_app(
         return EmbeddingSearchResponse(
             candidates=[candidate.to_json() for candidate in candidates],
         )
+
+    @app.post("/v1/embeddings/recall-audit", response_model=EmbeddingRecallAuditResponse)
+    async def audit_embedding_recall(
+        request: EmbeddingRecallAuditRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> EmbeddingRecallAuditResponse:
+        _require_control_auth(authorization)
+        result = await embeddings.audit_recall(
+            workspace_key=request.workspace_id,
+            embedding_model=request.embedding_model,
+            object_type=request.object_type,
+            sample_size=max(1, min(request.sample_size, 100)),
+            k=max(1, min(request.k, 100)),
+            min_recall=max(0.0, min(request.min_recall, 1.0)),
+        )
+        return EmbeddingRecallAuditResponse(**result.to_json())
 
     @app.post("/v1/embeddings/generate", response_model=EmbeddingGenerateResponse)
     async def generate_embeddings(

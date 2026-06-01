@@ -105,15 +105,23 @@ class MemoryUtilityWorkerStore:
         workspace_key: str,
         archive_threshold: float = -1.0,
         max_archive: int = 5,
+        promotion_min_retrieval: int = 3,
+        max_promote: int = 3,
+        active_budget: int | None = None,
+        max_merge: int = 5,
     ) -> CurationRunResult:
         self.curation_calls.append(
             {
                 "workspace_key": workspace_key,
                 "archive_threshold": archive_threshold,
                 "max_archive": max_archive,
+                "promotion_min_retrieval": promotion_min_retrieval,
+                "max_promote": max_promote,
+                "active_budget": active_budget,
+                "max_merge": max_merge,
             }
         )
-        return CurationRunResult(scanned=2, archived=1, actions=[])
+        return CurationRunResult(scanned=2, archived=1, promoted=1, merged=0, actions=[])
 
 
 class MemoryContractWorkerStore:
@@ -505,7 +513,15 @@ def test_worker_dispatches_utility_and_curation_jobs() -> None:
             workspace_key="dev-01",
             job_kind="curation.run",
             idempotency_key="curation:one",
-            payload={"workspace_id": "dev-01", "archive_threshold": -2.5, "max_archive": 3},
+            payload={
+                "workspace_id": "dev-01",
+                "archive_threshold": -2.5,
+                "max_archive": 3,
+                "promotion_min_retrieval": 4,
+                "max_promote": 2,
+                "active_budget": 12,
+                "max_merge": 1,
+            },
         )
         stores = WorkerStores(
             jobs=jobs,
@@ -524,9 +540,18 @@ def test_worker_dispatches_utility_and_curation_jobs() -> None:
     assert first.output["scanned"] == 1
     assert second.status == "succeeded"
     assert second.output["archived"] == 1
+    assert second.output["promoted"] == 1
     assert utility.rollup_calls == [{"workspace_key": "dev-01", "limit": 17}]
     assert utility.curation_calls == [
-        {"workspace_key": "dev-01", "archive_threshold": -2.5, "max_archive": 3}
+        {
+            "workspace_key": "dev-01",
+            "archive_threshold": -2.5,
+            "max_archive": 3,
+            "promotion_min_retrieval": 4,
+            "max_promote": 2,
+            "active_budget": 12,
+            "max_merge": 1,
+        }
     ]
 
 

@@ -101,12 +101,16 @@ class UtilityRollupResult:
 class CurationRunResult:
     scanned: int
     archived: int
+    promoted: int
+    merged: int
     actions: list[CurationActionRecord]
 
     def to_json(self) -> dict[str, Any]:
         return {
             "scanned": self.scanned,
             "archived": self.archived,
+            "promoted": self.promoted,
+            "merged": self.merged,
             "actions": [action.to_json() for action in self.actions],
         }
 
@@ -126,8 +130,12 @@ class UtilityStore(Protocol):
         workspace_key: str,
         archive_threshold: float = -1.0,
         max_archive: int = 5,
+        promotion_min_retrieval: int = 3,
+        max_promote: int = 3,
+        active_budget: int | None = None,
+        max_merge: int = 5,
     ) -> CurationRunResult:
-        """Archive active low-utility skills and log curation actions."""
+        """Promote recurring archived skills, archive weak active skills, and merge duplicates."""
 
 
 class NullUtilityStore:
@@ -145,8 +153,12 @@ class NullUtilityStore:
         workspace_key: str,
         archive_threshold: float = -1.0,
         max_archive: int = 5,
+        promotion_min_retrieval: int = 3,
+        max_promote: int = 3,
+        active_budget: int | None = None,
+        max_merge: int = 5,
     ) -> CurationRunResult:
-        return CurationRunResult(scanned=0, archived=0, actions=[])
+        return CurationRunResult(scanned=0, archived=0, promoted=0, merged=0, actions=[])
 
 
 class AsyncpgUtilityStore(AsyncpgPoolOwner):
@@ -186,50 +198,300 @@ class AsyncpgUtilityStore(AsyncpgPoolOwner):
         workspace_key: str,
         archive_threshold: float = -1.0,
         max_archive: int = 5,
+        promotion_min_retrieval: int = 3,
+        max_promote: int = 3,
+        active_budget: int | None = None,
+        max_merge: int = 5,
     ) -> CurationRunResult:
         rollups = await self.run_utility_rollup(workspace_key=workspace_key)
         pool = await self._get_pool()
         actions: list[CurationActionRecord] = []
+        archived = 0
+        promoted = 0
+        merged = 0
         async with pool.acquire() as conn, conn.transaction():
             workspace_id = await ensure_workspace(conn, workspace_key)
-            for rollup in rollups.rollups:
-                if len(actions) >= max_archive:
+            rollup_by_skill = {rollup.skill_id: rollup for rollup in rollups.rollups}
+
+            for rollup in sorted(
+                rollups.rollups,
+                key=lambda item: (item.utility_score, item.slug or ""),
+                reverse=True,
+            ):
+                if promoted >= max_promote:
                     break
-                if rollup.lifecycle_state != "active":
+                if rollup.lifecycle_state != "archived":
                     continue
-                if rollup.utility_score > archive_threshold:
+                if rollup.features.retrieval_count < promotion_min_retrieval:
                     continue
-                await conn.execute(
-                    """
-                    UPDATE autoskill.skills
-                    SET lifecycle_state = 'archived',
-                        updated_at = now()
-                    WHERE workspace_id = $1
-                      AND skill_id = $2
-                      AND lifecycle_state = 'active'
-                    """,
+                if rollup.features.canary_failure_count or rollup.features.hurt_count:
+                    continue
+                if await _set_lifecycle_state(
+                    conn,
                     workspace_id,
                     rollup.skill_id,
-                )
-                action = await _insert_curation_action(
+                    from_state="archived",
+                    to_state="active",
+                ):
+                    actions.append(
+                        await _insert_curation_action(
+                            conn,
+                            workspace_id=workspace_id,
+                            skill_id=rollup.skill_id,
+                            action="promote_archive",
+                            status="applied",
+                            reason="archived skill demand recurred",
+                            features={
+                                **rollup.features.to_json(),
+                                "utility_score": rollup.utility_score,
+                                "promotion_min_retrieval": promotion_min_retrieval,
+                            },
+                        )
+                    )
+                    promoted += 1
+
+            duplicate_actions = await _archive_duplicate_edges(
+                conn,
+                workspace_id=workspace_id,
+                rollup_by_skill=rollup_by_skill,
+                max_merge=min(max_merge, max_archive),
+            )
+            actions.extend(duplicate_actions)
+            archived += len(duplicate_actions)
+            merged += len(duplicate_actions)
+
+            archive_actions = await _archive_low_utility(
+                conn,
+                workspace_id=workspace_id,
+                rollups=rollups.rollups,
+                archive_threshold=archive_threshold,
+                max_archive=max(0, max_archive - archived),
+            )
+            actions.extend(archive_actions)
+            archived += len(archive_actions)
+
+            if active_budget is not None and active_budget > 0:
+                budget_actions = await _enforce_active_budget(
                     conn,
                     workspace_id=workspace_id,
-                    skill_id=rollup.skill_id,
-                    action="archive",
-                    status="applied",
-                    reason="utility below archive threshold",
-                    features={
-                        **rollup.features.to_json(),
-                        "utility_score": rollup.utility_score,
-                        "archive_threshold": archive_threshold,
-                    },
+                    rollup_by_skill=rollup_by_skill,
+                    active_budget=active_budget,
+                    max_archive=max(0, max_archive - archived),
                 )
-                actions.append(action)
+                actions.extend(budget_actions)
+                archived += len(budget_actions)
         return CurationRunResult(
             scanned=rollups.scanned,
-            archived=len(actions),
+            archived=archived,
+            promoted=promoted,
+            merged=merged,
             actions=actions,
         )
+
+
+async def _archive_low_utility(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    rollups: list[SkillUtilityRollupRecord],
+    archive_threshold: float,
+    max_archive: int,
+) -> list[CurationActionRecord]:
+    actions: list[CurationActionRecord] = []
+    for rollup in sorted(rollups, key=lambda item: (item.utility_score, item.slug or "")):
+        if len(actions) >= max_archive:
+            break
+        if rollup.lifecycle_state != "active":
+            continue
+        if rollup.utility_score > archive_threshold:
+            continue
+        if not await _set_lifecycle_state(
+            conn,
+            workspace_id,
+            rollup.skill_id,
+            from_state="active",
+            to_state="archived",
+        ):
+            continue
+        actions.append(
+            await _insert_curation_action(
+                conn,
+                workspace_id=workspace_id,
+                skill_id=rollup.skill_id,
+                action="archive",
+                status="applied",
+                reason="utility below archive threshold",
+                features={
+                    **rollup.features.to_json(),
+                    "utility_score": rollup.utility_score,
+                    "archive_threshold": archive_threshold,
+                },
+            )
+        )
+    return actions
+
+
+async def _archive_duplicate_edges(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    rollup_by_skill: dict[UUID, SkillUtilityRollupRecord],
+    max_merge: int,
+) -> list[CurationActionRecord]:
+    if max_merge <= 0:
+        return []
+    rows = await conn.fetch(
+        """
+        SELECT
+          e.from_skill_id,
+          e.to_skill_id,
+          from_skill.slug AS from_slug,
+          to_skill.slug AS to_slug
+        FROM autoskill.skill_edges e
+        JOIN autoskill.skills from_skill
+          ON from_skill.skill_id = e.from_skill_id
+         AND from_skill.workspace_id = e.workspace_id
+        JOIN autoskill.skills to_skill
+          ON to_skill.skill_id = e.to_skill_id
+         AND to_skill.workspace_id = e.workspace_id
+        WHERE e.workspace_id = $1
+          AND e.edge_kind IN ('duplicate', 'duplicate_of')
+          AND from_skill.lifecycle_state = 'active'
+          AND to_skill.lifecycle_state = 'active'
+        ORDER BY from_skill.slug ASC, to_skill.slug ASC
+        LIMIT $2
+        """,
+        workspace_id,
+        max_merge * 3,
+    )
+    actions: list[CurationActionRecord] = []
+    archived_skill_ids: set[UUID] = set()
+    for row in rows:
+        if len(actions) >= max_merge:
+            break
+        left = row["from_skill_id"]
+        right = row["to_skill_id"]
+        if left in archived_skill_ids or right in archived_skill_ids:
+            continue
+        left_rollup = rollup_by_skill.get(left)
+        right_rollup = rollup_by_skill.get(right)
+        left_score = left_rollup.utility_score if left_rollup else 0.0
+        right_score = right_rollup.utility_score if right_rollup else 0.0
+        if (left_score, row["from_slug"]) >= (right_score, row["to_slug"]):
+            keep_id, keep_slug = left, row["from_slug"]
+            archive_id, archive_slug, archive_rollup = right, row["to_slug"], right_rollup
+        else:
+            keep_id, keep_slug = right, row["to_slug"]
+            archive_id, archive_slug, archive_rollup = left, row["from_slug"], left_rollup
+        if not await _set_lifecycle_state(
+            conn,
+            workspace_id,
+            archive_id,
+            from_state="active",
+            to_state="archived",
+        ):
+            continue
+        archived_skill_ids.add(archive_id)
+        features = archive_rollup.features.to_json() if archive_rollup else {}
+        actions.append(
+            await _insert_curation_action(
+                conn,
+                workspace_id=workspace_id,
+                skill_id=archive_id,
+                action="merge_duplicate",
+                status="applied",
+                reason="explicit duplicate edge archived lower-utility skill",
+                features={
+                    **features,
+                    "utility_score": archive_rollup.utility_score if archive_rollup else 0.0,
+                    "archived_slug": archive_slug,
+                    "kept_skill_id": str(keep_id),
+                    "kept_slug": keep_slug,
+                },
+            )
+        )
+    return actions
+
+
+async def _enforce_active_budget(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    rollup_by_skill: dict[UUID, SkillUtilityRollupRecord],
+    active_budget: int,
+    max_archive: int,
+) -> list[CurationActionRecord]:
+    rows = await conn.fetch(
+        """
+        SELECT s.skill_id, s.slug, COALESCE(r.utility_score, 0)::float AS utility_score
+        FROM autoskill.skills s
+        LEFT JOIN autoskill.skill_utility_rollups r
+          ON r.workspace_id = s.workspace_id
+         AND r.skill_id = s.skill_id
+        WHERE s.workspace_id = $1
+          AND s.lifecycle_state = 'active'
+        ORDER BY COALESCE(r.utility_score, 0) DESC, s.updated_at DESC, s.slug ASC
+        OFFSET $2
+        LIMIT $3
+        """,
+        workspace_id,
+        active_budget,
+        max_archive,
+    )
+    actions: list[CurationActionRecord] = []
+    for row in rows:
+        skill_id = row["skill_id"]
+        rollup = rollup_by_skill.get(skill_id)
+        if not await _set_lifecycle_state(
+            conn,
+            workspace_id,
+            skill_id,
+            from_state="active",
+            to_state="archived",
+        ):
+            continue
+        features = rollup.features.to_json() if rollup else {}
+        actions.append(
+            await _insert_curation_action(
+                conn,
+                workspace_id=workspace_id,
+                skill_id=skill_id,
+                action="enforce_active_budget",
+                status="applied",
+                reason="active skill budget exceeded",
+                features={
+                    **features,
+                    "utility_score": rollup.utility_score if rollup else row["utility_score"],
+                    "active_budget": active_budget,
+                },
+            )
+        )
+    return actions
+
+
+async def _set_lifecycle_state(
+    conn: asyncpg.Connection,
+    workspace_id: UUID,
+    skill_id: UUID,
+    *,
+    from_state: str,
+    to_state: str,
+) -> bool:
+    result = await conn.execute(
+        """
+        UPDATE autoskill.skills
+        SET lifecycle_state = $4,
+            updated_at = now()
+        WHERE workspace_id = $1
+          AND skill_id = $2
+          AND lifecycle_state = $3
+        """,
+        workspace_id,
+        skill_id,
+        from_state,
+        to_state,
+    )
+    return _command_count(result) > 0
 
 
 async def _load_skill_feature_rows(
@@ -391,6 +653,13 @@ def _json_dict(value: object) -> dict[str, Any]:
 
 def _json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _command_count(command_tag: str) -> int:
+    try:
+        return int(command_tag.rsplit(" ", 1)[1])
+    except (IndexError, ValueError):
+        return 0
 
 
 def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:

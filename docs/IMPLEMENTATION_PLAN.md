@@ -78,12 +78,13 @@ Deliverables:
 - lexical + vector + metadata search; lexical evidence/body-index search and pgvector nearest search are implemented;
 - exact rerank; implemented as deterministic broker rerank over lexical score, query overlap, lifecycle, and graph edges;
 - active/archive matching; implemented in runtime broker and `/v1/skills/match` so archived matches are promotion candidates rather than injected hints or duplicate new skills;
-- duplicate matching.
+- duplicate matching;
+- ANN recall audit; implemented as `/v1/embeddings/recall-audit`, comparing index-preferred nearest-neighbor results against exact pgvector ordering for a bounded sample.
 
 Acceptance:
 
 - active and archived matches are considered before new skill creation;
-- ANN recall audit exists;
+- ANN recall audit exists; implemented and validated against local Postgres;
 - retrieval decisions are logged.
 
 ## Phase 5 - Runtime Context Broker
@@ -172,16 +173,16 @@ Deliverables:
 
 - `autonomous_guarded` apply;
 - improvement engine;
-- archive/promote/merge/split;
+- archive/promote/merge/split; archive, archived promotion, explicit duplicate merge/archive, and active-bank budget overflow are implemented as deterministic lifecycle-state curation actions; split remains pending;
 - utility rollups; implemented as deterministic v1 rollups from attribution events, rendered retrieval counts, shadowing/hurt outcomes, and canary failures;
 - attribution ledger.
 
 Acceptance:
 
 - low-utility skills archive; implemented for active skills below a configurable utility threshold with curation action logging;
-- archived skills promote when demand recurs;
-- duplicates merge only after probes pass;
-- active bank budget is enforced.
+- archived skills promote when demand recurs; implemented for archived skills with repeated retrieval demand and no harm/canary failures, with evaluator-gated promotion still pending;
+- duplicates merge only after probes pass; implemented for explicit duplicate graph edges as lower-utility duplicate archiving, with probe-gated merge planning still pending;
+- active bank budget is enforced; implemented by archiving lowest-utility overflow active skills.
 
 ## Phase 9 - Drift and Advanced Governance
 

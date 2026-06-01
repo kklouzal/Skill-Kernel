@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from math import isfinite
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 import asyncpg
@@ -73,6 +73,24 @@ class EmbeddingSearchCandidate:
         payload = self.embedding.to_json()
         payload["distance"] = self.distance
         return payload
+
+
+@dataclass(frozen=True)
+class EmbeddingRecallAuditResult:
+    sampled: int
+    k: int
+    min_recall: float
+    avg_recall: float
+    failures: list[dict[str, Any]]
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "sampled": self.sampled,
+            "k": self.k,
+            "min_recall": self.min_recall,
+            "avg_recall": self.avg_recall,
+            "failures": self.failures,
+        }
 
 
 @dataclass(frozen=True)
@@ -147,6 +165,18 @@ class EmbeddingStore(Protocol):
     ) -> int:
         """Remove embeddings derived from revoked objects."""
 
+    async def audit_recall(
+        self,
+        *,
+        workspace_key: str,
+        embedding_model: str,
+        object_type: str | None = None,
+        sample_size: int = 10,
+        k: int = 10,
+        min_recall: float = 0.95,
+    ) -> EmbeddingRecallAuditResult:
+        """Compare indexed nearest-neighbor recall against exact pgvector ordering."""
+
 
 class NullEmbeddingStore:
     async def list_unembedded_sources(
@@ -204,6 +234,24 @@ class NullEmbeddingStore:
         objects: list[dict[str, str]],
     ) -> int:
         return 0
+
+    async def audit_recall(
+        self,
+        *,
+        workspace_key: str,
+        embedding_model: str,
+        object_type: str | None = None,
+        sample_size: int = 10,
+        k: int = 10,
+        min_recall: float = 0.95,
+    ) -> EmbeddingRecallAuditResult:
+        return EmbeddingRecallAuditResult(
+            sampled=0,
+            k=k,
+            min_recall=1.0,
+            avg_recall=1.0,
+            failures=[],
+        )
 
 
 class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
@@ -399,6 +447,127 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                 [object_id for _object_type, object_id in object_keys],
             )
             return _command_count(result)
+
+    async def audit_recall(
+        self,
+        *,
+        workspace_key: str,
+        embedding_model: str,
+        object_type: str | None = None,
+        sample_size: int = 10,
+        k: int = 10,
+        min_recall: float = 0.95,
+    ) -> EmbeddingRecallAuditResult:
+        pool = await self._get_pool()
+        sample_limit = max(1, min(sample_size, 100))
+        result_limit = max(1, min(k, 100))
+        failures: list[dict[str, Any]] = []
+        recalls: list[float] = []
+        async with pool.acquire() as conn, conn.transaction():
+            samples = await conn.fetch(
+                """
+                SELECT e.embedding_id, e.object_type, e.object_id, e.embedding::text AS embedding
+                FROM autoskill.embeddings e
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE w.external_key = $1
+                  AND e.embedding_model = $2
+                  AND ($3::text IS NULL OR e.object_type = $3)
+                ORDER BY e.created_at DESC, e.embedding_id ASC
+                LIMIT $4
+                """,
+                workspace_key,
+                embedding_model,
+                object_type,
+                sample_limit,
+            )
+            for sample in samples:
+                approximate_ids = await _nearest_embedding_ids(
+                    conn,
+                    workspace_key=workspace_key,
+                    embedding_model=embedding_model,
+                    embedding=str(sample["embedding"]),
+                    object_type=object_type,
+                    limit=result_limit,
+                    prefer_index=True,
+                )
+                exact_ids = await _nearest_embedding_ids(
+                    conn,
+                    workspace_key=workspace_key,
+                    embedding_model=embedding_model,
+                    embedding=str(sample["embedding"]),
+                    object_type=object_type,
+                    limit=result_limit,
+                    prefer_index=False,
+                )
+                if not exact_ids:
+                    continue
+                recall = len(set(approximate_ids) & set(exact_ids)) / len(exact_ids)
+                recalls.append(recall)
+                if recall < min_recall:
+                    failures.append(
+                        {
+                            "embedding_id": str(sample["embedding_id"]),
+                            "object_type": sample["object_type"],
+                            "object_id": str(sample["object_id"]),
+                            "recall": round(recall, 4),
+                            "expected_ids": [str(item) for item in exact_ids],
+                            "observed_ids": [str(item) for item in approximate_ids],
+                        }
+                    )
+        if not recalls:
+            return EmbeddingRecallAuditResult(
+                sampled=0,
+                k=result_limit,
+                min_recall=1.0,
+                avg_recall=1.0,
+                failures=[],
+            )
+        return EmbeddingRecallAuditResult(
+            sampled=len(recalls),
+            k=result_limit,
+            min_recall=round(min(recalls), 4),
+            avg_recall=round(sum(recalls) / len(recalls), 4),
+            failures=failures,
+        )
+
+
+async def _nearest_embedding_ids(
+    conn: asyncpg.Connection,
+    *,
+    workspace_key: str,
+    embedding_model: str,
+    embedding: str,
+    object_type: str | None,
+    limit: int,
+    prefer_index: bool,
+) -> list[UUID]:
+    if prefer_index:
+        await conn.execute("SET LOCAL enable_seqscan = off")
+        await conn.execute("SET LOCAL enable_bitmapscan = off")
+    else:
+        await conn.execute("SET LOCAL enable_indexscan = off")
+        await conn.execute("SET LOCAL enable_bitmapscan = off")
+    rows = await conn.fetch(
+        """
+        SELECT e.embedding_id
+        FROM autoskill.embeddings e
+        JOIN autoskill.workspaces w USING (workspace_id)
+        WHERE w.external_key = $1
+          AND e.embedding_model = $2
+          AND ($4::text IS NULL OR e.object_type = $4)
+        ORDER BY e.embedding <=> $3::vector
+        LIMIT $5
+        """,
+        workspace_key,
+        embedding_model,
+        embedding,
+        object_type,
+        limit,
+    )
+    await conn.execute("RESET enable_seqscan")
+    await conn.execute("RESET enable_indexscan")
+    await conn.execute("RESET enable_bitmapscan")
+    return [row["embedding_id"] for row in rows]
 
 
 def _validate_embedding(embedding: list[float]) -> None:
