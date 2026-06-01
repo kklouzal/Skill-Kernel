@@ -87,7 +87,7 @@ Acceptance:
 Deliverables:
 
 - evidence extractor; implemented for deterministic observed evidence derived from redacted raw events;
-- redacted embeddings; storage/search primitives, deterministic development generation worker, configurable provider routing, profile-scoped embedding ownership, and qualified-profile generation are implemented;
+- redacted embeddings; storage/search primitives, deterministic development generation worker, configurable provider routing, profile-scoped embedding ownership, variable-dimension profile storage/search, and qualified-profile generation are implemented;
 - lexical + vector + metadata search; lexical evidence/body-index search and pgvector nearest search are implemented;
 - exact rerank; implemented as deterministic broker rerank over lexical score, query overlap, lifecycle, and graph edges;
 - active/archive matching; implemented in runtime broker and `/v1/skills/match` so archived matches are promotion candidates rather than injected hints or duplicate new skills;
@@ -100,6 +100,7 @@ Acceptance:
 - ANN recall audit exists; implemented and validated against local Postgres;
 - retrieval decisions are logged.
 - same-object/same-model embeddings from different qualified profiles remain separate; implemented with `embedding_profile_id` storage, profile-scoped uniqueness, API propagation, and local Postgres smoke validation.
+- non-default embedding dimensions can be qualified, stored, and searched under profile ownership; implemented with unbounded pgvector storage, persisted `embedding_dim`, dimension-filtered search/recall queries, and a retained expression HNSW index for the default 1536-dimensional path.
 - model/embedding qualification run tables and profile status stamping are implemented for auditable qualification gates.
 
 ## Phase 4.5 - Text Model Access and Invocation Audit

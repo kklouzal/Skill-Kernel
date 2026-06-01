@@ -507,7 +507,7 @@ CREATE TABLE IF NOT EXISTS autoskill.embeddings (
   embedding_profile_id uuid REFERENCES autoskill.embedding_profiles(embedding_profile_id),
   embedding_model text NOT NULL,
   embedding_dim integer NOT NULL,
-  embedding vector(1536) NOT NULL,
+  embedding vector NOT NULL,
   text_hash text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -515,6 +515,12 @@ CREATE TABLE IF NOT EXISTS autoskill.embeddings (
 ALTER TABLE autoskill.embeddings
   ADD COLUMN IF NOT EXISTS embedding_profile_id uuid
   REFERENCES autoskill.embedding_profiles(embedding_profile_id);
+
+DROP INDEX IF EXISTS autoskill.embeddings_hnsw_cosine_idx;
+
+ALTER TABLE autoskill.embeddings
+  ALTER COLUMN embedding TYPE vector
+  USING embedding::vector;
 
 ALTER TABLE autoskill.embeddings
   DROP CONSTRAINT IF EXISTS embeddings_object_type_object_id_embedding_model_key;
@@ -1103,9 +1109,10 @@ CREATE INDEX IF NOT EXISTS external_skill_inventory_status_idx
 CREATE INDEX IF NOT EXISTS external_skill_review_actions_external_idx
   ON autoskill.external_skill_review_actions(external_skill_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS embeddings_hnsw_cosine_idx
+CREATE INDEX IF NOT EXISTS embeddings_hnsw_cosine_1536_idx
   ON autoskill.embeddings
-  USING hnsw (embedding vector_cosine_ops);
+  USING hnsw ((embedding::vector(1536)) vector_cosine_ops)
+  WHERE embedding_dim = 1536;
 
 CREATE INDEX IF NOT EXISTS embeddings_object_idx
   ON autoskill.embeddings (workspace_id, object_type, skill_id);

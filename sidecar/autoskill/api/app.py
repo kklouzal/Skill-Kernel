@@ -1213,11 +1213,6 @@ def _embedder_from_profile(profile: object, settings: object):
             status_code=http_status.HTTP_409_CONFLICT,
             detail="embedding profile is not qualified",
         )
-    if getattr(profile, "embedding_dim", None) != 1536:
-        raise HTTPException(
-            status_code=http_status.HTTP_409_CONFLICT,
-            detail="embedding profile dimension must be 1536",
-        )
     route_kind = str(getattr(profile, "route_kind", ""))
     model = str(profile.model)
     embedding_dim = int(getattr(profile, "embedding_dim", 1536))

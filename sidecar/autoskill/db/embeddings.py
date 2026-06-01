@@ -221,7 +221,7 @@ class NullEmbeddingStore:
             skill_id=skill_id,
             embedding_profile_id=embedding_profile_id,
             embedding_model=embedding_model,
-            embedding_dim=EMBEDDING_DIM,
+            embedding_dim=len(embedding),
             text_hash=sha256_text(text),
             created_at=now,
         )
@@ -373,6 +373,7 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
         embedding_profile_id: UUID | None = None,
     ) -> EmbeddingUpsertResult:
         _validate_embedding(embedding)
+        embedding_dim = len(embedding)
         pool = await self._get_pool()
         async with pool.acquire() as conn, conn.transaction():
             workspace_id = await ensure_workspace(conn, workspace_key)
@@ -414,7 +415,7 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                 skill_id,
                 embedding_profile_id,
                 embedding_model,
-                EMBEDDING_DIM,
+                embedding_dim,
                 _vector_literal(embedding),
                 sha256_text(text),
             )
@@ -434,6 +435,7 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
         limit: int = 10,
     ) -> list[EmbeddingSearchCandidate]:
         _validate_embedding(embedding)
+        embedding_dim = len(embedding)
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
@@ -449,6 +451,7 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                     OR ($4::uuid IS NULL AND e.embedding_profile_id IS NULL
                       AND e.embedding_model = $2)
                   )
+                  AND e.embedding_dim = $7
                   AND ($5::text IS NULL OR e.object_type = $5)
                 ORDER BY e.embedding <=> $3::vector
                 LIMIT $6
@@ -459,6 +462,7 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                 embedding_profile_id,
                 object_type,
                 limit,
+                embedding_dim,
             )
             return [
                 EmbeddingSearchCandidate(
@@ -533,7 +537,12 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
         async with pool.acquire() as conn, conn.transaction():
             samples = await conn.fetch(
                 """
-                SELECT e.embedding_id, e.object_type, e.object_id, e.embedding::text AS embedding
+                SELECT
+                  e.embedding_id,
+                  e.object_type,
+                  e.object_id,
+                  e.embedding_dim,
+                  e.embedding::text AS embedding
                 FROM autoskill.embeddings e
                 JOIN autoskill.workspaces w USING (workspace_id)
                 WHERE w.external_key = $1
@@ -559,6 +568,7 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                     embedding_model=embedding_model,
                     embedding_profile_id=embedding_profile_id,
                     embedding=str(sample["embedding"]),
+                    embedding_dim=int(sample["embedding_dim"]),
                     object_type=object_type,
                     limit=result_limit,
                     prefer_index=True,
@@ -569,6 +579,7 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                     embedding_model=embedding_model,
                     embedding_profile_id=embedding_profile_id,
                     embedding=str(sample["embedding"]),
+                    embedding_dim=int(sample["embedding_dim"]),
                     object_type=object_type,
                     limit=result_limit,
                     prefer_index=False,
@@ -612,6 +623,7 @@ async def _nearest_embedding_ids(
     embedding_model: str,
     embedding_profile_id: UUID | None,
     embedding: str,
+    embedding_dim: int,
     object_type: str | None,
     limit: int,
     prefer_index: bool,
@@ -633,6 +645,7 @@ async def _nearest_embedding_ids(
             OR ($4::uuid IS NULL AND e.embedding_profile_id IS NULL
               AND e.embedding_model = $2)
           )
+          AND e.embedding_dim = $7
           AND ($5::text IS NULL OR e.object_type = $5)
         ORDER BY e.embedding <=> $3::vector
         LIMIT $6
@@ -643,6 +656,7 @@ async def _nearest_embedding_ids(
         embedding_profile_id,
         object_type,
         limit,
+        embedding_dim,
     )
     await conn.execute("RESET enable_seqscan")
     await conn.execute("RESET enable_indexscan")
@@ -651,8 +665,8 @@ async def _nearest_embedding_ids(
 
 
 def _validate_embedding(embedding: list[float]) -> None:
-    if len(embedding) != EMBEDDING_DIM:
-        raise ValueError(f"embedding must have exactly {EMBEDDING_DIM} dimensions")
+    if not embedding:
+        raise ValueError("embedding must not be empty")
     if not all(isfinite(value) for value in embedding):
         raise ValueError("embedding values must be finite")
     if not any(value != 0.0 for value in embedding):

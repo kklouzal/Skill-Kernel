@@ -23,7 +23,8 @@ from fastapi import HTTPException
 
 
 class MemoryPendingEmbeddingStore:
-    def __init__(self) -> None:
+    def __init__(self, *, expected_embedding_dim: int = EMBEDDING_DIM) -> None:
+        self.expected_embedding_dim = expected_embedding_dim
         self.sources = [
             EmbeddingSourceText(
                 object_type="evidence_item",
@@ -69,7 +70,7 @@ class MemoryPendingEmbeddingStore:
         skill_id=None,
         embedding_profile_id=None,
     ) -> EmbeddingUpsertResult:
-        assert len(embedding) == EMBEDDING_DIM
+        assert len(embedding) == self.expected_embedding_dim
         assert any(value != 0.0 for value in embedding)
         self.upserts.append(
             {
@@ -92,7 +93,7 @@ class MemoryPendingEmbeddingStore:
                 skill_id=skill_id,
                 embedding_profile_id=embedding_profile_id,
                 embedding_model=embedding_model,
-                embedding_dim=EMBEDDING_DIM,
+                embedding_dim=len(embedding),
                 text_hash="stored-hash",
                 created_at=datetime.now(UTC),
             ),
@@ -243,6 +244,40 @@ def test_generate_embeddings_api_uses_qualified_embedding_profile() -> None:
     assert profile_store.calls == [
         {"workspace_key": "dev-01", "profile_key": "embedding-default"}
     ]
+
+
+def test_generate_embeddings_api_uses_qualified_non_default_embedding_dimension() -> None:
+    store = MemoryPendingEmbeddingStore(expected_embedding_dim=8)
+    profile_id = uuid4()
+    profile_store = MemoryEmbeddingProfileStore(
+        profile=SimpleNamespace(
+            profile_id=profile_id,
+            status="qualified",
+            embedding_dim=8,
+            route_kind="hash",
+            model="qualified-small-hash-profile",
+            timeout_seconds=30.0,
+        )
+    )
+    app = create_app(embedding_store=store, profile_store=profile_store)
+    route = next(route for route in app.routes if route.path == "/v1/embeddings/generate")
+
+    async def run():
+        return await route.endpoint(
+            request=EmbeddingGenerateRequest(
+                workspace_id="dev-01",
+                embedding_profile_key="embedding-small",
+                limit=1,
+            ),
+        )
+
+    response = asyncio.run(run())
+
+    assert response.generated == 1
+    assert response.embedding_model == "qualified-small-hash-profile"
+    assert response.embedding_profile_id == str(profile_id)
+    assert response.embedding_dim == 8
+    assert store.upserts[0]["embedding_profile_id"] == profile_id
 
 
 def test_generate_embeddings_api_rejects_unqualified_embedding_profile() -> None:
