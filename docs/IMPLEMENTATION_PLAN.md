@@ -159,13 +159,14 @@ Acceptance:
 - verified staged manifests can atomically replace one active autoskill directory, snapshot the previous active directory into `.autoskill/archive`, reject active snapshot symlinks and manifest target escapes, and restore the previous active directory from a verified archive snapshot; implemented and validated with focused writer tests;
 - active-root apply/rollback service wrappers record governance transaction items/statuses and restore the previous active state if post-apply governance recording fails; implemented and validated with focused writer tests;
 - sidecar writer endpoints apply and roll back verified manifests through the transaction-aware writer service; implemented and validated with focused writer/API tests and compose/Postgres smoke coverage;
+- runtime context hint cache can be invalidated by workspace/skill ID through a control endpoint, and freeze/critical-canary paths evict affected skill hints immediately;
 - writer apply/rollback transaction items are discoverable by provenance traversal from their evolution transaction root; implemented and validated with focused writer/governance tests plus compose/Postgres smoke coverage;
 - canary critical failures record canary evidence, mark the skill `frozen`, store the freeze reason, record a transaction item, and queue a rollback revocation request when the canary is transaction-scoped; implemented and validated with focused tests plus compose/Postgres smoke coverage;
 - mutation-pool `revocations.rollback` jobs claim queued rollback revocation requests, start an idempotent `rollback_skill` transaction, restore the recorded archive manifest through the transaction-aware writer rollback path, and complete the revocation request with rollback artifact evidence; implemented and validated with focused worker tests plus compose/Postgres smoke coverage;
 - valid skill appears under active root;
 - invalid paths are rejected;
 - rollback restores the previous effective state;
-- canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed mutation-worker rollback execution, initial-create active-path deletion rollback, and body-index/embedding invalidation are implemented, while active-cache invalidation and broader per-object revoke handlers remain pending.
+- canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed mutation-worker rollback execution, initial-create active-path deletion rollback, body-index/embedding invalidation, and active broker-cache invalidation are implemented, while broader per-object revoke handlers remain pending.
 - long-running job leases renew while handlers are still running; implemented in the job store, worker execution wrapper, and control API with focused tests.
 
 ## Phase 8 - Autonomous Improvement and Curation

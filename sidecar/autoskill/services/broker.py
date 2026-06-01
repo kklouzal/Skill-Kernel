@@ -63,6 +63,23 @@ class ContextHintCache:
             response=response.model_copy(update={"cache_status": "cache-fill"}),
         )
 
+    def invalidate(
+        self,
+        *,
+        workspace_id: str | None = None,
+        skill_ids: list[str] | None = None,
+    ) -> int:
+        skill_set = set(skill_ids or [])
+        removed = 0
+        for key, entry in list(self._entries.items()):
+            if workspace_id is not None and key[0] != workspace_id:
+                continue
+            if skill_set and not (skill_set & set(entry.response.skill_ids)):
+                continue
+            self._entries.pop(key, None)
+            removed += 1
+        return removed
+
     def _key(self, request: ContextHintRequest, query: str) -> tuple[str, str, int]:
         return (request.workspace_id, query.lower(), max(1, request.max_tokens))
 

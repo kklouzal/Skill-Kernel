@@ -152,6 +152,15 @@ class WorkerHealthResponse(BaseModel):
     workers: list[dict[str, object]]
 
 
+class ContextCacheInvalidateRequest(BaseModel):
+    workspace_id: str | None = None
+    skill_ids: list[str] = []
+
+
+class ContextCacheInvalidateResponse(BaseModel):
+    removed: int
+
+
 class SkillListResponse(BaseModel):
     skills: list[dict[str, object]]
 
@@ -905,6 +914,21 @@ def create_app(
             return bootstrap_context_hint(request)
         return await build_context_hint(retrieval, request, cache=broker_cache)
 
+    @app.post(
+        "/v1/runtime/context-hint/cache/invalidate",
+        response_model=ContextCacheInvalidateResponse,
+    )
+    async def invalidate_context_hint_cache(
+        request: ContextCacheInvalidateRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ContextCacheInvalidateResponse:
+        _require_control_auth(authorization)
+        removed = broker_cache.invalidate(
+            workspace_id=request.workspace_id,
+            skill_ids=request.skill_ids,
+        )
+        return ContextCacheInvalidateResponse(removed=removed)
+
     @app.get("/v1/skills", response_model=SkillListResponse)
     async def list_skills(
         authorization: Annotated[str | None, Header()] = None,
@@ -1448,6 +1472,11 @@ def create_app(
             skill_version_id=request.skill_version_id,
             evolution_transaction_id=request.evolution_transaction_id,
         )
+        if request.critical or request.status == "critical":
+            broker_cache.invalidate(
+                workspace_id=request.workspace_id,
+                skill_ids=[str(request.skill_id)],
+            )
         return CanaryResultResponse(**result.to_json())
 
     @app.post("/v1/control/freeze", response_model=SkillLifecycleResponse)
@@ -1461,6 +1490,10 @@ def create_app(
             skill_id=request.skill_id,
             reason=request.reason,
             evolution_transaction_id=request.evolution_transaction_id,
+        )
+        broker_cache.invalidate(
+            workspace_id=request.workspace_id,
+            skill_ids=[str(request.skill_id)],
         )
         return SkillLifecycleResponse(skill=skill.to_json() if skill else None)
 

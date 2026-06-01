@@ -313,3 +313,39 @@ def test_context_broker_cache_avoids_duplicate_retrieval() -> None:
     assert second.cache_status == "cache-hit"
     assert len(store.calls) == 1
     assert len(store.records) == 1
+
+
+def test_context_broker_cache_invalidates_by_workspace_and_skill() -> None:
+    skill_id = uuid4()
+    store = MemoryBrokerRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=skill_id,
+                summary="WHEN PDF tables are malformed, use the deterministic repair workflow.",
+                rank=0.9,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "pdf-table-repair",
+                },
+            ),
+        ]
+    )
+    cache = ContextHintCache(ttl_seconds=60)
+    request = ContextHintRequest(
+        workspace_id="dev-01",
+        user_intent="repair pdf table extraction",
+    )
+
+    async def run():
+        await build_context_hint(store, request, cache=cache)
+        removed = cache.invalidate(workspace_id="dev-01", skill_ids=[str(skill_id)])
+        await build_context_hint(store, request, cache=cache)
+        return removed
+
+    removed = asyncio.run(run())
+
+    assert removed == 1
+    assert len(store.calls) == 2
