@@ -226,6 +226,23 @@ class AsyncpgUtilityStore(AsyncpgPoolOwner):
                     continue
                 if rollup.features.canary_failure_count or rollup.features.hurt_count:
                     continue
+                if not await _latest_evaluator_passed(conn, rollup.skill_id):
+                    actions.append(
+                        await _insert_curation_action(
+                            conn,
+                            workspace_id=workspace_id,
+                            skill_id=rollup.skill_id,
+                            action="promote_archive",
+                            status="blocked",
+                            reason="archived promotion requires evaluator pass",
+                            features={
+                                **rollup.features.to_json(),
+                                "utility_score": rollup.utility_score,
+                                "promotion_min_retrieval": promotion_min_retrieval,
+                            },
+                        )
+                    )
+                    continue
                 if await _set_lifecycle_state(
                     conn,
                     workspace_id,
@@ -373,6 +390,27 @@ async def _archive_duplicate_edges(
         right = row["to_skill_id"]
         if left in archived_skill_ids or right in archived_skill_ids:
             continue
+        if not await _latest_evaluator_passed(conn, left) or not await _latest_evaluator_passed(
+            conn,
+            right,
+        ):
+            actions.append(
+                await _insert_curation_action(
+                    conn,
+                    workspace_id=workspace_id,
+                    skill_id=None,
+                    action="merge_duplicate",
+                    status="blocked",
+                    reason="duplicate merge requires evaluator pass for both skills",
+                    features={
+                        "from_skill_id": str(left),
+                        "to_skill_id": str(right),
+                        "from_slug": row["from_slug"],
+                        "to_slug": row["to_slug"],
+                    },
+                )
+            )
+            continue
         left_rollup = rollup_by_skill.get(left)
         right_rollup = rollup_by_skill.get(right)
         left_score = left_rollup.utility_score if left_rollup else 0.0
@@ -492,6 +530,20 @@ async def _set_lifecycle_state(
         to_state,
     )
     return _command_count(result) > 0
+
+
+async def _latest_evaluator_passed(conn: asyncpg.Connection, skill_id: UUID) -> bool:
+    status = await conn.fetchval(
+        """
+        SELECT evaluator_status
+        FROM autoskill.skill_versions
+        WHERE skill_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        skill_id,
+    )
+    return status == "passed"
 
 
 async def _load_skill_feature_rows(

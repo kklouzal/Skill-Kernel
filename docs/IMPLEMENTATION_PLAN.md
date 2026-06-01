@@ -175,15 +175,15 @@ Deliverables:
 
 - `autonomous_guarded` apply;
 - improvement engine;
-- archive/promote/merge/split; archive, archived promotion, explicit duplicate merge/archive, and active-bank budget overflow are implemented as deterministic lifecycle-state curation actions; split remains pending;
+- archive/promote/merge/split; archive, evaluator-gated archived promotion, evaluator-gated explicit duplicate merge/archive, and active-bank budget overflow are implemented as deterministic lifecycle-state curation actions; split remains pending;
 - utility rollups; implemented as deterministic v1 rollups from attribution events, rendered retrieval counts, shadowing/hurt outcomes, and canary failures;
 - attribution ledger.
 
 Acceptance:
 
 - low-utility skills archive; implemented for active skills below a configurable utility threshold with curation action logging;
-- archived skills promote when demand recurs; implemented for archived skills with repeated retrieval demand and no harm/canary failures, with evaluator-gated promotion still pending;
-- duplicates merge only after probes pass; implemented for explicit duplicate graph edges as lower-utility duplicate archiving, with probe-gated merge planning still pending;
+- archived skills promote when demand recurs; implemented for archived skills with repeated retrieval demand, no harm/canary failures, and latest evaluator pass;
+- duplicates merge only after probes pass; implemented for explicit duplicate graph edges as lower-utility duplicate archiving only when both latest skill versions have evaluator pass, with dedicated merge probe planning still pending;
 - active bank budget is enforced; implemented by archiving lowest-utility overflow active skills.
 
 ## Phase 9 - Drift and Advanced Governance
