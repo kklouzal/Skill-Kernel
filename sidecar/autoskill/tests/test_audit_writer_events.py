@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from autoskill.api.app import WriterApplyRequest, WriterRollbackRequest, create_app
 from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope
@@ -301,6 +302,62 @@ def test_writer_rollback_records_governance_item(tmp_path: Path) -> None:
     assert governance.statuses[-1]["status"] == "rolled_back"
     assert governance.items[0]["activation_state"] == "rolled_back"
     assert governance.items[0]["rollback_action"]["operation"] == "operator_review"
+
+
+def test_writer_api_applies_and_rolls_back_with_workspace_roots(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    staging_root = workspace_root / ".autoskill" / "staging"
+    workspace_root.mkdir()
+    active_path = workspace_root / "skills" / "autoskill" / "autoskill-example"
+    active_path.mkdir(parents=True)
+    (active_path / "SKILL.md").write_text("# Old\n\n## WHEN\n- Old.\n", encoding="utf-8")
+    staged = stage_compiled_skill(
+        staging_root,
+        staging_id=uuid4(),
+        skill_version_id=uuid4(),
+        slug="autoskill-example",
+        compiled_skill_md="# New\n\n## WHEN\n- New.\n",
+    )
+    governance = MemoryWriterGovernance()
+    app = create_app(governance_store=governance, writer_workspace_root=workspace_root)
+    apply_route = next(route for route in app.routes if route.path == "/v1/writer/apply")
+    rollback_route = next(route for route in app.routes if route.path == "/v1/writer/rollback")
+
+    async def run():
+        applied = await apply_route.endpoint(
+            request=WriterApplyRequest(
+                evolution_transaction_id=uuid4(),
+                manifest_relative_path=staged.manifest_relative_path,
+            )
+        )
+        previous_snapshot = applied.artifact["previous_snapshot"]
+        assert isinstance(previous_snapshot, dict)
+        rolled_back = await rollback_route.endpoint(
+            request=WriterRollbackRequest(
+                evolution_transaction_id=uuid4(),
+                archive_manifest_relative_path=str(
+                    previous_snapshot["manifest_relative_path"]
+                ),
+            )
+        )
+        return applied, rolled_back
+
+    applied, rolled_back = asyncio.run(run())
+
+    assert applied.artifact["active_relative_path"] == "skills/autoskill/autoskill-example"
+    assert rolled_back.artifact["slug"] == "autoskill-example"
+    assert (active_path / "SKILL.md").read_text(encoding="utf-8").startswith("# Old")
+    assert [entry["status"] for entry in governance.statuses] == [
+        "applying",
+        "applied",
+        "rolling_back",
+        "rolled_back",
+    ]
+    assert [item["activation_state"] for item in governance.items] == [
+        "active",
+        "archived",
+        "rolled_back",
+    ]
 
 
 def test_writer_rejects_manifest_target_outside_active_root(tmp_path: Path) -> None:

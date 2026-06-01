@@ -79,6 +79,9 @@ Phase 6/7 control-plane buildout.
 - Writer validation passed locally: focused writer tests covered manifest creation/verification, scanner rejection, support-artifact allowlisting, staging symlink rejection, active apply, archive snapshot verification, rollback restore, manifest target escape rejection, and active snapshot symlink rejection; full Python suite passed with 68 tests.
 - Transaction-aware writer apply/rollback service primitives are implemented: staged manifest apply records active compiled-file and archive-snapshot transaction items with rollback actions, rollback restore records a rolled-back compiled-file item, transaction statuses advance through applying/applied and rolling_back/rolled_back, and failed governance recording after filesystem apply restores the previous active snapshot or removes the newly-created active path.
 - Writer governance validation passed locally: focused writer tests covered transaction item recording for apply, fail-closed active restore on governance recording failure, and rollback item recording; full Python suite passed with 71 tests.
+- Sidecar writer control endpoints are implemented: `/v1/writer/apply` and `/v1/writer/rollback` require control auth, resolve staging/archive roots under the configured workspace root, fail closed unless `active_root` is the pinned `skills/autoskill` root expected by the deterministic writer, and call the transaction-aware apply/rollback wrappers.
+- Writer API validation passed locally: focused writer/API tests staged a compiled skill, applied it through the sidecar route, recorded active/archive transaction items, rolled back through the sidecar route, and restored the previous `SKILL.md`.
+- Real local Postgres writer endpoint validation passed via compose: migration applied, staged manifest applied through `/v1/writer/apply`, rollback restored the prior active `SKILL.md` through `/v1/writer/rollback`, DB rows showed `compile` status `applied` with two transaction items and `rollback_skill` status `rolled_back` with one transaction item, and compose was cleaned down afterward.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
@@ -88,8 +91,8 @@ Phase 6/7 control-plane buildout.
 3. Add persistent worker heartbeat/lease renewal records if long-running jobs start exceeding one lease interval.
 4. Add contrastive induction and future intervention replay so no-skill-control probes can graduate from `needs_intervention` to pass/fail.
 5. Add shadow-edge/probe generation from repeated attribution events after deduplication policy is defined.
-6. Expose transaction-aware writer apply/rollback through sidecar control endpoints once the endpoint path/root policy is pinned.
-7. Wire writer apply/rollback records into provenance traversal, canary/freeze state transitions, and active-cache/embedding invalidation.
+6. Wire writer apply/rollback endpoint outputs into provenance traversal, canary/freeze state transitions, active-cache/embedding invalidation, and mutation worker jobs.
+7. Add mutation-worker callers for writer apply/rollback once canary/freeze and provenance invalidation gates are ready.
 
 ## Known Risks
 
@@ -102,5 +105,5 @@ Phase 6/7 control-plane buildout.
 - Embedding generation defaults to deterministic local hash embeddings until production provider settings are configured and live-validated.
 - Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and shadow-edge/probe generation from attribution events are still pending.
 - Candidate evaluator execution is deterministic and conservative; no-skill-control probes remain `needs_intervention` until real intervention/counterfactual replay exists, and this must pass before any staged writer/activation path is added.
-- Candidate proposal persistence is transaction-anchored, but future staged writer apply/rollback paths still need end-to-end transaction wrapping.
-- Revocation traversal now previews impacted derived artifacts, and staged writer apply/rollback filesystem primitives have transaction-aware service wrappers, but sidecar control endpoints, canary/freeze orchestration, provenance edges for writer artifacts, and per-object invalidation/revoke handlers are still pending.
+- Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback now has sidecar control endpoints, but mutation-worker orchestration still needs end-to-end caller wiring before autonomous apply is allowed.
+- Revocation traversal now previews impacted derived artifacts, and staged writer apply/rollback filesystem primitives have transaction-aware service wrappers plus sidecar control endpoints, but canary/freeze orchestration, provenance edges for writer artifacts, and per-object invalidation/revoke handlers are still pending.

@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from hmac import compare_digest
+from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
@@ -42,6 +43,10 @@ from autoskill.services.worker import (
     WorkerStores,
     build_worker_health,
     run_worker_once,
+)
+from autoskill.services.writer import (
+    apply_staged_manifest_with_governance,
+    rollback_active_skill_with_governance,
 )
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi import status as http_status
@@ -229,6 +234,20 @@ class EvolutionTransactionItemRequest(BaseModel):
 
 class EvolutionTransactionItemResponse(BaseModel):
     item: dict[str, object]
+
+
+class WriterApplyRequest(BaseModel):
+    evolution_transaction_id: UUID
+    manifest_relative_path: str
+
+
+class WriterRollbackRequest(BaseModel):
+    evolution_transaction_id: UUID
+    archive_manifest_relative_path: str
+
+
+class WriterArtifactResponse(BaseModel):
+    artifact: dict[str, object]
 
 
 class ProvenanceEdgeCreateRequest(BaseModel):
@@ -535,6 +554,34 @@ def _require_control_auth(authorization: str | None) -> None:
         )
 
 
+def _resolve_workspace_child(workspace_root: Path, configured_path: Path) -> Path:
+    path = configured_path if configured_path.is_absolute() else workspace_root / configured_path
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(workspace_root)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="writer roots must stay under the workspace root",
+        ) from error
+    return resolved
+
+
+def _writer_roots(workspace_root: Path | None = None) -> tuple[Path, Path, Path]:
+    settings = get_settings()
+    root = (workspace_root or Path.cwd()).resolve()
+    active_root = _resolve_workspace_child(root, settings.active_root)
+    expected_active_root = (root / "skills" / "autoskill").resolve()
+    if active_root != expected_active_root:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="writer endpoints require active_root=skills/autoskill",
+        )
+    staging_root = _resolve_workspace_child(root, settings.staging_root)
+    archive_root = _resolve_workspace_child(root, settings.archive_root)
+    return root, staging_root, archive_root
+
+
 def create_app(
     event_store: EventStore | None = None,
     job_store: JobStore | None = None,
@@ -546,6 +593,7 @@ def create_app(
     candidate_store: CandidateStore | None = None,
     evaluation_store: EvaluationStore | None = None,
     governance_store: GovernanceStore | None = None,
+    writer_workspace_root: Path | None = None,
 ) -> FastAPI:
     store = event_store or _build_event_store()
     jobs = job_store or _build_job_store()
@@ -966,6 +1014,51 @@ def create_app(
             rollback_action=request.rollback_action,
         )
         return EvolutionTransactionItemResponse(item=item.to_json())
+
+    @app.post("/v1/writer/apply", response_model=WriterArtifactResponse)
+    async def apply_writer_manifest(
+        request: WriterApplyRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> WriterArtifactResponse:
+        _require_control_auth(authorization)
+        workspace_root, staging_root, archive_root = _writer_roots(writer_workspace_root)
+        try:
+            artifact = await apply_staged_manifest_with_governance(
+                governance,
+                evolution_transaction_id=request.evolution_transaction_id,
+                staging_root=staging_root,
+                workspace_root=workspace_root,
+                archive_root=archive_root,
+                manifest_relative_path=request.manifest_relative_path,
+            )
+        except (ValueError, FileExistsError, FileNotFoundError) as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return WriterArtifactResponse(artifact=artifact.to_json())
+
+    @app.post("/v1/writer/rollback", response_model=WriterArtifactResponse)
+    async def rollback_writer_manifest(
+        request: WriterRollbackRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> WriterArtifactResponse:
+        _require_control_auth(authorization)
+        workspace_root, _staging_root, archive_root = _writer_roots(writer_workspace_root)
+        try:
+            artifact = await rollback_active_skill_with_governance(
+                governance,
+                evolution_transaction_id=request.evolution_transaction_id,
+                workspace_root=workspace_root,
+                archive_root=archive_root,
+                archive_manifest_relative_path=request.archive_manifest_relative_path,
+            )
+        except (ValueError, FileExistsError, FileNotFoundError) as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return WriterArtifactResponse(artifact=artifact.to_json())
 
     @app.post("/v1/provenance/edges", response_model=ProvenanceEdgeCreateResponse)
     async def record_provenance_edge(
