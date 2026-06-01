@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from time import monotonic
 from uuid import UUID
 
+from autoskill.db.compatibility import CompatibilityStore
 from autoskill.db.context import ContextGovernanceStore
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalStore
 from autoskill.services.scanner import has_blocking_findings, scan_text
@@ -23,6 +24,7 @@ class ContextHintRequest(BaseModel):
     trace_id: UUID | None = None
     span_id: UUID | None = None
     parent_span_id: UUID | None = None
+    executor_profile_id: UUID | None = None
     user_intent: str | None = None
     max_tokens: int = 600
 
@@ -48,7 +50,7 @@ class CachedContextHint:
 class ContextHintCache:
     def __init__(self, *, ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS) -> None:
         self.ttl_seconds = ttl_seconds
-        self._entries: dict[tuple[str, str, int], CachedContextHint] = {}
+        self._entries: dict[tuple[str, str, str, int], CachedContextHint] = {}
 
     def get(self, request: ContextHintRequest, query: str) -> ContextHintResponse | None:
         key = self._key(request, query)
@@ -84,8 +86,13 @@ class ContextHintCache:
             removed += 1
         return removed
 
-    def _key(self, request: ContextHintRequest, query: str) -> tuple[str, str, int]:
-        return (request.workspace_id, query.lower(), max(1, request.max_tokens))
+    def _key(self, request: ContextHintRequest, query: str) -> tuple[str, str, str, int]:
+        return (
+            request.workspace_id,
+            str(request.executor_profile_id) if request.executor_profile_id else "",
+            query.lower(),
+            max(1, request.max_tokens),
+        )
 
 
 def bootstrap_context_hint(_: ContextHintRequest) -> ContextHintResponse:
@@ -98,6 +105,7 @@ async def build_context_hint(
     *,
     cache: ContextHintCache | None = None,
     context_governance: ContextGovernanceStore | None = None,
+    compatibility: CompatibilityStore | None = None,
 ) -> ContextHintResponse:
     query = (request.user_intent or "").strip()
     if not query:
@@ -138,7 +146,13 @@ async def build_context_hint(
         limit=12,
     )
     ranked = _rerank_candidates([*result.candidates, *graph_candidates], query)
+    ranked, compatibility_suppressed = await _apply_executor_compatibility(
+        compatibility,
+        request,
+        ranked,
+    )
     selected, suppressed, archive_promotion_skill_ids = _select_skill_candidates(ranked)
+    suppressed = [*compatibility_suppressed, *suppressed]
     if not selected:
         response = ContextHintResponse(
             decision="defer_skill",
@@ -225,6 +239,33 @@ def _select_skill_candidates(
     return selected, suppressed, archive_promotion_skill_ids
 
 
+async def _apply_executor_compatibility(
+    compatibility: CompatibilityStore | None,
+    request: ContextHintRequest,
+    candidates: list[RetrievalCandidate],
+) -> tuple[list[RetrievalCandidate], list[dict[str, object]]]:
+    if compatibility is None or request.executor_profile_id is None:
+        return candidates, []
+    version_ids = _candidate_skill_version_ids(candidates)
+    if not version_ids:
+        return candidates, []
+    statuses = await compatibility.list_statuses(
+        workspace_key=request.workspace_id,
+        executor_profile_id=request.executor_profile_id,
+        skill_version_ids=version_ids,
+    )
+    filtered: list[RetrievalCandidate] = []
+    suppressed: list[dict[str, object]] = []
+    for candidate in candidates:
+        skill_version_id = _candidate_skill_version_id(candidate)
+        status = statuses.get(skill_version_id) if skill_version_id else None
+        if status in {"blocked", "drifted"}:
+            suppressed.append(_suppressed(candidate, f"executor-{status}"))
+            continue
+        filtered.append(candidate)
+    return filtered, suppressed
+
+
 def _render_hint(candidates: list[RetrievalCandidate], *, max_tokens: int) -> str:
     budget_chars = max_tokens * 4
     lines = [
@@ -271,6 +312,27 @@ def _candidate_skill_ids(candidates: list[RetrievalCandidate]) -> list[UUID]:
             seen.add(candidate.skill_id)
             ordered.append(candidate.skill_id)
     return ordered
+
+
+def _candidate_skill_version_ids(candidates: list[RetrievalCandidate]) -> list[UUID]:
+    seen: set[UUID] = set()
+    ordered: list[UUID] = []
+    for candidate in candidates:
+        skill_version_id = _candidate_skill_version_id(candidate)
+        if skill_version_id and skill_version_id not in seen:
+            seen.add(skill_version_id)
+            ordered.append(skill_version_id)
+    return ordered
+
+
+def _candidate_skill_version_id(candidate: RetrievalCandidate) -> UUID | None:
+    value = candidate.metadata.get("skill_version_id")
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except ValueError:
+        return None
 
 
 def _rerank_candidates(

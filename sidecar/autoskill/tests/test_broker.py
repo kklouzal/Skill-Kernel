@@ -104,6 +104,35 @@ class MemoryContextGovernanceStore:
         return SimpleNamespace(context_token_ledger_id=uuid4())
 
 
+class MemoryCompatibilityStore:
+    def __init__(self, statuses: dict[tuple[object, object], str]) -> None:
+        self.statuses = statuses
+        self.calls: list[dict[str, object]] = []
+
+    async def list_statuses(
+        self,
+        *,
+        workspace_key: str,
+        executor_profile_id,
+        skill_version_ids: list,
+    ) -> dict:
+        self.calls.append(
+            {
+                "workspace_key": workspace_key,
+                "executor_profile_id": executor_profile_id,
+                "skill_version_ids": skill_version_ids,
+            }
+        )
+        return {
+            skill_version_id: status
+            for skill_version_id in skill_version_ids
+            if (
+                status := self.statuses.get((skill_version_id, executor_profile_id))
+            )
+            is not None
+        }
+
+
 def test_context_broker_renders_scanned_skill_candidates() -> None:
     skill_id = uuid4()
     trace_id = uuid4()
@@ -173,6 +202,49 @@ def test_context_broker_renders_scanned_skill_candidates() -> None:
     assert context.artifacts[0]["max_tokens"] == 120
     assert context.ledgers[0]["visibility_state"] == "skill_visible"
     assert context.ledgers[0]["context_artifact_id"] == context.artifacts[0]["context_artifact_id"]
+
+
+def test_context_broker_suppresses_executor_blocked_skill_version() -> None:
+    skill_id = uuid4()
+    skill_version_id = uuid4()
+    executor_profile_id = uuid4()
+    store = MemoryBrokerRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=skill_id,
+                summary="WHEN PDF tables are malformed, use the deterministic repair workflow.",
+                rank=0.9,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "pdf-table-repair",
+                    "skill_version_id": str(skill_version_id),
+                },
+            )
+        ]
+    )
+    compatibility = MemoryCompatibilityStore(
+        {(skill_version_id, executor_profile_id): "blocked"}
+    )
+
+    async def run():
+        return await build_context_hint(
+            store,
+            ContextHintRequest(
+                workspace_id="dev-01",
+                executor_profile_id=executor_profile_id,
+                user_intent="repair pdf table extraction",
+            ),
+            compatibility=compatibility,
+        )
+
+    response = asyncio.run(run())
+
+    assert response.decision == "defer_skill"
+    assert response.suppressed[0]["reason"] == "executor-blocked"
+    assert compatibility.calls[0]["skill_version_ids"] == [skill_version_id]
 
 
 def test_context_broker_records_no_skill_token_ledger() -> None:
@@ -409,6 +481,51 @@ def test_context_broker_cache_avoids_duplicate_retrieval() -> None:
     assert second.cache_status == "cache-hit"
     assert len(store.calls) == 1
     assert len(store.records) == 1
+
+
+def test_context_broker_cache_is_executor_profile_scoped() -> None:
+    skill_id = uuid4()
+    store = MemoryBrokerRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=skill_id,
+                summary="WHEN PDF tables are malformed, use the deterministic repair workflow.",
+                rank=0.9,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "pdf-table-repair",
+                },
+            ),
+        ]
+    )
+    cache = ContextHintCache(ttl_seconds=60)
+
+    async def run():
+        await build_context_hint(
+            store,
+            ContextHintRequest(
+                workspace_id="dev-01",
+                executor_profile_id=uuid4(),
+                user_intent="repair pdf table extraction",
+            ),
+            cache=cache,
+        )
+        await build_context_hint(
+            store,
+            ContextHintRequest(
+                workspace_id="dev-01",
+                executor_profile_id=uuid4(),
+                user_intent="repair pdf table extraction",
+            ),
+            cache=cache,
+        )
+
+    asyncio.run(run())
+
+    assert len(store.calls) == 2
 
 
 def test_context_broker_cache_invalidates_by_workspace_and_skill() -> None:

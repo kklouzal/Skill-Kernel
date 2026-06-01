@@ -17,6 +17,11 @@ from autoskill.core.skillir import EffectSignature
 from autoskill.db.attribution import AsyncpgAttributionStore, AttributionStore, NullAttributionStore
 from autoskill.db.audit import AsyncpgAuditStore, AuditStore, NullAuditStore
 from autoskill.db.candidates import AsyncpgCandidateStore, CandidateStore, NullCandidateStore
+from autoskill.db.compatibility import (
+    AsyncpgCompatibilityStore,
+    CompatibilityStore,
+    NullCompatibilityStore,
+)
 from autoskill.db.context import (
     AsyncpgContextGovernanceStore,
     ContextGovernanceStore,
@@ -308,6 +313,18 @@ class ProfileQualificationRunRequest(BaseModel):
 
 class ProfileQualificationRunResponse(BaseModel):
     run: dict[str, object]
+
+
+class SkillProfileCompatibilityUpsertRequest(BaseModel):
+    workspace_id: str
+    skill_version_id: UUID
+    executor_profile_id: UUID
+    status: str
+    evidence: dict[str, object] = Field(default_factory=dict)
+
+
+class SkillProfileCompatibilityResponse(BaseModel):
+    compatibility: dict[str, object]
 
 
 class ContextArtifactRecordRequest(BaseModel):
@@ -1028,6 +1045,16 @@ def _build_profile_qualification_store() -> ProfileQualificationStore:
     return NullProfileQualificationStore()
 
 
+def _build_compatibility_store() -> CompatibilityStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgCompatibilityStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullCompatibilityStore()
+
+
 def _build_context_governance_store() -> ContextGovernanceStore:
     settings = get_settings()
     if settings.database_url:
@@ -1275,6 +1302,7 @@ def create_app(
     llm_invocation_store: LLMInvocationStore | None = None,
     profile_qualification_store: ProfileQualificationStore | None = None,
     llm_client: LLMClient | None = None,
+    compatibility_store: CompatibilityStore | None = None,
     context_governance_store: ContextGovernanceStore | None = None,
     topology_store: TopologyStore | None = None,
     writer_workspace_root: Path | None = None,
@@ -1308,6 +1336,7 @@ def create_app(
         invocations=llm_invocations,
         settings=get_settings(),
     )
+    compatibility = compatibility_store or _build_compatibility_store()
     context_governance = context_governance_store or _build_context_governance_store()
     topology = topology_store or _build_topology_store()
     broker_cache = ContextHintCache()
@@ -1339,6 +1368,7 @@ def create_app(
                 profiles,
                 llm_invocations,
                 profile_qualifications,
+                compatibility,
                 context_governance,
                 topology,
             ):
@@ -1405,6 +1435,7 @@ def create_app(
             request,
             cache=broker_cache,
             context_governance=context_governance,
+            compatibility=compatibility,
         )
 
     @app.post(
@@ -1873,6 +1904,24 @@ def create_app(
                 detail=str(exc),
             ) from exc
         return ProfileQualificationRunResponse(run=result.to_json())
+
+    @app.post(
+        "/v1/profiles/compatibility",
+        response_model=SkillProfileCompatibilityResponse,
+    )
+    async def upsert_skill_profile_compatibility(
+        request: SkillProfileCompatibilityUpsertRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> SkillProfileCompatibilityResponse:
+        _require_control_auth(authorization)
+        record = await compatibility.upsert_compatibility(
+            workspace_key=request.workspace_id,
+            skill_version_id=request.skill_version_id,
+            executor_profile_id=request.executor_profile_id,
+            status=request.status,
+            evidence=request.evidence,
+        )
+        return SkillProfileCompatibilityResponse(compatibility=record.to_json())
 
     @app.post("/v1/context/artifacts", response_model=ContextArtifactResponse)
     async def record_context_artifact(

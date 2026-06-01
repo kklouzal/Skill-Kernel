@@ -119,6 +119,7 @@ Deliverables:
 - cache-backed context hint endpoint; endpoint is present behind a disabled-by-default config gate with short in-process cache;
 - shadowing logs; broker suppression/rendering telemetry is attached to retrieval logs, and outcome/correction-based shadowing detection records attribution events.
 - external-skill inventory awareness; implemented as control-authenticated upsert/list APIs, hashed-root/file-hash/status/risk metadata persistence, read-only scanner job wiring, lexical retrieval of visible/changed external skills, broker suppression as non-runtime collisions, and duplicate-match `external_collision_review` decisions that block automatic candidate creation.
+- executor-profile compatibility suppression; implemented through `skill_profile_compatibility`, a control upsert API, executor-scoped broker cache keys, and runtime suppression of explicitly `blocked` or `drifted` skill versions for the requesting executor profile.
 
 Acceptance:
 
@@ -127,6 +128,7 @@ Acceptance:
 - no raw memory/evidence is injected; implemented for evidence-only matches by deferring without hint text.
 - rendered skill IDs, suppression reasons, and reason codes are recorded on retrieval logs.
 - external skills are visible to collision analysis but are never injected as runtime hints or selected for autonomous mutation; scanner jobs hash external roots/files and quarantine scanner-blocked external skills without storing raw root paths.
+- blocked/drifted executor compatibility suppresses otherwise renderable skills for that profile while leaving unscoped/no-row retrieval unchanged; implemented and validated with focused broker tests plus compose/Postgres smoke coverage.
 
 ## Phase 6 - Candidate Generation in Propose-Only Mode
 

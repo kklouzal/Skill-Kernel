@@ -361,6 +361,17 @@ ALTER TABLE autoskill.evaluations
 ALTER TABLE autoskill.evaluations
   ADD COLUMN IF NOT EXISTS parent_span_id uuid;
 
+CREATE TABLE IF NOT EXISTS autoskill.skill_profile_compatibility (
+  skill_profile_compatibility_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_version_id uuid NOT NULL REFERENCES autoskill.skill_versions(skill_version_id),
+  executor_profile_id uuid NOT NULL REFERENCES autoskill.executor_profiles(executor_profile_id),
+  status text NOT NULL CHECK (status IN ('unknown','compatible','degraded','blocked','drifted')),
+  evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
+  last_checked_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, skill_version_id, executor_profile_id)
+);
+
 CREATE TABLE IF NOT EXISTS autoskill.broker_policy_versions (
   broker_policy_version_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
