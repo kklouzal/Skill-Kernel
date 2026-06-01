@@ -130,8 +130,8 @@ Deliverables:
 
 - v9 transaction/provenance/revocation schema; implemented for idempotent evolution transactions, transaction items, evidence maturity, action-attribution checks, control-flow events, and revocation requests;
 - transaction control APIs; implemented for starting idempotent transactions, updating transaction status/metrics, recording rollback-aware transaction items, and queuing revocation requests;
-- staged writer;
-- manifests and hashes;
+- staged writer; implemented for scanner-gated compiled `SKILL.md` staging under a bounded staging root without active-root mutation;
+- manifests and hashes; implemented for writer manifests with staged file hash verification;
 - atomic apply;
 - archive snapshots;
 - rollback and canary states.
@@ -143,6 +143,7 @@ Acceptance:
 - revocation requests can be queued for rollback/traversal roots; implemented and validated against local Postgres;
 - candidate proposal persistence creates or accepts a `candidate_proposal` transaction, records source evidence IDs, stamps the inactive version, writes transaction items, and advances the transaction to `staged`; implemented and validated against local Postgres;
 - provenance edges can be recorded idempotently and revocation roots can be previewed through a bounded derived-object traversal; implemented and validated against local Postgres;
+- compiled runtime `SKILL.md` artifacts can be staged with deterministic manifests, slug/path/symlink checks, support-artifact allowlisting, scanner blocking, and staged hash verification; implemented and validated with focused writer tests;
 - valid skill appears under active root;
 - invalid paths are rejected;
 - rollback restores the previous effective state;
