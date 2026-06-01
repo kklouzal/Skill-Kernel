@@ -62,6 +62,8 @@ Phase 0/1 bootstrap.
 - Real local Postgres opportunity-miner validation passed via compose: two repeated `message_received` evidence records were grouped into one opportunity, an active body-index skill was matched, and the recommendation was `reuse_active` instead of creating a duplicate candidate.
 - Worker observability/configured concurrency primitive is implemented: settings now define scheduler/maintenance/mutation pool concurrency, worker loops default to those settings unless overridden, `/v1/status` includes worker health, and `/v1/workers/health` reports pool job kinds plus job counts by status, kind, and pool.
 - Propose-only candidate SkillIR scaffolding is implemented: `/v1/candidates/propose` mines repeated opportunities, skips active/archive matches according to opportunity recommendations, and returns scanner-checked SkillIR previews with cited evidence IDs without writing runtime skill files.
+- Candidate persistence and deterministic probe planning are implemented: proposal persistence writes inactive candidate skill/version rows, inactive compiled-file metadata, body-index documents, planned target/no-skill/regression probes, provenance-ready evidence links, and a planned proposal-gate evaluation without writing runtime skill files.
+- Real local Postgres candidate-persistence validation passed via compose: two redacted repeated events produced one opportunity, one proposal, one persisted candidate version, three planned probes, one planned evaluation, and two body-index documents.
 - Outcome-based shadowing detection primitive is implemented: `/v1/shadowing/detect` scans recent evidence for explicit `skill_shadowed` outcomes, selected-vs-expected skill mismatches, and correction phrasing, then records medium-risk attribution events without changing routing.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
@@ -70,7 +72,7 @@ Phase 0/1 bootstrap.
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
 2. Add production embedding provider live validation once credentials/provider endpoint are configured.
 3. Add persistent worker heartbeat/lease renewal records if long-running jobs start exceeding one lease interval.
-4. Add candidate persistence/evaluation/probe planning after propose-only previews are reviewed.
+4. Add contrastive induction and concrete evaluator execution over planned target/no-skill/regression probes.
 5. Add shadow-edge/probe generation from repeated attribution events after deduplication policy is defined.
 
 ## Known Risks
@@ -83,3 +85,4 @@ Phase 0/1 bootstrap.
 - Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive/intervention evidence still needs aggregation logic.
 - Embedding generation defaults to deterministic local hash embeddings until production provider settings are configured and live-validated.
 - Runtime context broker is still conservative: lexical retrieval-backed and scanned body docs only; vector fusion and shadow-edge/probe generation from attribution events are still pending.
+- Candidate probes are currently deterministic plans; evaluator execution is still pending and must pass before any staged writer/activation path is added.

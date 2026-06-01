@@ -111,16 +111,17 @@ Deliverables:
 - contrastive induction;
 - typed LLM operation wrappers;
 - SkillIR compiler and deterministic propose-only candidate scaffolding from gated opportunities;
+- inactive candidate skill/version persistence with body-level indexing; implemented for propose-only candidates without writing runtime files;
 - scanner;
-- probe generator;
-- evaluator.
+- probe generator; implemented as deterministic target, no-skill-control, and regression probe plans for persisted candidates;
+- evaluator; proposal-gate evaluation rows are planned, concrete probe execution remains pending.
 
 Acceptance:
 
-- candidates require grounded evidence; proposal scaffolds carry cited evidence IDs and skip active/archive duplicates;
+- candidates require grounded evidence; proposal scaffolds carry cited evidence IDs, skip active/archive duplicates, and persist inactive candidate revisions only;
 - self-feedback-only changes fail;
 - malicious artifacts are rejected;
-- evaluator reports target, regression, and no-skill results.
+- evaluator reports target, regression, and no-skill results; planned rows exist, execution remains pending.
 
 ## Phase 7 - Deterministic Writer and Rollback
 

@@ -40,6 +40,11 @@ def test_candidate_proposal_builds_propose_only_skillir() -> None:
     assert proposal["skillir"]["slug"].startswith("autoskill-message-received")
     assert proposal["compiled_sha256"]
     assert proposal["scanner_findings"] == []
+    assert [probe["kind"] for probe in proposal["probe_plan"]] == [
+        "target",
+        "no_skill_control",
+        "regression",
+    ]
     assert "Do not write files" in proposal["skillir"]["never"][0]
 
 

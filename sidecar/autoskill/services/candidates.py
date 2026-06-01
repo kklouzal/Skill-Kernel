@@ -6,6 +6,7 @@ from typing import Any
 from autoskill.core.skillir import SkillIR
 from autoskill.services.compiler import compile_skill
 from autoskill.services.opportunity import OpportunityCandidate, OpportunityMineResult
+from autoskill.services.probes import ProbePlan, plan_candidate_probes
 
 
 @dataclass(frozen=True)
@@ -15,8 +16,10 @@ class CandidateSkillProposal:
     evidence_ids: list[str]
     skipped_reason: str | None
     skillir: SkillIR | None
+    compiled_runtime_text: str | None
     compiled_sha256: str | None
     scanner_findings: list[dict[str, str]]
+    probe_plan: list[ProbePlan]
 
     def to_json(self) -> dict[str, Any]:
         skillir = self.skillir.model_dump(by_alias=True, mode="json") if self.skillir else None
@@ -28,6 +31,7 @@ class CandidateSkillProposal:
             "skillir": skillir,
             "compiled_sha256": self.compiled_sha256,
             "scanner_findings": self.scanner_findings,
+            "probe_plan": [probe.to_json() for probe in self.probe_plan],
         }
 
 
@@ -66,8 +70,10 @@ def _proposal_from_opportunity(candidate: OpportunityCandidate) -> CandidateSkil
             evidence_ids=candidate.evidence_ids,
             skipped_reason=f"opportunity recommendation is {candidate.recommendation}",
             skillir=None,
+            compiled_runtime_text=None,
             compiled_sha256=None,
             scanner_findings=[],
+            probe_plan=[],
         )
 
     skill = SkillIR(
@@ -117,12 +123,14 @@ def _proposal_from_opportunity(candidate: OpportunityCandidate) -> CandidateSkil
         ],
     )
     compiled = compile_skill(skill)
+    probe_plan = plan_candidate_probes(skill)
     return CandidateSkillProposal(
         candidate_slug=candidate.candidate_slug,
         recommendation=candidate.recommendation,
         evidence_ids=candidate.evidence_ids,
         skipped_reason=None,
         skillir=skill,
+        compiled_runtime_text=compiled.skill_md,
         compiled_sha256=compiled.sha256,
         scanner_findings=[
             {
@@ -132,6 +140,7 @@ def _proposal_from_opportunity(candidate: OpportunityCandidate) -> CandidateSkil
             }
             for finding in compiled.scanner_findings
         ],
+        probe_plan=probe_plan,
     )
 
 

@@ -11,6 +11,7 @@ from autoskill import __version__
 from autoskill.core.config import get_settings
 from autoskill.core.events import IngestRequest, IngestResult
 from autoskill.db.attribution import AsyncpgAttributionStore, AttributionStore, NullAttributionStore
+from autoskill.db.candidates import AsyncpgCandidateStore, CandidateStore, NullCandidateStore
 from autoskill.db.embeddings import AsyncpgEmbeddingStore, EmbeddingStore, NullEmbeddingStore
 from autoskill.db.events import AsyncpgEventStore, EventStore, NullEventStore
 from autoskill.db.evidence import AsyncpgEvidenceStore, EvidenceStore, NullEvidenceStore
@@ -158,6 +159,7 @@ class CandidateProposalRequest(BaseModel):
     workspace_id: str
     limit: int = 100
     min_support: int = 2
+    persist: bool = True
 
 
 class CandidateProposalResponse(BaseModel):
@@ -165,6 +167,7 @@ class CandidateProposalResponse(BaseModel):
     proposed: int
     skipped: int
     proposals: list[dict[str, object]]
+    persistence: dict[str, object] | None = None
 
 
 class ShadowingDetectRequest(BaseModel):
@@ -319,6 +322,16 @@ def _build_attribution_store() -> AttributionStore:
     return NullAttributionStore()
 
 
+def _build_candidate_store() -> CandidateStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgCandidateStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullCandidateStore()
+
+
 def _require_ingest_auth(authorization: str | None) -> None:
     settings = get_settings()
     if not settings.ingest_token:
@@ -353,6 +366,7 @@ def create_app(
     retrieval_store: RetrievalStore | None = None,
     embedding_store: EmbeddingStore | None = None,
     attribution_store: AttributionStore | None = None,
+    candidate_store: CandidateStore | None = None,
 ) -> FastAPI:
     store = event_store or _build_event_store()
     jobs = job_store or _build_job_store()
@@ -361,6 +375,7 @@ def create_app(
     retrieval = retrieval_store or _build_retrieval_store()
     embeddings = embedding_store or _build_embedding_store()
     attribution = attribution_store or _build_attribution_store()
+    candidates = candidate_store or _build_candidate_store()
     broker_cache = ContextHintCache()
 
     @asynccontextmanager
@@ -368,7 +383,16 @@ def create_app(
         try:
             yield
         finally:
-            for closeable in (store, jobs, scheduler, evidence, retrieval, embeddings, attribution):
+            for closeable in (
+                store,
+                jobs,
+                scheduler,
+                evidence,
+                retrieval,
+                embeddings,
+                attribution,
+                candidates,
+            ):
                 close = getattr(closeable, "close", None)
                 if close is not None:
                     await close()
@@ -634,7 +658,14 @@ def create_app(
             min_support=max(2, min(request.min_support, 25)),
         )
         result = propose_candidate_skills(opportunities)
-        return CandidateProposalResponse(**result.to_json())
+        payload = result.to_json()
+        if request.persist:
+            persistence = await candidates.persist_candidate_proposals(
+                workspace_key=request.workspace_id,
+                proposals=result.proposals,
+            )
+            payload["persistence"] = persistence.to_json()
+        return CandidateProposalResponse(**payload)
 
     @app.post("/v1/shadowing/detect", response_model=ShadowingDetectResponse)
     async def detect_shadowing(
