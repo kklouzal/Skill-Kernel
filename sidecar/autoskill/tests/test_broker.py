@@ -2,7 +2,7 @@ import asyncio
 from uuid import uuid4
 
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalResult
-from autoskill.services.broker import ContextHintRequest, build_context_hint
+from autoskill.services.broker import ContextHintCache, ContextHintRequest, build_context_hint
 
 
 class MemoryBrokerRetrievalStore:
@@ -15,6 +15,7 @@ class MemoryBrokerRetrievalStore:
         self.graph_candidates = graph_candidates or []
         self.calls: list[dict[str, object]] = []
         self.graph_calls: list[dict[str, object]] = []
+        self.records: list[dict[str, object]] = []
 
     async def lexical_query(
         self,
@@ -57,6 +58,25 @@ class MemoryBrokerRetrievalStore:
             }
         )
         return self.graph_candidates[:limit]
+
+    async def record_context_hint(
+        self,
+        *,
+        retrieval_log_id,
+        rendered_skill_ids: list,
+        decision: str,
+        suppressed: list[dict[str, object]],
+        reason_codes: list[str],
+    ) -> None:
+        self.records.append(
+            {
+                "retrieval_log_id": retrieval_log_id,
+                "rendered_skill_ids": rendered_skill_ids,
+                "decision": decision,
+                "suppressed": suppressed,
+                "reason_codes": reason_codes,
+            }
+        )
 
 
 def test_context_broker_renders_scanned_skill_candidates() -> None:
@@ -113,6 +133,8 @@ def test_context_broker_renders_scanned_skill_candidates() -> None:
     assert "exact-rerank" in response.reason_codes
     assert store.calls[0]["limit"] == 8
     assert store.graph_calls[0]["limit"] == 12
+    assert store.records[0]["decision"] == "skill_hint"
+    assert store.records[0]["rendered_skill_ids"] == [skill_id]
 
 
 def test_context_broker_defers_evidence_only_matches() -> None:
@@ -253,3 +275,41 @@ def test_context_broker_suppresses_archived_matches_for_promotion() -> None:
     assert response.decision == "defer_skill"
     assert response.archive_promotion_skill_ids == [str(archived_skill_id)]
     assert response.suppressed[0]["reason"] == "archived-promotion-candidate"
+
+
+def test_context_broker_cache_avoids_duplicate_retrieval() -> None:
+    skill_id = uuid4()
+    store = MemoryBrokerRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=skill_id,
+                summary="WHEN PDF tables are malformed, use the deterministic repair workflow.",
+                rank=0.9,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "pdf-table-repair",
+                },
+            ),
+        ]
+    )
+    cache = ContextHintCache(ttl_seconds=60)
+    request = ContextHintRequest(
+        workspace_id="dev-01",
+        user_intent="repair pdf table extraction",
+    )
+
+    async def run():
+        first = await build_context_hint(store, request, cache=cache)
+        second = await build_context_hint(store, request, cache=cache)
+        return first, second
+
+    first, second = asyncio.run(run())
+
+    assert first.decision == "skill_hint"
+    assert second.decision == "skill_hint"
+    assert second.cache_status == "cache-hit"
+    assert len(store.calls) == 1
+    assert len(store.records) == 1

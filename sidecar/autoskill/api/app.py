@@ -17,6 +17,7 @@ from autoskill.db.jobs import AsyncpgJobStore, JobStore, NullJobStore
 from autoskill.db.retrieval import AsyncpgRetrievalStore, NullRetrievalStore, RetrievalStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore, NullSchedulerStore, SchedulerStore
 from autoskill.services.broker import (
+    ContextHintCache,
     ContextHintRequest,
     ContextHintResponse,
     bootstrap_context_hint,
@@ -277,6 +278,7 @@ def create_app(
     evidence = evidence_store or _build_evidence_store()
     retrieval = retrieval_store or _build_retrieval_store()
     embeddings = embedding_store or _build_embedding_store()
+    broker_cache = ContextHintCache()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -333,7 +335,7 @@ def create_app(
     async def context_hint(request: ContextHintRequest) -> ContextHintResponse:
         if not get_settings().runtime_context_broker_enabled:
             return bootstrap_context_hint(request)
-        return await build_context_hint(retrieval, request)
+        return await build_context_hint(retrieval, request, cache=broker_cache)
 
     @app.get("/v1/skills")
     async def list_skills() -> dict[str, list[object]]:

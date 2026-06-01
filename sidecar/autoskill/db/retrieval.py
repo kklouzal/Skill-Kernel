@@ -75,6 +75,17 @@ class RetrievalStore(Protocol):
     ) -> list[RetrievalCandidate]:
         """Hydrate body-level candidates connected to selected skills."""
 
+    async def record_context_hint(
+        self,
+        *,
+        retrieval_log_id: UUID | None,
+        rendered_skill_ids: list[UUID],
+        decision: str,
+        suppressed: list[dict[str, object]],
+        reason_codes: list[str],
+    ) -> None:
+        """Attach broker rendering telemetry to a retrieval log."""
+
 
 class NullRetrievalStore:
     async def lexical_query(
@@ -97,6 +108,17 @@ class NullRetrievalStore:
         limit: int = 25,
     ) -> list[RetrievalCandidate]:
         return []
+
+    async def record_context_hint(
+        self,
+        *,
+        retrieval_log_id: UUID | None,
+        rendered_skill_ids: list[UUID],
+        decision: str,
+        suppressed: list[dict[str, object]],
+        reason_codes: list[str],
+    ) -> None:
+        return None
 
 
 class AsyncpgRetrievalStore(AsyncpgPoolOwner):
@@ -268,6 +290,42 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
                 limit,
             )
             return [RetrievalCandidate.from_row(row) for row in rows]
+
+    async def record_context_hint(
+        self,
+        *,
+        retrieval_log_id: UUID | None,
+        rendered_skill_ids: list[UUID],
+        decision: str,
+        suppressed: list[dict[str, object]],
+        reason_codes: list[str],
+    ) -> None:
+        if retrieval_log_id is None:
+            return
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE autoskill.retrieval_logs
+                SET rendered_skill_ids = $2,
+                    no_skill_control = ($3 IN ('no_skill', 'defer_skill')),
+                    decision = $3,
+                    metadata = metadata || $4::jsonb
+                WHERE retrieval_log_id = $1
+                """,
+                retrieval_log_id,
+                rendered_skill_ids,
+                decision,
+                json.dumps(
+                    {
+                        "suppressed": suppressed,
+                        "reason_codes": reason_codes,
+                        "rendered_skill_count": len(rendered_skill_ids),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            )
 
 
 async def _insert_retrieval_log(

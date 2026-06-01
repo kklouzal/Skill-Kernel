@@ -91,14 +91,15 @@ Deliverables:
 
 - deterministic broker planner;
 - set-aware context renderer; implemented as a conservative retrieval-backed first pass with duplicate skill suppression and prerequisite graph expansion;
-- cache-backed context hint endpoint; endpoint is present behind a disabled-by-default config gate, cache layer pending;
-- shadowing logs.
+- cache-backed context hint endpoint; endpoint is present behind a disabled-by-default config gate with short in-process cache;
+- shadowing logs; broker suppression/rendering telemetry is attached to retrieval logs, outcome-based shadowing detection pending.
 
 Acceptance:
 
 - hint returns under configured timeout;
 - no LLM call runs in the hook path;
 - no raw memory/evidence is injected; implemented for evidence-only matches by deferring without hint text.
+- rendered skill IDs, suppression reasons, and reason codes are recorded on retrieval logs.
 
 ## Phase 6 - Candidate Generation in Propose-Only Mode
 

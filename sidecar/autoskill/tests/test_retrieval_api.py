@@ -53,6 +53,17 @@ class MemoryRetrievalStore:
     ) -> list[RetrievalCandidate]:
         return []
 
+    async def record_context_hint(
+        self,
+        *,
+        retrieval_log_id,
+        rendered_skill_ids: list,
+        decision: str,
+        suppressed: list[dict[str, object]],
+        reason_codes: list[str],
+    ) -> None:
+        return None
+
 
 def test_retrieval_query_api_returns_candidates() -> None:
     store = MemoryRetrievalStore()

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from time import monotonic
 from uuid import UUID
 
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalStore
@@ -9,6 +11,7 @@ from pydantic import BaseModel, Field
 
 BROKER_POLICY_VERSION = "bootstrap.v1"
 GRAPH_EDGE_KINDS = ["prerequisite", "conflict", "shadow", "supersedes"]
+DEFAULT_CACHE_TTL_SECONDS = 30.0
 
 
 class ContextHintRequest(BaseModel):
@@ -32,6 +35,38 @@ class ContextHintResponse(BaseModel):
     reason_codes: list[str] = Field(default_factory=list)
 
 
+@dataclass
+class CachedContextHint:
+    expires_at: float
+    response: ContextHintResponse
+
+
+class ContextHintCache:
+    def __init__(self, *, ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS) -> None:
+        self.ttl_seconds = ttl_seconds
+        self._entries: dict[tuple[str, str, int], CachedContextHint] = {}
+
+    def get(self, request: ContextHintRequest, query: str) -> ContextHintResponse | None:
+        key = self._key(request, query)
+        entry = self._entries.get(key)
+        if entry is None:
+            return None
+        if entry.expires_at <= monotonic():
+            self._entries.pop(key, None)
+            return None
+        return entry.response.model_copy(update={"cache_status": "cache-hit"})
+
+    def set(self, request: ContextHintRequest, query: str, response: ContextHintResponse) -> None:
+        key = self._key(request, query)
+        self._entries[key] = CachedContextHint(
+            expires_at=monotonic() + self.ttl_seconds,
+            response=response.model_copy(update={"cache_status": "cache-fill"}),
+        )
+
+    def _key(self, request: ContextHintRequest, query: str) -> tuple[str, str, int]:
+        return (request.workspace_id, query.lower(), max(1, request.max_tokens))
+
+
 def bootstrap_context_hint(_: ContextHintRequest) -> ContextHintResponse:
     return ContextHintResponse()
 
@@ -39,10 +74,16 @@ def bootstrap_context_hint(_: ContextHintRequest) -> ContextHintResponse:
 async def build_context_hint(
     retrieval: RetrievalStore,
     request: ContextHintRequest,
+    *,
+    cache: ContextHintCache | None = None,
 ) -> ContextHintResponse:
     query = (request.user_intent or "").strip()
     if not query:
         return ContextHintResponse(decision="no_skill", cache_status="empty-intent")
+    if cache is not None:
+        cached = cache.get(request, query)
+        if cached is not None:
+            return cached
 
     result = await retrieval.lexical_query(
         workspace_key=request.workspace_id,
@@ -53,11 +94,16 @@ async def build_context_hint(
     )
     retrieval_log_id = str(result.retrieval_log_id) if result.retrieval_log_id else None
     if not result.candidates:
-        return ContextHintResponse(
+        response = ContextHintResponse(
             decision="no_skill",
             cache_status="retrieval-empty",
             retrieval_log_id=retrieval_log_id,
+            reason_codes=["retrieval-empty"],
         )
+        await _record_context_hint(retrieval, result.retrieval_log_id, response)
+        if cache is not None:
+            cache.set(request, query, response)
+        return response
 
     graph_candidates = await retrieval.expand_skill_graph(
         workspace_key=request.workspace_id,
@@ -68,7 +114,7 @@ async def build_context_hint(
     ranked = _rerank_candidates([*result.candidates, *graph_candidates], query)
     selected, suppressed, archive_promotion_skill_ids = _select_skill_candidates(ranked)
     if not selected:
-        return ContextHintResponse(
+        response = ContextHintResponse(
             decision="defer_skill",
             cache_status="evidence-only",
             retrieval_log_id=retrieval_log_id,
@@ -76,10 +122,14 @@ async def build_context_hint(
             archive_promotion_skill_ids=archive_promotion_skill_ids,
             reason_codes=_reason_codes(suppressed, archive_promotion_skill_ids),
         )
+        await _record_context_hint(retrieval, result.retrieval_log_id, response)
+        if cache is not None:
+            cache.set(request, query, response)
+        return response
 
     hint = _render_hint(selected, max_tokens=max(1, request.max_tokens))
     if has_blocking_findings(scan_text(hint)):
-        return ContextHintResponse(
+        response = ContextHintResponse(
             decision="defer_skill",
             cache_status="render-scan-blocked",
             retrieval_log_id=retrieval_log_id,
@@ -87,8 +137,12 @@ async def build_context_hint(
             archive_promotion_skill_ids=archive_promotion_skill_ids,
             reason_codes=["render-scan-blocked"],
         )
+        await _record_context_hint(retrieval, result.retrieval_log_id, response)
+        if cache is not None:
+            cache.set(request, query, response)
+        return response
 
-    return ContextHintResponse(
+    response = ContextHintResponse(
         decision="skill_hint",
         hint=hint,
         skill_ids=[str(candidate.skill_id) for candidate in selected if candidate.skill_id],
@@ -98,6 +152,10 @@ async def build_context_hint(
         archive_promotion_skill_ids=archive_promotion_skill_ids,
         reason_codes=_reason_codes(suppressed, archive_promotion_skill_ids, selected),
     )
+    await _record_context_hint(retrieval, result.retrieval_log_id, response)
+    if cache is not None:
+        cache.set(request, query, response)
+    return response
 
 
 def _select_skill_candidates(
@@ -239,3 +297,17 @@ def _reason_codes(
             codes.add("graph-expanded")
         codes.add("exact-rerank")
     return sorted(codes)
+
+
+async def _record_context_hint(
+    retrieval: RetrievalStore,
+    retrieval_log_id: UUID | None,
+    response: ContextHintResponse,
+) -> None:
+    await retrieval.record_context_hint(
+        retrieval_log_id=retrieval_log_id,
+        rendered_skill_ids=[UUID(skill_id) for skill_id in response.skill_ids],
+        decision=response.decision,
+        suppressed=response.suppressed,
+        reason_codes=response.reason_codes,
+    )
