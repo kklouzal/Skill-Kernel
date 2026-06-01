@@ -1059,6 +1059,7 @@ def _worker_stores(
     utility: UtilityStore,
     contracts: ContractStore,
     observability: ObservabilityStore,
+    context_governance: ContextGovernanceStore,
     writer_workspace_root: Path | None = None,
 ) -> WorkerStores:
     workspace_root, _staging_root, archive_root = _writer_roots(writer_workspace_root)
@@ -1072,6 +1073,7 @@ def _worker_stores(
         governance=governance,
         utility=utility,
         contracts=contracts,
+        context_governance=context_governance,
         observability=observability,
         workspace_root=workspace_root,
         archive_root=archive_root,
@@ -1441,6 +1443,7 @@ def create_app(
                 utility=utility,
                 contracts=contracts,
                 observability=observability,
+                context_governance=context_governance,
                 writer_workspace_root=writer_workspace_root,
             ),
             worker_id=request.worker_id,

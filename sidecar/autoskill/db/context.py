@@ -178,6 +178,14 @@ class ContextGovernanceStore(Protocol):
     ) -> TokenLedgerRecord:
         """Record marginal context visibility accounting."""
 
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        """Mark context artifacts and ledgers derived from revoked objects."""
+
 
 class NullContextGovernanceStore:
     async def record_artifact(
@@ -254,6 +262,14 @@ class NullContextGovernanceStore:
             metadata=metadata or {},
             created_at=datetime.now(),
         )
+
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        return 0
 
 
 class AsyncpgContextGovernanceStore(AsyncpgPoolOwner):
@@ -406,6 +422,82 @@ class AsyncpgContextGovernanceStore(AsyncpgPoolOwner):
             )
         return TokenLedgerRecord.from_row(row)
 
+    async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        object_keys = _object_keys(objects)
+        if not object_keys:
+            return 0
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            result = await conn.fetchval(
+                """
+                WITH targets AS (
+                  SELECT *
+                  FROM unnest($2::text[], $3::uuid[]) AS target(object_type, object_id)
+                ),
+                artifacts AS (
+                  UPDATE autoskill.context_artifacts ca
+                  SET metadata = ca.metadata || jsonb_build_object(
+                    'revoked', true,
+                    'revoked_at', now(),
+                    'revocation_reason', 'derived_object_revoked'
+                  )
+                  FROM autoskill.workspaces w, targets t
+                  WHERE ca.workspace_id = w.workspace_id
+                    AND w.external_key = $1
+                    AND (
+                      (t.object_type = 'context_artifact'
+                        AND ca.context_artifact_id = t.object_id)
+                      OR (t.object_type = 'skill_version'
+                        AND ca.skill_version_id = t.object_id)
+                      OR (t.object_type = 'skill'
+                        AND ca.skill_id = t.object_id)
+                      OR (t.object_type = 'broker_policy_version'
+                        AND ca.broker_policy_version_id = t.object_id)
+                      OR (t.object_type = ca.source_object_type
+                        AND ca.source_object_id = t.object_id)
+                    )
+                  RETURNING ca.context_artifact_id
+                ),
+                ledgers AS (
+                  UPDATE autoskill.context_token_ledgers ctl
+                  SET metadata = ctl.metadata || jsonb_build_object(
+                    'revoked', true,
+                    'revoked_at', now(),
+                    'revocation_reason', 'derived_object_revoked'
+                  )
+                  FROM autoskill.workspaces w, targets t
+                  WHERE ctl.workspace_id = w.workspace_id
+                    AND w.external_key = $1
+                    AND (
+                      (t.object_type = 'context_artifact'
+                        AND ctl.context_artifact_id = t.object_id)
+                      OR (t.object_type = 'skill_version'
+                        AND ctl.skill_version_id = t.object_id)
+                      OR (t.object_type = 'skill'
+                        AND ctl.skill_id = t.object_id)
+                      OR (t.object_type = 'broker_policy_version'
+                        AND ctl.broker_policy_version_id = t.object_id)
+                      OR ctl.context_artifact_id IN (
+                        SELECT context_artifact_id FROM artifacts
+                      )
+                    )
+                  RETURNING ctl.context_token_ledger_id
+                )
+                SELECT
+                  (SELECT count(*) FROM artifacts)
+                  + (SELECT count(*) FROM ledgers) AS invalidated
+                """,
+                workspace_key,
+                [object_type for object_type, _object_id in object_keys],
+                [object_id for _object_type, object_id in object_keys],
+            )
+        return int(result or 0)
+
 
 def _estimate_tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
@@ -435,3 +527,17 @@ def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:
         return row[key]
     except KeyError:
         return None
+
+
+def _object_keys(objects: list[dict[str, str]]) -> list[tuple[str, UUID]]:
+    keys: list[tuple[str, UUID]] = []
+    for item in objects:
+        object_type = str(item.get("object_type") or "")
+        object_id = item.get("object_id")
+        if not object_type or object_id is None:
+            continue
+        try:
+            keys.append((object_type, UUID(str(object_id))))
+        except ValueError:
+            continue
+    return keys

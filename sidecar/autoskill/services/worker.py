@@ -9,6 +9,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from autoskill.core.hashing import sha256_json
+from autoskill.db.context import ContextGovernanceStore
 from autoskill.db.contracts import ContractStore
 from autoskill.db.embeddings import EmbeddingStore
 from autoskill.db.evaluations import EvaluationStore
@@ -121,6 +122,7 @@ class WorkerStores:
     governance: GovernanceStore | None = None
     utility: UtilityStore | None = None
     contracts: ContractStore | None = None
+    context_governance: ContextGovernanceStore | None = None
     observability: ObservabilityStore | None = None
     embedder: TextEmbedder | None = None
     workspace_root: Path | None = None
@@ -721,16 +723,26 @@ async def _invalidate_revoked_objects(
     objects = _revocation_impacted_objects(request)
     body_index_deleted = 0
     embeddings_deleted = 0
+    retrieval_logs_invalidated = 0
+    context_records_invalidated = 0
     if request.workspace_key is None or not objects:
         return {
             "objects": len(objects),
             "body_index_documents_deleted": body_index_deleted,
             "embeddings_deleted": embeddings_deleted,
+            "retrieval_logs_invalidated": retrieval_logs_invalidated,
+            "context_records_invalidated": context_records_invalidated,
         }
     if stores.retrieval is not None:
         invalidate = getattr(stores.retrieval, "invalidate_objects", None)
         if invalidate is not None:
             body_index_deleted = await invalidate(
+                workspace_key=request.workspace_key,
+                objects=objects,
+            )
+        invalidate_logs = getattr(stores.retrieval, "invalidate_logs", None)
+        if invalidate_logs is not None:
+            retrieval_logs_invalidated = await invalidate_logs(
                 workspace_key=request.workspace_key,
                 objects=objects,
             )
@@ -740,10 +752,19 @@ async def _invalidate_revoked_objects(
             workspace_key=request.workspace_key,
             objects=objects,
         )
+    if stores.context_governance is not None:
+        invalidate_context = getattr(stores.context_governance, "invalidate_objects", None)
+        if invalidate_context is not None:
+            context_records_invalidated = await invalidate_context(
+                workspace_key=request.workspace_key,
+                objects=objects,
+            )
     return {
         "objects": len(objects),
         "body_index_documents_deleted": body_index_deleted,
         "embeddings_deleted": embeddings_deleted,
+        "retrieval_logs_invalidated": retrieval_logs_invalidated,
+        "context_records_invalidated": context_records_invalidated,
     }
 
 

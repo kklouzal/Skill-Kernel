@@ -97,6 +97,14 @@ class RetrievalStore(Protocol):
     ) -> int:
         """Remove retrieval body-index documents derived from revoked objects."""
 
+    async def invalidate_logs(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        """Mark retrieval logs affected by revoked objects."""
+
 
 class NullRetrievalStore:
     async def lexical_query(
@@ -135,6 +143,14 @@ class NullRetrievalStore:
         return None
 
     async def invalidate_objects(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        return 0
+
+    async def invalidate_logs(
         self,
         *,
         workspace_key: str,
@@ -425,6 +441,66 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
                 workspace_key,
                 [object_type for object_type, _object_id in object_keys],
                 [object_id for _object_type, object_id in object_keys],
+            )
+            return _command_count(result)
+
+    async def invalidate_logs(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        object_keys = _object_keys(objects)
+        if not object_keys:
+            return 0
+        pool = await self._get_pool()
+        skill_ids = [
+            object_id
+            for object_type, object_id in object_keys
+            if object_type in {"skill", "skill_version", "compiled_skill_file"}
+        ]
+        log_ids = [
+            object_id
+            for object_type, object_id in object_keys
+            if object_type == "retrieval_log"
+        ]
+        source_ids = [
+            object_id
+            for object_type, object_id in object_keys
+            if object_type in {"evidence_item", "body_index_document", "external_skill"}
+        ]
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE autoskill.retrieval_logs rl
+                SET metadata = rl.metadata || jsonb_build_object(
+                  'revoked', true,
+                  'revoked_at', now(),
+                  'revocation_reason', 'derived_object_revoked'
+                )
+                FROM autoskill.workspaces w
+                WHERE rl.workspace_id = w.workspace_id
+                  AND w.external_key = $1
+                  AND (
+                    ($2::uuid[] <> '{}'::uuid[]
+                      AND (
+                        rl.candidate_skill_ids && $2::uuid[]
+                        OR rl.rendered_skill_ids && $2::uuid[]
+                      ))
+                    OR ($3::uuid[] <> '{}'::uuid[]
+                      AND rl.retrieval_log_id = ANY($3::uuid[]))
+                    OR ($4::uuid[] <> '{}'::uuid[]
+                      AND EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements(rl.metadata->'candidate_objects') item
+                        WHERE (item->>'object_id')::uuid = ANY($4::uuid[])
+                      ))
+                  )
+                """,
+                workspace_key,
+                skill_ids,
+                log_ids,
+                source_ids,
             )
             return _command_count(result)
 

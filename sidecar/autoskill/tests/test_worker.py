@@ -89,6 +89,21 @@ class MemoryInvalidationStore:
         return len(objects)
 
 
+class MemoryRetrievalInvalidationStore(MemoryInvalidationStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.log_calls: list[dict[str, object]] = []
+
+    async def invalidate_logs(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> int:
+        self.log_calls.append({"workspace_key": workspace_key, "objects": objects})
+        return len(objects)
+
+
 class MemoryObservabilityStore:
     def __init__(self) -> None:
         self.started: list[TraceSpanRecord] = []
@@ -621,6 +636,8 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
         "objects": 1,
         "body_index_documents_deleted": 1,
         "embeddings_deleted": 1,
+        "retrieval_logs_invalidated": 0,
+        "context_records_invalidated": 0,
     }
     assert retrieval.calls == embeddings.calls
     assert retrieval.calls[0]["workspace_key"] == "dev-01"
@@ -710,7 +727,95 @@ def test_mutation_worker_deletes_initial_create_on_rollback(tmp_path) -> None:
         "objects": 1,
         "body_index_documents_deleted": 1,
         "embeddings_deleted": 1,
+        "retrieval_logs_invalidated": 0,
+        "context_records_invalidated": 0,
     }
+
+
+def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path) -> None:
+    jobs = MemoryJobStore()
+    governance = MemoryGovernanceStore()
+    retrieval = MemoryRetrievalInvalidationStore()
+    embeddings = MemoryInvalidationStore()
+    context = MemoryInvalidationStore()
+    workspace_root = tmp_path / "workspace"
+    staging_root = workspace_root / ".autoskill" / "staging"
+    archive_root = workspace_root / ".autoskill" / "archive"
+
+    async def run():
+        apply_transaction = await governance.start_transaction(
+            workspace_key="dev-01",
+            transaction_kind="compile",
+            idempotency_key="apply:derived-state",
+            plan_hash="apply-plan",
+        )
+        staged = stage_compiled_skill(
+            staging_root,
+            staging_id=uuid4(),
+            skill_version_id=uuid4(),
+            slug="derived-state-skill",
+            compiled_skill_md="WHEN new\nDO useful behavior\n",
+        )
+        await apply_staged_manifest_with_governance(
+            governance,
+            evolution_transaction_id=apply_transaction.transaction.evolution_transaction_id,
+            staging_root=staging_root,
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            manifest_relative_path=staged.manifest_relative_path,
+        )
+        await governance.request_revocation(
+            workspace_key="dev-01",
+            request_kind="rollback",
+            root_object_type="evolution_transaction",
+            root_object_id=apply_transaction.transaction.evolution_transaction_id,
+            traversal_summary={
+                "impacted_objects": [
+                    {
+                        "object_type": "skill_version",
+                        "object_id": str(staged.skill_version_id),
+                    },
+                    {
+                        "object_type": "context_artifact",
+                        "object_id": str(uuid4()),
+                    },
+                ],
+            },
+        )
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="revocations.rollback",
+            idempotency_key="rollback:derived-state",
+            payload={"workspace_id": "dev-01"},
+        )
+        return await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=embeddings,
+                retrieval=retrieval,
+                governance=governance,
+                context_governance=context,
+                workspace_root=workspace_root,
+                archive_root=archive_root,
+            ),
+            worker_id="mutation-worker",
+            pool="mutation",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["revocations"][0]["invalidation"] == {
+        "objects": 2,
+        "body_index_documents_deleted": 2,
+        "embeddings_deleted": 2,
+        "retrieval_logs_invalidated": 2,
+        "context_records_invalidated": 2,
+    }
+    assert retrieval.log_calls[0]["workspace_key"] == "dev-01"
+    assert context.calls[0]["workspace_key"] == "dev-01"
 
 
 def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) -> None:

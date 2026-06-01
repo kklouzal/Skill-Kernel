@@ -6,6 +6,7 @@ import signal
 from pathlib import Path
 
 from autoskill.core.config import Settings, get_settings
+from autoskill.db.context import AsyncpgContextGovernanceStore
 from autoskill.db.contracts import AsyncpgContractStore
 from autoskill.db.embeddings import AsyncpgEmbeddingStore
 from autoskill.db.evaluations import AsyncpgEvaluationStore
@@ -61,6 +62,10 @@ async def run_worker(args: argparse.Namespace) -> int:
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
     )
+    context_governance = AsyncpgContextGovernanceStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
     observability = AsyncpgObservabilityStore(
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
@@ -83,6 +88,7 @@ async def run_worker(args: argparse.Namespace) -> int:
                 governance=governance,
                 utility=utility,
                 contracts=contracts,
+                context_governance=context_governance,
                 observability=observability,
                 embedder=build_text_embedder_from_settings(settings),
                 workspace_root=workspace_root,
@@ -109,6 +115,7 @@ async def run_worker(args: argparse.Namespace) -> int:
         await governance.close()
         await utility.close()
         await contracts.close()
+        await context_governance.close()
         await observability.close()
 
 
