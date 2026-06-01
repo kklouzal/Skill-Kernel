@@ -42,14 +42,16 @@ Phase 0/1 bootstrap.
 - Real local Postgres embedding validation passed via compose: migration applied, two non-zero embeddings inserted, nearest search returned both, and cosine ordering was correct.
 - Embedding generation primitive is implemented: evidence/body-index text source discovery, deterministic hash embedder, `/v1/embeddings/generate` control endpoint, and idempotent skip of already-current embeddings.
 - Real local Postgres embedding-generation validation passed via compose: migration applied, raw event ingested, evidence derived, one pending evidence source embedded, second generation pass skipped it, and pgvector search found the stored evidence embedding.
+- Runtime context broker primitive is implemented: disabled-by-default config gate, retrieval-backed hint building, first-class abstain/defer decisions, scanned body-document filtering, duplicate skill suppression, composed-context scan, and compact set-aware hints.
+- Real local Postgres broker validation passed via compose: seeded a scanned body-index document, broker retrieval logged the decision, and a bounded `skill_hint` returned for the matching intent.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
-2. Add context-broker data access and set-aware context rendering.
-3. Add worker loop dispatch with risk/cost pool separation.
-4. Add retry backoff and terminal failure policy for jobs.
+2. Add worker loop dispatch with risk/cost pool separation.
+3. Add retry backoff and terminal failure policy for jobs.
+4. Add exact rerank, graph expansion, and active/archive matching around broker candidates.
 5. Replace the deterministic development embedder with the configured production embedding provider when provider routing is wired.
 
 ## Known Risks
@@ -61,3 +63,4 @@ Phase 0/1 bootstrap.
 - Job completion currently records terminal success/failure; retry backoff policy beyond expired-lease recovery is still pending.
 - Evidence derivation currently creates one observed item per captured event; higher-maturity recurring/contrastive/intervention evidence still needs aggregation logic.
 - Embedding generation currently uses a deterministic local hash embedder as a development-safe provider stand-in; production embedding provider routing is still pending.
+- Runtime context broker is a conservative first pass: lexical retrieval-backed, scanned body docs only, no vector fusion, graph expansion, exact rerank, cache layer, or shadowing telemetry yet.

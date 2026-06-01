@@ -71,7 +71,7 @@ Acceptance:
 Deliverables:
 
 - evidence extractor; implemented for deterministic observed evidence derived from redacted raw events;
-- redacted embeddings; storage/search primitives are implemented, generation workers are pending;
+- redacted embeddings; storage/search primitives and deterministic development generation worker are implemented;
 - lexical + vector + metadata search; lexical evidence/body-index search and pgvector nearest search are implemented;
 - exact rerank;
 - active/archive/duplicate matching.
@@ -87,15 +87,15 @@ Acceptance:
 Deliverables:
 
 - deterministic broker planner;
-- set-aware context renderer;
-- cache-backed context hint endpoint;
+- set-aware context renderer; implemented as a conservative retrieval-backed first pass with duplicate skill suppression;
+- cache-backed context hint endpoint; endpoint is present behind a disabled-by-default config gate, cache layer pending;
 - shadowing logs.
 
 Acceptance:
 
 - hint returns under configured timeout;
 - no LLM call runs in the hook path;
-- no raw memory/evidence is injected.
+- no raw memory/evidence is injected; implemented for evidence-only matches by deferring without hint text.
 
 ## Phase 6 - Candidate Generation in Propose-Only Mode
 

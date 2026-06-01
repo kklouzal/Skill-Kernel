@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     active_root: Path = Path("skills/autoskill")
     archive_root: Path = Path(".autoskill/archive")
     staging_root: Path = Path(".autoskill/staging")
+    runtime_context_broker_enabled: bool = False
     runtime_context_timeout_ms: int = 150
     max_context_hint_tokens: int = 800
     allow_support_scripts: bool = True

@@ -20,6 +20,7 @@ from autoskill.services.broker import (
     ContextHintRequest,
     ContextHintResponse,
     bootstrap_context_hint,
+    build_context_hint,
 )
 from autoskill.services.embedding_generation import generate_pending_embeddings
 from fastapi import FastAPI, Header, HTTPException, Query
@@ -292,6 +293,7 @@ def create_app(
             ingest_auth_configured=bool(settings.ingest_token),
             control_auth_configured=bool(settings.control_token),
             runtime_context_broker={
+                "enabled": settings.runtime_context_broker_enabled,
                 "timeout_ms": settings.runtime_context_timeout_ms,
                 "max_tokens": settings.max_context_hint_tokens,
             },
@@ -314,7 +316,9 @@ def create_app(
 
     @app.post("/v1/runtime/context-hint", response_model=ContextHintResponse)
     async def context_hint(request: ContextHintRequest) -> ContextHintResponse:
-        return bootstrap_context_hint(request)
+        if not get_settings().runtime_context_broker_enabled:
+            return bootstrap_context_hint(request)
+        return await build_context_hint(retrieval, request)
 
     @app.get("/v1/skills")
     async def list_skills() -> dict[str, list[object]]:
