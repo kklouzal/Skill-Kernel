@@ -9,6 +9,7 @@ from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope
 from autoskill.db.activation import ActivationReadiness
+from autoskill.db.observability import TraceSpanRecord
 from autoskill.services.writer import (
     PathContainmentError,
     WriterPolicyError,
@@ -23,6 +24,60 @@ from autoskill.services.writer import (
     verify_archive_manifest,
     verify_staged_manifest,
 )
+
+
+class MemoryWriterObservability:
+    def __init__(self) -> None:
+        self.started: list[TraceSpanRecord] = []
+        self.finished: list[dict[str, object]] = []
+
+    async def start_span(
+        self,
+        *,
+        workspace_key: str,
+        operation_name: str,
+        operation_kind: str,
+        trace_id=None,
+        parent_span_id=None,
+        safe_attributes=None,
+        object_refs=None,
+    ) -> TraceSpanRecord:
+        from datetime import UTC, datetime
+
+        span = TraceSpanRecord(
+            trace_id=trace_id or uuid4(),
+            span_id=uuid4(),
+            parent_span_id=parent_span_id,
+            workspace_id=None,
+            workspace_key=workspace_key,
+            operation_name=operation_name,
+            operation_kind=operation_kind,
+            status="running",
+            safe_attributes=safe_attributes or {},
+            object_refs=object_refs or [],
+            started_at=datetime.now(UTC),
+            ended_at=None,
+        )
+        self.started.append(span)
+        return span
+
+    async def finish_span(
+        self,
+        *,
+        span_id,
+        status="ok",
+        safe_attributes=None,
+        object_refs=None,
+    ) -> TraceSpanRecord | None:
+        self.finished.append(
+            {
+                "span_id": span_id,
+                "status": status,
+                "safe_attributes": safe_attributes or {},
+                "object_refs": object_refs or [],
+            }
+        )
+        return None
 
 
 def test_event_redacted_sets_hash() -> None:
@@ -369,15 +424,25 @@ def test_writer_api_applies_and_rolls_back_with_workspace_roots(tmp_path: Path) 
         compiled_skill_md="# New\n\n## WHEN\n- New.\n",
     )
     governance = MemoryWriterGovernance()
-    app = create_app(governance_store=governance, writer_workspace_root=workspace_root)
+    observability = MemoryWriterObservability()
+    app = create_app(
+        governance_store=governance,
+        observability_store=observability,
+        writer_workspace_root=workspace_root,
+    )
     apply_route = next(route for route in app.routes if route.path == "/v1/writer/apply")
     rollback_route = next(route for route in app.routes if route.path == "/v1/writer/rollback")
+    trace_id = uuid4()
+    parent_span_id = uuid4()
 
     async def run():
         applied = await apply_route.endpoint(
             request=WriterApplyRequest(
                 evolution_transaction_id=uuid4(),
                 manifest_relative_path=staged.manifest_relative_path,
+                workspace_id="dev-01",
+                trace_id=trace_id,
+                span_id=parent_span_id,
             )
         )
         previous_snapshot = applied.artifact["previous_snapshot"]
@@ -388,6 +453,9 @@ def test_writer_api_applies_and_rolls_back_with_workspace_roots(tmp_path: Path) 
                 archive_manifest_relative_path=str(
                     previous_snapshot["manifest_relative_path"]
                 ),
+                workspace_id="dev-01",
+                trace_id=trace_id,
+                parent_span_id=parent_span_id,
             )
         )
         return applied, rolled_back
@@ -413,6 +481,15 @@ def test_writer_api_applies_and_rolls_back_with_workspace_roots(tmp_path: Path) 
         "derived_from",
         "rolled_back_by",
     ]
+    assert [span.operation_name for span in observability.started] == [
+        "writer.apply",
+        "writer.rollback",
+    ]
+    assert all(span.trace_id == trace_id for span in observability.started)
+    assert all(span.parent_span_id == parent_span_id for span in observability.started)
+    assert [finished["status"] for finished in observability.finished] == ["ok", "ok"]
+    assert observability.finished[0]["safe_attributes"]["slug"] == "autoskill-example"
+    assert observability.finished[1]["safe_attributes"]["file_count"] == 1
 
 
 def test_writer_apply_api_blocks_when_activation_gate_fails(tmp_path: Path) -> None:
@@ -427,9 +504,11 @@ def test_writer_apply_api_blocks_when_activation_gate_fails(tmp_path: Path) -> N
     )
     governance = MemoryWriterGovernance()
     activation_gate = MemoryActivationGate(allowed=False)
+    observability = MemoryWriterObservability()
     app = create_app(
         governance_store=governance,
         activation_gate_store=activation_gate,
+        observability_store=observability,
         writer_workspace_root=workspace_root,
     )
     apply_route = next(route for route in app.routes if route.path == "/v1/writer/apply")
@@ -451,6 +530,9 @@ def test_writer_apply_api_blocks_when_activation_gate_fails(tmp_path: Path) -> N
     assert activation_gate.calls[0]["skill_version_id"] == staged.skill_version_id
     assert not (workspace_root / "skills" / "autoskill" / "blocked-api-skill").exists()
     assert governance.statuses == []
+    assert observability.started[0].operation_name == "writer.apply"
+    assert observability.finished[0]["status"] == "error"
+    assert observability.finished[0]["safe_attributes"]["status_code"] == 409
 
 
 def test_writer_rejects_manifest_target_outside_active_root(tmp_path: Path) -> None:

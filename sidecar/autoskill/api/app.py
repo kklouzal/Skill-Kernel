@@ -611,11 +611,18 @@ class WriterApplyRequest(BaseModel):
     workspace_id: str | None = None
     activation_gate_required: bool = False
     executor_profile_id: UUID | None = None
+    trace_id: UUID | None = None
+    span_id: UUID | None = None
+    parent_span_id: UUID | None = None
 
 
 class WriterRollbackRequest(BaseModel):
     evolution_transaction_id: UUID
     archive_manifest_relative_path: str
+    workspace_id: str | None = None
+    trace_id: UUID | None = None
+    span_id: UUID | None = None
+    parent_span_id: UUID | None = None
 
 
 class WriterArtifactResponse(BaseModel):
@@ -2342,6 +2349,24 @@ def create_app(
     ) -> WriterArtifactResponse:
         _require_control_auth(authorization)
         workspace_root, staging_root, archive_root = _writer_roots(writer_workspace_root)
+        span = await observability.start_span(
+            workspace_key=request.workspace_id or "default",
+            operation_name="writer.apply",
+            operation_kind="writer",
+            trace_id=request.trace_id,
+            parent_span_id=request.span_id or request.parent_span_id,
+            safe_attributes={
+                "source": "api",
+                "activation_gate_required": request.activation_gate_required,
+                "manifest_relative_path": request.manifest_relative_path,
+            },
+            object_refs=[
+                {
+                    "object_type": "evolution_transaction",
+                    "object_id": str(request.evolution_transaction_id),
+                }
+            ],
+        )
         try:
             await _check_writer_activation_gate_for_api(
                 activation_gate,
@@ -2356,11 +2381,45 @@ def create_app(
                 archive_root=archive_root,
                 manifest_relative_path=request.manifest_relative_path,
             )
+        except HTTPException as error:
+            await observability.finish_span(
+                span_id=span.span_id,
+                status="error",
+                safe_attributes={
+                    "status_code": error.status_code,
+                    "error": str(error.detail)[:500],
+                },
+            )
+            raise
         except (ValueError, FileExistsError, FileNotFoundError) as error:
+            await observability.finish_span(
+                span_id=span.span_id,
+                status="error",
+                safe_attributes={"error": str(error)[:500]},
+            )
             raise HTTPException(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail=str(error),
             ) from error
+        await observability.finish_span(
+            span_id=span.span_id,
+            status="ok",
+            safe_attributes={
+                "slug": artifact.slug,
+                "file_count": len(artifact.files),
+                "previous_snapshot": artifact.previous_snapshot is not None,
+            },
+            object_refs=[
+                {
+                    "object_type": "evolution_transaction",
+                    "object_id": str(request.evolution_transaction_id),
+                },
+                {
+                    "object_type": "compiled_skill_file",
+                    "relative_path": artifact.active_relative_path,
+                },
+            ],
+        )
         return WriterArtifactResponse(artifact=artifact.to_json())
 
     @app.post("/v1/writer/rollback", response_model=WriterArtifactResponse)
@@ -2370,6 +2429,23 @@ def create_app(
     ) -> WriterArtifactResponse:
         _require_control_auth(authorization)
         workspace_root, _staging_root, archive_root = _writer_roots(writer_workspace_root)
+        span = await observability.start_span(
+            workspace_key=request.workspace_id or "default",
+            operation_name="writer.rollback",
+            operation_kind="writer",
+            trace_id=request.trace_id,
+            parent_span_id=request.span_id or request.parent_span_id,
+            safe_attributes={
+                "source": "api",
+                "archive_manifest_relative_path": request.archive_manifest_relative_path,
+            },
+            object_refs=[
+                {
+                    "object_type": "evolution_transaction",
+                    "object_id": str(request.evolution_transaction_id),
+                }
+            ],
+        )
         try:
             artifact = await rollback_active_skill_with_governance(
                 governance,
@@ -2379,10 +2455,33 @@ def create_app(
                 archive_manifest_relative_path=request.archive_manifest_relative_path,
             )
         except (ValueError, FileExistsError, FileNotFoundError) as error:
+            await observability.finish_span(
+                span_id=span.span_id,
+                status="error",
+                safe_attributes={"error": str(error)[:500]},
+            )
             raise HTTPException(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail=str(error),
             ) from error
+        await observability.finish_span(
+            span_id=span.span_id,
+            status="ok",
+            safe_attributes={
+                "slug": artifact.slug,
+                "file_count": len(artifact.files),
+            },
+            object_refs=[
+                {
+                    "object_type": "evolution_transaction",
+                    "object_id": str(request.evolution_transaction_id),
+                },
+                {
+                    "object_type": "compiled_skill_file",
+                    "relative_path": artifact.active_relative_path,
+                },
+            ],
+        )
         return WriterArtifactResponse(artifact=artifact.to_json())
 
     @app.post("/v1/provenance/edges", response_model=ProvenanceEdgeCreateResponse)
