@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import asyncpg
 
@@ -20,6 +20,9 @@ class JobRecord:
     job_id: UUID
     workspace_id: UUID | None
     workspace_key: str | None
+    trace_id: UUID | None
+    span_id: UUID | None
+    parent_span_id: UUID | None
     job_kind: str
     status: str
     idempotency_key: str
@@ -42,6 +45,9 @@ class JobRecord:
             job_id=row["job_id"],
             workspace_id=_row_get(row, "workspace_id"),
             workspace_key=_row_get(row, "workspace_key"),
+            trace_id=_row_get(row, "trace_id"),
+            span_id=_row_get(row, "span_id"),
+            parent_span_id=_row_get(row, "parent_span_id"),
             job_kind=row["job_kind"],
             status=row["status"],
             idempotency_key=row["idempotency_key"],
@@ -61,6 +67,9 @@ class JobRecord:
             "job_id": str(self.job_id),
             "workspace_id": str(self.workspace_id) if self.workspace_id else None,
             "workspace_key": self.workspace_key,
+            "trace_id": str(self.trace_id) if self.trace_id else None,
+            "span_id": str(self.span_id) if self.span_id else None,
+            "parent_span_id": str(self.parent_span_id) if self.parent_span_id else None,
             "job_kind": self.job_kind,
             "status": self.status,
             "idempotency_key": self.idempotency_key,
@@ -136,6 +145,9 @@ class JobStore(Protocol):
         job_kind: str,
         idempotency_key: str,
         payload: dict[str, Any] | None = None,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
         priority: int = 100,
         max_attempts: int = 5,
         available_at: datetime | None = None,
@@ -205,6 +217,9 @@ class NullJobStore:
         job_kind: str,
         idempotency_key: str,
         payload: dict[str, Any] | None = None,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
         priority: int = 100,
         max_attempts: int = 5,
         available_at: datetime | None = None,
@@ -214,6 +229,9 @@ class NullJobStore:
             job_id=UUID("00000000-0000-0000-0000-000000000000"),
             workspace_id=None,
             workspace_key=workspace_key,
+            trace_id=trace_id or uuid4(),
+            span_id=span_id or uuid4(),
+            parent_span_id=parent_span_id,
             job_kind=job_kind,
             status="queued",
             idempotency_key=idempotency_key,
@@ -305,6 +323,9 @@ class AsyncpgJobStore(AsyncpgPoolOwner):
         job_kind: str,
         idempotency_key: str,
         payload: dict[str, Any] | None = None,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
         priority: int = 100,
         max_attempts: int = 5,
         available_at: datetime | None = None,
@@ -317,6 +338,9 @@ class AsyncpgJobStore(AsyncpgPoolOwner):
                 INSERT INTO autoskill.jobs (
                   job_id,
                   workspace_id,
+                  trace_id,
+                  span_id,
+                  parent_span_id,
                   job_kind,
                   idempotency_key,
                   payload,
@@ -325,13 +349,18 @@ class AsyncpgJobStore(AsyncpgPoolOwner):
                   available_at
                 )
                 VALUES (
-                  gen_random_uuid(), $1, $2, $3, $4::jsonb, $5, $6, COALESCE($7, now())
+                  gen_random_uuid(), $1, COALESCE($2, gen_random_uuid()),
+                  COALESCE($3, gen_random_uuid()), $4, $5, $6, $7::jsonb, $8, $9,
+                  COALESCE($10, now())
                 )
                 ON CONFLICT (workspace_id, idempotency_key) DO UPDATE
                 SET idempotency_key = EXCLUDED.idempotency_key
                 RETURNING *, (xmax = 0) AS created
                 """,
                 workspace_id,
+                trace_id,
+                span_id,
+                parent_span_id,
                 job_kind,
                 idempotency_key,
                 _json(payload or {}),

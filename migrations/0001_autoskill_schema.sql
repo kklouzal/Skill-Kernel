@@ -398,8 +398,8 @@ CREATE TABLE IF NOT EXISTS autoskill.schedules (
 CREATE TABLE IF NOT EXISTS autoskill.jobs (
   job_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
-  trace_id uuid,
-  span_id uuid,
+  trace_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  span_id uuid NOT NULL DEFAULT gen_random_uuid(),
   parent_span_id uuid,
   job_kind text NOT NULL,
   status text NOT NULL DEFAULT 'queued',
@@ -424,6 +424,18 @@ ALTER TABLE autoskill.jobs
 
 ALTER TABLE autoskill.jobs
   ADD COLUMN IF NOT EXISTS parent_span_id uuid;
+
+UPDATE autoskill.jobs
+SET trace_id = COALESCE(trace_id, gen_random_uuid()),
+    span_id = COALESCE(span_id, gen_random_uuid())
+WHERE trace_id IS NULL
+   OR span_id IS NULL;
+
+ALTER TABLE autoskill.jobs
+  ALTER COLUMN trace_id SET DEFAULT gen_random_uuid(),
+  ALTER COLUMN trace_id SET NOT NULL,
+  ALTER COLUMN span_id SET DEFAULT gen_random_uuid(),
+  ALTER COLUMN span_id SET NOT NULL;
 
 CREATE TABLE IF NOT EXISTS autoskill.job_attempts (
   job_attempt_id uuid PRIMARY KEY,

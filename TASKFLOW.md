@@ -124,14 +124,16 @@ Phase 10/11 v14 substrate buildout.
 - v14 schema substrate is implemented for trace spans/links, diagnostic momentum, executor profiles, text model profiles, embedding profiles, context artifacts, context token ledgers, SkillGraphIR operation records, usage windows, co-usage edges, and usage clusters.
 - Sidecar control surfaces now expose trace-span start/finish/list, diagnostic momentum record/list, executor profile upsert/list, text model profile upsert, embedding profile upsert, context artifact recording, and context token-ledger recording.
 - Trace spine propagation has started: plugin event envelopes now include `trace_id`, `span_id`, and `parent_span_id`, Python ingest models accept those fields, and `raw_events` persists them.
+- Job queue trace propagation is implemented: job enqueue accepts explicit trace context, new API/scheduled jobs generate missing `trace_id`/`span_id`, existing dev rows are migration-backfilled and constrained non-null for trace/span, and job list/claim/renew/complete responses preserve the trace fields.
 - SkillGraphIR validation is implemented for topology operation graphs, including missing-node checks, compose effect-gap blocking, and decompose effect coverage requirements.
 - Validation passed for the v14 substrate slice: `ruff check sidecar/autoskill`, `.venv/bin/pytest -q sidecar/autoskill/tests` with 108 passing tests, `npm test --prefix plugin/autoskill` with 7 passing tests, and a real compose Postgres migration smoke.
+- Validation passed for the job trace propagation slice: `uv run pytest sidecar/autoskill/tests/test_jobs_api.py sidecar/autoskill/tests/test_scheduler_api.py -q` passed 6 tests; `uv run ruff check sidecar/autoskill/db/jobs.py sidecar/autoskill/db/scheduler.py sidecar/autoskill/api/app.py sidecar/autoskill/tests/test_jobs_api.py sidecar/autoskill/tests/test_scheduler_api.py` passed; real compose Postgres smoke proved migration backfill/defaults, duplicate enqueue trace preservation, generated/scheduled job trace IDs, and claim-time trace preservation; final gates `uv run ruff check sidecar`, `uv run pytest`, `uv run python -m compileall -q sidecar`, and `git diff --check` passed.
 - OpenClaw simple-plugin validator is not applicable to this hook plugin shape; Phase 0 still needs an installed-plugin smoke test against the live gateway.
 
 ## Next Gates
 
 1. Confirm exact OpenClaw hook event names and return contracts with an installed-plugin smoke test.
-2. Continue trace propagation through jobs, retrieval, evaluation, writer, rollback, and revocation paths.
+2. Continue trace propagation through retrieval, evaluation, writer, rollback, revocation, and trace-span recording paths.
 3. Wire executor/model/embedding profiles into evaluation, broker routing, embedding generation, activation gates, and profile qualification probes.
 4. Persist compiler and broker context artifacts automatically, including token ledgers for `no_skill`, `skill_hidden`, and `skill_visible` marginal-value trials.
 5. Implement topology operation services for improve/compose/decompose using SkillGraphIR, effect compatibility validation, operation trials, and rollback-aware transactions.

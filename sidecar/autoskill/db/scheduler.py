@@ -233,11 +233,13 @@ async def _enqueue_scheduled_job(
         INSERT INTO autoskill.jobs (
           job_id,
           workspace_id,
+          trace_id,
+          span_id,
           job_kind,
           idempotency_key,
           payload
         )
-        VALUES (gen_random_uuid(), $1, $2, $3, $4::jsonb)
+        VALUES (gen_random_uuid(), $1, gen_random_uuid(), gen_random_uuid(), $2, $3, $4::jsonb)
         ON CONFLICT (workspace_id, idempotency_key) DO NOTHING
         RETURNING *
         """,

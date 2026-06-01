@@ -32,6 +32,9 @@ class MemoryJobStore:
         job_kind: str,
         idempotency_key: str,
         payload: dict[str, object] | None = None,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
         priority: int = 100,
         max_attempts: int = 5,
         available_at: datetime | None = None,
@@ -44,6 +47,9 @@ class MemoryJobStore:
             job_id=uuid4(),
             workspace_id=uuid4(),
             workspace_key=workspace_key,
+            trace_id=trace_id or uuid4(),
+            span_id=span_id or uuid4(),
+            parent_span_id=parent_span_id,
             job_kind=job_kind,
             status="queued",
             idempotency_key=idempotency_key,
@@ -209,12 +215,18 @@ def test_control_auth_rejects_invalid_bearer_token(monkeypatch: pytest.MonkeyPat
 @pytest.mark.asyncio
 async def test_job_store_enqueue_claim_complete_cycle() -> None:
     store = MemoryJobStore()
+    trace_id = uuid4()
+    span_id = uuid4()
+    parent_span_id = uuid4()
 
     first = await store.enqueue_job(
         workspace_key="dev-01",
         job_kind="evidence_extraction",
         idempotency_key="event:one",
         payload={"event_id": "one"},
+        trace_id=trace_id,
+        span_id=span_id,
+        parent_span_id=parent_span_id,
     )
     duplicate = await store.enqueue_job(
         workspace_key="dev-01",
@@ -231,7 +243,14 @@ async def test_job_store_enqueue_claim_complete_cycle() -> None:
 
     assert first.created is True
     assert duplicate.created is False
+    assert first.job.trace_id == trace_id
+    assert first.job.span_id == span_id
+    assert first.job.parent_span_id == parent_span_id
+    assert duplicate.job.trace_id == trace_id
     assert leased.status == "leased"
+    assert leased.to_json()["trace_id"] == str(trace_id)
+    assert leased.to_json()["span_id"] == str(span_id)
+    assert leased.to_json()["parent_span_id"] == str(parent_span_id)
     assert leased.attempts == 1
     assert completed is not None
     assert completed.status == "succeeded"
@@ -265,6 +284,8 @@ async def test_job_store_renews_held_lease() -> None:
 def test_jobs_api_uses_job_store() -> None:
     store = MemoryJobStore()
     app = create_app(job_store=store)
+    trace_id = uuid4()
+    span_id = uuid4()
     enqueue_route = next(route for route in app.routes if route.path == "/v1/jobs/enqueue")
     claim_route = next(route for route in app.routes if route.path == "/v1/jobs/claim")
     list_route = next(route for route in app.routes if route.path == "/v1/jobs")
@@ -279,6 +300,8 @@ def test_jobs_api_uses_job_store() -> None:
                 job_kind="evidence_extraction",
                 idempotency_key="event:two",
                 payload={},
+                trace_id=trace_id,
+                span_id=span_id,
             )
         )
         claimed = await claim_route.endpoint(request=JobClaimRequest(worker_id="worker-1"))
@@ -291,9 +314,13 @@ def test_jobs_api_uses_job_store() -> None:
 
     enqueued, claimed, renewed, listed = asyncio.run(run())
     assert enqueued.created is True
+    assert enqueued.job["trace_id"] == str(trace_id)
+    assert enqueued.job["span_id"] == str(span_id)
     assert claimed.job is not None
     assert claimed.job["status"] == "leased"
+    assert claimed.job["trace_id"] == str(trace_id)
     assert renewed["job"]["status"] == "leased"
+    assert renewed["job"]["span_id"] == str(span_id)
     assert listed["jobs"][0]["idempotency_key"] == "event:two"
 
 

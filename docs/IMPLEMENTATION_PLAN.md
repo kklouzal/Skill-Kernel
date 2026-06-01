@@ -58,6 +58,7 @@ Deliverables:
 
 - sidecar-owned schedules;
 - jobs, attempts, leases, idempotency keys;
+- job trace context; implemented with enqueue-supplied or generated `trace_id`/`span_id`, non-null persisted job trace/span roots, scheduled-job trace generation, and trace-preserving job JSON responses.
 - worker pools; implemented as explicit scheduler/maintenance/mutation run-once dispatch, bounded loop entrypoints, configured per-pool loop concurrency, persistent worker heartbeats, and worker health summaries.
 
 Acceptance:
@@ -68,6 +69,7 @@ Acceptance:
 - failed attempts back off and terminally fail at `max_attempts`;
 - maintenance worker can claim and complete deterministic evidence/embedding jobs.
 - worker loop supports bounded/configured concurrency, persistent heartbeat observation, and graceful process shutdown.
+- queued, leased, renewed, completed, API-enqueued, and scheduled jobs carry trace/span context; implemented and validated with focused tests plus compose/Postgres smoke coverage.
 
 ## Phase 4 - Evidence, Embeddings, Retrieval
 

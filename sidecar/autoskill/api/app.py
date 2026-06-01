@@ -101,6 +101,9 @@ class JobEnqueueRequest(BaseModel):
     job_kind: str
     idempotency_key: str
     payload: dict[str, object] = {}
+    trace_id: UUID | None = None
+    span_id: UUID | None = None
+    parent_span_id: UUID | None = None
     priority: int = 100
     max_attempts: int = 5
 
@@ -1266,6 +1269,9 @@ def create_app(
             job_kind=request.job_kind,
             idempotency_key=request.idempotency_key,
             payload=request.payload,
+            trace_id=request.trace_id,
+            span_id=request.span_id,
+            parent_span_id=request.parent_span_id,
             priority=request.priority,
             max_attempts=request.max_attempts,
         )
