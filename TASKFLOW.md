@@ -215,7 +215,11 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   the deterministic SkillIR context compiler and require routing-equivalence plus
   regression evidence before staging, while OpenAI-compatible text model profiles
   can opt into `/responses` endpoint semantics with content-safe invocation
-  audit. Focused LLM/compiler/worker tests passed.
+  audit. Focused LLM/compiler/worker tests passed, `uv run ruff check sidecar`,
+  `uv run pytest` with 211 tests, `uv run python -m compileall -q sidecar`, and
+  `git diff --check` passed; a rebuilt compose migration smoke applied the DDL,
+  then a live asyncpg smoke persisted and read back `endpoint_kind=responses` for
+  a qualified model profile.
 - Validation passed for active/profile-qualified embedding generation controls: direct API and queued worker `embeddings.generate` paths now resolve explicit or active qualified embedding profiles, preserve profile IDs through embedding storage, and record content-safe `embedding_call` spans without embedding text/source bodies. Focused embedding/worker tests passed.
 - Validation passed for production embedding validation and stored broker replay corpus controls: `/v1/profiles/embeddings/validate-production` can qualify the configured endpoint/profile and optionally exercise generation, while broker policy replay can consume persisted redacted replay episodes by tag instead of requiring caller-supplied episodes only. Focused profile/broker tests passed.
 - Validation passed for content-safe worker progress metadata: `run_worker_once` now records persistent worker heartbeat progress for claimed jobs, lease renewals, success, and failure, including bounded payload controls and output keys/counts without raw evidence, skill text, or body content. Focused worker tests passed, and full `make test`, `make lint`, `make compile`, `make plugin-check`, and `git diff --check` passed with 181 tests.
