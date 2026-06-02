@@ -67,10 +67,11 @@ async def mine_opportunities(
 
     candidates: list[OpportunityCandidate] = []
     for key, records in sorted(grouped.items()):
-        if len(records) < min_support:
+        support_count = _support_count(records)
+        if support_count < min_support:
             continue
         slug = _candidate_slug(key)
-        description = _candidate_description(key, records)
+        description = _candidate_description(key, records, support_count)
         match = await match_existing_skills(
             retrieval_store,
             SkillMatchRequest(
@@ -84,7 +85,7 @@ async def mine_opportunities(
             OpportunityCandidate(
                 key=key,
                 evidence_ids=[str(record.evidence_id) for record in records],
-                support_count=len(records),
+                support_count=support_count,
                 candidate_slug=slug,
                 candidate_description=description,
                 match=match,
@@ -95,6 +96,10 @@ async def mine_opportunities(
 
 
 def _opportunity_key(record: EvidenceRecord) -> str:
+    if record.kind == "recurring_evidence_cluster":
+        signature = record.payload.get("signature")
+        if signature:
+            return str(signature).replace(":", "-")
     source = record.payload.get("source_event", {})
     event_type = str(source.get("event_type") or record.kind)
     payload = record.payload.get("redacted_payload", {})
@@ -111,12 +116,30 @@ def _candidate_slug(key: str) -> str:
     return f"autoskill-{collapsed}"[:80].strip("-")
 
 
-def _candidate_description(key: str, records: list[EvidenceRecord]) -> str:
+def _support_count(records: list[EvidenceRecord]) -> int:
+    cluster_counts = [
+        int(record.payload.get("support_count") or 0)
+        for record in records
+        if record.kind == "recurring_evidence_cluster"
+    ]
+    if cluster_counts:
+        observed_count = sum(
+            1 for record in records if record.kind != "recurring_evidence_cluster"
+        )
+        return max(observed_count, *cluster_counts)
+    return len(records)
+
+
+def _candidate_description(
+    key: str,
+    records: list[EvidenceRecord],
+    support_count: int,
+) -> str:
     parts = key.split("-")
     event_type = parts[0].replace("_", " ")
     trigger = " ".join(parts[1:]).strip()
     trigger_text = f" around {trigger}" if trigger else ""
     return (
-        f"Repeated {event_type} workflow evidence{trigger_text} observed {len(records)} times; "
+        f"Repeated {event_type} workflow evidence{trigger_text} observed {support_count} times; "
         "derive a guarded procedural skill only if active and archived matches are insufficient."
     )

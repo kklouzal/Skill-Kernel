@@ -4,7 +4,13 @@ from uuid import UUID, uuid4
 
 from autoskill.api.app import EvidenceDeriveRequest, create_app
 from autoskill.core.enums import EvidenceMaturity
-from autoskill.db.evidence import EvidenceDeriveResult, EvidenceRecord
+from autoskill.db.evidence import (
+    RECURRING_EVIDENCE_MIN_SUPPORT,
+    EvidenceDeriveResult,
+    EvidenceRecord,
+    _recurring_payload,
+    _recurring_signature,
+)
 
 
 class MemoryEvidenceStore:
@@ -97,3 +103,63 @@ def test_evidence_record_json_preserves_provenance_ids() -> None:
     assert payload["workspace_key"] == "dev-01"
     assert payload["source_event_id"] == str(source_event_id)
     assert payload["payload"]["source_event"]["event_id"] == str(source_event_id)
+
+
+def test_recurring_evidence_signature_uses_redacted_stable_terms() -> None:
+    now = datetime.now(UTC)
+    record = EvidenceRecord(
+        evidence_id=UUID("00000000-0000-0000-0000-000000000011"),
+        workspace_id=UUID("00000000-0000-0000-0000-000000000012"),
+        workspace_key="dev-01",
+        source_event_id=uuid4(),
+        evidence_hash="hash-recurring-1",
+        kind="event_observation",
+        maturity="observed",
+        trust="tool_output",
+        taint=["tool", "redacted"],
+        summary="Observed redacted tool_call_end event.",
+        payload={
+            "source_event": {"event_type": "tool_call_end", "source": "openclaw-plugin"},
+            "redacted_payload": {
+                "tool": "pytest",
+                "error": {"code": "ModuleNotFoundError", "message": "missing package"},
+            },
+        },
+        created_at=now,
+    )
+
+    signature = _recurring_signature(record)
+
+    assert signature == "tool-call-end:modulenotfounderror:pytest"
+
+
+def test_recurring_payload_is_runtime_safe_and_cites_support() -> None:
+    now = datetime.now(UTC)
+    workspace_id = UUID("00000000-0000-0000-0000-000000000022")
+    records = [
+        EvidenceRecord(
+            evidence_id=UUID(f"00000000-0000-0000-0000-00000000003{index}"),
+            workspace_id=workspace_id,
+            workspace_key="dev-01",
+            source_event_id=uuid4(),
+            evidence_hash=f"hash-recurring-{index}",
+            kind="event_observation",
+            maturity="observed",
+            trust="tool_output",
+            taint=["tool"],
+            summary="Observed redacted tool_call_end event.",
+            payload={
+                "source_event": {"event_type": "tool_call_end", "source": "openclaw-plugin"},
+                "redacted_payload": {"content": "pytest missing package"},
+            },
+            created_at=now,
+        )
+        for index in range(RECURRING_EVIDENCE_MIN_SUPPORT)
+    ]
+
+    payload = _recurring_payload("tool-call-end:pytest:missing:package", records)
+
+    assert payload["schema"] == "autoskill.recurring_evidence_cluster.v1"
+    assert payload["support_count"] == RECURRING_EVIDENCE_MIN_SUPPORT
+    assert len(payload["support_evidence_ids"]) == RECURRING_EVIDENCE_MIN_SUPPORT
+    assert payload["redacted_payload"]["content"] == "tool-call-end pytest missing package"

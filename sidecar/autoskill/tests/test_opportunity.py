@@ -75,6 +75,29 @@ def evidence_record(event_type: str, content: str) -> EvidenceRecord:
     )
 
 
+def recurring_evidence_record(signature: str, support_count: int) -> EvidenceRecord:
+    return EvidenceRecord(
+        evidence_id=uuid4(),
+        workspace_id=uuid4(),
+        workspace_key="dev-01",
+        source_event_id=None,
+        evidence_hash=str(uuid4()),
+        kind="recurring_evidence_cluster",
+        maturity="recurring",
+        trust="tool_output",
+        taint=["tool"],
+        summary=f"Recurring redacted evidence cluster {signature!r}.",
+        payload={
+            "schema": "autoskill.recurring_evidence_cluster.v1",
+            "signature": signature,
+            "support_count": support_count,
+            "support_evidence_ids": [str(uuid4()) for _ in range(support_count)],
+            "redacted_payload": {"content": signature.replace(":", " ")},
+        },
+        created_at=datetime.now(UTC),
+    )
+
+
 def test_opportunity_miner_calls_duplicate_matching_before_recommending_candidate() -> None:
     evidence = MemoryOpportunityEvidenceStore(
         [
@@ -99,6 +122,29 @@ def test_opportunity_miner_calls_duplicate_matching_before_recommending_candidat
     assert result.candidates[0].recommendation == "propose_candidate"
     assert result.candidates[0].support_count == 2
     assert retrieval.queries
+
+
+def test_opportunity_miner_uses_recurring_cluster_support() -> None:
+    evidence = MemoryOpportunityEvidenceStore(
+        [recurring_evidence_record("tool-call-end:pytest:missing:package", 3)]
+    )
+    retrieval = MemoryOpportunityRetrievalStore([])
+
+    async def run():
+        return await mine_opportunities(
+            evidence,
+            retrieval,
+            workspace_key="dev-01",
+            min_support=2,
+        )
+
+    result = asyncio.run(run())
+
+    assert result.scanned == 1
+    assert len(result.candidates) == 1
+    assert result.candidates[0].key == "tool-call-end-pytest-missing-package"
+    assert result.candidates[0].support_count == 3
+    assert result.candidates[0].evidence_ids == [str(evidence.records[0].evidence_id)]
 
 
 def test_opportunity_miner_recommends_reuse_for_active_match() -> None:

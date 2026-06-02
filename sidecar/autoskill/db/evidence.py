@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -11,6 +12,8 @@ import asyncpg
 from autoskill.core.enums import EvidenceMaturity
 from autoskill.core.hashing import sha256_json
 from autoskill.db.pool import AsyncpgPoolOwner
+
+RECURRING_EVIDENCE_MIN_SUPPORT = 3
 
 
 @dataclass(frozen=True)
@@ -149,6 +152,11 @@ class AsyncpgEvidenceStore(AsyncpgPoolOwner):
                     duplicate += 1
                     continue
                 evidence.append(inserted)
+            recurring = await _insert_recurring_evidence_clusters(
+                conn,
+                workspace_key=workspace_key,
+            )
+            evidence.extend(recurring)
 
         return EvidenceDeriveResult(
             scanned=len(events),
@@ -245,6 +253,213 @@ async def _insert_event_evidence(
         row["evidence_id"],
     )
     return EvidenceRecord.from_row({**dict(row), "workspace_key": event["workspace_key"]})
+
+
+async def _insert_recurring_evidence_clusters(
+    conn: asyncpg.Connection,
+    *,
+    workspace_key: str | None,
+) -> list[EvidenceRecord]:
+    rows = await conn.fetch(
+        """
+        SELECT i.*, w.external_key AS workspace_key
+        FROM autoskill.evidence_items i
+        JOIN autoskill.workspaces w USING (workspace_id)
+        WHERE i.revoked_at IS NULL
+          AND i.kind = 'event_observation'
+          AND i.maturity = 'observed'
+          AND ($1::text IS NULL OR w.external_key = $1)
+        ORDER BY i.created_at ASC
+        LIMIT 2000
+        """,
+        workspace_key,
+    )
+    grouped: dict[str, list[EvidenceRecord]] = defaultdict(list)
+    for row in rows:
+        record = EvidenceRecord.from_row(row)
+        grouped[_recurring_signature(record)].append(record)
+
+    clusters: list[EvidenceRecord] = []
+    for signature, records in sorted(grouped.items()):
+        if len(records) < RECURRING_EVIDENCE_MIN_SUPPORT:
+            continue
+        inserted = await _insert_recurring_evidence_cluster(conn, signature, records)
+        if inserted is not None:
+            clusters.append(inserted)
+    return clusters
+
+
+async def _insert_recurring_evidence_cluster(
+    conn: asyncpg.Connection,
+    signature: str,
+    records: list[EvidenceRecord],
+) -> EvidenceRecord | None:
+    first = records[0]
+    workspace_id = first.workspace_id
+    if workspace_id is None:
+        return None
+    evidence_hash = sha256_json(
+        {
+            "kind": "recurring_evidence_cluster",
+            "workspace_id": str(workspace_id),
+            "signature": signature,
+            "min_support": RECURRING_EVIDENCE_MIN_SUPPORT,
+        }
+    )
+    payload = _recurring_payload(signature, records)
+    row = await conn.fetchrow(
+        """
+        INSERT INTO autoskill.evidence_items (
+          evidence_id,
+          workspace_id,
+          evidence_hash,
+          kind,
+          maturity,
+          trust,
+          taint,
+          summary,
+          payload
+        )
+        VALUES (
+          gen_random_uuid(),
+          $1,
+          $2,
+          'recurring_evidence_cluster',
+          $3,
+          $4,
+          $5,
+          $6,
+          $7::jsonb
+        )
+        ON CONFLICT (workspace_id, evidence_hash) DO NOTHING
+        RETURNING *
+        """,
+        workspace_id,
+        evidence_hash,
+        str(EvidenceMaturity.RECURRING),
+        _dominant_trust(records),
+        _merged_taint(records),
+        _recurring_summary(signature, records),
+        _json(payload),
+    )
+    if row is None:
+        return None
+
+    await conn.executemany(
+        """
+        INSERT INTO autoskill.provenance_edges (
+          provenance_edge_id,
+          workspace_id,
+          source_kind,
+          source_id,
+          derived_kind,
+          derived_id,
+          relation
+        )
+        VALUES (gen_random_uuid(), $1, 'evidence_item', $2, 'evidence_item', $3, 'supports_cluster')
+        ON CONFLICT DO NOTHING
+        """,
+        [
+            (workspace_id, record.evidence_id, row["evidence_id"])
+            for record in records[:50]
+        ],
+    )
+    await conn.execute(
+        """
+        INSERT INTO autoskill.evidence_maturity (
+          evidence_maturity_id, workspace_id, object_type, object_id, maturity, basis
+        )
+        VALUES (gen_random_uuid(), $1, 'evidence', $2, 'recurring', $3::jsonb)
+        ON CONFLICT (workspace_id, object_type, object_id) DO UPDATE
+        SET maturity = EXCLUDED.maturity,
+            basis = EXCLUDED.basis,
+            updated_at = now()
+        """,
+        workspace_id,
+        row["evidence_id"],
+        _json(
+            {
+                "schema": "autoskill.recurring_evidence_maturity.v1",
+                "signature": signature,
+                "support_count": len(records),
+                "support_evidence_ids": [str(record.evidence_id) for record in records[:50]],
+            }
+        ),
+    )
+    return EvidenceRecord.from_row({**dict(row), "workspace_key": first.workspace_key})
+
+
+def _recurring_signature(record: EvidenceRecord) -> str:
+    source = record.payload.get("source_event", {})
+    event_type = _safe_component(source.get("event_type") or record.kind)
+    payload = record.payload.get("redacted_payload", {})
+    payload_terms = _payload_terms(payload)
+    if payload_terms:
+        return ":".join([event_type, *payload_terms[:4]])
+    return event_type
+
+
+def _payload_terms(payload: object) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    terms: list[str] = []
+    for key in ("error", "error_code", "status", "tool", "command", "message", "content"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            value = value.get("code") or value.get("message") or value.get("type")
+        if value is None:
+            continue
+        terms.extend(_safe_component(part) for part in str(value).split())
+    return [term for term in terms if len(term) >= 3]
+
+
+def _safe_component(value: object) -> str:
+    cleaned = "".join(
+        ch.lower() if ch.isalnum() else "-"
+        for ch in str(value)
+    )
+    return "-".join(part for part in cleaned.split("-") if part)[:48] or "unknown"
+
+
+def _recurring_payload(signature: str, records: list[EvidenceRecord]) -> dict[str, Any]:
+    first_source = records[0].payload.get("source_event", {})
+    return {
+        "schema_version": 1,
+        "schema": "autoskill.recurring_evidence_cluster.v1",
+        "signature": signature,
+        "support_count": len(records),
+        "min_support": RECURRING_EVIDENCE_MIN_SUPPORT,
+        "support_evidence_ids": [str(record.evidence_id) for record in records[:50]],
+        "source_event": {
+            "event_type": first_source.get("event_type") or records[0].kind,
+            "source": first_source.get("source"),
+            "first_observed_at": records[0].created_at.isoformat(),
+            "last_observed_at": records[-1].created_at.isoformat(),
+        },
+        "redacted_payload": {
+            "content": signature.replace(":", " "),
+            "support_count": len(records),
+        },
+    }
+
+
+def _recurring_summary(signature: str, records: list[EvidenceRecord]) -> str:
+    return (
+        f"Recurring redacted evidence cluster {signature!r} observed "
+        f"{len(records)} times."
+    )
+
+
+def _dominant_trust(records: list[EvidenceRecord]) -> str:
+    counts: dict[str, int] = defaultdict(int)
+    for record in records:
+        counts[record.trust] += 1
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
+def _merged_taint(records: list[EvidenceRecord]) -> list[str]:
+    taint = {item for record in records for item in record.taint}
+    return sorted(taint)
 
 
 def _summary(event: asyncpg.Record) -> str:

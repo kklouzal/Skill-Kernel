@@ -86,7 +86,7 @@ Acceptance:
 
 Deliverables:
 
-- evidence extractor; implemented for deterministic observed evidence derived from redacted raw events;
+- evidence extractor; implemented for deterministic observed evidence derived from redacted raw events plus recurring evidence clusters when repeated redacted signatures meet support thresholds;
 - redacted embeddings; storage/search primitives, deterministic development generation worker, configurable provider routing, profile-scoped embedding ownership, variable-dimension profile storage/search, and qualified-profile generation are implemented;
 - lexical + vector + metadata search; lexical evidence/body-index search and pgvector nearest search are implemented;
 - exact rerank; implemented as deterministic broker rerank over lexical score, query overlap, lifecycle, and graph edges;
