@@ -1044,6 +1044,14 @@ def test_broker_policy_replay_reports_mismatches_and_degradation() -> None:
     assert replay.episodes[0]["decision"] == "no_skill"
 
 
+def test_context_hint_request_accepts_intent_alias() -> None:
+    request = ContextHintRequest.model_validate(
+        {"workspace_id": "dev-01", "intent": "diagrams unreadable labels"}
+    )
+
+    assert request.user_intent == "diagrams unreadable labels"
+
+
 def test_broker_canary_feedback_recommends_rollback_on_replay_degradation() -> None:
     replay = asyncio.run(
         replay_broker_policy(

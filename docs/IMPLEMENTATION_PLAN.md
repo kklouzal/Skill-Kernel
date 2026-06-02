@@ -378,10 +378,19 @@ Deliverables:
   bounded `GET /v1/profiles/models` and `GET /v1/profiles/embeddings` routes;
 - deterministic deployment readiness reporting; implemented as
   `GET /v1/deployment/readiness`, which reports pass/block/warn state for
-  database configuration, ingest/control auth, redaction, runtime broker
-  enablement, writer-root containment, executor/text/embedding profile readiness,
-  active broker policy, production-tagged replay corpus presence, job failures,
-  and worker concurrency;
+  database/auth/redaction, runtime broker config, writer root containment,
+  active executor/text/embedding profiles, active broker policy, replay corpus,
+  worker concurrency, and workspace-scoped job-queue health;
+- operator disaster-recovery bundle export and guarded restore; implemented as
+  `scripts/autoskill_backup.py` and `scripts/autoskill_restore.py`, covering a
+  verifiable Postgres `autoskill` schema dump plus active/archive/staging runtime
+  roots, with restore defaulting to verification and requiring explicit
+  destructive confirmation before DB or filesystem overwrite;
+- deterministic scanner red-team smoke; implemented as
+  `scripts/autoskill_red_team.py`, covering hidden Markdown, bidi/invisible
+  controls, dynamic fetch-exec, policy override, credential exfiltration,
+  destructive host commands, sensitive-file harvest, cross-artifact bundle
+  exfiltration chains, and allowed secret-boundary language;
 - production preflight remains sidecar-state-only and does not install the
   plugin, write runtime skills, activate autonomous apply, or mutate live
   OpenClaw configuration.

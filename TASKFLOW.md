@@ -255,15 +255,32 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `completion`, `response`, etc.) are content-stripped by default before event
   forwarding/storage, raw capture remains an explicit plugin opt-in that still
   secret-redacts, and the sidecar keeps storage-time redaction fail-closed.
+- Dev-01 deployment readiness now passes end-to-end with the real local text and
+  embedding endpoints, active executor/text/embedding profiles, an active broker
+  policy, and a redacted production replay corpus. A readiness bug where
+  unrelated historical failed jobs blocked deployment was fixed by scoping the
+  job-queue check to the requested workspace.
+- Operator disaster-recovery tooling is implemented: `scripts/autoskill_backup.py`
+  exports a verifiable bundle containing a custom-format Postgres dump for the
+  `autoskill` schema plus active/archive/staging filesystem roots, and
+  `scripts/autoskill_restore.py` verifies the bundle by default and requires an
+  explicit destructive confirmation before restoring DB or runtime files.
+- Deterministic red-team scanner smoke is implemented:
+  `scripts/autoskill_red_team.py` runs the blocking scanner cases for hidden
+  Markdown, bidi/invisible controls, fetch-exec, policy override, credential
+  exfiltration, destructive commands, sensitive-file harvest, cross-artifact
+  exfiltration chains, and allowed secret-boundary language.
+- Runtime context-hint requests now accept `intent` as a compatibility alias for
+  `user_intent`, preventing an otherwise valid broker smoke or caller from
+  silently dropping the intent and receiving an empty-intent `no_skill`
+  decision.
 
 ## Next Gates
 
-1. Run `/v1/deployment/readiness` against the intended deployment workspace after seeding/qualifying the real executor, text, embedding, broker policy, and production replay records.
-2. Enable the production plugin policy outside the development profile and run a full gateway capture/spool/replay smoke.
-3. Populate broker replay episodes from redacted deployment telemetry, then run stored-corpus replay/canary tuning against real production episodes.
-4. Run `/v1/profiles/embeddings/validate-production` or a bounded `embeddings.generate` smoke against the configured local embedding endpoint with the intended `AUTOSKILL_EMBEDDING_DIM`.
-5. Run `/v1/profiles/embeddings/validate-production` against the real configured endpoint/credentials in the deployment environment.
-6. Roll out live repair/import execution only after operator config enables the plugin and production replay/embedding validation passes.
+1. Enable the production plugin policy outside the development profile and run a full gateway capture/spool/replay smoke.
+2. Populate more broker replay episodes from sustained redacted deployment telemetry, then run stored-corpus replay/canary tuning against those real episodes.
+3. Run `scripts/autoskill_backup.py` to an operator-approved backup location after the production roots contain activated SkillKernel-owned skills, then verify with `scripts/autoskill_restore.py --dry-run`.
+4. Roll out live repair/import execution only after operator config enables the plugin and production replay/embedding validation remains green.
 
 ## Known Risks
 
@@ -280,6 +297,11 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Embedding generation defaults to deterministic local hash embeddings unless an active qualified embedding profile is configured; storage now supports profile-scoped variable dimensions, with the default 1536-dimensional path retaining the indexed HNSW fast path.
 - Runtime context broker is still conservative: vector fusion is available for local deterministic hash embeddings, policy artifact replay/canary primitives exist, and stored redacted replay episodes can drive policy replay; production replay quality still depends on deployment telemetry being populated.
 - Deployment readiness is a deterministic sidecar/state preflight, not a substitute for the full live gateway capture/spool/replay smoke after production plugin policy is enabled.
+- Dev-01 readiness is green for the current canary, but the active/archive/staging
+  runtime roots were absent during backup smoke because no SkillKernel-owned
+  runtime skill has been activated into those roots yet. The backup bundle still
+  contains the database dump and records missing roots explicitly; rerun the
+  backup after the first live activation to prove filesystem restore coverage.
 - Repair execution remains guarded and fail-closed: explicit staged manifests still pass through activation-gated `writer.apply`, and policy-approved repair materialization can generate staged manifests from bounded repair proposals only when a skill-version anchor exists and deterministic context-governance proof can be recorded for the staged runtime artifact.
 - External-skill awareness now includes read-only root scanning plus inventory/retrieval/matching, scan scheduling defaults, embedding generation for external descriptions, richer collision risk scoring, explicit operator review-action recording, and operator-approved stage-only import materialization.
 - v16 trace/profile/context APIs and schema exist; event/job/retrieval/evaluator/context-broker paths now propagate trace or context artifacts, LLM calls now have content-safe invocation audit rows, direct writer apply/rollback APIs record content-safe writer spans, mutation-worker writer apply plus revocation rollback record content-safe child spans, embedding generation records content-safe `embedding_call` spans, and worker heartbeat summaries expose content-safe claimed/renewed/succeeded/failed job progress. Longer semantic jobs may still add specialized counters as their multi-phase internals mature.

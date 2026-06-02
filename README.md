@@ -42,6 +42,10 @@ Implemented now:
 - runtime action-attribution check recording for blocked high-risk tool-boundary decisions;
 - active embedding-profile selection, profile-qualified queued embedding generation, content-safe embedding generation trace spans, and production embedding validation control API;
 - redacted broker replay episode corpus recording plus stored-corpus broker policy replay;
+- deployment readiness preflight, operator backup/restore bundle scripts, and a
+  deterministic scanner red-team smoke runner;
+- runtime context-hint request compatibility for both `user_intent` and `intent`
+  payloads;
 - OpenClaw plugin/hook package with local redaction, bounded spool, forwarding, replay utilities, and smoke-tested hook loading;
 - focused Python, Node, and local Postgres compose smoke validation for deterministic primitives.
 
@@ -77,6 +81,19 @@ Validate the OpenClaw plugin skeleton:
 cd /Warehouse/SkillKernel/plugin/autoskill
 npm run check
 npm test
+```
+
+Create and verify an operator disaster-recovery bundle:
+
+```bash
+python scripts/autoskill_backup.py --workspace-root /home/kklouzal/.openclaw/workspace --output-dir /tmp/skillkernel-autoskill-backups --include-staging
+python scripts/autoskill_restore.py /path/to/autoskill-backup.tar.gz --workspace-root /home/kklouzal/.openclaw/workspace --dry-run
+```
+
+Run the deterministic scanner red-team smoke:
+
+```bash
+python scripts/autoskill_red_team.py --output /tmp/autoskill-red-team.json
 ```
 
 ## Non-Negotiables

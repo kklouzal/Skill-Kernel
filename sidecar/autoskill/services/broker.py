@@ -18,7 +18,7 @@ from autoskill.services.scanner import (
     has_blocking_findings,
     scan_text_bundle,
 )
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 BROKER_POLICY_VERSION = "bootstrap.v1"
 GRAPH_EDGE_KINDS = ["prerequisite", "conflict", "shadow", "supersedes"]
@@ -124,7 +124,10 @@ class ContextHintRequest(BaseModel):
     executor_profile_id: UUID | None = None
     memory_influence_ids: list[UUID] = Field(default_factory=list, max_length=20)
     memory_influence_run_id: str | None = None
-    user_intent: str | None = None
+    user_intent: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("user_intent", "intent"),
+    )
     max_tokens: int = 600
 
 
