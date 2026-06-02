@@ -92,8 +92,7 @@ from autoskill.services.broker import (
 )
 from autoskill.services.candidates import propose_candidate_skills
 from autoskill.services.embedding_generation import (
-    HashingTextEmbedder,
-    OpenAICompatibleTextEmbedder,
+    build_text_embedder_from_profile,
     build_text_embedder_from_settings,
     generate_pending_embeddings,
 )
@@ -740,16 +739,38 @@ class BrokerPolicyActivateRequest(BaseModel):
 
 class BrokerPolicyReplayRequest(BaseModel):
     workspace_id: str
-    episodes: list[BrokerReplayEpisode]
+    episodes: list[BrokerReplayEpisode] = Field(default_factory=list)
     policy: dict[str, object] | None = None
     version: str | None = None
     broker_policy_version_id: UUID | None = None
     executor_profile_id: UUID | None = None
     max_tokens: int = 800
+    include_stored_episodes: bool = False
+    stored_episode_tags: list[str] = Field(default_factory=list)
+    stored_episode_limit: int = 100
 
 
 class BrokerPolicyReplayResponse(BaseModel):
     replay: BrokerReplayResult
+
+
+class BrokerReplayEpisodeRecordRequest(BaseModel):
+    workspace_id: str
+    episode_key: str
+    redacted_user_intent: str
+    expected_decision: str | None = None
+    expected_skill_ids: list[UUID] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, object] = Field(default_factory=dict)
+    source_retrieval_log_id: UUID | None = None
+
+
+class BrokerReplayEpisodeRecordResponse(BaseModel):
+    episode: dict[str, object]
+
+
+class BrokerReplayEpisodeListResponse(BaseModel):
+    episodes: list[dict[str, object]]
 
 
 class BrokerPolicyCanaryRequest(BaseModel):
@@ -978,6 +999,20 @@ class EmbeddingGenerateRequest(BaseModel):
     embedding_profile_key: str | None = None
     embedding_model: str | None = None
     limit: int = 100
+
+
+class EmbeddingProductionValidationRequest(BaseModel):
+    workspace_id: str
+    profile_key: str
+    probe_set_version: str | None = None
+    generate_embeddings: bool = False
+    generate_limit: int = 25
+
+
+class EmbeddingProductionValidationResponse(BaseModel):
+    qualified: bool
+    qualification: dict[str, object]
+    generation: dict[str, object] | None = None
 
 
 class EmbeddingGenerateResponse(BaseModel):
@@ -1307,39 +1342,17 @@ def _writer_roots(workspace_root: Path | None = None) -> tuple[Path, Path, Path]
 
 
 def _embedder_from_profile(profile: object, settings: object):
-    if getattr(profile, "status", None) != "qualified":
+    try:
+        return build_text_embedder_from_profile(
+            profile,
+            embedding_api_key=getattr(settings, "embedding_api_key", None),
+            embedding_api_base_url=getattr(settings, "embedding_api_base_url", None),
+        )
+    except ValueError as error:
         raise HTTPException(
             status_code=http_status.HTTP_409_CONFLICT,
-            detail="embedding profile is not qualified",
-        )
-    route_kind = str(getattr(profile, "route_kind", ""))
-    model = str(profile.model)
-    embedding_dim = int(getattr(profile, "embedding_dim", 1536))
-    if route_kind == "hash":
-        return HashingTextEmbedder(model=model, embedding_dim=embedding_dim)
-    if route_kind == "openai_compatible":
-        base_url = getattr(profile, "endpoint_ref", None) or getattr(
-            settings,
-            "embedding_api_base_url",
-            None,
-        )
-        api_key = getattr(settings, "embedding_api_key", None)
-        if not base_url or not api_key:
-            raise HTTPException(
-                status_code=http_status.HTTP_409_CONFLICT,
-                detail="qualified openai_compatible profile requires endpoint and API key",
-            )
-        return OpenAICompatibleTextEmbedder(
-            base_url=str(base_url),
-            api_key=str(api_key),
-            model=model,
-            embedding_dim=embedding_dim,
-            timeout_seconds=float(getattr(profile, "timeout_seconds", 30.0)),
-        )
-    raise HTTPException(
-        status_code=http_status.HTTP_409_CONFLICT,
-        detail=f"embedding profile route_kind is not supported for generation: {route_kind}",
-    )
+            detail=str(error),
+        ) from error
 
 
 def _worker_stores(
@@ -1359,9 +1372,11 @@ def _worker_stores(
     context_governance: ContextGovernanceStore,
     topology: TopologyStore,
     activation_gate: ActivationGateStore,
+    profiles: ProfileStore,
     writer_workspace_root: Path | None = None,
     external_skill_roots: list[Path] | None = None,
 ) -> WorkerStores:
+    settings = get_settings()
     workspace_root, _staging_root, archive_root = _writer_roots(writer_workspace_root)
     return WorkerStores(
         jobs=jobs,
@@ -1379,6 +1394,9 @@ def _worker_stores(
         topology=topology,
         activation_gate=activation_gate,
         observability=observability,
+        profiles=profiles,
+        embedding_api_key=getattr(settings, "embedding_api_key", None),
+        embedding_api_base_url=getattr(settings, "embedding_api_base_url", None),
         workspace_root=workspace_root,
         archive_root=archive_root,
         external_skill_roots=external_skill_roots,
@@ -1557,6 +1575,35 @@ async def _request_broker_policy(
         policy=active.policy,
         broker_policy_version_id=active.broker_policy_version_id,
     )
+
+
+async def _broker_replay_episodes(
+    broker_policies: BrokerPolicyStore,
+    request: BrokerPolicyReplayRequest,
+) -> list[BrokerReplayEpisode]:
+    episodes = list(request.episodes)
+    if request.include_stored_episodes:
+        stored = await broker_policies.list_replay_episodes(
+            workspace_key=request.workspace_id,
+            tags=request.stored_episode_tags,
+            limit=max(1, min(request.stored_episode_limit, 500)),
+        )
+        episodes.extend(
+            BrokerReplayEpisode(
+                episode_id=record.episode_key,
+                user_intent=record.redacted_user_intent,
+                expected_decision=record.expected_decision,
+                expected_skill_ids=[str(item) for item in record.expected_skill_ids],
+                max_tokens=request.max_tokens,
+            )
+            for record in stored
+        )
+    if not episodes:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="broker replay requires explicit episodes or include_stored_episodes=true",
+        )
+    return episodes
 
 
 def create_app(
@@ -1829,6 +1876,7 @@ def create_app(
     ) -> BrokerPolicyReplayResponse:
         _require_control_auth(authorization)
         policy = await _request_broker_policy(broker_policies, request)
+        episodes = await _broker_replay_episodes(broker_policies, request)
         settings = get_settings()
         replay = await replay_broker_policy(
             retrieval,
@@ -1837,7 +1885,7 @@ def create_app(
                 executor_profile_id=request.executor_profile_id,
                 max_tokens=request.max_tokens,
             ),
-            episodes=request.episodes,
+            episodes=episodes,
             policy=policy,
             compatibility=compatibility,
             semantic_embedder=(
@@ -1847,6 +1895,47 @@ def create_app(
             ),
         )
         return BrokerPolicyReplayResponse(replay=replay)
+
+    @app.post(
+        "/v1/broker/replay-episodes",
+        response_model=BrokerReplayEpisodeRecordResponse,
+    )
+    async def record_broker_replay_episode(
+        request: BrokerReplayEpisodeRecordRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> BrokerReplayEpisodeRecordResponse:
+        _require_control_auth(authorization)
+        episode = await broker_policies.record_replay_episode(
+            workspace_key=request.workspace_id,
+            episode_key=request.episode_key,
+            redacted_user_intent=request.redacted_user_intent,
+            expected_decision=request.expected_decision,
+            expected_skill_ids=request.expected_skill_ids,
+            tags=request.tags,
+            metadata=request.metadata,
+            source_retrieval_log_id=request.source_retrieval_log_id,
+        )
+        return BrokerReplayEpisodeRecordResponse(episode=episode.to_json())
+
+    @app.get(
+        "/v1/broker/replay-episodes",
+        response_model=BrokerReplayEpisodeListResponse,
+    )
+    async def list_broker_replay_episodes(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str = "default",
+        tags: Annotated[list[str] | None, Query()] = None,
+        limit: int = 100,
+    ) -> BrokerReplayEpisodeListResponse:
+        _require_control_auth(authorization)
+        episodes = await broker_policies.list_replay_episodes(
+            workspace_key=workspace_id,
+            tags=tags or [],
+            limit=max(1, min(limit, 500)),
+        )
+        return BrokerReplayEpisodeListResponse(
+            episodes=[episode.to_json() for episode in episodes],
+        )
 
     @app.post(
         "/v1/broker/policies/canary",
@@ -2137,6 +2226,7 @@ def create_app(
                 context_governance=context_governance,
                 topology=topology,
                 activation_gate=activation_gate,
+                profiles=profiles,
                 writer_workspace_root=writer_workspace_root,
                 external_skill_roots=external_skill_roots,
             ),
@@ -3196,6 +3286,24 @@ def create_app(
             embedder = _embedder_from_profile(profile, settings)
             embedding_model = profile.model
             embedding_profile_id = profile.profile_id
+        elif request.workspace_id:
+            active_profile = await profiles.get_active_embedding_profile(
+                workspace_key=request.workspace_id,
+            )
+            if active_profile is not None:
+                embedder = _embedder_from_profile(active_profile, settings)
+                embedding_model = active_profile.model
+                embedding_profile_id = active_profile.profile_id
+            else:
+                try:
+                    embedder = build_text_embedder_from_settings(settings)
+                except ValueError as error:
+                    raise HTTPException(
+                        status_code=http_status.HTTP_400_BAD_REQUEST,
+                        detail=str(error),
+                    ) from error
+                embedding_model = request.embedding_model
+                embedding_profile_id = None
         else:
             try:
                 embedder = build_text_embedder_from_settings(settings)
@@ -3206,15 +3314,99 @@ def create_app(
                 ) from error
             embedding_model = request.embedding_model
             embedding_profile_id = None
-        result = await generate_pending_embeddings(
-            embeddings,
-            embedder=embedder,
-            workspace_key=request.workspace_id,
-            embedding_model=embedding_model,
-            embedding_profile_id=embedding_profile_id,
-            limit=max(1, min(request.limit, 500)),
+        bounded_limit = max(1, min(request.limit, 500))
+        span = await observability.start_span(
+            workspace_key=request.workspace_id or "default",
+            operation_name="embeddings.generate",
+            operation_kind="embedding_call",
+            safe_attributes={
+                "source": "api",
+                "limit": bounded_limit,
+                "embedding_profile_key": request.embedding_profile_key,
+                "embedding_profile_id": str(embedding_profile_id)
+                if embedding_profile_id
+                else None,
+                "embedding_model": embedding_model,
+            },
+        )
+        try:
+            result = await generate_pending_embeddings(
+                embeddings,
+                embedder=embedder,
+                workspace_key=request.workspace_id,
+                embedding_model=embedding_model,
+                embedding_profile_id=embedding_profile_id,
+                limit=bounded_limit,
+            )
+        except Exception as error:
+            await observability.finish_span(
+                span_id=span.span_id,
+                status="error",
+                safe_attributes={"error": f"{type(error).__name__}: {error}"[:500]},
+            )
+            raise
+        await observability.finish_span(
+            span_id=span.span_id,
+            status="ok",
+            safe_attributes={
+                "scanned": result.scanned,
+                "generated": result.generated,
+                "created": result.created,
+                "updated": result.updated,
+                "embedding_model": result.embedding_model,
+                "embedding_dim": result.embedding_dim,
+                "embedding_profile_id": result.embedding_profile_id,
+            },
+            object_refs=[
+                {
+                    "object_type": str(source["object_type"]),
+                    "object_id": str(source["object_id"]),
+                }
+                for source in result.sources[:50]
+            ],
         )
         return EmbeddingGenerateResponse(**result.to_json())
+
+    @app.post(
+        "/v1/profiles/embeddings/validate-production",
+        response_model=EmbeddingProductionValidationResponse,
+    )
+    async def validate_production_embedding_profile(
+        request: EmbeddingProductionValidationRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> EmbeddingProductionValidationResponse:
+        _require_control_auth(authorization)
+        try:
+            qualified = await qualify_embedding_profile(
+                profiles=profiles,
+                qualifications=profile_qualifications,
+                workspace_key=request.workspace_id,
+                profile_key=request.profile_key,
+                probe_set_version=request.probe_set_version
+                or "autoskill-embedding-production-validation.v1",
+                embedding_api_key=getattr(get_settings(), "embedding_api_key", None),
+            )
+        except ProfileQualificationError as exc:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        generation = None
+        if request.generate_embeddings and qualified.run.verdict == "qualified":
+            generated = await generate_embeddings(
+                request=EmbeddingGenerateRequest(
+                    workspace_id=request.workspace_id,
+                    embedding_profile_key=request.profile_key,
+                    limit=request.generate_limit,
+                ),
+                authorization=authorization,
+            )
+            generation = generated.model_dump(mode="json")
+        return EmbeddingProductionValidationResponse(
+            qualified=qualified.run.verdict == "qualified",
+            qualification=qualified.to_json(),
+            generation=generation,
+        )
 
     @app.get("/v1/audit/recent", response_model=AuditRecentResponse)
     async def recent_audit(

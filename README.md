@@ -40,15 +40,17 @@ Implemented now:
 - curation, utility, duplicate-merge probe planning, repair proposal planning, guarded repair materialization, drift probes, false-positive controls, and HTTP-status contract probes;
 - external-skill operator review plus stage-only import materialization that never mutates external-owned roots;
 - runtime action-attribution check recording for blocked high-risk tool-boundary decisions;
+- active embedding-profile selection, profile-qualified queued embedding generation, content-safe embedding generation trace spans, and production embedding validation control API;
+- redacted broker replay episode corpus recording plus stored-corpus broker policy replay;
 - OpenClaw plugin/hook package with local redaction, bounded spool, forwarding, replay utilities, and smoke-tested hook loading;
 - focused Python, Node, and local Postgres compose smoke validation for deterministic primitives.
 
-Not implemented yet:
+Deployment/operator gates still outside repo implementation:
 
 - production plugin policy enablement outside the development profile;
-- production embedding provider live validation against a real configured endpoint
-  in the deployment environment;
-- richer historical replay over production episode corpora for broker-policy tuning;
+- production embedding provider validation against the real deployment endpoint and
+  credentials using the validation API;
+- production broker replay corpus population from redacted deployment telemetry;
 - live production repair/import rollout after operator config enables the plugin
   outside the development profile.
 

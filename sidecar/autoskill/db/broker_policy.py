@@ -57,6 +57,59 @@ class BrokerPolicyVersionRecord:
         }
 
 
+@dataclass(frozen=True)
+class BrokerReplayEpisodeRecord:
+    broker_replay_episode_id: UUID
+    workspace_id: UUID | None
+    workspace_key: str | None
+    source_retrieval_log_id: UUID | None
+    episode_key: str
+    redacted_user_intent: str
+    expected_decision: str | None
+    expected_skill_ids: list[UUID]
+    tags: list[str]
+    metadata: dict[str, Any]
+    created_at: datetime
+
+    @classmethod
+    def from_row(
+        cls,
+        row: asyncpg.Record | dict[str, Any],
+    ) -> BrokerReplayEpisodeRecord:
+        return cls(
+            broker_replay_episode_id=row["broker_replay_episode_id"],
+            workspace_id=_row_get(row, "workspace_id"),
+            workspace_key=_row_get(row, "workspace_key"),
+            source_retrieval_log_id=_row_get(row, "source_retrieval_log_id"),
+            episode_key=row["episode_key"],
+            redacted_user_intent=row["redacted_user_intent"],
+            expected_decision=_row_get(row, "expected_decision"),
+            expected_skill_ids=list(row["expected_skill_ids"] or []),
+            tags=list(row["tags"] or []),
+            metadata=_json_dict(row["metadata"]),
+            created_at=row["created_at"],
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "broker_replay_episode_id": str(self.broker_replay_episode_id),
+            "workspace_id": str(self.workspace_id) if self.workspace_id else None,
+            "workspace_key": self.workspace_key,
+            "source_retrieval_log_id": (
+                str(self.source_retrieval_log_id)
+                if self.source_retrieval_log_id
+                else None
+            ),
+            "episode_key": self.episode_key,
+            "redacted_user_intent": self.redacted_user_intent,
+            "expected_decision": self.expected_decision,
+            "expected_skill_ids": [str(item) for item in self.expected_skill_ids],
+            "tags": self.tags,
+            "metadata": self.metadata,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
 class BrokerPolicyStore(Protocol):
     async def get_policy_version(
         self,
@@ -103,11 +156,35 @@ class BrokerPolicyStore(Protocol):
     ) -> BrokerPolicyVersionRecord | None:
         """Attach bounded canary feedback and roll back critical policy versions."""
 
+    async def record_replay_episode(
+        self,
+        *,
+        workspace_key: str,
+        episode_key: str,
+        redacted_user_intent: str,
+        expected_decision: str | None = None,
+        expected_skill_ids: list[UUID] | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        source_retrieval_log_id: UUID | None = None,
+    ) -> BrokerReplayEpisodeRecord:
+        """Persist one content-safe broker replay episode for policy replay."""
+
+    async def list_replay_episodes(
+        self,
+        *,
+        workspace_key: str,
+        tags: list[str] | None = None,
+        limit: int = 100,
+    ) -> list[BrokerReplayEpisodeRecord]:
+        """List content-safe broker replay episodes for historical policy replay."""
+
 
 class NullBrokerPolicyStore:
     def __init__(self) -> None:
         self.policies: dict[tuple[str, UUID], BrokerPolicyVersionRecord] = {}
         self.active_by_workspace: dict[str, UUID] = {}
+        self.replay_episodes: dict[tuple[str, str], BrokerReplayEpisodeRecord] = {}
 
     async def get_active_policy(
         self,
@@ -214,6 +291,54 @@ class NullBrokerPolicyStore:
             self.active_by_workspace.pop(workspace_key, None)
         return updated
 
+    async def record_replay_episode(
+        self,
+        *,
+        workspace_key: str,
+        episode_key: str,
+        redacted_user_intent: str,
+        expected_decision: str | None = None,
+        expected_skill_ids: list[UUID] | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        source_retrieval_log_id: UUID | None = None,
+    ) -> BrokerReplayEpisodeRecord:
+        existing = self.replay_episodes.get((workspace_key, episode_key))
+        record = BrokerReplayEpisodeRecord(
+            broker_replay_episode_id=(
+                existing.broker_replay_episode_id if existing else uuid4()
+            ),
+            workspace_id=None,
+            workspace_key=workspace_key,
+            source_retrieval_log_id=source_retrieval_log_id,
+            episode_key=episode_key,
+            redacted_user_intent=redacted_user_intent,
+            expected_decision=expected_decision,
+            expected_skill_ids=expected_skill_ids or [],
+            tags=tags or [],
+            metadata=metadata or {},
+            created_at=existing.created_at if existing else datetime.now(),
+        )
+        self.replay_episodes[(workspace_key, episode_key)] = record
+        return record
+
+    async def list_replay_episodes(
+        self,
+        *,
+        workspace_key: str,
+        tags: list[str] | None = None,
+        limit: int = 100,
+    ) -> list[BrokerReplayEpisodeRecord]:
+        tag_set = set(tags or [])
+        records = [
+            record
+            for (record_workspace, _episode_key), record in self.replay_episodes.items()
+            if record_workspace == workspace_key
+            and (not tag_set or tag_set.issubset(set(record.tags)))
+        ]
+        records.sort(key=lambda item: item.created_at, reverse=True)
+        return records[:limit]
+
 
 class AsyncpgBrokerPolicyStore(AsyncpgPoolOwner):
     async def get_policy_version(
@@ -236,6 +361,95 @@ class AsyncpgBrokerPolicyStore(AsyncpgPoolOwner):
                 broker_policy_version_id,
             )
         return BrokerPolicyVersionRecord.from_row(row) if row else None
+
+    async def record_replay_episode(
+        self,
+        *,
+        workspace_key: str,
+        episode_key: str,
+        redacted_user_intent: str,
+        expected_decision: str | None = None,
+        expected_skill_ids: list[UUID] | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        source_retrieval_log_id: UUID | None = None,
+    ) -> BrokerReplayEpisodeRecord:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                INSERT INTO autoskill.broker_replay_episodes (
+                  broker_replay_episode_id,
+                  workspace_id,
+                  source_retrieval_log_id,
+                  episode_key,
+                  redacted_user_intent,
+                  expected_decision,
+                  expected_skill_ids,
+                  tags,
+                  metadata
+                )
+                VALUES (
+                  gen_random_uuid(),
+                  $1,
+                  $2,
+                  $3,
+                  $4,
+                  $5,
+                  $6,
+                  $7,
+                  $8::jsonb
+                )
+                ON CONFLICT (workspace_id, episode_key)
+                DO UPDATE SET
+                  source_retrieval_log_id = EXCLUDED.source_retrieval_log_id,
+                  redacted_user_intent = EXCLUDED.redacted_user_intent,
+                  expected_decision = EXCLUDED.expected_decision,
+                  expected_skill_ids = EXCLUDED.expected_skill_ids,
+                  tags = EXCLUDED.tags,
+                  metadata = EXCLUDED.metadata
+                RETURNING *, $9::text AS workspace_key
+                """,
+                workspace_id,
+                source_retrieval_log_id,
+                episode_key,
+                redacted_user_intent,
+                expected_decision,
+                expected_skill_ids or [],
+                tags or [],
+                _json(metadata or {}),
+                workspace_key,
+            )
+        return BrokerReplayEpisodeRecord.from_row(row)
+
+    async def list_replay_episodes(
+        self,
+        *,
+        workspace_key: str,
+        tags: list[str] | None = None,
+        limit: int = 100,
+    ) -> list[BrokerReplayEpisodeRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT e.*, w.external_key AS workspace_key
+                FROM autoskill.broker_replay_episodes e
+                JOIN autoskill.workspaces w ON w.workspace_id = e.workspace_id
+                WHERE w.external_key = $1
+                  AND (
+                    $2::text[] = '{}'::text[]
+                    OR e.tags @> $2::text[]
+                  )
+                ORDER BY e.created_at DESC
+                LIMIT $3
+                """,
+                workspace_key,
+                tags or [],
+                limit,
+            )
+        return [BrokerReplayEpisodeRecord.from_row(row) for row in rows]
 
     async def get_active_policy(
         self,

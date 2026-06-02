@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 from autoskill.api.app import WorkerRunOnceRequest, create_app
@@ -21,7 +22,10 @@ from autoskill.services.worker import (
     run_worker_once,
 )
 from autoskill.services.writer import apply_staged_manifest_with_governance, stage_compiled_skill
-from autoskill.tests.test_embedding_generation import MemoryPendingEmbeddingStore
+from autoskill.tests.test_embedding_generation import (
+    MemoryEmbeddingProfileStore,
+    MemoryPendingEmbeddingStore,
+)
 from autoskill.tests.test_external_skills import MemoryExternalSkillStore
 from autoskill.tests.test_governance import MemoryGovernanceStore
 from autoskill.tests.test_jobs_api import MemoryJobStore
@@ -389,6 +393,7 @@ class WorkerTestStores:
     embeddings: MemoryPendingEmbeddingStore
     evaluations: MemoryEvaluationWorkerStore | None = None
     observability: MemoryObservabilityStore | None = None
+    profiles: MemoryEmbeddingProfileStore | None = None
 
     def as_worker_stores(self) -> WorkerStores:
         return WorkerStores(
@@ -398,6 +403,7 @@ class WorkerTestStores:
             embeddings=self.embeddings,
             evaluations=self.evaluations,
             observability=self.observability,
+            profiles=self.profiles,
         )
 
 
@@ -559,6 +565,99 @@ def test_worker_pool_does_not_claim_other_pool_jobs() -> None:
 
     assert result.status == "idle"
     assert result.claimed is False
+
+
+def test_worker_embedding_generate_uses_qualified_embedding_profile() -> None:
+    profile_id = uuid4()
+    profiles = MemoryEmbeddingProfileStore(
+        profile=SimpleNamespace(
+            profile_id=profile_id,
+            status="qualified",
+            qualification={"verdict": "qualified"},
+            embedding_dim=8,
+            route_kind="hash",
+            model="queued-profile-model",
+            timeout_seconds=30.0,
+        )
+    )
+    stores = WorkerTestStores(
+        jobs=MemoryJobStore(),
+        scheduler=MemorySchedulerWorkerStore(),
+        evidence=MemoryEvidenceWorkerStore(),
+        embeddings=MemoryPendingEmbeddingStore(expected_embedding_dim=8),
+        observability=MemoryObservabilityStore(),
+        profiles=profiles,
+    )
+
+    async def run():
+        await stores.jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="embeddings.generate",
+            idempotency_key="embed:profile",
+            payload={
+                "workspace_id": "dev-01",
+                "embedding_profile_key": "embedding-default",
+                "limit": 1,
+            },
+        )
+        return await run_worker_once(
+            stores.as_worker_stores(),
+            worker_id="worker-1",
+            pool="maintenance",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["embedding_model"] == "queued-profile-model"
+    assert result.output["embedding_profile_id"] == str(profile_id)
+    assert stores.embeddings.upserts[0]["embedding_profile_id"] == profile_id
+    assert profiles.calls == [
+        {"workspace_key": "dev-01", "profile_key": "embedding-default"}
+    ]
+    assert any(span.operation_kind == "embedding_call" for span in stores.observability.started)
+
+
+def test_worker_embedding_generate_prefers_active_embedding_profile() -> None:
+    profile_id = uuid4()
+    profiles = MemoryEmbeddingProfileStore(
+        active_profile=SimpleNamespace(
+            profile_id=profile_id,
+            status="active",
+            qualification={"verdict": "qualified"},
+            embedding_dim=8,
+            route_kind="hash",
+            model="active-queued-profile",
+            timeout_seconds=30.0,
+        )
+    )
+    stores = WorkerTestStores(
+        jobs=MemoryJobStore(),
+        scheduler=MemorySchedulerWorkerStore(),
+        evidence=MemoryEvidenceWorkerStore(),
+        embeddings=MemoryPendingEmbeddingStore(expected_embedding_dim=8),
+        profiles=profiles,
+    )
+
+    async def run():
+        await stores.jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="embeddings.generate",
+            idempotency_key="embed:active-profile",
+            payload={"workspace_id": "dev-01", "limit": 1},
+        )
+        return await run_worker_once(
+            stores.as_worker_stores(),
+            worker_id="worker-1",
+            pool="maintenance",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["embedding_model"] == "active-queued-profile"
+    assert result.output["embedding_profile_id"] == str(profile_id)
+    assert profiles.active_calls == [{"workspace_key": "dev-01"}]
 
 
 def test_worker_run_once_api_uses_configured_stores() -> None:

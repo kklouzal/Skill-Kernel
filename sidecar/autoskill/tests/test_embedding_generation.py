@@ -105,13 +105,19 @@ class MemoryPendingEmbeddingStore:
 
 
 class MemoryEmbeddingProfileStore:
-    def __init__(self, *, profile=None) -> None:
+    def __init__(self, *, profile=None, active_profile=None) -> None:
         self.profile = profile
+        self.active_profile = active_profile
         self.calls: list[dict[str, object]] = []
+        self.active_calls: list[dict[str, object]] = []
 
     async def get_embedding_profile(self, *, workspace_key: str, profile_key: str):
         self.calls.append({"workspace_key": workspace_key, "profile_key": profile_key})
         return self.profile
+
+    async def get_active_embedding_profile(self, *, workspace_key: str):
+        self.active_calls.append({"workspace_key": workspace_key})
+        return self.active_profile
 
 
 def test_hashing_text_embedder_is_deterministic_and_normalized() -> None:
@@ -244,6 +250,37 @@ def test_generate_embeddings_api_uses_qualified_embedding_profile() -> None:
     assert profile_store.calls == [
         {"workspace_key": "dev-01", "profile_key": "embedding-default"}
     ]
+
+
+def test_generate_embeddings_api_prefers_active_embedding_profile() -> None:
+    store = MemoryPendingEmbeddingStore(expected_embedding_dim=8)
+    profile_id = uuid4()
+    profile_store = MemoryEmbeddingProfileStore(
+        active_profile=SimpleNamespace(
+            profile_id=profile_id,
+            status="active",
+            qualification={"verdict": "qualified"},
+            embedding_dim=8,
+            route_kind="hash",
+            model="active-hash-profile",
+            timeout_seconds=30.0,
+        )
+    )
+    app = create_app(embedding_store=store, profile_store=profile_store)
+    route = next(route for route in app.routes if route.path == "/v1/embeddings/generate")
+
+    async def run():
+        return await route.endpoint(
+            request=EmbeddingGenerateRequest(workspace_id="dev-01", limit=1),
+        )
+
+    response = asyncio.run(run())
+
+    assert response.generated == 1
+    assert response.embedding_model == "active-hash-profile"
+    assert response.embedding_profile_id == str(profile_id)
+    assert store.upserts[0]["embedding_profile_id"] == profile_id
+    assert profile_store.active_calls == [{"workspace_key": "dev-01"}]
 
 
 def test_generate_embeddings_api_uses_qualified_non_default_embedding_dimension() -> None:

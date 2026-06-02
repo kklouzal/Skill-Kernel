@@ -21,11 +21,16 @@ from autoskill.db.external_skills import ExternalSkillStore
 from autoskill.db.governance import GovernanceStore, RevocationRequestRecord
 from autoskill.db.jobs import JobRecord, JobStore
 from autoskill.db.observability import NullObservabilityStore, ObservabilityStore
+from autoskill.db.profiles import ProfileStore
 from autoskill.db.retrieval import RetrievalStore
 from autoskill.db.scheduler import SchedulerStore
 from autoskill.db.topology import TopologyStore
 from autoskill.db.utility import UtilityStore
-from autoskill.services.embedding_generation import TextEmbedder, generate_pending_embeddings
+from autoskill.services.embedding_generation import (
+    TextEmbedder,
+    build_text_embedder_from_profile,
+    generate_pending_embeddings,
+)
 from autoskill.services.evaluation_runner import run_pending_proposal_gates_with_trace
 from autoskill.services.external_import import materialize_external_skill_import
 from autoskill.services.external_inventory import scan_external_skill_roots
@@ -138,7 +143,10 @@ class WorkerStores:
     observability: ObservabilityStore | None = None
     attribution: AttributionStore | None = None
     activation_gate: ActivationGateStore | None = None
+    profiles: ProfileStore | None = None
     embedder: TextEmbedder | None = None
+    embedding_api_key: str | None = None
+    embedding_api_base_url: str | None = None
     workspace_root: Path | None = None
     archive_root: Path | None = None
     external_skill_roots: list[Path] | None = None
@@ -452,12 +460,95 @@ async def _run_evidence_derive(stores: WorkerStores, job: JobRecord) -> dict[str
 
 async def _run_embedding_generate(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
     limit = _payload_int(job.payload, "limit", default=100, minimum=1, maximum=500)
-    result = await generate_pending_embeddings(
-        stores.embeddings,
-        embedder=stores.embedder,
-        workspace_key=_payload_workspace(job),
-        embedding_model=_payload_str(job.payload, "embedding_model"),
-        limit=limit,
+    workspace = _payload_workspace(job)
+    profile_key = _payload_str(job.payload, "embedding_profile_key")
+    embedder = stores.embedder
+    embedding_model = _payload_str(job.payload, "embedding_model")
+    embedding_profile_id = None
+    if profile_key:
+        if stores.profiles is None:
+            raise ValueError("profile store is required for embedding_profile_key jobs")
+        if workspace is None:
+            raise ValueError("workspace_id is required for embedding_profile_key jobs")
+        profile = await stores.profiles.get_embedding_profile(
+            workspace_key=workspace,
+            profile_key=profile_key,
+        )
+        if profile is None:
+            raise ValueError(f"embedding profile not found: {workspace}/{profile_key}")
+        embedder = build_text_embedder_from_profile(
+            profile,
+            embedding_api_key=stores.embedding_api_key,
+            embedding_api_base_url=stores.embedding_api_base_url,
+        )
+        embedding_model = profile.model
+        embedding_profile_id = profile.profile_id
+    elif workspace is not None and stores.profiles is not None:
+        profile = await stores.profiles.get_active_embedding_profile(workspace_key=workspace)
+        if profile is not None:
+            embedder = build_text_embedder_from_profile(
+                profile,
+                embedding_api_key=stores.embedding_api_key,
+                embedding_api_base_url=stores.embedding_api_base_url,
+            )
+            embedding_model = profile.model
+            embedding_profile_id = profile.profile_id
+
+    observability = stores.observability or NullObservabilityStore()
+    span = await observability.start_span(
+        workspace_key=workspace or job.workspace_key or "unknown",
+        trace_id=job.trace_id,
+        parent_span_id=job.span_id or job.parent_span_id,
+        operation_name="embeddings.generate",
+        operation_kind="embedding_call",
+        safe_attributes={
+            "source": "worker",
+            "job_id": str(job.job_id),
+            "job_kind": job.job_kind,
+            "limit": limit,
+            "embedding_profile_key": profile_key,
+            "embedding_profile_id": str(embedding_profile_id)
+            if embedding_profile_id
+            else None,
+            "embedding_model": embedding_model,
+        },
+        object_refs=[{"object_type": "job", "object_id": str(job.job_id)}],
+    )
+    try:
+        result = await generate_pending_embeddings(
+            stores.embeddings,
+            embedder=embedder,
+            workspace_key=workspace,
+            embedding_model=embedding_model,
+            embedding_profile_id=embedding_profile_id,
+            limit=limit,
+        )
+    except Exception as error:
+        await observability.finish_span(
+            span_id=span.span_id,
+            status="error",
+            safe_attributes={"error": f"{type(error).__name__}: {error}"[:500]},
+        )
+        raise
+    await observability.finish_span(
+        span_id=span.span_id,
+        status="ok",
+        safe_attributes={
+            "scanned": result.scanned,
+            "generated": result.generated,
+            "created": result.created,
+            "updated": result.updated,
+            "embedding_model": result.embedding_model,
+            "embedding_dim": result.embedding_dim,
+            "embedding_profile_id": result.embedding_profile_id,
+        },
+        object_refs=[
+            {"object_type": "job", "object_id": str(job.job_id)},
+            *[
+                {"object_type": str(source["object_type"]), "object_id": str(source["object_id"])}
+                for source in result.sources[:50]
+            ],
+        ],
     )
     return result.to_json()
 
@@ -522,9 +613,10 @@ async def _run_curation(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
     workspace = _payload_workspace(job)
     if workspace is None:
         raise ValueError("curation requires workspace_id")
+    payload = _payload_dict(job.payload)
     result = await stores.utility.run_curation(
         workspace_key=workspace,
-        archive_threshold=float(job.payload.get("archive_threshold", -1.0)),
+        archive_threshold=float(payload.get("archive_threshold", -1.0)),
         max_archive=_payload_int(job.payload, "max_archive", default=5, minimum=0, maximum=100),
         promotion_min_retrieval=_payload_int(
             job.payload,
@@ -536,7 +628,7 @@ async def _run_curation(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
         max_promote=_payload_int(job.payload, "max_promote", default=3, minimum=0, maximum=100),
         active_budget=(
             None
-            if job.payload.get("active_budget") is None
+            if payload.get("active_budget") is None
             else _payload_int(job.payload, "active_budget", default=100, minimum=1, maximum=1000)
         ),
         max_merge=_payload_int(job.payload, "max_merge", default=5, minimum=0, maximum=100),
@@ -1052,8 +1144,8 @@ async def _run_topology_score_broker_trials(
     result = await stores.topology.record_broker_trial_scores(
         workspace_key=workspace,
         skill_graph_operation_id=operation_id,
-        replay_result=_json_object(job.payload.get("broker_replay")),
-        canary_metrics=_json_object(job.payload.get("broker_canary_metrics")),
+        replay_result=_json_object(_payload_dict(job.payload).get("broker_replay")),
+        canary_metrics=_json_object(_payload_dict(job.payload).get("broker_canary_metrics")),
         scored_by=job.lease_owner or "autoskill-worker",
     )
     return result.to_json()
@@ -1202,9 +1294,13 @@ async def _run_writer_apply(stores: WorkerStores, job: JobRecord) -> dict[str, A
             "source": "worker",
             "job_id": str(job.job_id),
             "job_kind": job.job_kind,
-            "policy_approved": bool(job.payload.get("policy_approved")),
-            "activation_gate_required": bool(job.payload.get("activation_gate_required")),
-            "has_manifest_relative_path": bool(job.payload.get("manifest_relative_path")),
+            "policy_approved": bool(_payload_dict(job.payload).get("policy_approved")),
+            "activation_gate_required": bool(
+                _payload_dict(job.payload).get("activation_gate_required")
+            ),
+            "has_manifest_relative_path": bool(
+                _payload_dict(job.payload).get("manifest_relative_path")
+            ),
         },
         object_refs=[{"object_type": "job", "object_id": str(job.job_id)}],
     )
@@ -1213,7 +1309,7 @@ async def _run_writer_apply(stores: WorkerStores, job: JobRecord) -> dict[str, A
             raise ValueError("governance store is required for writer apply")
         if stores.workspace_root is None or stores.archive_root is None:
             raise ValueError("writer roots are required for writer apply")
-        if not bool(job.payload.get("policy_approved")):
+        if not bool(_payload_dict(job.payload).get("policy_approved")):
             raise ValueError("writer apply requires explicit policy_approved=true")
         transaction_id = _payload_uuid(job.payload, "evolution_transaction_id")
         manifest_relative_path = _payload_str(job.payload, "manifest_relative_path")
@@ -1277,7 +1373,7 @@ async def _check_writer_activation_gate(
     staging_root: Path,
     manifest_relative_path: str,
 ):
-    if not bool(job.payload.get("activation_gate_required")):
+    if not bool(_payload_dict(job.payload).get("activation_gate_required")):
         return None
     if stores.activation_gate is None:
         raise ValueError("writer apply activation gate requires activation_gate store")
@@ -1571,22 +1667,34 @@ def _payload_workspace(job: JobRecord) -> str | None:
     return _payload_str(job.payload, "workspace_id") or job.workspace_key
 
 
-def _payload_str(payload: dict[str, Any], key: str) -> str | None:
-    value = payload.get(key)
+def _payload_dict(payload: dict[str, Any] | str | None) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, str):
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
+
+
+def _payload_str(payload: dict[str, Any] | str | None, key: str) -> str | None:
+    value = _payload_dict(payload).get(key)
     if value is None:
         return None
     return str(value)
 
 
 def _payload_int(
-    payload: dict[str, Any],
+    payload: dict[str, Any] | str | None,
     key: str,
     *,
     default: int,
     minimum: int,
     maximum: int,
 ) -> int:
-    value = payload.get(key, default)
+    value = _payload_dict(payload).get(key, default)
     try:
         parsed = int(value)
     except (TypeError, ValueError):
@@ -1594,8 +1702,8 @@ def _payload_int(
     return max(minimum, min(parsed, maximum))
 
 
-def _payload_uuid(payload: dict[str, Any], key: str) -> UUID | None:
-    value = payload.get(key)
+def _payload_uuid(payload: dict[str, Any] | str | None, key: str) -> UUID | None:
+    value = _payload_dict(payload).get(key)
     return _uuid_value(value)
 
 

@@ -232,6 +232,13 @@ class ProfileStore(Protocol):
     ) -> ModelProfileRecord | None:
         """Fetch one embedding profile for provider-qualified runtime use."""
 
+    async def get_active_embedding_profile(
+        self,
+        *,
+        workspace_key: str,
+    ) -> ModelProfileRecord | None:
+        """Fetch the active qualified embedding profile for a workspace, if any."""
+
 
 class NullProfileStore:
     async def upsert_executor_profile(
@@ -367,6 +374,13 @@ class NullProfileStore:
         *,
         workspace_key: str,
         profile_key: str,
+    ) -> ModelProfileRecord | None:
+        return None
+
+    async def get_active_embedding_profile(
+        self,
+        *,
+        workspace_key: str,
     ) -> ModelProfileRecord | None:
         return None
 
@@ -567,6 +581,17 @@ class AsyncpgProfileStore(AsyncpgPoolOwner):
         pool = await self._get_pool()
         async with pool.acquire() as conn, conn.transaction():
             workspace_id = await ensure_workspace(conn, workspace_key)
+            if status == "active":
+                await conn.execute(
+                    """
+                    UPDATE autoskill.embedding_profiles
+                    SET status = 'qualified',
+                        updated_at = now()
+                    WHERE workspace_id = $1
+                      AND status = 'active'
+                    """,
+                    workspace_id,
+                )
             row = await conn.fetchrow(
                 """
                 INSERT INTO autoskill.embedding_profiles (
@@ -627,6 +652,28 @@ class AsyncpgProfileStore(AsyncpgPoolOwner):
                 """,
                 workspace_id,
                 profile_key,
+                workspace_key,
+            )
+        return ModelProfileRecord.from_embedding_row(row) if row else None
+
+    async def get_active_embedding_profile(
+        self,
+        *,
+        workspace_key: str,
+    ) -> ModelProfileRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                SELECT *, $2::text AS workspace_key
+                FROM autoskill.embedding_profiles
+                WHERE workspace_id = $1
+                  AND status = 'active'
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                workspace_id,
                 workspace_key,
             )
         return ModelProfileRecord.from_embedding_row(row) if row else None

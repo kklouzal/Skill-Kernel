@@ -258,7 +258,9 @@ Acceptance:
 - archived skills promote when demand recurs; implemented for archived skills with repeated retrieval demand, no harm/canary failures, and latest evaluator pass;
 - duplicates merge only after probes pass; implemented for explicit duplicate graph edges as lower-utility duplicate archiving only when both latest skill versions have evaluator pass, with dedicated target/no-skill/regression/collision merge probe plans plus repair/split structured trial/gate proposals now logged for duplicate, harmful, or shadowing patterns;
 - active bank budget is enforced; implemented by archiving lowest-utility overflow active skills.
-- external collisions pause candidate creation for review; real external-root scanning/import recommendation flows remain pending.
+- external collisions pause candidate creation for review; real external-root scanning,
+  import recommendation, operator review actions, and stage-only import
+  materialization are implemented without mutating external-owned roots.
 
 ## Phase 9 - Drift and Advanced Governance
 

@@ -106,6 +106,41 @@ def build_text_embedder_from_settings(settings: object) -> TextEmbedder:
     raise ValueError(f"unsupported embedding provider: {provider}")
 
 
+def build_text_embedder_from_profile(
+    profile: object,
+    *,
+    embedding_api_key: str | None = None,
+    embedding_api_base_url: str | None = None,
+) -> TextEmbedder:
+    status = getattr(profile, "status", None)
+    qualification = getattr(profile, "qualification", {}) or {}
+    if status not in {"qualified", "active"}:
+        raise ValueError("embedding profile is not qualified")
+    if status == "active" and qualification.get("verdict") not in {None, "qualified"}:
+        raise ValueError("active embedding profile has a failing qualification verdict")
+    route_kind = str(getattr(profile, "route_kind", ""))
+    model = str(getattr(profile, "model", ""))
+    embedding_dim = int(getattr(profile, "embedding_dim", 0) or 0)
+    if embedding_dim <= 0:
+        raise ValueError("embedding profile must declare a positive embedding_dim")
+    if route_kind == "hash":
+        return HashingTextEmbedder(model=model, embedding_dim=embedding_dim)
+    if route_kind == "openai_compatible":
+        base_url = getattr(profile, "endpoint_ref", None) or embedding_api_base_url
+        if not base_url or not embedding_api_key:
+            raise ValueError(
+                "qualified openai_compatible profile requires endpoint and API key"
+            )
+        return OpenAICompatibleTextEmbedder(
+            base_url=str(base_url),
+            api_key=embedding_api_key,
+            model=model,
+            embedding_dim=embedding_dim,
+            timeout_seconds=float(getattr(profile, "timeout_seconds", 30.0)),
+        )
+    raise ValueError(f"embedding profile route_kind is not supported: {route_kind}")
+
+
 @dataclass(frozen=True)
 class EmbeddingGenerationResult:
     scanned: int

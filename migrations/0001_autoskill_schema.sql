@@ -310,12 +310,19 @@ CREATE TABLE IF NOT EXISTS autoskill.embedding_profiles (
   endpoint_ref text,
   timeout_seconds double precision NOT NULL DEFAULT 30,
   status text NOT NULL DEFAULT 'candidate'
-    CHECK (status IN ('candidate','qualified','failed','disabled')),
+    CHECK (status IN ('candidate','qualified','active','failed','disabled')),
   qualification jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(workspace_id, profile_key)
 );
+
+ALTER TABLE autoskill.embedding_profiles
+  DROP CONSTRAINT IF EXISTS embedding_profiles_status_check;
+
+ALTER TABLE autoskill.embedding_profiles
+  ADD CONSTRAINT embedding_profiles_status_check
+  CHECK (status IN ('candidate','qualified','active','failed','disabled'));
 
 CREATE TABLE IF NOT EXISTS autoskill.embedding_profile_qualification_runs (
   embedding_profile_qualification_run_id uuid PRIMARY KEY,
@@ -409,6 +416,23 @@ ALTER TABLE autoskill.retrieval_logs
 
 ALTER TABLE autoskill.retrieval_logs
   ADD COLUMN IF NOT EXISTS parent_span_id uuid;
+
+CREATE TABLE IF NOT EXISTS autoskill.broker_replay_episodes (
+  broker_replay_episode_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  source_retrieval_log_id uuid REFERENCES autoskill.retrieval_logs(retrieval_log_id),
+  episode_key text NOT NULL,
+  redacted_user_intent text NOT NULL,
+  expected_decision text,
+  expected_skill_ids uuid[] NOT NULL DEFAULT '{}',
+  tags text[] NOT NULL DEFAULT '{}',
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(workspace_id, episode_key)
+);
+
+CREATE INDEX IF NOT EXISTS broker_replay_episodes_workspace_created_idx
+  ON autoskill.broker_replay_episodes(workspace_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS autoskill.body_index_documents (
   body_index_document_id uuid PRIMARY KEY,

@@ -6,6 +6,7 @@ from autoskill.api.app import (
     BrokerPolicyCanaryRequest,
     BrokerPolicyReplayRequest,
     BrokerPolicyUpsertRequest,
+    BrokerReplayEpisodeRecordRequest,
     create_app,
 )
 from autoskill.db.broker_policy import NullBrokerPolicyStore
@@ -86,6 +87,62 @@ def test_broker_policy_api_activates_policy_and_replay_uses_it() -> None:
     assert replayed.replay.matched == 1
     assert replayed.replay.policy["version"] == "broker-policy-test.v1"
     assert retrieval.calls[0]["limit"] == 2
+
+
+def test_broker_policy_replay_uses_stored_redacted_episode_corpus() -> None:
+    policy_store = NullBrokerPolicyStore()
+    skill_id = uuid4()
+    retrieval = MemoryBrokerRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=skill_id,
+                summary="WHEN PDF tables are malformed, use the deterministic repair workflow.",
+                rank=0.9,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "pdf-table-repair",
+                },
+            )
+        ]
+    )
+    app = create_app(
+        broker_policy_store=policy_store,
+        retrieval_store=retrieval,
+    )
+    record = next(
+        route for route in app.routes if route.path == "/v1/broker/replay-episodes"
+    )
+    replay = next(route for route in app.routes if route.path == "/v1/broker/policies/replay")
+
+    async def run():
+        stored = await record.endpoint(
+            request=BrokerReplayEpisodeRecordRequest(
+                workspace_id="dev-01",
+                episode_key="pdf-table-prod-1",
+                redacted_user_intent="repair redacted pdf table",
+                expected_decision="skill_hint",
+                expected_skill_ids=[skill_id],
+                tags=["production", "pdf"],
+            )
+        )
+        replayed = await replay.endpoint(
+            request=BrokerPolicyReplayRequest(
+                workspace_id="dev-01",
+                include_stored_episodes=True,
+                stored_episode_tags=["production"],
+            )
+        )
+        return stored, replayed
+
+    stored, replayed = asyncio.run(run())
+
+    assert stored.episode["episode_key"] == "pdf-table-prod-1"
+    assert replayed.replay.total == 1
+    assert replayed.replay.matched == 1
+    assert retrieval.calls[0]["query"] == "repair redacted pdf table"
 
 
 def test_broker_policy_canary_rolls_back_critical_policy() -> None:
