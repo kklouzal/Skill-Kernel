@@ -21,6 +21,11 @@ from autoskill.db.activation import (
 )
 from autoskill.db.attribution import AsyncpgAttributionStore, AttributionStore, NullAttributionStore
 from autoskill.db.audit import AsyncpgAuditStore, AuditStore, NullAuditStore
+from autoskill.db.broker_policy import (
+    AsyncpgBrokerPolicyStore,
+    BrokerPolicyStore,
+    NullBrokerPolicyStore,
+)
 from autoskill.db.candidates import AsyncpgCandidateStore, CandidateStore, NullCandidateStore
 from autoskill.db.compatibility import (
     AsyncpgCompatibilityStore,
@@ -73,11 +78,17 @@ from autoskill.db.skills import AsyncpgSkillStore, NullSkillStore, SkillStore
 from autoskill.db.topology import AsyncpgTopologyStore, NullTopologyStore, TopologyStore
 from autoskill.db.utility import AsyncpgUtilityStore, NullUtilityStore, UtilityStore
 from autoskill.services.broker import (
+    BrokerCanaryFeedback,
+    BrokerPolicy,
+    BrokerReplayEpisode,
+    BrokerReplayResult,
     ContextHintCache,
     ContextHintRequest,
     ContextHintResponse,
     bootstrap_context_hint,
     build_context_hint,
+    evaluate_broker_canary_feedback,
+    replay_broker_policy,
 )
 from autoskill.services.candidates import propose_candidate_skills
 from autoskill.services.embedding_generation import (
@@ -710,6 +721,51 @@ class RevocationRequestCreateResponse(BaseModel):
     revocation: dict[str, object]
 
 
+class BrokerPolicyUpsertRequest(BaseModel):
+    workspace_id: str
+    version: str
+    policy: dict[str, object]
+    status: str = "candidate"
+    broker_policy_version_id: UUID | None = None
+
+
+class BrokerPolicyResponse(BaseModel):
+    policy_version: dict[str, object] | None
+
+
+class BrokerPolicyActivateRequest(BaseModel):
+    workspace_id: str
+    broker_policy_version_id: UUID
+
+
+class BrokerPolicyReplayRequest(BaseModel):
+    workspace_id: str
+    episodes: list[BrokerReplayEpisode]
+    policy: dict[str, object] | None = None
+    version: str | None = None
+    broker_policy_version_id: UUID | None = None
+    executor_profile_id: UUID | None = None
+    max_tokens: int = 800
+
+
+class BrokerPolicyReplayResponse(BaseModel):
+    replay: BrokerReplayResult
+
+
+class BrokerPolicyCanaryRequest(BaseModel):
+    workspace_id: str
+    broker_policy_version_id: UUID
+    status: str | None = None
+    reason: str | None = None
+    metrics: dict[str, object] = {}
+    replay: BrokerReplayResult | None = None
+
+
+class BrokerPolicyCanaryResponse(BaseModel):
+    feedback: BrokerCanaryFeedback
+    policy_version: dict[str, object] | None
+
+
 class CanaryResultRequest(BaseModel):
     workspace_id: str
     skill_id: UUID
@@ -1134,6 +1190,16 @@ def _build_context_governance_store() -> ContextGovernanceStore:
     return NullContextGovernanceStore()
 
 
+def _build_broker_policy_store() -> BrokerPolicyStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgBrokerPolicyStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullBrokerPolicyStore()
+
+
 def _build_topology_store() -> TopologyStore:
     settings = get_settings()
     if settings.database_url:
@@ -1423,6 +1489,55 @@ async def _check_topology_activation_gate_for_api(
         )
 
 
+async def _active_broker_policy(
+    broker_policies: BrokerPolicyStore,
+    workspace_id: str,
+) -> BrokerPolicy:
+    active = await broker_policies.get_active_policy(workspace_key=workspace_id)
+    if active is None:
+        return BrokerPolicy()
+    return BrokerPolicy.from_artifact(
+        version=active.version,
+        policy=active.policy,
+        broker_policy_version_id=active.broker_policy_version_id,
+    )
+
+
+async def _request_broker_policy(
+    broker_policies: BrokerPolicyStore,
+    request: BrokerPolicyReplayRequest,
+) -> BrokerPolicy:
+    if request.policy is not None:
+        return BrokerPolicy.from_artifact(
+            version=request.version or "inline.replay",
+            policy=request.policy,
+            broker_policy_version_id=request.broker_policy_version_id,
+        )
+    if request.broker_policy_version_id is not None:
+        record = await broker_policies.get_policy_version(
+            workspace_key=request.workspace_id,
+            broker_policy_version_id=request.broker_policy_version_id,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="broker policy version not found",
+            )
+        return BrokerPolicy.from_artifact(
+            version=record.version,
+            policy=record.policy,
+            broker_policy_version_id=record.broker_policy_version_id,
+        )
+    active = await broker_policies.get_active_policy(workspace_key=request.workspace_id)
+    if active is None:
+        return BrokerPolicy()
+    return BrokerPolicy.from_artifact(
+        version=active.version,
+        policy=active.policy,
+        broker_policy_version_id=active.broker_policy_version_id,
+    )
+
+
 def create_app(
     event_store: EventStore | None = None,
     job_store: JobStore | None = None,
@@ -1448,6 +1563,7 @@ def create_app(
     llm_client: LLMClient | None = None,
     compatibility_store: CompatibilityStore | None = None,
     context_governance_store: ContextGovernanceStore | None = None,
+    broker_policy_store: BrokerPolicyStore | None = None,
     topology_store: TopologyStore | None = None,
     activation_gate_store: ActivationGateStore | None = None,
     writer_workspace_root: Path | None = None,
@@ -1484,6 +1600,7 @@ def create_app(
     )
     compatibility = compatibility_store or _build_compatibility_store()
     context_governance = context_governance_store or _build_context_governance_store()
+    broker_policies = broker_policy_store or _build_broker_policy_store()
     topology = topology_store or _build_topology_store()
     activation_gate = activation_gate_store or _build_activation_gate_store()
     broker_cache = ContextHintCache()
@@ -1517,6 +1634,7 @@ def create_app(
                 profile_qualifications,
                 compatibility,
                 context_governance,
+                broker_policies,
                 topology,
                 activation_gate,
             ):
@@ -1579,6 +1697,7 @@ def create_app(
         settings = get_settings()
         if not settings.runtime_context_broker_enabled:
             return bootstrap_context_hint(request)
+        policy = await _active_broker_policy(broker_policies, request.workspace_id)
         return await build_context_hint(
             retrieval,
             request,
@@ -1590,6 +1709,127 @@ def create_app(
                 if settings.embedding_provider == "hash"
                 else None
             ),
+            policy=policy,
+        )
+
+    @app.get(
+        "/v1/broker/policies/active",
+        response_model=BrokerPolicyResponse,
+    )
+    async def get_active_broker_policy(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str = "default",
+    ) -> BrokerPolicyResponse:
+        _require_control_auth(authorization)
+        active = await broker_policies.get_active_policy(workspace_key=workspace_id)
+        return BrokerPolicyResponse(
+            policy_version=active.to_json() if active else None,
+        )
+
+    @app.post(
+        "/v1/broker/policies",
+        response_model=BrokerPolicyResponse,
+    )
+    async def upsert_broker_policy(
+        request: BrokerPolicyUpsertRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> BrokerPolicyResponse:
+        _require_control_auth(authorization)
+        if request.status not in {"candidate", "active"}:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="status must be candidate or active",
+            )
+        record = await broker_policies.upsert_policy_version(
+            workspace_key=request.workspace_id,
+            version=request.version,
+            policy=request.policy,
+            status=request.status,
+            broker_policy_version_id=request.broker_policy_version_id,
+        )
+        broker_cache.invalidate(workspace_id=request.workspace_id)
+        return BrokerPolicyResponse(policy_version=record.to_json())
+
+    @app.post(
+        "/v1/broker/policies/activate",
+        response_model=BrokerPolicyResponse,
+    )
+    async def activate_broker_policy(
+        request: BrokerPolicyActivateRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> BrokerPolicyResponse:
+        _require_control_auth(authorization)
+        record = await broker_policies.activate_policy_version(
+            workspace_key=request.workspace_id,
+            broker_policy_version_id=request.broker_policy_version_id,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="broker policy version not found",
+            )
+        broker_cache.invalidate(workspace_id=request.workspace_id)
+        return BrokerPolicyResponse(policy_version=record.to_json())
+
+    @app.post(
+        "/v1/broker/policies/replay",
+        response_model=BrokerPolicyReplayResponse,
+    )
+    async def replay_broker_policy_route(
+        request: BrokerPolicyReplayRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> BrokerPolicyReplayResponse:
+        _require_control_auth(authorization)
+        policy = await _request_broker_policy(broker_policies, request)
+        settings = get_settings()
+        replay = await replay_broker_policy(
+            retrieval,
+            ContextHintRequest(
+                workspace_id=request.workspace_id,
+                executor_profile_id=request.executor_profile_id,
+                max_tokens=request.max_tokens,
+            ),
+            episodes=request.episodes,
+            policy=policy,
+            compatibility=compatibility,
+            semantic_embedder=(
+                build_text_embedder_from_settings(settings)
+                if settings.embedding_provider == "hash"
+                else None
+            ),
+        )
+        return BrokerPolicyReplayResponse(replay=replay)
+
+    @app.post(
+        "/v1/broker/policies/canary",
+        response_model=BrokerPolicyCanaryResponse,
+    )
+    async def record_broker_policy_canary(
+        request: BrokerPolicyCanaryRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> BrokerPolicyCanaryResponse:
+        _require_control_auth(authorization)
+        feedback = evaluate_broker_canary_feedback(
+            replay=request.replay,
+            metrics=request.metrics,
+            status=request.status,
+        )
+        record = await broker_policies.record_canary_feedback(
+            workspace_key=request.workspace_id,
+            broker_policy_version_id=request.broker_policy_version_id,
+            status=feedback.status,
+            metrics=feedback.metrics,
+            reason=request.reason or ",".join(feedback.reason_codes) or None,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="broker policy version not found",
+            )
+        broker_cache.invalidate(workspace_id=request.workspace_id)
+        return BrokerPolicyCanaryResponse(
+            feedback=feedback,
+            policy_version=record.to_json(),
         )
 
     @app.post(
@@ -2078,6 +2318,7 @@ def create_app(
                 profile_key=request.profile_key,
                 probe_set_version=request.probe_set_version
                 or "autoskill-embedding-profile-probes.v1",
+                embedding_api_key=getattr(get_settings(), "embedding_api_key", None),
             )
         except ProfileQualificationError as exc:
             raise HTTPException(

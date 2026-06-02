@@ -3,7 +3,15 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalResult
-from autoskill.services.broker import ContextHintCache, ContextHintRequest, build_context_hint
+from autoskill.services.broker import (
+    BrokerPolicy,
+    BrokerReplayEpisode,
+    ContextHintCache,
+    ContextHintRequest,
+    build_context_hint,
+    evaluate_broker_canary_feedback,
+    replay_broker_policy,
+)
 from autoskill.services.embedding_generation import HashingTextEmbedder
 
 
@@ -116,6 +124,7 @@ class MemoryBrokerRetrievalStore:
         decision: str,
         suppressed: list[dict[str, object]],
         reason_codes: list[str],
+        broker_policy_version_id=None,
     ) -> None:
         self.records.append(
             {
@@ -124,6 +133,7 @@ class MemoryBrokerRetrievalStore:
                 "decision": decision,
                 "suppressed": suppressed,
                 "reason_codes": reason_codes,
+                "broker_policy_version_id": broker_policy_version_id,
             }
         )
 
@@ -657,3 +667,135 @@ def test_context_broker_cache_invalidates_by_workspace_and_skill() -> None:
 
     assert removed == 1
     assert len(store.calls) == 2
+
+
+def test_context_broker_applies_versioned_policy_limits() -> None:
+    first_skill_id = uuid4()
+    second_skill_id = uuid4()
+    policy_id = uuid4()
+    store = MemoryBrokerRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=first_skill_id,
+                summary="WHEN PDF tables are malformed, use the deterministic repair workflow.",
+                rank=0.9,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "pdf-table-repair",
+                },
+            ),
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=second_skill_id,
+                summary="WHEN PDF labels are missing, use the label repair workflow.",
+                rank=0.8,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "pdf-label-repair",
+                },
+            ),
+        ],
+        graph_candidates=[
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=uuid4(),
+                summary="Graph candidate should not hydrate when graph_limit is zero.",
+                rank=0.0,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "graph-candidate",
+                    "graph_edge_kind": "prerequisite",
+                },
+            )
+        ],
+    )
+    policy = BrokerPolicy.from_artifact(
+        version="broker-test.v2",
+        broker_policy_version_id=policy_id,
+        policy={
+            "runtime_context_broker": {
+                "lexical_limit": 3,
+                "semantic_limit": 2,
+                "graph_limit": 0,
+                "max_rendered_skills": 1,
+                "graph_edge_kinds": ["prerequisite"],
+            }
+        },
+    )
+
+    async def run():
+        return await build_context_hint(
+            store,
+            ContextHintRequest(
+                workspace_id="dev-01",
+                user_intent="repair pdf",
+                max_tokens=120,
+            ),
+            policy=policy,
+        )
+
+    response = asyncio.run(run())
+
+    assert response.broker_policy_version == "broker-test.v2"
+    assert response.broker_policy_version_id == str(policy_id)
+    assert response.skill_ids == [str(first_skill_id)]
+    assert store.calls[0]["limit"] == 3
+    assert store.graph_calls[0]["limit"] == 0
+    assert store.records[0]["broker_policy_version_id"] == policy_id
+
+
+def test_broker_policy_replay_reports_mismatches_and_degradation() -> None:
+    store = MemoryBrokerRetrievalStore([])
+    policy = BrokerPolicy(version="replay.v1")
+
+    async def run():
+        return await replay_broker_policy(
+            store,
+            ContextHintRequest(workspace_id="dev-01", max_tokens=120),
+            episodes=[
+                BrokerReplayEpisode(
+                    episode_id="expected-skill",
+                    user_intent="repair pdf",
+                    expected_decision="skill_hint",
+                    expected_skill_ids=[str(uuid4())],
+                )
+            ],
+            policy=policy,
+        )
+
+    replay = asyncio.run(run())
+
+    assert replay.total == 1
+    assert replay.mismatched == 1
+    assert replay.degradation_count == 1
+    assert replay.episodes[0]["decision"] == "no_skill"
+
+
+def test_broker_canary_feedback_recommends_rollback_on_replay_degradation() -> None:
+    replay = asyncio.run(
+        replay_broker_policy(
+            MemoryBrokerRetrievalStore([]),
+            ContextHintRequest(workspace_id="dev-01"),
+            episodes=[
+                BrokerReplayEpisode(
+                    episode_id="expected-skill",
+                    user_intent="repair pdf",
+                    expected_decision="skill_hint",
+                )
+            ],
+            policy=BrokerPolicy(version="canary.v1"),
+        )
+    )
+
+    feedback = evaluate_broker_canary_feedback(replay=replay, metrics={"shadowed_rate": 0.0})
+
+    assert feedback.status == "critical"
+    assert feedback.rollback_recommended is True
+    assert feedback.reason_codes == ["replay-degraded"]

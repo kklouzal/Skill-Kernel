@@ -102,6 +102,7 @@ class RetrievalStore(Protocol):
         decision: str,
         suppressed: list[dict[str, object]],
         reason_codes: list[str],
+        broker_policy_version_id: UUID | None = None,
     ) -> None:
         """Attach broker rendering telemetry to a retrieval log."""
 
@@ -171,6 +172,7 @@ class NullRetrievalStore:
         decision: str,
         suppressed: list[dict[str, object]],
         reason_codes: list[str],
+        broker_policy_version_id: UUID | None = None,
     ) -> None:
         return None
 
@@ -560,6 +562,7 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
         decision: str,
         suppressed: list[dict[str, object]],
         reason_codes: list[str],
+        broker_policy_version_id: UUID | None = None,
     ) -> None:
         if retrieval_log_id is None:
             return
@@ -571,17 +574,24 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
                 SET rendered_skill_ids = $2,
                     no_skill_control = ($3 IN ('no_skill', 'defer_skill')),
                     decision = $3,
-                    metadata = metadata || $4::jsonb
+                    broker_policy_version_id = $4,
+                    metadata = metadata || $5::jsonb
                 WHERE retrieval_log_id = $1
                 """,
                 retrieval_log_id,
                 rendered_skill_ids,
                 decision,
+                broker_policy_version_id,
                 json.dumps(
                     {
                         "suppressed": suppressed,
                         "reason_codes": reason_codes,
                         "rendered_skill_count": len(rendered_skill_ids),
+                        "broker_policy_version_id": (
+                            str(broker_policy_version_id)
+                            if broker_policy_version_id
+                            else None
+                        ),
                     },
                     sort_keys=True,
                     separators=(",", ":"),

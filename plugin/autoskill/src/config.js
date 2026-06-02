@@ -18,5 +18,9 @@ export function resolveConfig(ctx = {}) {
       maxTokens: cfg.runtimeContextBroker?.maxTokens ?? 600,
       failSoft: cfg.runtimeContextBroker?.failSoft !== false,
     },
+    runtimeToolBoundary: {
+      enabled: cfg.runtimeToolBoundary?.enabled === true,
+      blockOnHighRisk: cfg.runtimeToolBoundary?.blockOnHighRisk !== false,
+    },
   };
 }

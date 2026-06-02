@@ -102,6 +102,10 @@ Acceptance:
 - same-object/same-model embeddings from different qualified profiles remain separate; implemented with `embedding_profile_id` storage, profile-scoped uniqueness, API propagation, and local Postgres smoke validation.
 - non-default embedding dimensions can be qualified, stored, and searched under profile ownership; implemented with unbounded pgvector storage, persisted `embedding_dim`, dimension-filtered search/recall queries, and a retained expression HNSW index for the default 1536-dimensional path.
 - model/embedding qualification run tables and profile status stamping are implemented for auditable qualification gates.
+- OpenAI-compatible embedding profile qualification is implemented through the
+  same bounded provider embedder path used by generation, with dimension,
+  finite-value, non-zero, stability, and negative-pair separation checks recorded
+  without storing API keys or probe text.
 
 ## Phase 4.5 - Text Model Access and Invocation Audit
 
@@ -133,6 +137,7 @@ Deliverables:
 - shadowing logs; broker suppression/rendering telemetry is attached to retrieval logs, and outcome/correction-based shadowing detection records attribution events.
 - external-skill inventory awareness; implemented as control-authenticated upsert/list APIs, hashed-root/file-hash/status/risk metadata persistence, read-only scanner job wiring, lexical retrieval of visible/changed external skills, broker suppression as non-runtime collisions, and duplicate-match `external_collision_review` decisions that block automatic candidate creation.
 - executor-profile compatibility suppression; implemented through `skill_profile_compatibility`, a control upsert API, executor-scoped broker cache keys, and runtime suppression of explicitly `blocked` or `drifted` skill versions for the requesting executor profile.
+- broker policy artifacts; implemented as persisted `broker_policy_versions` with active-version lookup, bounded policy overrides for retrieval/graph/render limits, policy-scoped cache keys, replay evaluation primitives, and canary feedback recording.
 
 Acceptance:
 
@@ -142,6 +147,11 @@ Acceptance:
 - rendered skill IDs, suppression reasons, and reason codes are recorded on retrieval logs.
 - external skills are visible to collision analysis but are never injected as runtime hints or selected for autonomous mutation; scanner jobs hash external roots/files and quarantine scanner-blocked external skills without storing raw root paths.
 - blocked/drifted executor compatibility suppresses otherwise renderable skills for that profile while leaving unscoped/no-row retrieval unchanged; implemented and validated with focused broker tests plus compose/Postgres smoke coverage.
+- active broker policy versions are represented in retrieval/context telemetry and can be replayed against bounded episodes before canary feedback marks a policy passed, failed, or rolled back.
+- opt-in runtime tool-call boundary enforcement is implemented on
+  `before_tool_call`, preserving capture-only behavior by default and returning
+  terminal OpenClaw block decisions for deterministic high-risk tool patterns
+  when `runtimeToolBoundary.enabled=true`.
 
 ## Phase 6 - Candidate Generation in Propose-Only Mode
 
@@ -153,7 +163,10 @@ Deliverables:
 - typed LLM operation wrappers;
 - SkillIR compiler and deterministic propose-only candidate scaffolding from gated opportunities;
 - inactive candidate skill/version persistence with body-level indexing; implemented for propose-only candidates without writing runtime files and now anchored to idempotent governance transactions;
-- scanner;
+- scanner; implemented with deterministic blocking classifications for hidden
+  comments, invisible controls, secret-like material, dynamic fetch-exec,
+  policy override, credential exfiltration, destructive host commands, and
+  sensitive file harvesting;
 - probe generator; implemented as deterministic target, no-skill-control, and regression probe plans for persisted candidates;
 - evaluator; implemented as deterministic proposal-gate execution that records target, no-skill-control, and regression probe results while requiring intervention replay before activation.
 - evaluator trace propagation; implemented for API-triggered and worker-triggered proposal-gate runs with content-safe `evaluator` spans, caller/job trace preservation, and safe count/status/object-ref close metadata.
@@ -232,6 +245,7 @@ Acceptance:
 Deliverables:
 
 - `autonomous_guarded` apply; implemented as fail-closed mutation-worker `writer.apply` orchestration that only applies a staged manifest when the queued job carries explicit `policy_approved=true`;
+- repair-proposal execution; implemented as mutation-worker `repair.execute` orchestration that claims planned curation repair proposals and open drift repair candidates, records governance transactions/items/provenance, queues policy-approved staged manifests to `writer.apply`, and otherwise fail-closes to evaluator or drift recheck jobs with source execution metadata;
 - improvement engine;
 - archive/promote/merge/split; archive, evaluator-gated archived promotion, evaluator-gated explicit duplicate merge/archive, active-bank budget overflow, and planned split/improvement/disambiguation curation actions are implemented as deterministic lifecycle-state or planning actions with structured repair proposal payloads;
 - external-skill review actions; implemented as a control-authenticated operator decision ledger for reuse/import/ignore/quarantine, with no autonomous mutation of external-owned files;
@@ -261,6 +275,6 @@ Deliverables:
 
 Acceptance:
 
-- drift violations trigger targeted repair; implemented as drift-event repair-candidate metadata with localized repair plans and active drift probes that retire when contracts return valid or when an operator marks a known-noisy contract false-positive, with actual repair proposal execution still pending;
+- drift violations trigger targeted repair; implemented as drift-event repair-candidate metadata with localized repair plans and active drift probes that retire when contracts return valid or when an operator marks a known-noisy contract false-positive; conservative repair execution now queues drift rechecks or policy-approved staged writer applies rather than inventing broad autonomous mutations from incomplete source data;
 - curation logs features/actions/outcomes;
 - audit integrity verifies.

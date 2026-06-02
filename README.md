@@ -31,6 +31,9 @@ Implemented now:
 - retrieval schema support for body index documents, pgvector embeddings, lexical indexes, vector fusion, retrieval logs, and broker telemetry;
 - profile-owned embedding storage and search with variable-dimension support;
 - typed event envelope, SkillIR, SkillGraphIR, scanner, compiler, redaction, audit hash, trace spine, and path-contained writer primitives;
+- deterministic first-pass scanner classifications for hidden content,
+  secret-like material, dynamic fetch-exec, policy override, credential
+  exfiltration, destructive host commands, and sensitive file harvesting;
 - staged writer apply/rollback, provenance traversal, revocation invalidation, canary freeze, and mutation-worker rollback paths;
 - topology proposal, trial, apply, downstream action, and invalidation primitives;
 - curation, utility, duplicate-merge probe planning, repair proposal planning, drift probes, false-positive controls, and HTTP-status contract probes;
@@ -40,10 +43,13 @@ Implemented now:
 Not implemented yet:
 
 - production plugin policy enablement outside the development profile;
-- production embedding provider live validation once credentials and endpoint are configured;
-- richer broker replay and canary policy feedback for compose/decompose routing decisions;
+- production embedding provider live validation against a real configured endpoint
+  in the deployment environment;
+- topology-specific broker replay and canary scoring for compose/decompose routing
+  decisions;
 - optional operator-approved import materialization for external skills;
-- autonomous execution of repair proposals.
+- semantic SkillIR repair generation/materialization beyond conservative
+  policy-approved staged writer applies.
 
 ## Development
 

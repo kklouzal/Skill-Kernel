@@ -1,16 +1,17 @@
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from autoskill.api.app import WorkerRunOnceRequest, create_app
 from autoskill.db.activation import ActivationReadiness
-from autoskill.db.contracts import ContractExtractResult, DriftCheckResult
+from autoskill.db.contracts import ContractExtractResult, DriftCheckResult, DriftRepairEventRecord
 from autoskill.db.evaluations import EvaluationRunResult
 from autoskill.db.evidence import EvidenceDeriveResult
 from autoskill.db.observability import TraceSpanRecord
 from autoskill.db.scheduler import SchedulerTickResult
 from autoskill.db.topology import NullTopologyStore
-from autoskill.db.utility import CurationRunResult, UtilityRollupResult
+from autoskill.db.utility import CurationActionRecord, CurationRunResult, UtilityRollupResult
 from autoskill.services.worker import (
     WorkerLoopConfig,
     WorkerStores,
@@ -181,7 +182,6 @@ class MemoryObservabilityStore:
         safe_attributes=None,
         object_refs=None,
     ) -> TraceSpanRecord:
-        from datetime import UTC, datetime
         from uuid import uuid4
 
         span = TraceSpanRecord(
@@ -230,6 +230,8 @@ class MemoryUtilityWorkerStore:
     def __init__(self) -> None:
         self.rollup_calls: list[dict[str, object]] = []
         self.curation_calls: list[dict[str, object]] = []
+        self.repair_actions: list[CurationActionRecord] = []
+        self.completed_repair_actions: list[dict[str, object]] = []
 
     async def run_utility_rollup(
         self,
@@ -271,11 +273,53 @@ class MemoryUtilityWorkerStore:
             actions=[],
         )
 
+    async def claim_planned_repair_actions(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        worker_id: str | None = None,
+        job_id=None,
+    ) -> list[CurationActionRecord]:
+        claimed = self.repair_actions[:limit]
+        self.repair_actions = self.repair_actions[limit:]
+        self.completed_repair_actions.append(
+            {
+                "operation": "claim",
+                "workspace_key": workspace_key,
+                "limit": limit,
+                "worker_id": worker_id,
+                "job_id": job_id,
+            }
+        )
+        return claimed
+
+    async def complete_repair_action_execution(
+        self,
+        *,
+        workspace_key: str,
+        curation_action_id,
+        status: str,
+        execution: dict[str, object],
+    ) -> CurationActionRecord | None:
+        self.completed_repair_actions.append(
+            {
+                "operation": "complete",
+                "workspace_key": workspace_key,
+                "curation_action_id": curation_action_id,
+                "status": status,
+                "execution": execution,
+            }
+        )
+        return None
+
 
 class MemoryContractWorkerStore:
     def __init__(self) -> None:
         self.extract_calls: list[dict[str, object]] = []
         self.drift_calls: list[dict[str, object]] = []
+        self.repair_events: list[DriftRepairEventRecord] = []
+        self.completed_repair_events: list[dict[str, object]] = []
 
     async def extract_contracts(
         self,
@@ -294,6 +338,46 @@ class MemoryContractWorkerStore:
     ) -> DriftCheckResult:
         self.drift_calls.append({"workspace_key": workspace_key, "limit": limit})
         return DriftCheckResult(scanned=2, valid=1, violated=1, unknown=0, events=[])
+
+    async def claim_open_drift_repair_events(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        worker_id: str | None = None,
+        job_id=None,
+    ) -> list[DriftRepairEventRecord]:
+        claimed = self.repair_events[:limit]
+        self.repair_events = self.repair_events[limit:]
+        self.completed_repair_events.append(
+            {
+                "operation": "claim",
+                "workspace_key": workspace_key,
+                "limit": limit,
+                "worker_id": worker_id,
+                "job_id": job_id,
+            }
+        )
+        return claimed
+
+    async def complete_drift_repair_execution(
+        self,
+        *,
+        workspace_key: str,
+        drift_event_id,
+        status: str,
+        execution: dict[str, object],
+    ) -> DriftRepairEventRecord | None:
+        self.completed_repair_events.append(
+            {
+                "operation": "complete",
+                "workspace_key": workspace_key,
+                "drift_event_id": drift_event_id,
+                "status": status,
+                "execution": execution,
+            }
+        )
+        return None
 
 
 @dataclass
@@ -1445,3 +1529,128 @@ def test_worker_dispatches_contract_and_drift_jobs() -> None:
     assert second.output["violated"] == 1
     assert contracts.extract_calls == [{"workspace_key": "dev-01", "limit": 11}]
     assert contracts.drift_calls == [{"workspace_key": "dev-01", "limit": 13}]
+
+
+def test_repair_execute_queues_evaluator_when_curation_source_lacks_staged_manifest() -> None:
+    jobs = MemoryJobStore()
+    utility = MemoryUtilityWorkerStore()
+    governance = MemoryGovernanceStore()
+    action_id = uuid4()
+    skill_id = uuid4()
+    utility.repair_actions.append(
+        CurationActionRecord(
+            curation_action_id=action_id,
+            skill_id=skill_id,
+            action="plan_improvement",
+            status="planned",
+            reason="repeated harmful outcomes require guarded improvement",
+            features={
+                "repair_proposal": {
+                    "schema": "autoskill.curation_repair_proposal.v1",
+                    "proposal_kind": "improve",
+                    "subject_skill_id": str(skill_id),
+                    "planned_trials": ["target", "regression", "no_skill_control"],
+                    "acceptance_gate": {
+                        "scanner_pass": True,
+                        "regression_failures": 0,
+                        "requires_no_skill_control": True,
+                    },
+                }
+            },
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="repair.execute",
+            idempotency_key="repair:curation",
+            payload={"workspace_id": "dev-01", "curation_limit": 1, "drift_limit": 0},
+        )
+        stores = WorkerStores(
+            jobs=jobs,
+            scheduler=MemorySchedulerWorkerStore(),
+            evidence=MemoryEvidenceWorkerStore(),
+            embeddings=MemoryPendingEmbeddingStore(),
+            utility=utility,
+            governance=governance,
+        )
+        return await run_worker_once(stores, worker_id="worker-1", pool="mutation")
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["claimed"] == 1
+    assert result.output["gate_jobs_queued"] == 1
+    assert result.output["writer_apply_queued"] == 0
+    queued_eval = jobs.jobs[
+        f"repair-execute:curation_action:{action_id}:evaluations.run"
+    ]
+    assert queued_eval.job_kind == "evaluations.run"
+    assert queued_eval.payload["repair_execution"]["reason"] == (
+        "source data insufficient for autonomous writer apply"
+    )
+    assert utility.completed_repair_actions[-1]["status"] == "queued"
+    assert governance.items[0].item_kind == "curation_action_repair_proposal"
+    assert governance.items[0].activation_state == "planned"
+    assert governance.edges[0].relation == "records_repair_execution_plan"
+
+
+def test_repair_execute_queues_writer_apply_only_for_policy_approved_manifest() -> None:
+    jobs = MemoryJobStore()
+    contracts = MemoryContractWorkerStore()
+    governance = MemoryGovernanceStore()
+    drift_event_id = uuid4()
+    skill_id = uuid4()
+    skill_version_id = uuid4()
+    contracts.repair_events.append(
+        DriftRepairEventRecord(
+            drift_event_id=drift_event_id,
+            environment_contract_id=uuid4(),
+            skill_id=skill_id,
+            skill_version_id=skill_version_id,
+            status="open",
+            reason="required env var AUTOSKILL_EXAMPLE is missing",
+            repair_candidate={
+                "kind": "contract_repair",
+                "repair_plan": {"kind": "localized_contract_repair"},
+                "writer_apply": {
+                    "policy_approved": True,
+                    "manifest_relative_path": "autoskill-example/writer-manifest.json",
+                },
+            },
+        )
+    )
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="repair.execute",
+            idempotency_key="repair:drift",
+            payload={"workspace_id": "dev-01", "curation_limit": 0, "drift_limit": 1},
+        )
+        stores = WorkerStores(
+            jobs=jobs,
+            scheduler=MemorySchedulerWorkerStore(),
+            evidence=MemoryEvidenceWorkerStore(),
+            embeddings=MemoryPendingEmbeddingStore(),
+            contracts=contracts,
+            governance=governance,
+        )
+        return await run_worker_once(stores, worker_id="worker-1", pool="mutation")
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["claimed"] == 1
+    assert result.output["writer_apply_queued"] == 1
+    queued_apply = jobs.jobs[f"repair-execute:drift_event:{drift_event_id}:writer-apply"]
+    assert queued_apply.job_kind == "writer.apply"
+    assert queued_apply.payload["policy_approved"] is True
+    assert queued_apply.payload["activation_gate_required"] is True
+    assert queued_apply.payload["manifest_relative_path"] == (
+        "autoskill-example/writer-manifest.json"
+    )
+    assert contracts.completed_repair_events[-1]["status"] == "repair_queued"
+    assert governance.items[0].item_kind == "drift_event_repair_proposal"

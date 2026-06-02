@@ -149,6 +149,16 @@ class JobDefinition:
     handler: Callable[[WorkerStores, JobRecord], Awaitable[dict[str, Any]]]
 
 
+@dataclass(frozen=True)
+class RepairExecutionSource:
+    source_kind: Literal["curation_action", "drift_event"]
+    source_id: UUID
+    skill_id: UUID | None
+    skill_version_id: UUID | None
+    proposal: dict[str, Any]
+    reason: str
+
+
 async def run_worker_once(
     stores: WorkerStores,
     *,
@@ -556,6 +566,322 @@ async def _run_drift_checks(stores: WorkerStores, job: JobRecord) -> dict[str, A
         limit=_payload_int(job.payload, "limit", default=250, minimum=1, maximum=1000),
     )
     return result.to_json()
+
+
+async def _run_repair_execute(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
+    if stores.governance is None:
+        raise ValueError("governance store is required for repair execution")
+    workspace = _payload_workspace(job)
+    if workspace is None:
+        raise ValueError("repair execution requires workspace_id")
+
+    curation_limit = _payload_int(
+        job.payload,
+        "curation_limit",
+        default=10,
+        minimum=0,
+        maximum=100,
+    )
+    drift_limit = _payload_int(job.payload, "drift_limit", default=10, minimum=0, maximum=100)
+    sources = await _claim_repair_execution_sources(
+        stores,
+        workspace_key=workspace,
+        curation_limit=curation_limit,
+        drift_limit=drift_limit,
+        worker_id=job.lease_owner,
+        job_id=job.job_id,
+    )
+    processed: list[dict[str, Any]] = []
+    queued = blocked = writer_apply_queued = gate_jobs_queued = 0
+    for source in sources:
+        try:
+            execution = await _execute_repair_source(stores, job, workspace, source)
+            status = "queued"
+            queued += 1
+            writer_apply_queued += int(execution.get("queued_job_kind") == "writer.apply")
+            gate_jobs_queued += int(execution.get("queued_job_kind") != "writer.apply")
+        except Exception as error:
+            status = "blocked"
+            blocked += 1
+            execution = {
+                "status": "blocked",
+                "source_kind": source.source_kind,
+                "source_id": str(source.source_id),
+                "error": f"{type(error).__name__}: {error}",
+            }
+        await _complete_repair_execution_source(
+            stores,
+            workspace_key=workspace,
+            source=source,
+            status=status,
+            execution=execution,
+        )
+        processed.append(execution)
+    return {
+        "claimed": len(sources),
+        "queued": queued,
+        "blocked": blocked,
+        "writer_apply_queued": writer_apply_queued,
+        "gate_jobs_queued": gate_jobs_queued,
+        "repairs": processed,
+    }
+
+
+async def _claim_repair_execution_sources(
+    stores: WorkerStores,
+    *,
+    workspace_key: str,
+    curation_limit: int,
+    drift_limit: int,
+    worker_id: str | None,
+    job_id: UUID,
+) -> list[RepairExecutionSource]:
+    sources: list[RepairExecutionSource] = []
+    if curation_limit > 0 and stores.utility is not None:
+        claim = getattr(stores.utility, "claim_planned_repair_actions", None)
+        if claim is not None:
+            actions = await claim(
+                workspace_key=workspace_key,
+                limit=curation_limit,
+                worker_id=worker_id,
+                job_id=job_id,
+            )
+            for action in actions:
+                proposal = _json_object(action.features.get("repair_proposal"))
+                if not proposal:
+                    continue
+                sources.append(
+                    RepairExecutionSource(
+                        source_kind="curation_action",
+                        source_id=action.curation_action_id,
+                        skill_id=action.skill_id,
+                        skill_version_id=None,
+                        proposal=proposal,
+                        reason=action.reason,
+                    )
+                )
+    if drift_limit > 0 and stores.contracts is not None:
+        claim = getattr(stores.contracts, "claim_open_drift_repair_events", None)
+        if claim is not None:
+            events = await claim(
+                workspace_key=workspace_key,
+                limit=drift_limit,
+                worker_id=worker_id,
+                job_id=job_id,
+            )
+            for event in events:
+                sources.append(
+                    RepairExecutionSource(
+                        source_kind="drift_event",
+                        source_id=event.drift_event_id,
+                        skill_id=event.skill_id,
+                        skill_version_id=event.skill_version_id,
+                        proposal=event.repair_candidate,
+                        reason=event.reason,
+                    )
+                )
+    return sources
+
+
+async def _execute_repair_source(
+    stores: WorkerStores,
+    job: JobRecord,
+    workspace_key: str,
+    source: RepairExecutionSource,
+) -> dict[str, Any]:
+    transaction = await stores.governance.start_transaction(
+        workspace_key=workspace_key,
+        transaction_kind="repair_proposal_execution",
+        idempotency_key=f"repair-execute:{source.source_kind}:{source.source_id}",
+        plan_hash=sha256_json(
+            {
+                "source_kind": source.source_kind,
+                "source_id": str(source.source_id),
+                "skill_id": str(source.skill_id) if source.skill_id else None,
+                "skill_version_id": (
+                    str(source.skill_version_id) if source.skill_version_id else None
+                ),
+                "proposal": source.proposal,
+            }
+        ),
+        actor="autoskill-mutation-worker",
+        cause={
+            "source": "repair.execute",
+            "job_id": str(job.job_id),
+            "source_kind": source.source_kind,
+            "source_id": str(source.source_id),
+            "reason": source.reason,
+        },
+        policy_snapshot={
+            "fail_closed": True,
+            "writer_apply_requires_policy_approved": True,
+            "writer_apply_requires_activation_gate": True,
+            "insufficient_source_data_action": "queue_gate_or_recheck_job",
+        },
+    )
+    await stores.governance.update_transaction_status(
+        evolution_transaction_id=transaction.transaction.evolution_transaction_id,
+        status="planning",
+        metrics={
+            "source_kind": source.source_kind,
+            "source_id": str(source.source_id),
+        },
+    )
+    item = await stores.governance.record_transaction_item(
+        evolution_transaction_id=transaction.transaction.evolution_transaction_id,
+        item_kind=f"{source.source_kind}_repair_proposal",
+        item_id=source.source_id,
+        activation_state="planned",
+        after_hash=sha256_json(source.proposal),
+        rollback_action={
+            "operation": "operator_review",
+            "reason": "repair execution metadata only; no runtime artifact mutation recorded",
+        },
+    )
+    await stores.governance.record_provenance_edge(
+        workspace_key=workspace_key,
+        source_kind="evolution_transaction",
+        source_id=transaction.transaction.evolution_transaction_id,
+        derived_kind="transaction_item",
+        derived_id=item.transaction_item_id,
+        relation="records_repair_execution_plan",
+    )
+
+    apply_payload = _writer_apply_payload_for_repair(
+        source,
+        transaction_id=transaction.transaction.evolution_transaction_id,
+    )
+    if apply_payload is not None:
+        queued_job = await stores.jobs.enqueue_job(
+            workspace_key=workspace_key,
+            job_kind="writer.apply",
+            idempotency_key=f"repair-execute:{source.source_kind}:{source.source_id}:writer-apply",
+            payload=apply_payload,
+            trace_id=job.trace_id,
+            parent_span_id=job.span_id or job.parent_span_id,
+            priority=_payload_int(
+                job.payload,
+                "queued_priority",
+                default=25,
+                minimum=1,
+                maximum=1000,
+            ),
+            max_attempts=1,
+        )
+        queued_kind = "writer.apply"
+    else:
+        queued_kind = (
+            "evaluations.run"
+            if source.source_kind == "curation_action"
+            else "drift.check"
+        )
+        queued_job = await stores.jobs.enqueue_job(
+            workspace_key=workspace_key,
+            job_kind=queued_kind,
+            idempotency_key=f"repair-execute:{source.source_kind}:{source.source_id}:{queued_kind}",
+            payload={
+                "workspace_id": workspace_key,
+                "limit": 25,
+                "repair_execution": {
+                    "source_kind": source.source_kind,
+                    "source_id": str(source.source_id),
+                    "proposal_kind": source.proposal.get("proposal_kind")
+                    or source.proposal.get("kind"),
+                    "reason": "source data insufficient for autonomous writer apply",
+                },
+            },
+            trace_id=job.trace_id,
+            parent_span_id=job.span_id or job.parent_span_id,
+            priority=_payload_int(
+                job.payload,
+                "queued_priority",
+                default=50,
+                minimum=1,
+                maximum=1000,
+            ),
+            max_attempts=1,
+        )
+
+    await stores.governance.update_transaction_status(
+        evolution_transaction_id=transaction.transaction.evolution_transaction_id,
+        status="queued",
+        metrics={
+            "source_kind": source.source_kind,
+            "source_id": str(source.source_id),
+            "queued_job_kind": queued_kind,
+            "queued_job_id": str(queued_job.job.job_id),
+            "queued_job_created": queued_job.created,
+        },
+    )
+    return {
+        "status": "queued",
+        "source_kind": source.source_kind,
+        "source_id": str(source.source_id),
+        "repair_transaction_id": str(transaction.transaction.evolution_transaction_id),
+        "transaction_created": transaction.created,
+        "transaction_item_id": str(item.transaction_item_id),
+        "queued_job_kind": queued_kind,
+        "queued_job_id": str(queued_job.job.job_id),
+        "queued_job_created": queued_job.created,
+        "fail_closed": apply_payload is None,
+    }
+
+
+def _writer_apply_payload_for_repair(
+    source: RepairExecutionSource,
+    *,
+    transaction_id: UUID,
+) -> dict[str, Any] | None:
+    execution = _json_object(source.proposal.get("execution"))
+    writer_apply = _json_object(source.proposal.get("writer_apply"))
+    payload = execution or writer_apply
+    if not payload:
+        return None
+    if payload.get("policy_approved") is not True:
+        return None
+    manifest_relative_path = _string_value(payload.get("manifest_relative_path"))
+    if not manifest_relative_path:
+        return None
+    payload_transaction_id = _uuid_value(payload.get("evolution_transaction_id")) or transaction_id
+    return {
+        "workspace_id": payload.get("workspace_id"),
+        "policy_approved": True,
+        "activation_gate_required": True,
+        "evolution_transaction_id": str(payload_transaction_id),
+        "manifest_relative_path": manifest_relative_path,
+        "repair_execution": {
+            "source_kind": source.source_kind,
+            "source_id": str(source.source_id),
+        },
+    }
+
+
+async def _complete_repair_execution_source(
+    stores: WorkerStores,
+    *,
+    workspace_key: str,
+    source: RepairExecutionSource,
+    status: str,
+    execution: dict[str, Any],
+) -> None:
+    if source.source_kind == "curation_action" and stores.utility is not None:
+        complete = getattr(stores.utility, "complete_repair_action_execution", None)
+        if complete is not None:
+            await complete(
+                workspace_key=workspace_key,
+                curation_action_id=source.source_id,
+                status=status,
+                execution=execution,
+            )
+    elif source.source_kind == "drift_event" and stores.contracts is not None:
+        complete = getattr(stores.contracts, "complete_drift_repair_execution", None)
+        if complete is not None:
+            await complete(
+                workspace_key=workspace_key,
+                drift_event_id=source.source_id,
+                status="repair_queued" if status == "queued" else status,
+                execution=execution,
+            )
 
 
 async def _run_external_skill_scan(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
@@ -1112,6 +1438,10 @@ def _payload_int(
 
 def _payload_uuid(payload: dict[str, Any], key: str) -> UUID | None:
     value = payload.get(key)
+    return _uuid_value(value)
+
+
+def _uuid_value(value: object) -> UUID | None:
     if value is None:
         return None
     if isinstance(value, UUID):
@@ -1120,6 +1450,25 @@ def _payload_uuid(payload: dict[str, Any], key: str) -> UUID | None:
         return UUID(str(value))
     except ValueError:
         return None
+
+
+def _json_object(value: object) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            loaded = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+    return {}
+
+
+def _string_value(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 JOB_DEFINITIONS: dict[str, JobDefinition] = {
@@ -1159,6 +1508,11 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "drift.check",
         "maintenance",
         _run_drift_checks,
+    ),
+    "repair.execute": JobDefinition(
+        "repair.execute",
+        "mutation",
+        _run_repair_execute,
     ),
     "external_skills.scan": JobDefinition(
         "external_skills.scan",

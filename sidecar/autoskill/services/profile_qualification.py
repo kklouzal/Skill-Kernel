@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from math import sqrt
+from math import isfinite, sqrt
 from typing import Any
 
 from autoskill.db.profile_qualifications import (
@@ -11,7 +11,11 @@ from autoskill.db.profile_qualifications import (
     ProfileQualificationStore,
 )
 from autoskill.db.profiles import ProfileStore
-from autoskill.services.embedding_generation import HashingTextEmbedder
+from autoskill.services.embedding_generation import (
+    HashingTextEmbedder,
+    OpenAICompatibleTextEmbedder,
+    TextEmbedder,
+)
 from autoskill.services.llm import LLMClient, LLMCompletionRequest, LLMMessage
 
 TEXT_PROFILE_PROBE_SET_VERSION = "autoskill-text-profile-probes.v1"
@@ -129,6 +133,7 @@ async def qualify_embedding_profile(
     workspace_key: str,
     profile_key: str,
     probe_set_version: str = EMBEDDING_PROFILE_PROBE_SET_VERSION,
+    embedding_api_key: str | None = None,
 ) -> EmbeddingProfileQualificationResult:
     profile = await profiles.get_embedding_profile(
         workspace_key=workspace_key,
@@ -139,19 +144,8 @@ async def qualify_embedding_profile(
             f"embedding profile not found: {workspace_key}/{profile_key}"
         )
 
-    if profile.route_kind != "hash":
-        probe_results = {
-            "checks": {
-                "route_supported": False,
-                "dimension_matches": False,
-                "stable_single": False,
-                "negative_pair_separation": False,
-            },
-            "error": f"qualification route not implemented for {profile.route_kind}",
-        }
-        verdict = "failed"
-    else:
-        embedder = HashingTextEmbedder(model=profile.model, embedding_dim=profile.embedding_dim)
+    try:
+        embedder = _embedder_for_profile(profile, embedding_api_key=embedding_api_key)
         first = embedder.embed("autoskill qualification positive sample")
         second = embedder.embed("autoskill qualification positive sample")
         negative = embedder.embed("unrelated negative sample")
@@ -160,7 +154,9 @@ async def qualify_embedding_profile(
         checks = {
             "route_supported": True,
             "dimension_matches": len(first) == profile.embedding_dim,
-            "stable_single": first == second and positive_similarity >= 0.999,
+            "finite_values": _all_finite(first) and _all_finite(second) and _all_finite(negative),
+            "non_zero": _has_signal(first) and _has_signal(second) and _has_signal(negative),
+            "stable_single": positive_similarity >= 0.999,
             "negative_pair_separation": positive_similarity - negative_similarity >= 0.05,
         }
         probe_results = {
@@ -170,6 +166,19 @@ async def qualify_embedding_profile(
             "distance_metric": "cosine",
         }
         verdict = "qualified" if all(checks.values()) else "failed"
+    except Exception as exc:
+        probe_results = {
+            "checks": {
+                "route_supported": profile.route_kind in {"hash", "openai_compatible"},
+                "dimension_matches": False,
+                "finite_values": False,
+                "non_zero": False,
+                "stable_single": False,
+                "negative_pair_separation": False,
+            },
+            "error": _safe_error(exc),
+        }
+        verdict = "failed"
 
     run = await qualifications.record_embedding_qualification_run(
         workspace_key=workspace_key,
@@ -187,6 +196,34 @@ async def qualify_embedding_profile(
     return EmbeddingProfileQualificationResult(run=run)
 
 
+def _embedder_for_profile(
+    profile: object,
+    *,
+    embedding_api_key: str | None,
+) -> TextEmbedder:
+    route_kind = str(getattr(profile, "route_kind", ""))
+    model = str(getattr(profile, "model", ""))
+    embedding_dim = int(getattr(profile, "embedding_dim", 0) or 0)
+    if embedding_dim <= 0:
+        raise ValueError("embedding profile must declare a positive embedding_dim")
+    if route_kind == "hash":
+        return HashingTextEmbedder(model=model, embedding_dim=embedding_dim)
+    if route_kind == "openai_compatible":
+        endpoint_ref = getattr(profile, "endpoint_ref", None)
+        if not endpoint_ref or not embedding_api_key:
+            raise ValueError(
+                "openai_compatible embedding qualification requires endpoint_ref and API key"
+            )
+        return OpenAICompatibleTextEmbedder(
+            base_url=str(endpoint_ref),
+            api_key=embedding_api_key,
+            model=model,
+            embedding_dim=embedding_dim,
+            timeout_seconds=float(getattr(profile, "timeout_seconds", 30.0)),
+        )
+    raise ValueError(f"unsupported embedding qualification route: {route_kind}")
+
+
 def _parse_json_object(text: str) -> dict[str, Any]:
     parsed = json.loads(text)
     return parsed if isinstance(parsed, dict) else {}
@@ -199,6 +236,14 @@ def _cosine(left: list[float], right: list[float]) -> float:
     if left_magnitude == 0.0 or right_magnitude == 0.0:
         return 0.0
     return numerator / (left_magnitude * right_magnitude)
+
+
+def _all_finite(values: list[float]) -> bool:
+    return bool(values) and all(isfinite(value) for value in values)
+
+
+def _has_signal(values: list[float]) -> bool:
+    return any(value != 0.0 for value in values)
 
 
 def _safe_error(exc: BaseException) -> str:

@@ -76,7 +76,15 @@ context hints from `before_prompt_build` are blocked.
 
 ## Tool Hooks
 
-`before_tool_call` and `after_tool_call` are the relevant attribution/capture hooks. The bootstrap `before_tool_call` handler captures redacted metadata and does not block yet.
+`before_tool_call` and `after_tool_call` are the relevant attribution/capture hooks. The bootstrap `before_tool_call` handler always captures redacted metadata and can optionally block high-risk calls when runtime boundary enforcement is enabled.
+
+OpenClaw's current hook contract supports terminal blocks from
+`before_tool_call` using `{ block: true, blockReason: "..." }`. AutoSkill now
+uses that seam only when `runtimeToolBoundary.enabled=true`; by default it
+remains capture-only. The opt-in first-pass boundary blocks deterministic
+high-risk patterns such as dynamic fetch-exec, destructive host commands,
+credential exfiltration, and sensitive file harvesting while still forwarding a
+redacted event envelope for attribution.
 
 ## Validation Note
 

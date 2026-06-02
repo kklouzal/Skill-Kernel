@@ -33,6 +33,22 @@ FETCH_EXEC = re.compile(
     r"(?is)(curl|wget|fetch|Invoke-WebRequest).{0,120}(\|\s*(sh|bash|python)|eval|exec)"
 )
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+POLICY_OVERRIDE = re.compile(
+    r"(?is)\b(ignore|bypass|override|discard)\b.{0,80}"
+    r"\b(system|developer|safety|policy|instruction|guardrail|approval|sandbox)\b"
+)
+CREDENTIAL_EXFILTRATION = re.compile(
+    r"(?is)\b(print|dump|exfiltrate|send|upload|post|log|copy|collect)\b.{0,100}"
+    r"\b(secret|token|password|api[_ -]?key|credential|authorization|ssh[_ -]?key)\b"
+)
+DESTRUCTIVE_HOST_COMMAND = re.compile(
+    r"(?is)(\brm\s+-rf\s+/(?:\s|$)|\bmkfs(?:\.\w+)?\b|"
+    r"\bdd\s+if=.{0,80}\s+of=/dev/|\bchmod\s+-R\s+777\s+/|\bchown\s+-R\b.{0,80}\s+/)"
+)
+SENSITIVE_FILE_HARVEST = re.compile(
+    r"(?is)\b(read|cat|open|scan|index|embed|upload|copy)\b.{0,100}"
+    r"(~?/\.ssh\b|/etc/shadow\b|/etc/passwd\b|\.env\b|credentials?\.(json|yaml|yml)\b)"
+)
 
 
 def scan_text(text: str) -> list[ScannerFinding]:
@@ -75,6 +91,38 @@ def scan_text(text: str) -> list[ScannerFinding]:
                 FindingSeverity.CRITICAL,
                 "dynamic-fetch-exec",
                 "dynamic fetch-exec patterns are forbidden",
+            )
+        )
+    if POLICY_OVERRIDE.search(text):
+        findings.append(
+            ScannerFinding(
+                FindingSeverity.CRITICAL,
+                "policy-override-instruction",
+                "policy, approval, sandbox, or instruction override language is forbidden",
+            )
+        )
+    if CREDENTIAL_EXFILTRATION.search(text):
+        findings.append(
+            ScannerFinding(
+                FindingSeverity.CRITICAL,
+                "credential-exfiltration",
+                "credential or secret exfiltration instructions are forbidden",
+            )
+        )
+    if DESTRUCTIVE_HOST_COMMAND.search(text):
+        findings.append(
+            ScannerFinding(
+                FindingSeverity.CRITICAL,
+                "destructive-host-command",
+                "destructive host-level command patterns are forbidden",
+            )
+        )
+    if SENSITIVE_FILE_HARVEST.search(text):
+        findings.append(
+            ScannerFinding(
+                FindingSeverity.ERROR,
+                "sensitive-file-harvest",
+                "sensitive file harvesting instructions are forbidden",
             )
         )
     return findings

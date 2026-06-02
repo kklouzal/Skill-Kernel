@@ -71,6 +71,40 @@ class DriftFalsePositiveResult:
         }
 
 
+@dataclass(frozen=True)
+class DriftRepairEventRecord:
+    drift_event_id: UUID
+    environment_contract_id: UUID
+    skill_id: UUID
+    skill_version_id: UUID
+    status: str
+    reason: str
+    repair_candidate: dict[str, Any]
+
+    @classmethod
+    def from_row(cls, row: asyncpg.Record | dict[str, Any]) -> DriftRepairEventRecord:
+        return cls(
+            drift_event_id=row["drift_event_id"],
+            environment_contract_id=row["environment_contract_id"],
+            skill_id=row["skill_id"],
+            skill_version_id=row["skill_version_id"],
+            status=row["status"],
+            reason=row["reason"],
+            repair_candidate=_json_dict(row["repair_candidate"]),
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "drift_event_id": str(self.drift_event_id),
+            "environment_contract_id": str(self.environment_contract_id),
+            "skill_id": str(self.skill_id),
+            "skill_version_id": str(self.skill_version_id),
+            "status": self.status,
+            "reason": self.reason,
+            "repair_candidate": self.repair_candidate,
+        }
+
+
 class ContractStore(Protocol):
     async def extract_contracts(
         self,
@@ -97,6 +131,26 @@ class ContractStore(Protocol):
         rationale: str | None = None,
     ) -> DriftFalsePositiveResult:
         """Suppress a known-noisy contract and retire its active drift probes."""
+
+    async def claim_open_drift_repair_events(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        worker_id: str | None = None,
+        job_id: UUID | None = None,
+    ) -> list[DriftRepairEventRecord]:
+        """Claim open drift repair candidates for deterministic execution."""
+
+    async def complete_drift_repair_execution(
+        self,
+        *,
+        workspace_key: str,
+        drift_event_id: UUID,
+        status: str,
+        execution: dict[str, Any],
+    ) -> DriftRepairEventRecord | None:
+        """Attach repair execution metadata to a claimed drift event."""
 
 
 class NullContractStore:
@@ -144,6 +198,26 @@ class NullContractStore:
                 "rationale": rationale,
             },
         )
+
+    async def claim_open_drift_repair_events(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        worker_id: str | None = None,
+        job_id: UUID | None = None,
+    ) -> list[DriftRepairEventRecord]:
+        return []
+
+    async def complete_drift_repair_execution(
+        self,
+        *,
+        workspace_key: str,
+        drift_event_id: UUID,
+        status: str,
+        execution: dict[str, Any],
+    ) -> DriftRepairEventRecord | None:
+        return None
 
 
 class AsyncpgContractStore(AsyncpgPoolOwner):
@@ -409,6 +483,77 @@ class AsyncpgContractStore(AsyncpgPoolOwner):
                 metadata=_json_dict(row["metadata"]),
             )
 
+    async def claim_open_drift_repair_events(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        worker_id: str | None = None,
+        job_id: UUID | None = None,
+    ) -> list[DriftRepairEventRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            rows = await conn.fetch(
+                """
+                WITH candidate AS (
+                  SELECT drift_event_id
+                  FROM autoskill.drift_events
+                  WHERE workspace_id = $1
+                    AND status = 'open'
+                    AND repair_candidate ? 'repair_plan'
+                    AND NOT repair_candidate ? 'false_positive'
+                  ORDER BY created_at ASC
+                  FOR UPDATE SKIP LOCKED
+                  LIMIT $2
+                )
+                UPDATE autoskill.drift_events de
+                SET status = 'repairing',
+                    repair_candidate = repair_candidate || $3::jsonb
+                FROM candidate
+                WHERE de.drift_event_id = candidate.drift_event_id
+                RETURNING de.*
+                """,
+                workspace_id,
+                max(1, min(limit, 100)),
+                _json(
+                    {
+                        "repair_execution_claim": {
+                            "worker_id": worker_id,
+                            "job_id": str(job_id) if job_id else None,
+                        }
+                    }
+                ),
+            )
+        return [DriftRepairEventRecord.from_row(row) for row in rows]
+
+    async def complete_drift_repair_execution(
+        self,
+        *,
+        workspace_key: str,
+        drift_event_id: UUID,
+        status: str,
+        execution: dict[str, Any],
+    ) -> DriftRepairEventRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                UPDATE autoskill.drift_events
+                SET status = $3,
+                    repair_candidate = repair_candidate || $4::jsonb
+                WHERE workspace_id = $1
+                  AND drift_event_id = $2
+                RETURNING *
+                """,
+                workspace_id,
+                drift_event_id,
+                status,
+                _json({"repair_execution": execution}),
+            )
+        return DriftRepairEventRecord.from_row(row) if row is not None else None
+
 
 async def _upsert_drift_probe(
     conn: asyncpg.Connection,
@@ -491,11 +636,12 @@ async def _close_false_positive_drift_events(
             repair_candidate = repair_candidate || $3::jsonb
         WHERE workspace_id = $1
           AND environment_contract_id = $2
-          AND status = 'open'
+          AND status = ANY($4::text[])
         """,
         workspace_id,
         contract_id,
         _json({"closed_reason": "operator-marked false positive"}),
+        ["open", "repairing", "repair_queued"],
     )
     return _command_count(command)
 

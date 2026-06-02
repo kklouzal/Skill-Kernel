@@ -24,6 +24,12 @@ export const kind = "memory";
 
 export function register(api) {
   for (const [hookName, eventType, trust, taint] of CAPTURE_HOOKS) {
+    if (hookName === "before_tool_call") {
+      api.on(hookName, (event, ctx) => beforeToolCall(event, ctx), {
+        name: `autoskill-${eventType}`,
+      });
+      continue;
+    }
     api.on(
       hookName,
       (event, ctx) => captureEvent({ eventType, payload: event, trust, taint, hookContext: ctx }),
@@ -80,6 +86,67 @@ export async function captureEvent({ eventType, payload, trust, taint, hookConte
       },
     };
   }
+}
+
+export async function beforeToolCall(event, hookContext) {
+  const capture = await captureEvent({
+    eventType: "tool_call_start",
+    payload: event,
+    trust: "trusted",
+    taint: ["tool"],
+    hookContext,
+  });
+  const config = resolveConfig(hookContext);
+  const decision = evaluateToolBoundary(event, config);
+  if (!decision.block) {
+    return capture;
+  }
+  return {
+    ...capture,
+    block: true,
+    blockReason: decision.reason,
+  };
+}
+
+export function evaluateToolBoundary(event, config = {}) {
+  if (
+    !config.enabled ||
+    !config.runtimeToolBoundary?.enabled ||
+    !config.runtimeToolBoundary?.blockOnHighRisk
+  ) {
+    return { block: false };
+  }
+  const text = JSON.stringify(event ?? {});
+  const patterns = [
+    {
+      code: "dynamic-fetch-exec",
+      pattern: /(curl|wget|fetch|Invoke-WebRequest).{0,120}(\|\s*(sh|bash|python)|eval|exec)/is,
+    },
+    {
+      code: "destructive-host-command",
+      pattern:
+        /(\brm\s+-rf\s+\/(?:\s|$)|\bmkfs(?:\.\w+)?\b|\bdd\s+if=.{0,80}\s+of=\/dev\/|\bchmod\s+-R\s+777\s+\/|\bchown\s+-R\b.{0,80}\s+\/)/is,
+    },
+    {
+      code: "credential-exfiltration",
+      pattern:
+        /\b(print|dump|exfiltrate|send|upload|post|log|copy|collect)\b.{0,100}\b(secret|token|password|api[_ -]?key|credential|authorization|ssh[_ -]?key)\b/is,
+    },
+    {
+      code: "sensitive-file-harvest",
+      pattern:
+        /\b(read|cat|open|scan|index|embed|upload|copy)\b.{0,100}(~?\/\.ssh\b|\/etc\/shadow\b|\/etc\/passwd\b|\.env\b|credentials?\.(json|yaml|yml)\b)/is,
+    },
+  ];
+  const match = patterns.find(({ pattern }) => pattern.test(text));
+  if (!match) {
+    return { block: false };
+  }
+  return {
+    block: true,
+    reason: `autoskill runtime tool boundary blocked ${match.code}`,
+    code: match.code,
+  };
 }
 
 async function replayCapturedSpool(config) {

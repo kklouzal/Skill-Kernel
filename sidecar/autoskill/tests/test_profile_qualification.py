@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -79,7 +80,13 @@ class FakeLLMClient:
         )
 
 
-def _model_profile(*, kind: str = "model", status: str = "candidate") -> ModelProfileRecord:
+def _model_profile(
+    *,
+    kind: str = "model",
+    status: str = "candidate",
+    route_kind: str | None = None,
+    embedding_dim: int = 1536,
+) -> ModelProfileRecord:
     now = datetime.now(UTC)
     return ModelProfileRecord(
         profile_id=uuid4(),
@@ -88,13 +95,13 @@ def _model_profile(*, kind: str = "model", status: str = "candidate") -> ModelPr
         profile_key=f"default-{kind}",
         provider="test-provider",
         model="test-model",
-        route_kind="openai_compatible" if kind == "model" else "hash",
+        route_kind=route_kind or ("openai_compatible" if kind == "model" else "hash"),
         endpoint_ref="http://127.0.0.1:9999/v1",
         timeout_seconds=30.0,
         status=status,
         qualification={},
         kind=kind,  # type: ignore[arg-type]
-        embedding_dim=1536 if kind == "embedding" else None,
+        embedding_dim=embedding_dim if kind == "embedding" else None,
         thinking_level="off",
         thinking_fallback_policy="omit",
         created_at=now,
@@ -143,6 +150,77 @@ def test_hash_embedding_profile_qualification_records_dimension_and_stability() 
     assert result.run.embedding_dim == 1536
     assert result.run.probe_results["checks"]["dimension_matches"] is True
     assert result.run.probe_results["checks"]["stable_single"] is True
+    assert qualifications.embedding_runs[0] == result.run
+
+
+def test_openai_compatible_embedding_profile_qualification_probes_provider(
+    monkeypatch,
+) -> None:
+    qualifications = NullProfileQualificationStore()
+    captured: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, embedding: list[float]) -> None:
+            self.embedding = embedding
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"data": [{"embedding": self.embedding}]}).encode()
+
+    def fake_urlopen(http_request, timeout):
+        payload = json.loads(http_request.data.decode())
+        captured.append(
+            {
+                "url": http_request.full_url,
+                "authorization": http_request.headers["Authorization"],
+                "payload": payload,
+                "timeout": timeout,
+            }
+        )
+        if payload["input"] == "unrelated negative sample":
+            return FakeResponse([0.0, 1.0, 0.0, 0.0])
+        return FakeResponse([1.0, 0.0, 0.0, 0.0])
+
+    monkeypatch.setattr("autoskill.services.embedding_generation.request.urlopen", fake_urlopen)
+
+    async def run():
+        return await qualify_embedding_profile(
+            profiles=MemoryProfileStore(
+                embedding_profile=_model_profile(
+                    kind="embedding",
+                    route_kind="openai_compatible",
+                    embedding_dim=4,
+                )
+            ),
+            qualifications=qualifications,
+            workspace_key="dev-01",
+            profile_key="default-embedding",
+            embedding_api_key="test-key",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.run.verdict == "qualified"
+    assert result.run.embedding_dim == 4
+    assert result.run.probe_results["checks"] == {
+        "route_supported": True,
+        "dimension_matches": True,
+        "finite_values": True,
+        "non_zero": True,
+        "stable_single": True,
+        "negative_pair_separation": True,
+    }
+    assert [item["url"] for item in captured] == [
+        "http://127.0.0.1:9999/v1/embeddings",
+        "http://127.0.0.1:9999/v1/embeddings",
+        "http://127.0.0.1:9999/v1/embeddings",
+    ]
+    assert {item["authorization"] for item in captured} == {"Bearer test-key"}
     assert qualifications.embedding_runs[0] == result.run
 
 

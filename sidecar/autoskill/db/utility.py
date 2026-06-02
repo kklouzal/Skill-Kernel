@@ -140,6 +140,26 @@ class UtilityStore(Protocol):
     ) -> CurationRunResult:
         """Promote recurring archived skills, archive weak active skills, and merge duplicates."""
 
+    async def claim_planned_repair_actions(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        worker_id: str | None = None,
+        job_id: UUID | None = None,
+    ) -> list[CurationActionRecord]:
+        """Claim planned curation repair proposals for deterministic execution."""
+
+    async def complete_repair_action_execution(
+        self,
+        *,
+        workspace_key: str,
+        curation_action_id: UUID,
+        status: str,
+        execution: dict[str, Any],
+    ) -> CurationActionRecord | None:
+        """Attach repair execution metadata to a claimed curation action."""
+
 
 class NullUtilityStore:
     async def run_utility_rollup(
@@ -162,6 +182,26 @@ class NullUtilityStore:
         max_merge: int = 5,
     ) -> CurationRunResult:
         return CurationRunResult(scanned=0, archived=0, promoted=0, merged=0, planned=0, actions=[])
+
+    async def claim_planned_repair_actions(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        worker_id: str | None = None,
+        job_id: UUID | None = None,
+    ) -> list[CurationActionRecord]:
+        return []
+
+    async def complete_repair_action_execution(
+        self,
+        *,
+        workspace_key: str,
+        curation_action_id: UUID,
+        status: str,
+        execution: dict[str, Any],
+    ) -> CurationActionRecord | None:
+        return None
 
 
 class AsyncpgUtilityStore(AsyncpgPoolOwner):
@@ -315,6 +355,84 @@ class AsyncpgUtilityStore(AsyncpgPoolOwner):
             planned=sum(1 for action in actions if action.status == "planned"),
             actions=actions,
         )
+
+    async def claim_planned_repair_actions(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        worker_id: str | None = None,
+        job_id: UUID | None = None,
+    ) -> list[CurationActionRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            rows = await conn.fetch(
+                """
+                WITH candidate AS (
+                  SELECT curation_action_id
+                  FROM autoskill.curation_actions
+                  WHERE workspace_id = $1
+                    AND status = 'planned'
+                    AND action = ANY($2::text[])
+                    AND features ? 'repair_proposal'
+                  ORDER BY created_at ASC
+                  FOR UPDATE SKIP LOCKED
+                  LIMIT $3
+                )
+                UPDATE autoskill.curation_actions ca
+                SET status = 'executing',
+                    created_by_job_id = COALESCE($4, created_by_job_id),
+                    features = features || $5::jsonb
+                FROM candidate
+                WHERE ca.curation_action_id = candidate.curation_action_id
+                RETURNING ca.*
+                """,
+                workspace_id,
+                [
+                    "plan_improvement",
+                    "plan_disambiguation_repair",
+                    "plan_split",
+                ],
+                max(1, min(limit, 100)),
+                job_id,
+                _json(
+                    {
+                        "repair_execution_claim": {
+                            "worker_id": worker_id,
+                            "job_id": str(job_id) if job_id else None,
+                        }
+                    }
+                ),
+            )
+        return [CurationActionRecord.from_row(row) for row in rows]
+
+    async def complete_repair_action_execution(
+        self,
+        *,
+        workspace_key: str,
+        curation_action_id: UUID,
+        status: str,
+        execution: dict[str, Any],
+    ) -> CurationActionRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                UPDATE autoskill.curation_actions
+                SET status = $3,
+                    features = features || $4::jsonb
+                WHERE workspace_id = $1
+                  AND curation_action_id = $2
+                RETURNING *
+                """,
+                workspace_id,
+                curation_action_id,
+                status,
+                _json({"repair_execution": execution}),
+            )
+        return CurationActionRecord.from_row(row) if row is not None else None
 
 
 async def _archive_low_utility(

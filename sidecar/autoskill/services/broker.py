@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from time import monotonic
+from typing import Any
 from uuid import UUID
 
 from autoskill.db.compatibility import CompatibilityStore
@@ -15,6 +16,94 @@ from pydantic import BaseModel, Field
 BROKER_POLICY_VERSION = "bootstrap.v1"
 GRAPH_EDGE_KINDS = ["prerequisite", "conflict", "shadow", "supersedes"]
 DEFAULT_CACHE_TTL_SECONDS = 30.0
+DEFAULT_LEXICAL_LIMIT = 8
+DEFAULT_SEMANTIC_LIMIT = 8
+DEFAULT_GRAPH_LIMIT = 12
+DEFAULT_MAX_RENDERED_SKILLS = 4
+
+
+@dataclass(frozen=True)
+class BrokerPolicy:
+    version: str = BROKER_POLICY_VERSION
+    broker_policy_version_id: UUID | None = None
+    lexical_limit: int = DEFAULT_LEXICAL_LIMIT
+    semantic_limit: int = DEFAULT_SEMANTIC_LIMIT
+    graph_edge_kinds: tuple[str, ...] = tuple(GRAPH_EDGE_KINDS)
+    graph_limit: int = DEFAULT_GRAPH_LIMIT
+    max_rendered_skills: int = DEFAULT_MAX_RENDERED_SKILLS
+    canary_sample_rate: float = 0.0
+    replay_tags: tuple[str, ...] = ()
+
+    @classmethod
+    def from_artifact(
+        cls,
+        *,
+        version: str,
+        policy: dict[str, Any],
+        broker_policy_version_id: UUID | None = None,
+    ) -> BrokerPolicy:
+        broker = _dict(policy.get("runtime_context_broker")) or policy
+        return cls(
+            version=version,
+            broker_policy_version_id=broker_policy_version_id,
+            lexical_limit=_bounded_int(
+                broker.get("lexical_limit"),
+                default=DEFAULT_LEXICAL_LIMIT,
+                minimum=1,
+                maximum=50,
+            ),
+            semantic_limit=_bounded_int(
+                broker.get("semantic_limit"),
+                default=DEFAULT_SEMANTIC_LIMIT,
+                minimum=1,
+                maximum=50,
+            ),
+            graph_edge_kinds=tuple(
+                edge
+                for edge in _string_list(
+                    broker.get("graph_edge_kinds"),
+                    default=GRAPH_EDGE_KINDS,
+                )
+                if edge in GRAPH_EDGE_KINDS
+            )
+            or tuple(GRAPH_EDGE_KINDS),
+            graph_limit=_bounded_int(
+                broker.get("graph_limit"),
+                default=DEFAULT_GRAPH_LIMIT,
+                minimum=0,
+                maximum=100,
+            ),
+            max_rendered_skills=_bounded_int(
+                broker.get("max_rendered_skills"),
+                default=DEFAULT_MAX_RENDERED_SKILLS,
+                minimum=1,
+                maximum=20,
+            ),
+            canary_sample_rate=_bounded_float(
+                broker.get("canary_sample_rate"),
+                default=0.0,
+                minimum=0.0,
+                maximum=1.0,
+            ),
+            replay_tags=tuple(_string_list(broker.get("replay_tags"), default=[])),
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "broker_policy_version_id": (
+                str(self.broker_policy_version_id)
+                if self.broker_policy_version_id
+                else None
+            ),
+            "lexical_limit": self.lexical_limit,
+            "semantic_limit": self.semantic_limit,
+            "graph_edge_kinds": list(self.graph_edge_kinds),
+            "graph_limit": self.graph_limit,
+            "max_rendered_skills": self.max_rendered_skills,
+            "canary_sample_rate": self.canary_sample_rate,
+            "replay_tags": list(self.replay_tags),
+        }
 
 
 class ContextHintRequest(BaseModel):
@@ -35,11 +124,36 @@ class ContextHintResponse(BaseModel):
     hint: str = ""
     skill_ids: list[str] = Field(default_factory=list)
     broker_policy_version: str = BROKER_POLICY_VERSION
+    broker_policy_version_id: str | None = None
     cache_status: str = "bootstrap-empty"
     retrieval_log_id: str | None = None
     suppressed: list[dict[str, object]] = Field(default_factory=list)
     archive_promotion_skill_ids: list[str] = Field(default_factory=list)
     reason_codes: list[str] = Field(default_factory=list)
+
+
+class BrokerReplayEpisode(BaseModel):
+    episode_id: str
+    user_intent: str
+    expected_decision: str | None = None
+    expected_skill_ids: list[str] = Field(default_factory=list)
+    max_tokens: int | None = None
+
+
+class BrokerReplayResult(BaseModel):
+    policy: dict[str, object]
+    total: int
+    matched: int
+    mismatched: int
+    degradation_count: int
+    episodes: list[dict[str, object]]
+
+
+class BrokerCanaryFeedback(BaseModel):
+    status: str
+    rollback_recommended: bool
+    reason_codes: list[str] = Field(default_factory=list)
+    metrics: dict[str, object] = Field(default_factory=dict)
 
 
 @dataclass
@@ -51,10 +165,15 @@ class CachedContextHint:
 class ContextHintCache:
     def __init__(self, *, ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS) -> None:
         self.ttl_seconds = ttl_seconds
-        self._entries: dict[tuple[str, str, str, int], CachedContextHint] = {}
+        self._entries: dict[tuple[str, str, str, int, str], CachedContextHint] = {}
 
-    def get(self, request: ContextHintRequest, query: str) -> ContextHintResponse | None:
-        key = self._key(request, query)
+    def get(
+        self,
+        request: ContextHintRequest,
+        query: str,
+        policy: BrokerPolicy | None = None,
+    ) -> ContextHintResponse | None:
+        key = self._key(request, query, policy)
         entry = self._entries.get(key)
         if entry is None:
             return None
@@ -63,8 +182,14 @@ class ContextHintCache:
             return None
         return entry.response.model_copy(update={"cache_status": "cache-hit"})
 
-    def set(self, request: ContextHintRequest, query: str, response: ContextHintResponse) -> None:
-        key = self._key(request, query)
+    def set(
+        self,
+        request: ContextHintRequest,
+        query: str,
+        response: ContextHintResponse,
+        policy: BrokerPolicy | None = None,
+    ) -> None:
+        key = self._key(request, query, policy)
         self._entries[key] = CachedContextHint(
             expires_at=monotonic() + self.ttl_seconds,
             response=response.model_copy(update={"cache_status": "cache-fill"}),
@@ -87,12 +212,18 @@ class ContextHintCache:
             removed += 1
         return removed
 
-    def _key(self, request: ContextHintRequest, query: str) -> tuple[str, str, str, int]:
+    def _key(
+        self,
+        request: ContextHintRequest,
+        query: str,
+        policy: BrokerPolicy | None,
+    ) -> tuple[str, str, str, int, str]:
         return (
             request.workspace_id,
             str(request.executor_profile_id) if request.executor_profile_id else "",
             query.lower(),
             max(1, request.max_tokens),
+            _policy_cache_key(policy),
         )
 
 
@@ -109,12 +240,18 @@ async def build_context_hint(
     compatibility: CompatibilityStore | None = None,
     semantic_embedder: TextEmbedder | None = None,
     semantic_embedding_profile_id: UUID | None = None,
+    policy: BrokerPolicy | None = None,
 ) -> ContextHintResponse:
+    policy = policy or BrokerPolicy()
     query = (request.user_intent or "").strip()
     if not query:
-        return ContextHintResponse(decision="no_skill", cache_status="empty-intent")
+        return _policy_response(
+            policy,
+            decision="no_skill",
+            cache_status="empty-intent",
+        )
     if cache is not None:
-        cached = cache.get(request, query)
+        cached = cache.get(request, query, policy)
         if cached is not None:
             return cached
 
@@ -126,7 +263,7 @@ async def build_context_hint(
         parent_span_id=request.parent_span_id,
         session_id=request.session_id,
         turn_id=request.turn_id,
-        limit=8,
+        limit=policy.lexical_limit,
     )
     semantic_result = None
     if semantic_embedder is not None:
@@ -140,7 +277,7 @@ async def build_context_hint(
             parent_span_id=request.parent_span_id,
             session_id=request.session_id,
             turn_id=request.turn_id,
-            limit=8,
+            limit=policy.semantic_limit,
         )
     candidates = [
         *result.candidates,
@@ -148,7 +285,8 @@ async def build_context_hint(
     ]
     retrieval_log_id = _response_retrieval_log_id(result, semantic_result)
     if not candidates:
-        response = ContextHintResponse(
+        response = _policy_response(
+            policy,
             decision="no_skill",
             cache_status="retrieval-empty",
             retrieval_log_id=retrieval_log_id,
@@ -157,14 +295,14 @@ async def build_context_hint(
         await _record_context_hint(retrieval, result.retrieval_log_id, response)
         await _record_context_governance(context_governance, request, response)
         if cache is not None:
-            cache.set(request, query, response)
+            cache.set(request, query, response, policy)
         return response
 
     graph_candidates = await retrieval.expand_skill_graph(
         workspace_key=request.workspace_id,
         skill_ids=_candidate_skill_ids(candidates),
-        edge_kinds=GRAPH_EDGE_KINDS,
-        limit=12,
+        edge_kinds=list(policy.graph_edge_kinds),
+        limit=policy.graph_limit,
     )
     ranked = _rerank_candidates([*candidates, *graph_candidates], query)
     ranked, compatibility_suppressed = await _apply_executor_compatibility(
@@ -175,7 +313,8 @@ async def build_context_hint(
     selected, suppressed, archive_promotion_skill_ids = _select_skill_candidates(ranked)
     suppressed = [*compatibility_suppressed, *suppressed]
     if not selected:
-        response = ContextHintResponse(
+        response = _policy_response(
+            policy,
             decision="defer_skill",
             cache_status="evidence-only",
             retrieval_log_id=retrieval_log_id,
@@ -186,12 +325,14 @@ async def build_context_hint(
         await _record_context_hint(retrieval, result.retrieval_log_id, response)
         await _record_context_governance(context_governance, request, response)
         if cache is not None:
-            cache.set(request, query, response)
+            cache.set(request, query, response, policy)
         return response
 
+    selected = selected[: policy.max_rendered_skills]
     hint = _render_hint(selected, max_tokens=max(1, request.max_tokens))
     if has_blocking_findings(scan_text(hint)):
-        response = ContextHintResponse(
+        response = _policy_response(
+            policy,
             decision="defer_skill",
             cache_status="render-scan-blocked",
             retrieval_log_id=retrieval_log_id,
@@ -202,10 +343,11 @@ async def build_context_hint(
         await _record_context_hint(retrieval, result.retrieval_log_id, response)
         await _record_context_governance(context_governance, request, response)
         if cache is not None:
-            cache.set(request, query, response)
+            cache.set(request, query, response, policy)
         return response
 
-    response = ContextHintResponse(
+    response = _policy_response(
+        policy,
         decision="skill_hint",
         hint=hint,
         skill_ids=[str(candidate.skill_id) for candidate in selected if candidate.skill_id],
@@ -218,8 +360,130 @@ async def build_context_hint(
     await _record_context_hint(retrieval, result.retrieval_log_id, response)
     await _record_context_governance(context_governance, request, response)
     if cache is not None:
-        cache.set(request, query, response)
+        cache.set(request, query, response, policy)
     return response
+
+
+async def replay_broker_policy(
+    retrieval: RetrievalStore,
+    request: ContextHintRequest,
+    *,
+    episodes: list[BrokerReplayEpisode],
+    policy: BrokerPolicy,
+    compatibility: CompatibilityStore | None = None,
+    semantic_embedder: TextEmbedder | None = None,
+    semantic_embedding_profile_id: UUID | None = None,
+) -> BrokerReplayResult:
+    results: list[dict[str, object]] = []
+    matched = 0
+    degradation_count = 0
+    for episode in episodes[:100]:
+        response = await build_context_hint(
+            retrieval,
+            request.model_copy(
+                update={
+                    "user_intent": episode.user_intent,
+                    "max_tokens": episode.max_tokens or request.max_tokens,
+                }
+            ),
+            cache=None,
+            compatibility=compatibility,
+            semantic_embedder=semantic_embedder,
+            semantic_embedding_profile_id=semantic_embedding_profile_id,
+            policy=policy,
+        )
+        decision_match = (
+            episode.expected_decision is None
+            or response.decision == episode.expected_decision
+        )
+        skill_match = (
+            not episode.expected_skill_ids
+            or set(episode.expected_skill_ids) <= set(response.skill_ids)
+        )
+        episode_matched = decision_match and skill_match
+        if episode_matched:
+            matched += 1
+        if episode.expected_decision == "skill_hint" and response.decision != "skill_hint":
+            degradation_count += 1
+        results.append(
+            {
+                "episode_id": episode.episode_id,
+                "decision": response.decision,
+                "skill_ids": response.skill_ids,
+                "expected_decision": episode.expected_decision,
+                "expected_skill_ids": episode.expected_skill_ids,
+                "matched": episode_matched,
+                "reason_codes": response.reason_codes,
+                "retrieval_log_id": response.retrieval_log_id,
+            }
+        )
+    total = len(results)
+    return BrokerReplayResult(
+        policy=policy.to_json(),
+        total=total,
+        matched=matched,
+        mismatched=total - matched,
+        degradation_count=degradation_count,
+        episodes=results,
+    )
+
+
+def evaluate_broker_canary_feedback(
+    *,
+    replay: BrokerReplayResult | None = None,
+    metrics: dict[str, object] | None = None,
+    status: str | None = None,
+) -> BrokerCanaryFeedback:
+    observed = metrics or {}
+    reason_codes: set[str] = set()
+    replay_degraded = bool(replay and replay.degradation_count > 0)
+    harmful_rate = _bounded_float(
+        observed.get("harmful_rate"),
+        default=0.0,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    shadowed_rate = _bounded_float(
+        observed.get("shadowed_rate"),
+        default=0.0,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    ignored_rate = _bounded_float(
+        observed.get("ignored_rate"),
+        default=0.0,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    if replay_degraded:
+        reason_codes.add("replay-degraded")
+    if harmful_rate > 0.0:
+        reason_codes.add("harmful-rate-nonzero")
+    if shadowed_rate >= 0.2:
+        reason_codes.add("shadowed-rate-high")
+    if ignored_rate >= 0.5:
+        reason_codes.add("ignored-rate-high")
+    rollback = (
+        status == "critical"
+        or replay_degraded
+        or harmful_rate > 0.0
+        or shadowed_rate >= 0.2
+    )
+    if rollback:
+        status = "critical"
+    elif status is None:
+        status = "passed"
+    return BrokerCanaryFeedback(
+        status=status,
+        rollback_recommended=rollback,
+        reason_codes=sorted(reason_codes),
+        metrics={
+            **observed,
+            "replay_total": replay.total if replay else 0,
+            "replay_mismatched": replay.mismatched if replay else 0,
+            "replay_degradation_count": replay.degradation_count if replay else 0,
+        },
+    )
 
 
 def _select_skill_candidates(
@@ -471,6 +735,9 @@ async def _record_context_hint(
         decision=response.decision,
         suppressed=response.suppressed,
         reason_codes=response.reason_codes,
+        broker_policy_version_id=UUID(response.broker_policy_version_id)
+        if response.broker_policy_version_id
+        else None,
     )
 
 
@@ -498,10 +765,14 @@ async def _record_context_governance(
             shadowing_status="pending",
             metadata={
                 "broker_policy_version": response.broker_policy_version,
+                "broker_policy_version_id": response.broker_policy_version_id,
                 "decision": response.decision,
                 "skill_ids": response.skill_ids,
                 "reason_codes": response.reason_codes,
             },
+            broker_policy_version_id=UUID(response.broker_policy_version_id)
+            if response.broker_policy_version_id
+            else None,
         )
         token_count = artifact.token_count
     await context_governance.record_token_ledger(
@@ -512,8 +783,12 @@ async def _record_context_governance(
         session_id=request.session_id,
         turn_id=request.turn_id,
         outcome=response.decision,
+        broker_policy_version_id=UUID(response.broker_policy_version_id)
+        if response.broker_policy_version_id
+        else None,
         metadata={
             "broker_policy_version": response.broker_policy_version,
+            "broker_policy_version_id": response.broker_policy_version_id,
             "retrieval_log_id": response.retrieval_log_id,
             "skill_ids": response.skill_ids,
             "suppressed_count": len(response.suppressed),
@@ -532,3 +807,62 @@ def _visibility_state(response: ContextHintResponse) -> str:
 
 def _estimate_tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
+
+
+def _policy_response(
+    policy: BrokerPolicy,
+    **kwargs: Any,
+) -> ContextHintResponse:
+    return ContextHintResponse(
+        broker_policy_version=policy.version,
+        broker_policy_version_id=(
+            str(policy.broker_policy_version_id)
+            if policy.broker_policy_version_id
+            else None
+        ),
+        **kwargs,
+    )
+
+
+def _policy_cache_key(policy: BrokerPolicy | None) -> str:
+    if policy is None:
+        return BROKER_POLICY_VERSION
+    return str(policy.broker_policy_version_id or policy.version)
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _string_list(value: Any, *, default: list[str]) -> list[str]:
+    if not isinstance(value, list):
+        return default
+    return [str(item) for item in value if str(item)]
+
+
+def _bounded_int(
+    value: Any,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def _bounded_float(
+    value: Any,
+    *,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
