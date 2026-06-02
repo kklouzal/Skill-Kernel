@@ -191,6 +191,9 @@ async def compile_skill_with_context_governance(
     source_object_type: str = "skill_version",
     source_object_id: UUID | None = None,
     compiler_version: str = CONTEXT_COMPILER_VERSION,
+    require_probe_evidence: bool = False,
+    routing_equivalence_evidence: dict[str, object] | None = None,
+    regression_evidence: dict[str, object] | None = None,
 ) -> ContextCompilationResult:
     """Compile SkillIR and persist v16 context-gate governance records.
 
@@ -208,15 +211,23 @@ async def compile_skill_with_context_governance(
     semantic_equivalence_score = 1.0 if requirements and lost_requirements == 0 else 0.0
     description_over_budget = len(skill.description) > max(1, description_max_chars)
     blocking_scanner = has_blocking_findings(compiled.scanner_findings)
+    probe_reject_reason = _probe_reject_reason(
+        require_probe_evidence=require_probe_evidence,
+        routing_equivalence_evidence=routing_equivalence_evidence,
+        regression_evidence=regression_evidence,
+    )
     reject_reason = _context_reject_reason(
         blocking_scanner=blocking_scanner,
         description_over_budget=description_over_budget,
         token_over_budget=compiled.token_over_budget,
         lost_requirements=lost_requirements,
+        probe_reject_reason=probe_reject_reason,
     )
     status = "passed" if reject_reason is None else "failed"
     safety_status = "blocked" if blocking_scanner else "passed"
-    equivalence_status = "passed" if lost_requirements == 0 else "failed"
+    equivalence_status = (
+        "passed" if lost_requirements == 0 and probe_reject_reason is None else "failed"
+    )
 
     artifact = await store.record_artifact(
         workspace_key=workspace_key,
@@ -240,6 +251,11 @@ async def compile_skill_with_context_governance(
             "preserved_requirements": len(preserved),
             "lost_requirements": lost_requirements,
             "scanner_codes": [finding.code for finding in compiled.scanner_findings],
+            "probe_evidence_required": require_probe_evidence,
+            "routing_equivalence_evidence": _safe_gate_evidence(
+                routing_equivalence_evidence
+            ),
+            "regression_evidence": _safe_gate_evidence(regression_evidence),
         },
     )
 
@@ -253,6 +269,7 @@ async def compile_skill_with_context_governance(
         "max_tokens": max_context_tokens,
         "status": status,
         "reject_reason": reject_reason,
+        "probe_evidence_required": require_probe_evidence,
     }
     compile_run = await store.record_compile_run(
         workspace_key=workspace_key,
@@ -279,6 +296,8 @@ async def compile_skill_with_context_governance(
             "equivalence_status": equivalence_status,
             "description_over_budget": description_over_budget,
             "model_assist_used": False,
+            "probe_evidence_required": require_probe_evidence,
+            "probe_reject_reason": probe_reject_reason,
         },
     )
     budget_event = await store.record_budget_event(
@@ -316,6 +335,11 @@ async def compile_skill_with_context_governance(
             "compiler_version": compiler_version,
             "skill_slug": skill.slug,
             "method": "deterministic_exact_requirement_render",
+            "probe_evidence_required": require_probe_evidence,
+            "routing_equivalence_evidence": _safe_gate_evidence(
+                routing_equivalence_evidence
+            ),
+            "regression_evidence": _safe_gate_evidence(regression_evidence),
         },
     )
     return ContextCompilationResult(
@@ -361,6 +385,7 @@ def _context_reject_reason(
     description_over_budget: bool,
     token_over_budget: bool,
     lost_requirements: int,
+    probe_reject_reason: str | None = None,
 ) -> str | None:
     if blocking_scanner:
         return "scanner_blocked"
@@ -370,7 +395,51 @@ def _context_reject_reason(
         return "over_context_budget"
     if lost_requirements:
         return "semantic_loss"
+    if probe_reject_reason:
+        return probe_reject_reason
     return None
+
+
+def _probe_reject_reason(
+    *,
+    require_probe_evidence: bool,
+    routing_equivalence_evidence: dict[str, object] | None,
+    regression_evidence: dict[str, object] | None,
+) -> str | None:
+    if not require_probe_evidence:
+        return None
+    routing = routing_equivalence_evidence or {}
+    regression = regression_evidence or {}
+    required = (
+        routing.get("positive_routing_passed") is True,
+        routing.get("negative_routing_passed") is True,
+        routing.get("information_preservation_passed") is True,
+        regression.get("regression_passed") is True,
+    )
+    return None if all(required) else "needs_probe_evidence"
+
+
+def _safe_gate_evidence(evidence: dict[str, object] | None) -> dict[str, object]:
+    if not evidence:
+        return {}
+    allowed_keys = {
+        "positive_routing_passed",
+        "negative_routing_passed",
+        "information_preservation_passed",
+        "regression_passed",
+        "probe_set_version",
+        "probe_count",
+        "passed_count",
+        "failed_count",
+        "evidence_hash",
+        "notes_hash",
+    }
+    safe: dict[str, object] = {}
+    for key in allowed_keys:
+        value = evidence.get(key)
+        if isinstance(value, bool | int | float | str):
+            safe[key] = value
+    return safe
 
 
 def _compression_ratio(*, source_tokens: int, candidate_tokens: int) -> float:

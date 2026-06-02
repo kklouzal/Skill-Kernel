@@ -2007,6 +2007,20 @@ def test_repair_execute_materializes_policy_approved_repair_candidate(tmp_path) 
                         "policy_approved": True,
                         "skill_version_id": str(skill_version_id),
                         "slug": "repair-evaluator-failure",
+                        "routing_equivalence_evidence": {
+                            "positive_routing_passed": True,
+                            "negative_routing_passed": True,
+                            "information_preservation_passed": True,
+                            "probe_set_version": "test.repair.routing.v1",
+                            "probe_count": 3,
+                            "passed_count": 3,
+                        },
+                        "regression_evidence": {
+                            "regression_passed": True,
+                            "probe_set_version": "test.repair.regression.v1",
+                            "probe_count": 2,
+                            "passed_count": 2,
+                        },
                     },
                 }
             },
@@ -2057,7 +2071,15 @@ def test_repair_execute_materializes_policy_approved_repair_candidate(tmp_path) 
     assert queued_apply.payload["repair_execution"]["materialization"][
         "context_output_manifest_hash"
     ]
-    assert (tmp_path / queued_apply.payload["manifest_relative_path"]).exists()
+    manifest_path = tmp_path / queued_apply.payload["manifest_relative_path"]
+    assert manifest_path.exists()
+    staged_skill = manifest_path.parent / "SKILL.md"
+    staged_text = staged_skill.read_text(encoding="utf-8")
+    assert "## PRECONDITIONS" in staged_text
+    assert "## OUTPUTS" in staged_text
+    assert "## EFFECTS" in staged_text
+    assert "## FAIL" in staged_text
+    assert "## DO NOT USE WHEN" in staged_text
     assert len(memory.control_flow_events) == 1
     assert memory.control_flow_events[0].source_id == memory_record.quarantine_id
     assert memory.control_flow_events[0].influence_kind == "mutation"

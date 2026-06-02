@@ -80,6 +80,50 @@ def test_context_compiler_records_governance_gate_pass() -> None:
     assert result.semantic_equivalence_score == 1.0
 
 
+def test_context_compiler_requires_probe_evidence_when_activation_grade() -> None:
+    missing = asyncio.run(
+        compile_skill_with_context_governance(
+            valid_skill(),
+            NullContextGovernanceStore(),
+            workspace_key="dev-01",
+            require_probe_evidence=True,
+        )
+    )
+
+    assert missing.status == "failed"
+    assert missing.reject_reason == "needs_probe_evidence"
+    assert missing.context_artifact["equivalence_status"] == "failed"
+    assert missing.context_artifact["metadata"]["probe_evidence_required"] is True
+
+    passed = asyncio.run(
+        compile_skill_with_context_governance(
+            valid_skill(),
+            NullContextGovernanceStore(),
+            workspace_key="dev-01",
+            require_probe_evidence=True,
+            routing_equivalence_evidence={
+                "positive_routing_passed": True,
+                "negative_routing_passed": True,
+                "information_preservation_passed": True,
+                "probe_count": 3,
+                "passed_count": 3,
+                "raw_prompt": "must not be persisted",
+            },
+            regression_evidence={
+                "regression_passed": True,
+                "probe_count": 2,
+                "passed_count": 2,
+            },
+        )
+    )
+
+    assert passed.status == "passed"
+    assert passed.context_artifact["equivalence_status"] == "passed"
+    safe_evidence = passed.context_artifact["metadata"]["routing_equivalence_evidence"]
+    assert safe_evidence["positive_routing_passed"] is True
+    assert "raw_prompt" not in safe_evidence
+
+
 def test_context_compiler_manifest_hash_is_deterministic() -> None:
     skill = valid_skill()
     first = asyncio.run(

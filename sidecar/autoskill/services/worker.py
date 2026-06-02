@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from autoskill.core.hashing import sha256_json, sha256_text
+from autoskill.core.hashing import sha256_json
+from autoskill.core.skillir import SkillIR
 from autoskill.db.activation import ActivationGateStore
 from autoskill.db.attribution import AttributionStore
 from autoskill.db.context import ContextGovernanceStore
@@ -27,6 +28,10 @@ from autoskill.db.retrieval import RetrievalStore
 from autoskill.db.scheduler import SchedulerStore
 from autoskill.db.topology import TopologyStore
 from autoskill.db.utility import UtilityStore
+from autoskill.services.compiler import (
+    CONTEXT_COMPILER_VERSION,
+    compile_skill_with_context_governance,
+)
 from autoskill.services.embedding_generation import (
     TextEmbedder,
     build_text_embedder_from_profile,
@@ -36,7 +41,6 @@ from autoskill.services.evaluation_runner import run_pending_proposal_gates_with
 from autoskill.services.external_import import materialize_external_skill_import
 from autoskill.services.external_inventory import scan_external_skill_roots
 from autoskill.services.opportunity import mine_opportunities
-from autoskill.services.scanner import has_blocking_findings, scan_text
 from autoskill.services.writer import (
     apply_staged_manifest_with_governance,
     delete_active_skill_with_governance,
@@ -1171,9 +1175,6 @@ async def _materialized_writer_apply_payload_for_repair(
     slug = _string_value(materialization.get("slug")) or (
         f"repair-{source.source_kind}-{source.source_id.hex[:8]}"
     )
-    compiled_skill_md = _string_value(materialization.get("compiled_skill_md")) or (
-        _compiled_repair_skill_md(source, slug=slug)
-    )
     max_context_tokens = _payload_int(
         materialization,
         "max_context_tokens",
@@ -1181,16 +1182,32 @@ async def _materialized_writer_apply_payload_for_repair(
         minimum=100,
         maximum=2000,
     )
-    context_proof = await _record_context_proof_for_repair_materialization(
-        stores,
-        source,
-        workspace_key=workspace_key,
-        skill_version_id=skill_version_id,
-        compiled_skill_md=compiled_skill_md,
-        max_context_tokens=max_context_tokens,
-    )
-    if context_proof is None:
+    if stores.context_governance is None:
         return None
+    repair_skill = _repair_skillir(source, slug=slug, materialization=materialization)
+    context_result = await compile_skill_with_context_governance(
+        repair_skill,
+        stores.context_governance,
+        workspace_key=workspace_key,
+        skill_id=source.skill_id,
+        skill_version_id=skill_version_id,
+        max_context_tokens=max_context_tokens,
+        target_runtime_tokens=min(max_context_tokens, 350),
+        source_object_type=f"{source.source_kind}_repair_proposal",
+        source_object_id=source.source_id,
+        compiler_version=f"{CONTEXT_COMPILER_VERSION}.repair",
+        require_probe_evidence=True,
+        routing_equivalence_evidence=_json_object(
+            materialization.get("routing_equivalence_evidence")
+        ),
+        regression_evidence=_json_object(materialization.get("regression_evidence")),
+    )
+    if context_result.status != "passed":
+        return None
+    compiled_skill_md = context_result.compiled.skill_md
+    context_compile_run_id = context_result.compile_run["context_compile_run_id"]
+    context_artifact_id = context_result.context_artifact["context_artifact_id"]
+    context_output_manifest_hash = context_result.compile_run["output_manifest_hash"]
     staged = stage_compiled_skill(
         stores.workspace_root,
         staging_id=uuid4(),
@@ -1198,9 +1215,9 @@ async def _materialized_writer_apply_payload_for_repair(
         slug=slug,
         compiled_skill_md=compiled_skill_md,
         max_context_tokens=max_context_tokens,
-        context_compile_run_id=UUID(str(context_proof["context_compile_run_id"])),
-        context_artifact_id=UUID(str(context_proof["context_artifact_id"])),
-        context_output_manifest_hash=str(context_proof["output_manifest_hash"]),
+        context_compile_run_id=UUID(str(context_compile_run_id)),
+        context_artifact_id=UUID(str(context_artifact_id)),
+        context_output_manifest_hash=str(context_output_manifest_hash),
     )
     return {
         "workspace_id": workspace_key,
@@ -1216,9 +1233,9 @@ async def _materialized_writer_apply_payload_for_repair(
                 "skill_version_id": str(skill_version_id),
                 "slug": staged.slug,
                 "manifest_sha256": staged.manifest_sha256,
-                "context_compile_run_id": context_proof["context_compile_run_id"],
-                "context_artifact_id": context_proof["context_artifact_id"],
-                "context_output_manifest_hash": context_proof["output_manifest_hash"],
+                "context_compile_run_id": context_compile_run_id,
+                "context_artifact_id": context_artifact_id,
+                "context_output_manifest_hash": context_output_manifest_hash,
                 "scanner_findings": [
                     finding.to_json() for finding in staged.scanner_findings
                 ],
@@ -1227,131 +1244,15 @@ async def _materialized_writer_apply_payload_for_repair(
     }
 
 
-async def _record_context_proof_for_repair_materialization(
-    stores: WorkerStores,
+def _repair_skillir(
     source: RepairExecutionSource,
     *,
-    workspace_key: str,
-    skill_version_id: UUID,
-    compiled_skill_md: str,
-    max_context_tokens: int,
-) -> dict[str, str] | None:
-    if stores.context_governance is None:
-        return None
-    scanner_findings = scan_text(compiled_skill_md)
-    if has_blocking_findings(scanner_findings):
-        return None
-    token_count = _estimate_context_tokens(compiled_skill_md)
-    if token_count > max_context_tokens:
-        return None
-    text_hash = sha256_text(compiled_skill_md)
-    source_hash = sha256_json(
-        {
-            "source_kind": source.source_kind,
-            "source_id": str(source.source_id),
-            "proposal": source.proposal,
-        }
-    )
-    output_manifest = {
-        "schema": "autoskill.repair-context-compile-manifest.v1",
-        "source_kind": source.source_kind,
-        "source_id": str(source.source_id),
-        "skill_version_id": str(skill_version_id),
-        "compiled_sha256": text_hash,
-        "token_count": token_count,
-        "max_context_tokens": max_context_tokens,
-        "status": "passed",
-    }
-    output_manifest_hash = sha256_json(output_manifest)
-    artifact = await stores.context_governance.record_artifact(
-        workspace_key=workspace_key,
-        artifact_kind="skill_md",
-        source_object_type=f"{source.source_kind}_repair_proposal",
-        source_object_id=source.source_id,
-        skill_id=source.skill_id,
-        skill_version_id=skill_version_id,
-        text=compiled_skill_md,
-        max_tokens=max_context_tokens,
-        safety_status="passed",
-        equivalence_status="passed",
-        shadowing_status="pending",
-        metadata={
-            "loadability_class": "runtime_skill_body",
-            "compiler": "autoskill-repair-materializer.v1",
-            "source_kind": source.source_kind,
-            "source_id": str(source.source_id),
-            "scanner_codes": [finding.code for finding in scanner_findings],
-        },
-    )
-    compile_run = await stores.context_governance.record_compile_run(
-        workspace_key=workspace_key,
-        compiler_version="autoskill-repair-materializer.v1",
-        input_skillir_hash=source_hash,
-        output_manifest_hash=output_manifest_hash,
-        actual_runtime_tokens=token_count,
-        status="passed",
-        skill_id=source.skill_id,
-        skill_version_id=skill_version_id,
-        context_artifact_id=artifact.context_artifact_id,
-        target_runtime_tokens=min(max_context_tokens, 350),
-        compression_ratio=1.0,
-        semantic_equivalence_score=1.0,
-        metadata={
-            "loadability_class": "runtime_skill_body",
-            "source_kind": source.source_kind,
-            "source_id": str(source.source_id),
-            "budget_status": artifact.budget_status,
-            "safety_status": artifact.safety_status,
-            "equivalence_status": artifact.equivalence_status,
-        },
-    )
-    await stores.context_governance.record_budget_event(
-        workspace_key=workspace_key,
-        event_type="repair_materialization_budget_gate",
-        decision="accept",
-        skill_id=source.skill_id,
-        skill_version_id=skill_version_id,
-        context_artifact_id=artifact.context_artifact_id,
-        tokens_delta=token_count - min(max_context_tokens, 350),
-        evidence={
-            "gate": "repair_materialization_context_gate",
-            "max_context_tokens": max_context_tokens,
-            "actual_runtime_tokens": token_count,
-            "budget_status": artifact.budget_status,
-        },
-        metadata={
-            "compiler_version": "autoskill-repair-materializer.v1",
-            "source_kind": source.source_kind,
-            "source_id": str(source.source_id),
-        },
-    )
-    await stores.context_governance.record_semantic_compression_trial(
-        workspace_key=workspace_key,
-        skill_id=source.skill_id,
-        candidate_revision_id=skill_version_id,
-        candidate_context_artifact_id=artifact.context_artifact_id,
-        source_tokens=token_count,
-        candidate_tokens=token_count,
-        preserved_requirements=1,
-        lost_requirements=0,
-        added_unsupported_requirements=0,
-        equivalence_score=1.0,
-        status="passed",
-        metadata={
-            "compiler_version": "autoskill-repair-materializer.v1",
-            "source_kind": source.source_kind,
-            "source_id": str(source.source_id),
-        },
-    )
-    return {
-        "context_compile_run_id": str(compile_run.context_compile_run_id),
-        "context_artifact_id": str(artifact.context_artifact_id),
-        "output_manifest_hash": output_manifest_hash,
-        "text_hash": text_hash,
-    }
-
-
-def _compiled_repair_skill_md(source: RepairExecutionSource, *, slug: str) -> str:
+    slug: str,
+    materialization: dict[str, Any],
+) -> SkillIR:
+    skillir = _json_object(materialization.get("skillir"))
+    if skillir:
+        return SkillIR.model_validate(skillir)
     proposal_kind = (
         _string_value(source.proposal.get("proposal_kind"))
         or _string_value(source.proposal.get("kind"))
@@ -1359,32 +1260,44 @@ def _compiled_repair_skill_md(source: RepairExecutionSource, *, slug: str) -> st
     )
     objectives = _string_list(source.proposal.get("objectives")) or [source.reason]
     acceptance = _json_object(source.proposal.get("acceptance_gate"))
-    verify_lines = [
-        f"- {key}: {value}"
+    verification = [
+        f"{key}: {value}"
         for key, value in sorted(acceptance.items())
         if isinstance(key, str)
-    ] or ["- Run the proposal-specific evaluator or drift check before activation."]
-    return "\n".join(
-        [
-            "---",
-            f"name: {slug}",
-            f"description: Guarded {proposal_kind} repair candidate.",
-            "---",
-            "",
-            "## WHEN",
-            f"- A SkillKernel repair proposal of type `{proposal_kind}` is approved.",
-            "",
-            "## DO",
-            *[f"- {item}" for item in objectives],
-            "",
-            "## VERIFY",
-            *verify_lines,
-            "",
-            "## NEVER",
-            "- Do not bypass scanner, evaluator, activation, or rollback gates.",
-            "- Do not include raw secrets, credentials, or private source content.",
-            "",
-        ]
+    ] or ["Run the proposal-specific evaluator or drift check before activation."]
+    return SkillIR(
+        slug=slug,
+        name=slug,
+        description=(
+            f"Stage approved {proposal_kind} repair; use for SkillKernel guarded repair."
+        ),
+        applicability=[
+            f"A SkillKernel repair proposal of type `{proposal_kind}` is approved."
+        ],
+        inputs=["repair proposal", "source evidence or drift context"],
+        preconditions=[
+            "materialization.policy_approved is true",
+            "writer apply remains activation-gated",
+        ],
+        steps=objectives,
+        outputs=["staged repair candidate manifest"],
+        effects=["No active runtime files change until writer.apply succeeds."],
+        verification=verification,
+        failure_handling=[
+            (
+                "Fail closed to evaluator or drift recheck when compiler, scanner, "
+                "or writer proof is missing."
+            )
+        ],
+        do_not_use_when=[
+            "repair proposal is not explicitly policy approved",
+            "source lacks a skill version anchor",
+        ],
+        never=[
+            "Do not bypass scanner, evaluator, activation, or rollback gates.",
+            "Do not include raw secrets, credentials, or private source content.",
+        ],
+        evidence_ids=_string_list(source.proposal.get("evidence_ids")),
     )
 
 

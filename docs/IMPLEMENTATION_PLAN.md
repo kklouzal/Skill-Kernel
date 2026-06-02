@@ -119,7 +119,9 @@ Deliverables:
 
 - typed LLM client for semantic proposal jobs; implemented for one workspace/profile text profile per call;
 - model profile thinking-level and fallback policy; implemented on profile storage/API and recorded on invocation audit rows;
-- OpenAI-compatible `/chat/completions` route; implemented with bounded timeout and safe endpoint/API-key resolution;
+- OpenAI-compatible text routes; implemented for `/chat/completions` and
+  explicit `/responses` endpoint profiles with bounded timeout and safe
+  endpoint/API-key resolution;
 - OpenClaw text route; intentionally fail-closed as `unsupported` until a stable seam is available;
 - LLM invocation audit and trace spans; implemented as content-safe `llm_invocations` rows with purpose, model/profile, route, trace/span, token estimates, status, error, and non-secret audit metadata, plus `llm_call` trace spans that preserve caller/job trace roots without storing prompt or response text in span attributes;
 - text-model qualification runs; implemented as control-authenticated probes through the typed LLM client, with dedicated run records and latest-verdict profile status stamping.
@@ -132,6 +134,9 @@ Acceptance:
 - focused LLM client tests pass, full sidecar tests pass, and local Postgres smoke can persist an invocation audit row;
 - typed LLM calls record first-class `llm_call` spans for successful OpenAI-compatible calls and denied unsupported routes, with invocation audit rows attached to the model-call span;
 - model and embedding qualification runs persist dedicated audit rows and stamp the latest verdict onto profile records.
+- OpenAI-compatible text profiles can select `chat_completions` or `responses`
+  endpoint semantics, and invocation audit records the chosen endpoint route
+  without storing prompts, responses, or API keys.
 
 ## Phase 5 - Runtime Context Broker
 
@@ -292,8 +297,8 @@ Deliverables:
 - repair-proposal execution; implemented as mutation-worker `repair.execute` orchestration that claims planned curation repair proposals and open drift repair candidates, records governance transactions/items/provenance, queues explicit policy-approved staged manifests to `writer.apply`, can generate guarded staged repair manifests from policy-approved bounded proposals with skill-version anchors, and otherwise fail-closes to evaluator or drift recheck jobs with source execution metadata;
 - repair materialization context proof; implemented so generated repair
   manifests receive deterministic context artifact, compile-run, budget, and
-  semantic-compression proof before staging, and fail closed when proof cannot
-  be produced;
+  semantic-compression proof plus activation-grade routing/regression probe
+  evidence before staging, and fail closed when proof cannot be produced;
 - improvement engine;
 - archive/promote/merge/split; archive, evaluator-gated archived promotion, evaluator-gated explicit duplicate merge/archive, active-bank budget overflow, and planned split/improvement/disambiguation curation actions are implemented as deterministic lifecycle-state or planning actions with structured repair proposal payloads;
 - external-skill review actions and import materialization; implemented as a control-authenticated operator decision ledger for reuse/import/ignore/quarantine plus operator-approved stage-only import candidates, with no autonomous mutation of external-owned files;

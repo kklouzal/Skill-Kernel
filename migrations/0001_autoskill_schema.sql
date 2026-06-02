@@ -212,6 +212,8 @@ CREATE TABLE IF NOT EXISTS autoskill.model_profiles (
   model text NOT NULL,
   route_kind text NOT NULL CHECK (route_kind IN ('openclaw','openai_compatible')),
   endpoint_ref text,
+  endpoint_kind text NOT NULL DEFAULT 'chat_completions'
+    CHECK (endpoint_kind IN ('chat_completions','responses')),
   timeout_seconds double precision NOT NULL DEFAULT 60,
   thinking_level text NOT NULL DEFAULT 'off'
     CHECK (thinking_level IN ('off','minimal','low','medium','high','xhigh','adaptive','max')),
@@ -230,6 +232,16 @@ ALTER TABLE autoskill.model_profiles
 
 ALTER TABLE autoskill.model_profiles
   ADD COLUMN IF NOT EXISTS thinking_fallback_policy text NOT NULL DEFAULT 'omit';
+
+ALTER TABLE autoskill.model_profiles
+  ADD COLUMN IF NOT EXISTS endpoint_kind text NOT NULL DEFAULT 'chat_completions';
+
+ALTER TABLE autoskill.model_profiles
+  DROP CONSTRAINT IF EXISTS model_profiles_endpoint_kind_check;
+
+ALTER TABLE autoskill.model_profiles
+  ADD CONSTRAINT model_profiles_endpoint_kind_check
+  CHECK (endpoint_kind IN ('chat_completions','responses'));
 
 ALTER TABLE autoskill.model_profiles
   DROP CONSTRAINT IF EXISTS model_profiles_thinking_level_check;

@@ -210,6 +210,12 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Validation passed for runtime action-attribution checks: the sidecar now persists `action_attribution_checks`, and the plugin emits a content-safe blocked-tool check when runtime tool-boundary enforcement blocks a high-risk call. Focused shadowing/API tests, plugin tests, and focused ruff checks passed.
 - Validation passed for guarded external-skill import materialization: approved `import` review decisions can now become stage-only SkillKernel import candidates through `external_skills.materialize_import`, recording a completed review action without mutating external-owned roots. Focused external-skill/worker tests and focused ruff checks passed.
 - Validation passed for guarded repair materialization: policy-approved repair proposals with a skill-version anchor can now generate a scanned staged repair `SKILL.md` manifest and queue `writer.apply`; proposals without explicit approval or sufficient anchors still fail closed to evaluator/drift recheck work. Focused worker tests and focused ruff checks passed.
+- Validation passed for activation-grade repair materialization proof and
+  explicit text endpoint selection: generated repair manifests now go through
+  the deterministic SkillIR context compiler and require routing-equivalence plus
+  regression evidence before staging, while OpenAI-compatible text model profiles
+  can opt into `/responses` endpoint semantics with content-safe invocation
+  audit. Focused LLM/compiler/worker tests passed.
 - Validation passed for active/profile-qualified embedding generation controls: direct API and queued worker `embeddings.generate` paths now resolve explicit or active qualified embedding profiles, preserve profile IDs through embedding storage, and record content-safe `embedding_call` spans without embedding text/source bodies. Focused embedding/worker tests passed.
 - Validation passed for production embedding validation and stored broker replay corpus controls: `/v1/profiles/embeddings/validate-production` can qualify the configured endpoint/profile and optionally exercise generation, while broker policy replay can consume persisted redacted replay episodes by tag instead of requiring caller-supplied episodes only. Focused profile/broker tests passed.
 - Validation passed for content-safe worker progress metadata: `run_worker_once` now records persistent worker heartbeat progress for claimed jobs, lease renewals, success, and failure, including bounded payload controls and output keys/counts without raw evidence, skill text, or body content. Focused worker tests passed, and full `make test`, `make lint`, `make compile`, `make plugin-check`, and `git diff --check` passed with 181 tests.
@@ -309,14 +315,30 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   runtime details require `openclaw plugins inspect autoskill --json --runtime`;
   that command now reports `imported=true`, `hookCount=11`, all 11 typed hooks,
   and no diagnostics for the live installed plugin.
+- Direct OpenAI-compatible text profiles now persist an explicit
+  `endpoint_kind` (`chat_completions` or `responses`) and the LLM client routes
+  to `/v1/chat/completions` or `/v1/responses` accordingly, with content-safe
+  invocation audit metadata.
+- Activation-grade context compilation can now require content-safe routing,
+  information-preservation, and regression probe evidence; missing or failed
+  evidence causes `needs_probe_evidence` instead of a false equivalence pass.
+- Policy-approved repair materialization no longer stages ad hoc Markdown.
+  Repair proposals must become SkillIR, pass the normal context compiler, carry
+  routing/regression proof summaries, and then stage compiler-rendered `SKILL.md`
+  with the full typed runtime sections.
 
 ## Next Gates
 
 1. Continue collecting sustained Dev-01 telemetry and add only distinct,
    operator-reviewed replay episodes from real usage, then run replay/canary
    tuning on the enlarged corpus.
-2. Run `scripts/autoskill_backup.py` to an operator-approved backup location after the production roots contain activated SkillKernel-owned skills, then verify with `scripts/autoskill_restore.py --dry-run`.
-3. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
+2. Implement first-class support artifact staging/persistence so support files
+   are manifest-bound runtime artifacts with loadability class, scanner result,
+   token/hash records, rollback, and provenance coverage.
+3. Feed context-value-per-token, ignored-load, false-positive-load, and token
+   waste metrics into utility rollups and curation/topology decisions.
+4. Run `scripts/autoskill_backup.py` to an operator-approved backup location after the production roots contain activated SkillKernel-owned skills, then verify with `scripts/autoskill_restore.py --dry-run`.
+5. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
 
 ## Known Risks
 
@@ -345,7 +367,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   runtime skill has been activated into those roots yet. The backup bundle still
   contains the database dump and records missing roots explicitly; rerun the
   backup after the first live activation to prove filesystem restore coverage.
-- Repair execution remains guarded and fail-closed: explicit staged manifests still pass through activation-gated `writer.apply`, and policy-approved repair materialization can generate staged manifests from bounded repair proposals only when a skill-version anchor exists and deterministic context-governance proof can be recorded for the staged runtime artifact.
+- Repair execution remains guarded and fail-closed: explicit staged manifests still pass through activation-gated `writer.apply`, and policy-approved repair materialization can generate staged manifests from bounded repair proposals only when a skill-version anchor exists and deterministic context-governance proof with routing-equivalence and regression evidence can be recorded for the staged runtime artifact.
 - External-skill awareness now includes read-only root scanning plus inventory/retrieval/matching, scan scheduling defaults, embedding generation for external descriptions, richer collision risk scoring, explicit operator review-action recording, and operator-approved stage-only import materialization.
 - v16 trace/profile/context APIs and schema exist; event/job/retrieval/evaluator/context-broker paths now propagate trace or context artifacts, LLM calls now have content-safe invocation audit rows, direct writer apply/rollback APIs record content-safe writer spans, mutation-worker writer apply plus revocation rollback record content-safe child spans, embedding generation records content-safe `embedding_call` spans, and worker heartbeat summaries expose content-safe claimed/renewed/succeeded/failed job progress. Longer semantic jobs may still add specialized counters as their multi-phase internals mature.
 - SkillGraphIR now has planner/API/store persistence with transactions, planned trials, revocation invalidation for operation/trial state, deterministic apply state transitions after passed trials, broker replay/canary scoring gates for compose/decompose routing, stored downstream action plans, and mutation-worker lifecycle/graph/runtime invalidation execution after accepted topology operations.
@@ -353,4 +375,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints; mutation-worker apply exists but fails closed unless the queued job is explicitly policy-approved.
 - Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, invalidates body-index/embedding/context/retrieval/topology/evaluator/attribution/governance objects from traversal summaries, and freeze/critical-canary paths evict affected broker cache entries.
 - Utility rollups are deterministic v1 scoring, not full marginal-value/intervention scoring yet; curation now handles archived promotion, explicit duplicate merge/archive, low-utility archive, active-bank budget overflow, evaluator blocking, duplicate merge probe planning, and planned split/improvement/disambiguation actions with structured repair proposals. Conservative repair execution now claims planned repairs, records governance/provenance, queues evaluator or policy-approved writer work, and can generate guarded staged repair manifests from policy-approved bounded proposals.
+- Context-value/token ledgers exist and activation-grade compiler proof can now
+  require routing/regression evidence, but utility rollups still need to consume
+  context-value-per-token and token-waste outcomes before they fully drive
+  archive, compose, decompose, tighten-description, or broker-abstain actions.
+- Support artifacts remain represented in SkillIR and schema but are not yet
+  full writer-manifest artifacts with independent scan/token/provenance records.
 - Contract/drift checks are deterministic v1 path/command/env/package/schema/TCP/HTTP-status probes only; drift probe creation/retirement, localized repair metadata, live API status probes, operator false-positive suppression, and conservative repair execution/recheck queueing are implemented.

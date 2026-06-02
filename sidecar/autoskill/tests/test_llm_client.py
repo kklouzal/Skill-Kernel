@@ -143,9 +143,37 @@ class FakeResponse:
         ).encode()
 
 
+class FakeResponsesResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(
+            {
+                "id": "resp-test",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "{\"responses\": true}",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ).encode()
+
+
 def _profile(
     *,
     route_kind: str = "openai_compatible",
+    endpoint_kind: str = "chat_completions",
     thinking_level: str = "off",
     thinking_fallback_policy: str = "omit",
     qualification: dict[str, object] | None = None,
@@ -160,6 +188,7 @@ def _profile(
         model="test-model",
         route_kind=route_kind,
         endpoint_ref="http://127.0.0.1:9999/v1",
+        endpoint_kind=endpoint_kind,
         timeout_seconds=12.5,
         thinking_level=thinking_level,
         thinking_fallback_policy=thinking_fallback_policy,
@@ -257,6 +286,43 @@ def test_llm_client_posts_openai_compatible_request_and_records_safe_audit() -> 
             "object_id": str(invocations.records[0].llm_invocation_id),
         }
     ]
+
+
+def test_llm_client_supports_explicit_openai_compatible_responses_endpoint() -> None:
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(http_request, timeout):
+        captured["url"] = http_request.full_url
+        captured["timeout"] = timeout
+        captured["payload"] = json.loads(http_request.data.decode())
+        return FakeResponsesResponse()
+
+    invocations = MemoryInvocationStore()
+    client = LLMClient(
+        profiles=MemoryProfileStore(_profile(endpoint_kind="responses")),
+        invocations=invocations,
+        settings=SimpleNamespace(llm_api_key="secret-test-key"),
+        urlopen=fake_urlopen,
+    )
+
+    response = asyncio.run(client.complete(_request()))
+
+    assert response.text == "{\"responses\": true}"
+    assert response.finish_reason == "completed"
+    assert captured["url"] == "http://127.0.0.1:9999/v1/responses"
+    assert captured["timeout"] == 12.5
+    assert captured["payload"] == {
+        "model": "test-model",
+        "input": [{"role": "user", "content": "Return a JSON proposal."}],
+        "max_output_tokens": 1024,
+        "temperature": 0.0,
+    }
+    assert invocations.records[0].audit == {
+        "endpoint_route": "responses",
+        "finish_reason": "completed",
+        "provider_request_id": "resp-test",
+    }
+    assert "Return a JSON proposal." not in json.dumps(invocations.records[0].audit)
 
 
 def test_llm_client_records_strict_thinking_policy_failure() -> None:

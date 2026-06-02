@@ -323,6 +323,7 @@ class ModelProfileUpsertRequest(BaseModel):
     model: str
     route_kind: str
     endpoint_ref: str | None = None
+    endpoint_kind: str = "chat_completions"
     timeout_seconds: float = 60.0
     thinking_level: str = "off"
     thinking_fallback_policy: str = "omit"
@@ -396,6 +397,9 @@ class ContextSkillIRCompileRequest(BaseModel):
     max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS
     target_runtime_tokens: int = 350
     description_max_chars: int = DEFAULT_DESCRIPTION_MAX_CHARS
+    require_probe_evidence: bool = False
+    routing_equivalence_evidence: dict[str, object] = Field(default_factory=dict)
+    regression_evidence: dict[str, object] = Field(default_factory=dict)
 
 
 class ContextSkillIRCompileResponse(BaseModel):
@@ -2944,6 +2948,7 @@ def create_app(
             model=request.model,
             route_kind=request.route_kind,
             endpoint_ref=request.endpoint_ref,
+            endpoint_kind=request.endpoint_kind,
             timeout_seconds=request.timeout_seconds,
             thinking_level=request.thinking_level,
             thinking_fallback_policy=request.thinking_fallback_policy,
@@ -3116,6 +3121,9 @@ def create_app(
             max_context_tokens=max(1, min(request.max_context_tokens, 10_000)),
             target_runtime_tokens=max(1, min(request.target_runtime_tokens, 10_000)),
             description_max_chars=max(1, min(request.description_max_chars, 1_000)),
+            require_probe_evidence=request.require_probe_evidence,
+            routing_equivalence_evidence=request.routing_equivalence_evidence,
+            regression_evidence=request.regression_evidence,
         )
         return ContextSkillIRCompileResponse(result=result.to_json())
 

@@ -89,6 +89,7 @@ class ModelProfileRecord:
     embedding_dim: int | None
     created_at: datetime
     updated_at: datetime
+    endpoint_kind: str = "chat_completions"
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -100,6 +101,7 @@ class ModelProfileRecord:
             "model": self.model,
             "route_kind": self.route_kind,
             "endpoint_ref": self.endpoint_ref,
+            "endpoint_kind": self.endpoint_kind,
             "timeout_seconds": self.timeout_seconds,
             "thinking_level": self.thinking_level,
             "thinking_fallback_policy": self.thinking_fallback_policy,
@@ -122,6 +124,7 @@ class ModelProfileRecord:
             model=row["model"],
             route_kind=row["route_kind"],
             endpoint_ref=_row_get(row, "endpoint_ref"),
+            endpoint_kind=_row_get(row, "endpoint_kind") or "chat_completions",
             timeout_seconds=float(row["timeout_seconds"]),
             thinking_level=_row_get(row, "thinking_level") or "off",
             thinking_fallback_policy=_row_get(row, "thinking_fallback_policy") or "omit",
@@ -144,6 +147,7 @@ class ModelProfileRecord:
             model=row["model"],
             route_kind=row["route_kind"],
             endpoint_ref=_row_get(row, "endpoint_ref"),
+            endpoint_kind="embeddings",
             timeout_seconds=float(row["timeout_seconds"]),
             thinking_level="off",
             thinking_fallback_policy="omit",
@@ -192,6 +196,7 @@ class ProfileStore(Protocol):
         model: str,
         route_kind: str,
         endpoint_ref: str | None = None,
+        endpoint_kind: str = "chat_completions",
         timeout_seconds: float = 60.0,
         status: str = "candidate",
         qualification: dict[str, Any] | None = None,
@@ -313,6 +318,7 @@ class NullProfileStore:
         model: str,
         route_kind: str,
         endpoint_ref: str | None = None,
+        endpoint_kind: str = "chat_completions",
         timeout_seconds: float = 60.0,
         status: str = "candidate",
         qualification: dict[str, Any] | None = None,
@@ -331,6 +337,7 @@ class NullProfileStore:
             model=model,
             route_kind=route_kind,
             endpoint_ref=endpoint_ref,
+            endpoint_kind=endpoint_kind,
             timeout_seconds=timeout_seconds,
             thinking_level=thinking_level,
             thinking_fallback_policy=thinking_fallback_policy,
@@ -385,6 +392,7 @@ class NullProfileStore:
             model=model,
             route_kind=route_kind,
             endpoint_ref=endpoint_ref,
+            endpoint_kind="embeddings",
             timeout_seconds=timeout_seconds,
             thinking_level="off",
             thinking_fallback_policy="omit",
@@ -522,6 +530,7 @@ class AsyncpgProfileStore(AsyncpgPoolOwner):
         model: str,
         route_kind: str,
         endpoint_ref: str | None = None,
+        endpoint_kind: str = "chat_completions",
         timeout_seconds: float = 60.0,
         status: str = "candidate",
         qualification: dict[str, Any] | None = None,
@@ -541,6 +550,7 @@ class AsyncpgProfileStore(AsyncpgPoolOwner):
                   model,
                   route_kind,
                   endpoint_ref,
+                  endpoint_kind,
                   timeout_seconds,
                   thinking_level,
                   thinking_fallback_policy,
@@ -548,20 +558,21 @@ class AsyncpgProfileStore(AsyncpgPoolOwner):
                   qualification
                 )
                 VALUES (
-                  gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb
+                  gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb
                 )
                 ON CONFLICT (workspace_id, profile_key) DO UPDATE
                 SET provider = EXCLUDED.provider,
                     model = EXCLUDED.model,
                     route_kind = EXCLUDED.route_kind,
                     endpoint_ref = EXCLUDED.endpoint_ref,
+                    endpoint_kind = EXCLUDED.endpoint_kind,
                     timeout_seconds = EXCLUDED.timeout_seconds,
                     thinking_level = EXCLUDED.thinking_level,
                     thinking_fallback_policy = EXCLUDED.thinking_fallback_policy,
                     status = EXCLUDED.status,
                     qualification = EXCLUDED.qualification,
                     updated_at = now()
-                RETURNING *, $12::text AS workspace_key
+                RETURNING *, $13::text AS workspace_key
                 """,
                 workspace_id,
                 profile_key,
@@ -569,6 +580,7 @@ class AsyncpgProfileStore(AsyncpgPoolOwner):
                 model,
                 route_kind,
                 endpoint_ref,
+                endpoint_kind,
                 timeout_seconds,
                 thinking_level,
                 thinking_fallback_policy,

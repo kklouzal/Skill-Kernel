@@ -253,15 +253,15 @@ class LLMClient:
             )
             raise LLMClientError(error_text) from None
 
-        payload = {
-            "model": profile.model,
-            "messages": [message.to_json() for message in completion.messages],
-            "max_tokens": completion.max_output_tokens,
-            "temperature": completion.temperature,
-        }
+        endpoint_kind = _resolve_endpoint_kind(profile)
+        payload = _build_openai_compatible_payload(
+            completion=completion,
+            profile=profile,
+            endpoint_kind=endpoint_kind,
+        )
         payload.update(thinking.payload)
         http_request = request.Request(
-            f"{base_url.rstrip('/')}/chat/completions",
+            f"{base_url.rstrip('/')}/{_endpoint_path(endpoint_kind)}",
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {api_key}",
@@ -303,9 +303,7 @@ class LLMClient:
             )
             raise
 
-        choice = body.get("choices", [{}])[0]
-        message = choice.get("message", {})
-        text = str(message.get("content", ""))
+        text, finish_reason = _extract_openai_compatible_text(body, endpoint_kind)
         output_estimate = estimate_text_tokens(text)
         invocation = await self.invocations.record_invocation(
             workspace_key=completion.workspace_key,
@@ -325,9 +323,9 @@ class LLMClient:
             output_token_estimate=output_estimate,
             status="ok",
             audit={
-                "endpoint_route": "chat_completions",
+                "endpoint_route": endpoint_kind,
                 "provider_request_id": body.get("id"),
-                "finish_reason": choice.get("finish_reason"),
+                "finish_reason": finish_reason,
             },
         )
         return LLMCompletionResponse(
@@ -338,7 +336,7 @@ class LLMClient:
             invocation=invocation,
             prompt_token_estimate=prompt_token_estimate,
             output_token_estimate=output_estimate,
-            finish_reason=choice.get("finish_reason"),
+            finish_reason=finish_reason,
         )
 
     async def _record_failure(
@@ -369,7 +367,7 @@ class LLMClient:
             output_token_estimate=0,
             status=status,  # type: ignore[arg-type]
             error=error_text[:500],
-            audit={"endpoint_route": profile.route_kind},
+            audit={"endpoint_route": _failure_endpoint_route(profile)},
         )
 
     async def _finish_span(
@@ -392,6 +390,93 @@ def estimate_text_tokens(text: str) -> int:
     if not text:
         return 0
     return max(1, (len(text) + 3) // 4)
+
+
+def _resolve_endpoint_kind(profile: ModelProfileRecord) -> str:
+    endpoint_kind = getattr(profile, "endpoint_kind", None) or "chat_completions"
+    if endpoint_kind not in {"chat_completions", "responses"}:
+        raise LLMRouteUnsupportedError(f"unsupported LLM endpoint_kind: {endpoint_kind}")
+    return endpoint_kind
+
+
+def _failure_endpoint_route(profile: ModelProfileRecord) -> str:
+    if profile.route_kind == "openai_compatible":
+        return getattr(profile, "endpoint_kind", None) or "chat_completions"
+    return profile.route_kind
+
+
+def _endpoint_path(endpoint_kind: str) -> str:
+    if endpoint_kind == "responses":
+        return "responses"
+    return "chat/completions"
+
+
+def _build_openai_compatible_payload(
+    *,
+    completion: LLMCompletionRequest,
+    profile: ModelProfileRecord,
+    endpoint_kind: str,
+) -> dict[str, object]:
+    if endpoint_kind == "responses":
+        return {
+            "model": profile.model,
+            "input": [message.to_json() for message in completion.messages],
+            "max_output_tokens": completion.max_output_tokens,
+            "temperature": completion.temperature,
+        }
+    return {
+        "model": profile.model,
+        "messages": [message.to_json() for message in completion.messages],
+        "max_tokens": completion.max_output_tokens,
+        "temperature": completion.temperature,
+    }
+
+
+def _extract_openai_compatible_text(
+    body: dict[str, object],
+    endpoint_kind: str,
+) -> tuple[str, str | None]:
+    if endpoint_kind == "responses":
+        output_text = body.get("output_text")
+        if isinstance(output_text, str):
+            return output_text, _response_finish_reason(body)
+        output = body.get("output")
+        if isinstance(output, list):
+            fragments: list[str] = []
+            for item in output:
+                if not isinstance(item, dict):
+                    continue
+                content = item.get("content")
+                if not isinstance(content, list):
+                    continue
+                for part in content:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        fragments.append(part["text"])
+            return "".join(fragments), _response_finish_reason(body)
+        return "", _response_finish_reason(body)
+
+    choices = body.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices else {}
+    if not isinstance(choice, dict):
+        return "", None
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        return "", _string_or_none(choice.get("finish_reason"))
+    return str(message.get("content", "")), _string_or_none(choice.get("finish_reason"))
+
+
+def _response_finish_reason(body: dict[str, object]) -> str | None:
+    status = _string_or_none(body.get("status"))
+    if status:
+        return status
+    incomplete = body.get("incomplete_details")
+    if isinstance(incomplete, dict):
+        return _string_or_none(incomplete.get("reason"))
+    return None
+
+
+def _string_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def _resolve_thinking(profile: ModelProfileRecord) -> ThinkingDecision:
