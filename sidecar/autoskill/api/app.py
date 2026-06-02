@@ -1758,6 +1758,7 @@ def _worker_stores(
     topology: TopologyStore,
     activation_gate: ActivationGateStore,
     profiles: ProfileStore,
+    memory_governance: MemoryGovernanceStore,
     writer_workspace_root: Path | None = None,
     external_skill_roots: list[Path] | None = None,
 ) -> WorkerStores:
@@ -1780,6 +1781,7 @@ def _worker_stores(
         activation_gate=activation_gate,
         observability=observability,
         profiles=profiles,
+        memory_governance=memory_governance,
         embedding_api_key=getattr(settings, "embedding_api_key", None),
         embedding_api_base_url=getattr(settings, "embedding_api_base_url", None),
         workspace_root=workspace_root,
@@ -2783,6 +2785,7 @@ def create_app(
                 topology=topology,
                 activation_gate=activation_gate,
                 profiles=profiles,
+                memory_governance=memory_governance,
                 writer_workspace_root=writer_workspace_root,
                 external_skill_roots=external_skill_roots,
             ),

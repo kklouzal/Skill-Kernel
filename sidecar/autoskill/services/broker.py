@@ -6,6 +6,7 @@ from time import monotonic
 from typing import Any
 from uuid import UUID
 
+from autoskill.core.hashing import sha256_json
 from autoskill.db.compatibility import CompatibilityStore
 from autoskill.db.context import ContextGovernanceStore
 from autoskill.db.memory import MemoryGovernanceStore
@@ -138,6 +139,7 @@ class ContextHintResponse(BaseModel):
     suppressed: list[dict[str, object]] = Field(default_factory=list)
     archive_promotion_skill_ids: list[str] = Field(default_factory=list)
     reason_codes: list[str] = Field(default_factory=list)
+    bundle_scan: dict[str, object] = Field(default_factory=dict)
 
 
 class BrokerReplayEpisode(BaseModel):
@@ -346,6 +348,12 @@ async def build_context_hint(
     selected = selected[: policy.max_rendered_skills]
     hint = _render_hint(selected, max_tokens=max(1, request.max_tokens))
     bundle_findings = _scan_rendered_bundle(selected, hint)
+    bundle_scan = _bundle_scan_metadata(
+        selected,
+        hint=hint,
+        findings=bundle_findings,
+        status="blocked" if has_blocking_findings(bundle_findings) else "passed",
+    )
     if has_blocking_findings(bundle_findings):
         scanner_codes = [finding.code for finding in bundle_findings]
         response = _policy_response(
@@ -362,6 +370,7 @@ async def build_context_hint(
             ],
             archive_promotion_skill_ids=archive_promotion_skill_ids,
             reason_codes=["bundle-scan-blocked", *scanner_codes],
+            bundle_scan=bundle_scan,
         )
         await _record_context_hint(retrieval, result.retrieval_log_id, response)
         await _record_context_governance(context_governance, request, response)
@@ -380,6 +389,7 @@ async def build_context_hint(
         suppressed=suppressed,
         archive_promotion_skill_ids=archive_promotion_skill_ids,
         reason_codes=_reason_codes(suppressed, archive_promotion_skill_ids, selected),
+        bundle_scan=bundle_scan,
     )
     await _record_context_hint(retrieval, result.retrieval_log_id, response)
     await _record_context_governance(context_governance, request, response)
@@ -618,6 +628,43 @@ def _scan_rendered_bundle(
     return findings
 
 
+def _bundle_scan_metadata(
+    candidates: list[RetrievalCandidate],
+    *,
+    hint: str,
+    findings: list[ScannerFinding],
+    status: str,
+) -> dict[str, object]:
+    skill_ids = [str(candidate.skill_id) for candidate in candidates if candidate.skill_id]
+    object_refs: list[dict[str, object]] = []
+    for candidate in candidates:
+        skill_version_id = _candidate_skill_version_id(candidate)
+        object_refs.append(
+            {
+                "object_type": candidate.object_type,
+                "object_id": str(candidate.object_id),
+                "skill_id": str(candidate.skill_id) if candidate.skill_id else None,
+                "skill_version_id": str(skill_version_id) if skill_version_id else None,
+                "graph_edge_kind": candidate.metadata.get("graph_edge_kind"),
+            }
+        )
+    return {
+        "status": status,
+        "bundle_hash": sha256_json(
+            {
+                "hint_hash": sha256_json({"hint": hint}),
+                "object_refs": object_refs,
+                "skill_ids": skill_ids,
+            }
+        ),
+        "selected_skill_ids": skill_ids,
+        "selected_object_count": len(candidates),
+        "finding_count": len(findings),
+        "finding_codes": [finding.code for finding in findings],
+        "blocking": has_blocking_findings(findings),
+    }
+
+
 def _compact(text: str, limit: int) -> str:
     compacted = " ".join(text.split())
     if len(compacted) <= limit:
@@ -781,6 +828,7 @@ async def _record_context_hint(
         decision=response.decision,
         suppressed=response.suppressed,
         reason_codes=response.reason_codes,
+        metadata={"bundle_scan": response.bundle_scan} if response.bundle_scan else None,
         broker_policy_version_id=UUID(response.broker_policy_version_id)
         if response.broker_policy_version_id
         else None,
@@ -815,6 +863,7 @@ async def _record_context_governance(
                 "decision": response.decision,
                 "skill_ids": response.skill_ids,
                 "reason_codes": response.reason_codes,
+                "bundle_scan": response.bundle_scan,
             },
             broker_policy_version_id=UUID(response.broker_policy_version_id)
             if response.broker_policy_version_id
@@ -839,6 +888,7 @@ async def _record_context_governance(
             "skill_ids": response.skill_ids,
             "suppressed_count": len(response.suppressed),
             "reason_codes": response.reason_codes,
+            "bundle_scan": response.bundle_scan,
         },
     )
 

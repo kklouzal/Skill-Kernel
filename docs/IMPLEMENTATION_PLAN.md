@@ -137,7 +137,9 @@ Deliverables:
 - set-aware context renderer; implemented as a conservative retrieval-backed first pass with duplicate skill suppression, prerequisite graph expansion, and local-hash vector fusion before compatibility/selection gates;
 - rendered context bundle scanner; implemented for broker-selected skill sets
   with cross-artifact secret-exfiltration chain detection and conflict-edge
-  fail-closed handling before runtime hints are exposed;
+  fail-closed handling before runtime hints are exposed, plus content-safe
+  bundle verdict metadata persisted on retrieval logs/context artifacts by
+  bundle hash, scanner status, selected IDs, and finding codes;
 - cache-backed context hint endpoint; endpoint is present behind a disabled-by-default config gate with short in-process cache;
 - shadowing logs; broker suppression/rendering telemetry is attached to retrieval logs, and outcome/correction-based shadowing detection records attribution events.
 - external-skill inventory awareness; implemented as control-authenticated upsert/list APIs, hashed-root/file-hash/status/risk metadata persistence, read-only scanner job wiring, lexical retrieval of visible/changed external skills, broker suppression as non-runtime collisions, and duplicate-match `external_collision_review` decisions that block automatic candidate creation.
@@ -163,7 +165,8 @@ Acceptance:
 - rendered skill IDs, suppression reasons, and reason codes are recorded on retrieval logs.
 - rendered broker bundles fail closed when individually acceptable candidates
   become unsafe together or include conflict graph edges; implemented with
-  focused scanner/broker tests.
+  focused scanner/broker tests, with verdict metadata persisted for replay and
+  revocation traceability.
 - external skills are visible to collision analysis but are never injected as runtime hints or selected for autonomous mutation; scanner jobs hash external roots/files and quarantine scanner-blocked external skills without storing raw root paths.
 - blocked/drifted executor compatibility suppresses otherwise renderable skills for that profile while leaving unscoped/no-row retrieval unchanged; implemented and validated with focused broker tests plus compose/Postgres smoke coverage.
 - active broker policy versions are represented in retrieval/context telemetry and can be replayed against bounded episodes before canary feedback marks a policy passed, failed, or rolled back.
@@ -283,6 +286,10 @@ Deliverables:
 
 - `autonomous_guarded` apply; implemented as fail-closed mutation-worker `writer.apply` orchestration that only applies a staged manifest when the queued job carries explicit `policy_approved=true`;
 - repair-proposal execution; implemented as mutation-worker `repair.execute` orchestration that claims planned curation repair proposals and open drift repair candidates, records governance transactions/items/provenance, queues explicit policy-approved staged manifests to `writer.apply`, can generate guarded staged repair manifests from policy-approved bounded proposals with skill-version anchors, and otherwise fail-closes to evaluator or drift recheck jobs with source execution metadata;
+- repair materialization context proof; implemented so generated repair
+  manifests receive deterministic context artifact, compile-run, budget, and
+  semantic-compression proof before staging, and fail closed when proof cannot
+  be produced;
 - improvement engine;
 - archive/promote/merge/split; archive, evaluator-gated archived promotion, evaluator-gated explicit duplicate merge/archive, active-bank budget overflow, and planned split/improvement/disambiguation curation actions are implemented as deterministic lifecycle-state or planning actions with structured repair proposal payloads;
 - external-skill review actions and import materialization; implemented as a control-authenticated operator decision ledger for reuse/import/ignore/quarantine plus operator-approved stage-only import candidates, with no autonomous mutation of external-owned files;
@@ -337,7 +344,11 @@ Deliverables:
 - runtime memory-influence trust gating; implemented so broker requests must
   resolve every cited memory ID to an approved quarantined memory before
   retrieval/cache lookup, while pending/missing memory references fail closed and
-  record content-safe blocked influence events.
+  record content-safe blocked influence events;
+- mutation memory-influence trust gating; implemented so repair execution and
+  writer apply jobs that cite memory influence IDs require approved quarantined
+  memory before queueing/applying mutation work, and record content-safe
+  mutation control-flow events for approved and blocked cases.
 
 Acceptance:
 
@@ -350,7 +361,10 @@ Acceptance:
 - focused broker tests prove approved memory references create content-safe
   retrieval control-flow events while rendered hints remain sourced from scanned
   skill body-index documents, and unapproved memory references block before
-  retrieval.
+  retrieval;
+- focused worker tests prove approved memory references can influence guarded
+  repair mutation queueing with audit events, while pending memory blocks
+  mutation before writer apply is queued.
 
 ## Phase 10 - Production Hardening and Operator Readiness
 

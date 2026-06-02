@@ -7,10 +7,12 @@ from uuid import uuid4
 from autoskill.api.app import WorkerRunOnceRequest, create_app
 from autoskill.core.hashing import sha256_text
 from autoskill.db.activation import ActivationReadiness
+from autoskill.db.context import NullContextGovernanceStore
 from autoskill.db.contracts import ContractExtractResult, DriftCheckResult, DriftRepairEventRecord
 from autoskill.db.evaluations import EvaluationRunResult
 from autoskill.db.evidence import EvidenceDeriveResult
 from autoskill.db.external_skills import ExternalSkillInput
+from autoskill.db.memory import NullMemoryGovernanceStore
 from autoskill.db.observability import TraceSpanRecord
 from autoskill.db.scheduler import SchedulerTickResult
 from autoskill.db.topology import NullTopologyStore
@@ -1964,9 +1966,29 @@ def test_repair_execute_materializes_policy_approved_repair_candidate(tmp_path) 
     jobs = MemoryJobStore()
     utility = MemoryUtilityWorkerStore()
     governance = MemoryGovernanceStore()
+    memory = NullMemoryGovernanceStore()
     action_id = uuid4()
     skill_id = uuid4()
     skill_version_id = uuid4()
+    memory_record = asyncio.run(
+        memory.quarantine_memory(
+            workspace_key="dev-01",
+            source_object_type="evidence_item",
+            source_object_id=uuid4(),
+            proposed_memory={"summary": "approved repair routing context"},
+            taint={"trust": "derived"},
+            scanner_findings={"status": "passed"},
+        )
+    )
+    memory_record = asyncio.run(
+        memory.decide_memory_quarantine(
+            workspace_key="dev-01",
+            quarantine_id=memory_record.quarantine_id,
+            status="approved",
+            operator_id="test",
+            rationale="fixture approval",
+        )
+    )
     utility.repair_actions.append(
         CurationActionRecord(
             curation_action_id=action_id,
@@ -1980,6 +2002,7 @@ def test_repair_execute_materializes_policy_approved_repair_candidate(tmp_path) 
                     "proposal_kind": "improve",
                     "objectives": ["Tighten VERIFY around evaluator failure."],
                     "acceptance_gate": {"regression": "passed"},
+                    "memory_influence_ids": [str(memory_record.quarantine_id)],
                     "materialization": {
                         "policy_approved": True,
                         "skill_version_id": str(skill_version_id),
@@ -2006,6 +2029,8 @@ def test_repair_execute_materializes_policy_approved_repair_candidate(tmp_path) 
                 embeddings=MemoryPendingEmbeddingStore(),
                 utility=utility,
                 governance=governance,
+                memory_governance=memory,
+                context_governance=NullContextGovernanceStore(),
                 workspace_root=tmp_path,
             ),
             worker_id="mutation-worker",
@@ -2023,7 +2048,96 @@ def test_repair_execute_materializes_policy_approved_repair_candidate(tmp_path) 
     assert queued_apply.payload["repair_execution"]["materialization"]["slug"] == (
         "repair-evaluator-failure"
     )
+    assert queued_apply.payload["repair_execution"]["materialization"][
+        "context_compile_run_id"
+    ]
+    assert queued_apply.payload["repair_execution"]["materialization"][
+        "context_artifact_id"
+    ]
+    assert queued_apply.payload["repair_execution"]["materialization"][
+        "context_output_manifest_hash"
+    ]
     assert (tmp_path / queued_apply.payload["manifest_relative_path"]).exists()
+    assert len(memory.control_flow_events) == 1
+    assert memory.control_flow_events[0].source_id == memory_record.quarantine_id
+    assert memory.control_flow_events[0].influence_kind == "mutation"
+    assert memory.control_flow_events[0].decision["decision"] == "mutation_queued"
+    assert memory.control_flow_events[0].decision["queued_job_kind"] == "writer.apply"
+
+
+def test_repair_execute_blocks_unapproved_memory_influenced_mutation(tmp_path) -> None:
+    jobs = MemoryJobStore()
+    utility = MemoryUtilityWorkerStore()
+    governance = MemoryGovernanceStore()
+    memory = NullMemoryGovernanceStore()
+    action_id = uuid4()
+    skill_id = uuid4()
+    pending = asyncio.run(
+        memory.quarantine_memory(
+            workspace_key="dev-01",
+            source_object_type="evidence_item",
+            source_object_id=uuid4(),
+            proposed_memory={"summary": "pending repair routing context"},
+            taint={"trust": "derived"},
+            scanner_findings={"status": "pending"},
+        )
+    )
+    utility.repair_actions.append(
+        CurationActionRecord(
+            curation_action_id=action_id,
+            skill_id=skill_id,
+            action="plan_improvement",
+            status="planned",
+            reason="pending memory should not drive mutation",
+            features={
+                "repair_proposal": {
+                    "schema": "autoskill.curation_repair_proposal.v1",
+                    "proposal_kind": "improve",
+                    "memory_influence_ids": [str(pending.quarantine_id)],
+                    "materialization": {
+                        "policy_approved": True,
+                        "skill_version_id": str(uuid4()),
+                        "slug": "blocked-memory-repair",
+                    },
+                }
+            },
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="repair.execute",
+            idempotency_key="repair-execute:blocked-memory",
+            payload={"workspace_id": "dev-01", "curation_limit": 1, "drift_limit": 0},
+        )
+        return await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=MemoryPendingEmbeddingStore(),
+                utility=utility,
+                governance=governance,
+                memory_governance=memory,
+                workspace_root=tmp_path,
+            ),
+            worker_id="mutation-worker",
+            pool="mutation",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["blocked"] == 1
+    assert result.output["writer_apply_queued"] == 0
+    assert len(memory.control_flow_events) == 1
+    event = memory.control_flow_events[0]
+    assert event.source_id == pending.quarantine_id
+    assert event.influence_kind == "mutation"
+    assert event.decision["decision"] == "blocked_memory_influenced_mutation"
+    assert event.decision["memory_status"] == "pending"
 
 
 def test_repair_execute_queues_writer_apply_only_for_policy_approved_manifest() -> None:

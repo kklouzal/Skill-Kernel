@@ -125,6 +125,7 @@ class MemoryBrokerRetrievalStore:
         decision: str,
         suppressed: list[dict[str, object]],
         reason_codes: list[str],
+        metadata: dict[str, object] | None = None,
         broker_policy_version_id=None,
     ) -> None:
         self.records.append(
@@ -134,6 +135,7 @@ class MemoryBrokerRetrievalStore:
                 "decision": decision,
                 "suppressed": suppressed,
                 "reason_codes": reason_codes,
+                "metadata": metadata or {},
                 "broker_policy_version_id": broker_policy_version_id,
             }
         )
@@ -250,11 +252,20 @@ def test_context_broker_renders_scanned_skill_candidates() -> None:
     assert store.graph_calls[0]["limit"] == 12
     assert store.records[0]["decision"] == "skill_hint"
     assert store.records[0]["rendered_skill_ids"] == [skill_id]
+    bundle_scan = store.records[0]["metadata"]["bundle_scan"]
+    assert bundle_scan["status"] == "passed"
+    assert bundle_scan["blocking"] is False
+    assert bundle_scan["selected_skill_ids"] == [str(skill_id)]
+    assert bundle_scan["bundle_hash"]
     assert context.artifacts[0]["artifact_kind"] == "broker_hint"
     assert context.artifacts[0]["source_object_type"] == "retrieval_log"
     assert context.artifacts[0]["max_tokens"] == 120
+    assert context.artifacts[0]["metadata"]["bundle_scan"]["status"] == "passed"
     assert context.ledgers[0]["visibility_state"] == "skill_visible"
     assert context.ledgers[0]["context_artifact_id"] == context.artifacts[0]["context_artifact_id"]
+    assert context.ledgers[0]["metadata"]["bundle_scan"]["bundle_hash"] == (
+        bundle_scan["bundle_hash"]
+    )
 
 
 def test_context_broker_records_memory_control_flow_without_injecting_memory() -> None:
@@ -677,6 +688,10 @@ def test_context_broker_fails_closed_on_conflict_edge_bundle() -> None:
     assert "bundle-scan-blocked" in response.reason_codes
     assert store.records[0]["decision"] == "defer_skill"
     assert store.records[0]["rendered_skill_ids"] == []
+    assert store.records[0]["metadata"]["bundle_scan"]["status"] == "blocked"
+    assert "bundle-conflict-edge" in (
+        store.records[0]["metadata"]["bundle_scan"]["finding_codes"]
+    )
 
 
 def test_context_broker_fails_closed_on_cross_skill_secret_exfiltration_bundle() -> None:

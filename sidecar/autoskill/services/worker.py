@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from autoskill.core.hashing import sha256_json
+from autoskill.core.hashing import sha256_json, sha256_text
 from autoskill.db.activation import ActivationGateStore
 from autoskill.db.attribution import AttributionStore
 from autoskill.db.context import ContextGovernanceStore
@@ -20,6 +20,7 @@ from autoskill.db.evidence import EvidenceStore
 from autoskill.db.external_skills import ExternalSkillStore
 from autoskill.db.governance import GovernanceStore, RevocationRequestRecord
 from autoskill.db.jobs import JobRecord, JobStore
+from autoskill.db.memory import MemoryGovernanceStore
 from autoskill.db.observability import NullObservabilityStore, ObservabilityStore
 from autoskill.db.profiles import ProfileStore
 from autoskill.db.retrieval import RetrievalStore
@@ -35,6 +36,7 @@ from autoskill.services.evaluation_runner import run_pending_proposal_gates_with
 from autoskill.services.external_import import materialize_external_skill_import
 from autoskill.services.external_inventory import scan_external_skill_roots
 from autoskill.services.opportunity import mine_opportunities
+from autoskill.services.scanner import has_blocking_findings, scan_text
 from autoskill.services.writer import (
     apply_staged_manifest_with_governance,
     delete_active_skill_with_governance,
@@ -144,6 +146,7 @@ class WorkerStores:
     attribution: AttributionStore | None = None
     activation_gate: ActivationGateStore | None = None
     profiles: ProfileStore | None = None
+    memory_governance: MemoryGovernanceStore | None = None
     embedder: TextEmbedder | None = None
     embedding_api_key: str | None = None
     embedding_api_base_url: str | None = None
@@ -935,6 +938,23 @@ async def _execute_repair_source(
     workspace_key: str,
     source: RepairExecutionSource,
 ) -> dict[str, Any]:
+    memory_influence_ids = await _validate_memory_influence_for_mutation(
+        stores,
+        workspace_key=workspace_key,
+        memory_ids=[
+            *_payload_memory_influence_ids(job.payload),
+            *_payload_memory_influence_ids(source.proposal),
+        ],
+        run_id=f"repair-execute:{source.source_kind}:{source.source_id}",
+        control_surface="repair.execute",
+        decision_context={
+            "job_id": str(job.job_id),
+            "source_kind": source.source_kind,
+            "source_id": str(source.source_id),
+            "proposal_kind": source.proposal.get("proposal_kind")
+            or source.proposal.get("kind"),
+        },
+    )
     transaction = await stores.governance.start_transaction(
         workspace_key=workspace_key,
         transaction_kind="repair_proposal_execution",
@@ -999,7 +1019,7 @@ async def _execute_repair_source(
         transaction_id=transaction.transaction.evolution_transaction_id,
     )
     if apply_payload is None:
-        apply_payload = _materialized_writer_apply_payload_for_repair(
+        apply_payload = await _materialized_writer_apply_payload_for_repair(
             stores,
             source,
             workspace_key=workspace_key,
@@ -1067,6 +1087,23 @@ async def _execute_repair_source(
             "queued_job_created": queued_job.created,
         },
     )
+    await _record_memory_influence_for_mutation(
+        stores,
+        workspace_key=workspace_key,
+        memory_ids=memory_influence_ids,
+        run_id=f"repair-execute:{source.source_kind}:{source.source_id}",
+        decision={
+            "control_surface": "repair.execute",
+            "decision": "mutation_queued",
+            "source_kind": source.source_kind,
+            "source_id": str(source.source_id),
+            "evolution_transaction_id": str(
+                transaction.transaction.evolution_transaction_id
+            ),
+            "queued_job_kind": queued_kind,
+            "queued_job_id": str(queued_job.job.job_id),
+        },
+    )
     return {
         "status": "queued",
         "source_kind": source.source_kind,
@@ -1110,7 +1147,7 @@ def _writer_apply_payload_for_repair(
     }
 
 
-def _materialized_writer_apply_payload_for_repair(
+async def _materialized_writer_apply_payload_for_repair(
     stores: WorkerStores,
     source: RepairExecutionSource,
     *,
@@ -1137,19 +1174,33 @@ def _materialized_writer_apply_payload_for_repair(
     compiled_skill_md = _string_value(materialization.get("compiled_skill_md")) or (
         _compiled_repair_skill_md(source, slug=slug)
     )
+    max_context_tokens = _payload_int(
+        materialization,
+        "max_context_tokens",
+        default=900,
+        minimum=100,
+        maximum=2000,
+    )
+    context_proof = await _record_context_proof_for_repair_materialization(
+        stores,
+        source,
+        workspace_key=workspace_key,
+        skill_version_id=skill_version_id,
+        compiled_skill_md=compiled_skill_md,
+        max_context_tokens=max_context_tokens,
+    )
+    if context_proof is None:
+        return None
     staged = stage_compiled_skill(
         stores.workspace_root,
         staging_id=uuid4(),
         skill_version_id=skill_version_id,
         slug=slug,
         compiled_skill_md=compiled_skill_md,
-        max_context_tokens=_payload_int(
-            materialization,
-            "max_context_tokens",
-            default=900,
-            minimum=100,
-            maximum=2000,
-        ),
+        max_context_tokens=max_context_tokens,
+        context_compile_run_id=UUID(str(context_proof["context_compile_run_id"])),
+        context_artifact_id=UUID(str(context_proof["context_artifact_id"])),
+        context_output_manifest_hash=str(context_proof["output_manifest_hash"]),
     )
     return {
         "workspace_id": workspace_key,
@@ -1165,11 +1216,138 @@ def _materialized_writer_apply_payload_for_repair(
                 "skill_version_id": str(skill_version_id),
                 "slug": staged.slug,
                 "manifest_sha256": staged.manifest_sha256,
+                "context_compile_run_id": context_proof["context_compile_run_id"],
+                "context_artifact_id": context_proof["context_artifact_id"],
+                "context_output_manifest_hash": context_proof["output_manifest_hash"],
                 "scanner_findings": [
                     finding.to_json() for finding in staged.scanner_findings
                 ],
             },
         },
+    }
+
+
+async def _record_context_proof_for_repair_materialization(
+    stores: WorkerStores,
+    source: RepairExecutionSource,
+    *,
+    workspace_key: str,
+    skill_version_id: UUID,
+    compiled_skill_md: str,
+    max_context_tokens: int,
+) -> dict[str, str] | None:
+    if stores.context_governance is None:
+        return None
+    scanner_findings = scan_text(compiled_skill_md)
+    if has_blocking_findings(scanner_findings):
+        return None
+    token_count = _estimate_context_tokens(compiled_skill_md)
+    if token_count > max_context_tokens:
+        return None
+    text_hash = sha256_text(compiled_skill_md)
+    source_hash = sha256_json(
+        {
+            "source_kind": source.source_kind,
+            "source_id": str(source.source_id),
+            "proposal": source.proposal,
+        }
+    )
+    output_manifest = {
+        "schema": "autoskill.repair-context-compile-manifest.v1",
+        "source_kind": source.source_kind,
+        "source_id": str(source.source_id),
+        "skill_version_id": str(skill_version_id),
+        "compiled_sha256": text_hash,
+        "token_count": token_count,
+        "max_context_tokens": max_context_tokens,
+        "status": "passed",
+    }
+    output_manifest_hash = sha256_json(output_manifest)
+    artifact = await stores.context_governance.record_artifact(
+        workspace_key=workspace_key,
+        artifact_kind="skill_md",
+        source_object_type=f"{source.source_kind}_repair_proposal",
+        source_object_id=source.source_id,
+        skill_id=source.skill_id,
+        skill_version_id=skill_version_id,
+        text=compiled_skill_md,
+        max_tokens=max_context_tokens,
+        safety_status="passed",
+        equivalence_status="passed",
+        shadowing_status="pending",
+        metadata={
+            "loadability_class": "runtime_skill_body",
+            "compiler": "autoskill-repair-materializer.v1",
+            "source_kind": source.source_kind,
+            "source_id": str(source.source_id),
+            "scanner_codes": [finding.code for finding in scanner_findings],
+        },
+    )
+    compile_run = await stores.context_governance.record_compile_run(
+        workspace_key=workspace_key,
+        compiler_version="autoskill-repair-materializer.v1",
+        input_skillir_hash=source_hash,
+        output_manifest_hash=output_manifest_hash,
+        actual_runtime_tokens=token_count,
+        status="passed",
+        skill_id=source.skill_id,
+        skill_version_id=skill_version_id,
+        context_artifact_id=artifact.context_artifact_id,
+        target_runtime_tokens=min(max_context_tokens, 350),
+        compression_ratio=1.0,
+        semantic_equivalence_score=1.0,
+        metadata={
+            "loadability_class": "runtime_skill_body",
+            "source_kind": source.source_kind,
+            "source_id": str(source.source_id),
+            "budget_status": artifact.budget_status,
+            "safety_status": artifact.safety_status,
+            "equivalence_status": artifact.equivalence_status,
+        },
+    )
+    await stores.context_governance.record_budget_event(
+        workspace_key=workspace_key,
+        event_type="repair_materialization_budget_gate",
+        decision="accept",
+        skill_id=source.skill_id,
+        skill_version_id=skill_version_id,
+        context_artifact_id=artifact.context_artifact_id,
+        tokens_delta=token_count - min(max_context_tokens, 350),
+        evidence={
+            "gate": "repair_materialization_context_gate",
+            "max_context_tokens": max_context_tokens,
+            "actual_runtime_tokens": token_count,
+            "budget_status": artifact.budget_status,
+        },
+        metadata={
+            "compiler_version": "autoskill-repair-materializer.v1",
+            "source_kind": source.source_kind,
+            "source_id": str(source.source_id),
+        },
+    )
+    await stores.context_governance.record_semantic_compression_trial(
+        workspace_key=workspace_key,
+        skill_id=source.skill_id,
+        candidate_revision_id=skill_version_id,
+        candidate_context_artifact_id=artifact.context_artifact_id,
+        source_tokens=token_count,
+        candidate_tokens=token_count,
+        preserved_requirements=1,
+        lost_requirements=0,
+        added_unsupported_requirements=0,
+        equivalence_score=1.0,
+        status="passed",
+        metadata={
+            "compiler_version": "autoskill-repair-materializer.v1",
+            "source_kind": source.source_kind,
+            "source_id": str(source.source_id),
+        },
+    )
+    return {
+        "context_compile_run_id": str(compile_run.context_compile_run_id),
+        "context_artifact_id": str(artifact.context_artifact_id),
+        "output_manifest_hash": output_manifest_hash,
+        "text_hash": text_hash,
     }
 
 
@@ -1469,6 +1647,18 @@ async def _run_writer_apply(stores: WorkerStores, job: JobRecord) -> dict[str, A
             raise ValueError(
                 "writer apply requires evolution_transaction_id and manifest_relative_path"
             )
+        memory_influence_ids = await _validate_memory_influence_for_mutation(
+            stores,
+            workspace_key=workspace,
+            memory_ids=_payload_memory_influence_ids(job.payload),
+            run_id=f"writer-apply:{job.job_id}",
+            control_surface="writer.apply",
+            decision_context={
+                "job_id": str(job.job_id),
+                "evolution_transaction_id": str(transaction_id),
+                "has_manifest_relative_path": True,
+            },
+        )
         staging_root = stores.workspace_root / ".autoskill" / "staging"
         activation_readiness = await _check_writer_activation_gate(
             stores,
@@ -1491,6 +1681,20 @@ async def _run_writer_apply(stores: WorkerStores, job: JobRecord) -> dict[str, A
                 activation_readiness.to_json() if activation_readiness is not None else None
             ),
         }
+        await _record_memory_influence_for_mutation(
+            stores,
+            workspace_key=workspace,
+            memory_ids=memory_influence_ids,
+            run_id=f"writer-apply:{job.job_id}",
+            decision={
+                "control_surface": "writer.apply",
+                "decision": "mutation_applied",
+                "job_id": str(job.job_id),
+                "evolution_transaction_id": str(transaction_id),
+                "manifest_sha256": output["artifact"]["manifest_sha256"],
+                "active_relative_path": output["artifact"]["active_relative_path"],
+            },
+        )
     except Exception as error:
         await observability.finish_span(
             span_id=span.span_id,
@@ -1823,6 +2027,88 @@ def _job_kinds_for_pool(pool: WorkerPool) -> list[str]:
         for definition in JOB_DEFINITIONS.values()
         if definition.pool == pool
     ]
+
+
+async def _validate_memory_influence_for_mutation(
+    stores: WorkerStores,
+    *,
+    workspace_key: str,
+    memory_ids: list[UUID],
+    run_id: str,
+    control_surface: str,
+    decision_context: dict[str, Any],
+) -> list[UUID]:
+    deduped = list(dict.fromkeys(memory_ids))[:20]
+    if not deduped:
+        return []
+    if stores.memory_governance is None:
+        raise ValueError("memory influence on mutation requires memory governance store")
+    for memory_id in deduped:
+        record = await stores.memory_governance.get_memory_quarantine(
+            workspace_key=workspace_key,
+            quarantine_id=memory_id,
+        )
+        if record is not None and record.status == "approved":
+            continue
+        status = record.status if record is not None else "missing"
+        await stores.memory_governance.record_control_flow_event(
+            workspace_key=workspace_key,
+            source_kind="memory",
+            source_id=memory_id,
+            influence_kind="mutation",
+            run_id=run_id,
+            decision={
+                **decision_context,
+                "control_surface": control_surface,
+                "decision": "blocked_memory_influenced_mutation",
+                "memory_status": status,
+                "reason_codes": ["memory-influence-not-approved"],
+            },
+        )
+        raise ValueError(
+            f"memory-influenced mutation requires approved memory: {memory_id}"
+        )
+    return deduped
+
+
+async def _record_memory_influence_for_mutation(
+    stores: WorkerStores,
+    *,
+    workspace_key: str,
+    memory_ids: list[UUID],
+    run_id: str,
+    decision: dict[str, Any],
+) -> None:
+    if not memory_ids:
+        return
+    if stores.memory_governance is None:
+        raise ValueError("memory influence on mutation requires memory governance store")
+    for memory_id in memory_ids:
+        await stores.memory_governance.record_control_flow_event(
+            workspace_key=workspace_key,
+            source_kind="memory",
+            source_id=memory_id,
+            influence_kind="mutation",
+            run_id=run_id,
+            decision=decision,
+        )
+
+
+def _payload_memory_influence_ids(payload: dict[str, Any] | str | None) -> list[UUID]:
+    source = _payload_dict(payload)
+    values = source.get("memory_influence_ids")
+    if not isinstance(values, list):
+        return []
+    memory_ids: list[UUID] = []
+    for value in values:
+        parsed = _uuid_value(value)
+        if parsed is not None:
+            memory_ids.append(parsed)
+    return memory_ids
+
+
+def _estimate_context_tokens(text: str) -> int:
+    return max(1, (len(text) + 3) // 4)
 
 
 def _payload_workspace(job: JobRecord) -> str | None:

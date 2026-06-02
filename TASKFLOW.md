@@ -236,17 +236,29 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   tests passed with 32 tests; full `uv run ruff check sidecar`,
   `uv run pytest` with 199 tests, `uv run python -m compileall -q sidecar`,
   and `git diff --check` passed.
+- Broker bundle scan verdicts are now persisted as content-safe metadata on
+  retrieval logs, context artifacts, and token ledgers, including bundle hash,
+  selected IDs, scanner status, finding counts, and finding codes without
+  storing raw bundle text.
+- Repair materialization now records deterministic context-governance proof
+  before staging generated repair manifests, embeds the compile-run/artifact
+  proof into the writer manifest context gate, and fail-closes back to
+  evaluator/drift recheck when proof cannot be produced.
+- Memory-influenced mutation jobs now fail closed unless every cited memory ID is
+  approved in memory quarantine governance; approved repair/writer mutations and
+  blocked pending/missing memory references record content-safe
+  `control_flow_events` with influence kind `mutation`.
+- Focused validation passed for broker bundle metadata and mutation memory CFI:
+  `uv run ruff check sidecar` and broker/worker tests passed with 51 tests.
 
 ## Next Gates
 
-1. Wire deterministic context compiler gate execution into candidate persistence and repair/materialization staging so newly staged manifests receive first-class compile-run proof automatically instead of requiring caller-supplied proof.
-2. Persist bundle scanner verdict metadata on broker context artifacts/retrieval logs so later revocation and replay can trace exact co-load risk decisions by bundle hash.
-3. Run `/v1/deployment/readiness` against the intended deployment workspace after seeding/qualifying the real executor, text, embedding, broker policy, and production replay records.
-4. Enable the production plugin policy outside the development profile and run a full gateway capture/spool/replay smoke.
-5. Populate broker replay episodes from redacted deployment telemetry, then run stored-corpus replay/canary tuning against real production episodes.
-6. Run `/v1/profiles/embeddings/validate-production` or a bounded `embeddings.generate` smoke against the configured local embedding endpoint with the intended `AUTOSKILL_EMBEDDING_DIM`.
-7. Run `/v1/profiles/embeddings/validate-production` against the real configured endpoint/credentials in the deployment environment.
-8. Roll out live repair/import execution only after operator config enables the plugin and production replay/embedding validation passes.
+1. Run `/v1/deployment/readiness` against the intended deployment workspace after seeding/qualifying the real executor, text, embedding, broker policy, and production replay records.
+2. Enable the production plugin policy outside the development profile and run a full gateway capture/spool/replay smoke.
+3. Populate broker replay episodes from redacted deployment telemetry, then run stored-corpus replay/canary tuning against real production episodes.
+4. Run `/v1/profiles/embeddings/validate-production` or a bounded `embeddings.generate` smoke against the configured local embedding endpoint with the intended `AUTOSKILL_EMBEDDING_DIM`.
+5. Run `/v1/profiles/embeddings/validate-production` against the real configured endpoint/credentials in the deployment environment.
+6. Roll out live repair/import execution only after operator config enables the plugin and production replay/embedding validation passes.
 
 ## Known Risks
 
@@ -259,11 +271,11 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
 - Worker health now includes persistent heartbeat records, long-running handlers renew job leases, and single-job worker runs emit content-safe progress phases through heartbeat summaries. Future lengthy semantic handlers may still add deeper domain-specific counters when their internal phases mature.
 - Evidence derivation now creates observed event evidence plus deterministic recurring evidence clusters; richer cross-session semantic aggregation and additional contrastive evidence mining beyond evaluator replay maturity remain pending.
-- Memory quarantine/control-flow tables and operator APIs now exist, and the runtime broker can record approved memory-influenced retrieval decisions without injecting memory text while blocking unapproved memory references before retrieval. Broader retrieval provenance and mutation-path control-flow recording still need integration when derived memories influence autonomous changes.
+- Memory quarantine/control-flow tables and operator APIs now exist, the runtime broker can record approved memory-influenced retrieval decisions without injecting memory text while blocking unapproved memory references before retrieval, and repair/writer mutation paths now gate and log approved or blocked memory influence.
 - Embedding generation defaults to deterministic local hash embeddings unless an active qualified embedding profile is configured; storage now supports profile-scoped variable dimensions, with the default 1536-dimensional path retaining the indexed HNSW fast path.
 - Runtime context broker is still conservative: vector fusion is available for local deterministic hash embeddings, policy artifact replay/canary primitives exist, and stored redacted replay episodes can drive policy replay; production replay quality still depends on deployment telemetry being populated.
 - Deployment readiness is a deterministic sidecar/state preflight, not a substitute for the full live gateway capture/spool/replay smoke after production plugin policy is enabled.
-- Repair execution remains guarded and fail-closed: explicit staged manifests still pass through activation-gated `writer.apply`, and policy-approved repair materialization can generate staged manifests from bounded repair proposals only when a skill-version anchor exists.
+- Repair execution remains guarded and fail-closed: explicit staged manifests still pass through activation-gated `writer.apply`, and policy-approved repair materialization can generate staged manifests from bounded repair proposals only when a skill-version anchor exists and deterministic context-governance proof can be recorded for the staged runtime artifact.
 - External-skill awareness now includes read-only root scanning plus inventory/retrieval/matching, scan scheduling defaults, embedding generation for external descriptions, richer collision risk scoring, explicit operator review-action recording, and operator-approved stage-only import materialization.
 - v16 trace/profile/context APIs and schema exist; event/job/retrieval/evaluator/context-broker paths now propagate trace or context artifacts, LLM calls now have content-safe invocation audit rows, direct writer apply/rollback APIs record content-safe writer spans, mutation-worker writer apply plus revocation rollback record content-safe child spans, embedding generation records content-safe `embedding_call` spans, and worker heartbeat summaries expose content-safe claimed/renewed/succeeded/failed job progress. Longer semantic jobs may still add specialized counters as their multi-phase internals mature.
 - SkillGraphIR now has planner/API/store persistence with transactions, planned trials, revocation invalidation for operation/trial state, deterministic apply state transitions after passed trials, broker replay/canary scoring gates for compose/decompose routing, stored downstream action plans, and mutation-worker lifecycle/graph/runtime invalidation execution after accepted topology operations.

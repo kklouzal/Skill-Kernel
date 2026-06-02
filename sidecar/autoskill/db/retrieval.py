@@ -102,6 +102,7 @@ class RetrievalStore(Protocol):
         decision: str,
         suppressed: list[dict[str, object]],
         reason_codes: list[str],
+        metadata: dict[str, Any] | None = None,
         broker_policy_version_id: UUID | None = None,
     ) -> None:
         """Attach broker rendering telemetry to a retrieval log."""
@@ -172,6 +173,7 @@ class NullRetrievalStore:
         decision: str,
         suppressed: list[dict[str, object]],
         reason_codes: list[str],
+        metadata: dict[str, Any] | None = None,
         broker_policy_version_id: UUID | None = None,
     ) -> None:
         return None
@@ -562,6 +564,7 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
         decision: str,
         suppressed: list[dict[str, object]],
         reason_codes: list[str],
+        metadata: dict[str, Any] | None = None,
         broker_policy_version_id: UUID | None = None,
     ) -> None:
         if retrieval_log_id is None:
@@ -592,7 +595,8 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
                             if broker_policy_version_id
                             else None
                         ),
-                    },
+                    }
+                    | (metadata or {}),
                     sort_keys=True,
                     separators=(",", ":"),
                 ),
