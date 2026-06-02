@@ -332,6 +332,11 @@ Acceptance:
 - usage aggregation is deterministic and idempotent across repeated maintenance
   passes; implemented with focused tests and a real Postgres smoke proving
   windows, co-use edge counters, sequence/success counts, and usage clusters.
+- validation evidence for this slice: `uv run ruff check sidecar`, `uv run
+  pytest` with 220 tests, `uv run python -m compileall -q sidecar`, and `git
+  diff --check` passed; a compose Postgres smoke seeded retrieval plus
+  attribution usage, aggregated 2 windows into one compose cluster, and proved a
+  repeated pass left windows and edge counters unchanged.
 - external collisions pause candidate creation for review; real external-root scanning,
   import recommendation, operator review actions, and stage-only import
   materialization are implemented without mutating external-owned roots.

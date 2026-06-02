@@ -168,6 +168,14 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   idempotent `skill_usage_windows`, pair/sequence `skill_co_usage_edges`, and
   observed `skill_usage_clusters` with first-pass `compose` recommendations for
   topology consumers.
+- Validation passed for usage/topology aggregation and support-artifact context
+  registration: focused usage/worker/compiler tests passed, `uv run ruff check
+  sidecar`, `uv run pytest` with 220 tests, `uv run python -m compileall -q
+  sidecar`, and `git diff --check` passed; a real compose Postgres smoke seeded
+  retrieval plus attribution co-use, created 2 usage windows, updated the pair
+  edge to `co_usage_count=2`/`success_count=1`/`sequence_count=2`, created 1
+  compose usage cluster, and proved the second aggregation pass did not
+  increment windows or edge counters.
 - External-skill scanner job wiring is implemented: read-only skill roots can be passed to the worker entrypoint, `external_skills.scan` inventories `*/SKILL.md` files without storing raw root paths, hashes roots/files, parses public name/description frontmatter, and quarantines scanner-blocked external skills.
 - Scanner classification now blocks deterministic first-pass harmful capability and
   policy-override patterns: credential exfiltration, destructive host commands,
