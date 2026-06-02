@@ -1,5 +1,28 @@
 import path from "node:path";
 
+function envBool(name) {
+  const value = process.env[name];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (/^(1|true|yes|on)$/i.test(value)) {
+    return true;
+  }
+  if (/^(0|false|no|off)$/i.test(value)) {
+    return false;
+  }
+  return undefined;
+}
+
+function envInt(name) {
+  const value = process.env[name];
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 export function resolveConfig(ctx = {}) {
   const cfg =
     ctx.context?.pluginConfig ??
@@ -10,7 +33,11 @@ export function resolveConfig(ctx = {}) {
   const workspaceDir = ctx.workspaceDir ?? process.cwd();
   return {
     enabled: cfg.enabled !== false,
-    sidecarUrl: cfg.sidecarUrl ?? "http://127.0.0.1:8765",
+    sidecarUrl:
+      cfg.sidecarUrl ??
+      process.env.AUTOSKILL_PLUGIN_SIDECAR_URL ??
+      process.env.AUTOSKILL_SIDECAR_URL ??
+      "http://127.0.0.1:8765",
     ingestToken:
       cfg.ingestToken ??
       process.env.AUTOSKILL_PLUGIN_INGEST_TOKEN ??
@@ -22,14 +49,34 @@ export function resolveConfig(ctx = {}) {
     maxSpoolBytes: cfg.maxSpoolBytes ?? 10 * 1024 * 1024,
     captureRawConversation: cfg.captureRawConversation === true,
     runtimeContextBroker: {
-      enabled: cfg.runtimeContextBroker?.enabled === true,
-      timeoutMs: cfg.runtimeContextBroker?.timeoutMs ?? 150,
-      maxTokens: cfg.runtimeContextBroker?.maxTokens ?? 600,
+      enabled:
+        cfg.runtimeContextBroker?.enabled ??
+        envBool("AUTOSKILL_PLUGIN_RUNTIME_CONTEXT_BROKER_ENABLED") ??
+        envBool("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED") ??
+        false,
+      timeoutMs:
+        cfg.runtimeContextBroker?.timeoutMs ??
+        envInt("AUTOSKILL_PLUGIN_RUNTIME_CONTEXT_TIMEOUT_MS") ??
+        envInt("AUTOSKILL_RUNTIME_CONTEXT_TIMEOUT_MS") ??
+        150,
+      maxTokens:
+        cfg.runtimeContextBroker?.maxTokens ??
+        envInt("AUTOSKILL_PLUGIN_MAX_CONTEXT_HINT_TOKENS") ??
+        envInt("AUTOSKILL_MAX_CONTEXT_HINT_TOKENS") ??
+        600,
       failSoft: cfg.runtimeContextBroker?.failSoft !== false,
     },
     runtimeToolBoundary: {
-      enabled: cfg.runtimeToolBoundary?.enabled === true,
-      blockOnHighRisk: cfg.runtimeToolBoundary?.blockOnHighRisk !== false,
+      enabled:
+        cfg.runtimeToolBoundary?.enabled ??
+        envBool("AUTOSKILL_PLUGIN_RUNTIME_TOOL_BOUNDARY_ENABLED") ??
+        envBool("AUTOSKILL_RUNTIME_TOOL_BOUNDARY_ENABLED") ??
+        false,
+      blockOnHighRisk:
+        cfg.runtimeToolBoundary?.blockOnHighRisk ??
+        envBool("AUTOSKILL_PLUGIN_RUNTIME_TOOL_BOUNDARY_BLOCK_ON_HIGH_RISK") ??
+        envBool("AUTOSKILL_RUNTIME_TOOL_BOUNDARY_BLOCK_ON_HIGH_RISK") ??
+        true,
     },
   };
 }

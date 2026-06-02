@@ -213,13 +213,15 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Validation passed for active/profile-qualified embedding generation controls: direct API and queued worker `embeddings.generate` paths now resolve explicit or active qualified embedding profiles, preserve profile IDs through embedding storage, and record content-safe `embedding_call` spans without embedding text/source bodies. Focused embedding/worker tests passed.
 - Validation passed for production embedding validation and stored broker replay corpus controls: `/v1/profiles/embeddings/validate-production` can qualify the configured endpoint/profile and optionally exercise generation, while broker policy replay can consume persisted redacted replay episodes by tag instead of requiring caller-supplied episodes only. Focused profile/broker tests passed.
 - Validation passed for content-safe worker progress metadata: `run_worker_once` now records persistent worker heartbeat progress for claimed jobs, lease renewals, success, and failure, including bounded payload controls and output keys/counts without raw evidence, skill text, or body content. Focused worker tests passed, and full `make test`, `make lint`, `make compile`, `make plugin-check`, and `git diff --check` passed with 181 tests.
+- Validation passed for operator-configurable deployment fallbacks: the plugin now reads sidecar URL, runtime context broker, and runtime tool-boundary gates from `AUTOSKILL_*` environment fallbacks when explicit plugin config is absent; the sidecar can configure non-default OpenAI-compatible embedding dimensions through `AUTOSKILL_EMBEDDING_DIM`; and sidecar tests ignore repo-local `.env` by default to keep deployment settings from leaking into deterministic test fixtures.
 
 ## Next Gates
 
 1. Enable the production plugin policy outside the development profile and run a full gateway capture/spool/replay smoke.
 2. Populate broker replay episodes from redacted deployment telemetry, then run stored-corpus replay/canary tuning against real production episodes.
-3. Run `/v1/profiles/embeddings/validate-production` against the real configured endpoint/credentials in the deployment environment.
-4. Roll out live repair/import execution only after operator config enables the plugin and production replay/embedding validation passes.
+3. Run `/v1/profiles/embeddings/validate-production` or a bounded `embeddings.generate` smoke against the configured local embedding endpoint with the intended `AUTOSKILL_EMBEDDING_DIM`.
+4. Run `/v1/profiles/embeddings/validate-production` against the real configured endpoint/credentials in the deployment environment.
+5. Roll out live repair/import execution only after operator config enables the plugin and production replay/embedding validation passes.
 
 ## Known Risks
 

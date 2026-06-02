@@ -142,6 +142,23 @@ def test_embedder_factory_uses_hash_provider() -> None:
     assert embedder.model == "custom-hash-model"
 
 
+def test_embedder_factory_uses_configured_openai_compatible_dimension() -> None:
+    embedder = build_text_embedder_from_settings(
+        SimpleNamespace(
+            embedding_provider="openai_compatible",
+            embedding_model="nomic-embed-text.gguf",
+            embedding_dim=768,
+            embedding_api_base_url="http://127.0.0.1:18081/v1",
+            embedding_api_key="local-test",
+            embedding_timeout_seconds=12.5,
+        )
+    )
+
+    assert isinstance(embedder, OpenAICompatibleTextEmbedder)
+    assert embedder.model == "nomic-embed-text.gguf"
+    assert embedder.embedding_dim == 768
+
+
 def test_openai_compatible_embedder_posts_embedding_request(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

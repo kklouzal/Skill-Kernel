@@ -87,7 +87,7 @@ Acceptance:
 Deliverables:
 
 - evidence extractor; implemented for deterministic observed evidence derived from redacted raw events plus recurring evidence clusters when repeated redacted signatures meet support thresholds;
-- redacted embeddings; storage/search primitives, deterministic development generation worker, configurable provider routing, profile-scoped embedding ownership, variable-dimension profile storage/search, and qualified-profile generation are implemented;
+- redacted embeddings; storage/search primitives, deterministic development generation worker, configurable provider routing, profile-scoped embedding ownership, variable-dimension profile storage/search, qualified-profile generation, and deployment-level `AUTOSKILL_EMBEDDING_DIM` configuration are implemented;
 - lexical + vector + metadata search; lexical evidence/body-index search and pgvector nearest search are implemented;
 - exact rerank; implemented as deterministic broker rerank over lexical score, query overlap, lifecycle, and graph edges;
 - active/archive matching; implemented in runtime broker and `/v1/skills/match` so archived matches are promotion candidates rather than injected hints or duplicate new skills;
@@ -106,6 +106,8 @@ Acceptance:
   same bounded provider embedder path used by generation, with dimension,
   finite-value, non-zero, stability, and negative-pair separation checks recorded
   without storing API keys or probe text.
+- OpenAI-compatible embedding generation honors the configured embedding
+  dimension instead of forcing the default 1536-dimensional contract.
 
 ## Phase 4.5 - Text Model Access and Invocation Audit
 
@@ -152,6 +154,9 @@ Acceptance:
   `before_tool_call`, preserving capture-only behavior by default and returning
   terminal OpenClaw block decisions for deterministic high-risk tool patterns
   when `runtimeToolBoundary.enabled=true`.
+- plugin-side production canary gates can be toggled from environment fallbacks
+  for sidecar URL, runtime context broker, and runtime tool boundary settings
+  when no explicit OpenClaw plugin config is supplied.
 
 ## Phase 6 - Candidate Generation in Propose-Only Mode
 

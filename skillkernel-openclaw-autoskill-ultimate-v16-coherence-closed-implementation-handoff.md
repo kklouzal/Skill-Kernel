@@ -1427,7 +1427,7 @@ autoskill:
         route_type: openai_compatible
         provider: local-embedding
         model: embedding-model-id
-        base_url_env: AUTOSKILL_EMBEDDING_BASE_URL
+        base_url_env: AUTOSKILL_EMBEDDING_API_BASE_URL
         api_key_env: AUTOSKILL_EMBEDDING_API_KEY
         dimensions: 1536
         distance_metric: cosine
@@ -1468,7 +1468,7 @@ autoskill:
         route_type: openai_compatible
         provider: local-embedding
         model: embedding-model-id
-        base_url_env: AUTOSKILL_EMBEDDING_BASE_URL
+        base_url_env: AUTOSKILL_EMBEDDING_API_BASE_URL
         api_key_env: AUTOSKILL_EMBEDDING_API_KEY
         dimensions: 768
         distance_metric: cosine
@@ -5172,7 +5172,7 @@ autoskill:
         route_type: openai_compatible   # or openclaw
         provider: configured-embedding-provider
         model: embedding-model-id
-        base_url_env: AUTOSKILL_EMBEDDING_BASE_URL
+        base_url_env: AUTOSKILL_EMBEDDING_API_BASE_URL
         api_key_env: AUTOSKILL_EMBEDDING_API_KEY
         dimensions: 1536
         distance_metric: cosine

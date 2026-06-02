@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { beforeToolCall, captureEvent, evaluateToolBoundary } from "../src/index.js";
+import { resolveConfig } from "../src/config.js";
 
 const captureHooks = [
   ["after-tool-call", "tool_call_end", "tool_output"],
@@ -161,6 +162,75 @@ test("capture can read ingest token from environment fallback", async () => {
       process.env.AUTOSKILL_PLUGIN_INGEST_TOKEN = previousToken;
     }
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("config reads sidecar and canary toggles from environment fallbacks", () => {
+  const previous = {
+    sidecarUrl: process.env.AUTOSKILL_SIDECAR_URL,
+    brokerEnabled: process.env.AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED,
+    brokerTimeout: process.env.AUTOSKILL_RUNTIME_CONTEXT_TIMEOUT_MS,
+    brokerTokens: process.env.AUTOSKILL_MAX_CONTEXT_HINT_TOKENS,
+    toolBoundary: process.env.AUTOSKILL_RUNTIME_TOOL_BOUNDARY_ENABLED,
+    blockHighRisk: process.env.AUTOSKILL_RUNTIME_TOOL_BOUNDARY_BLOCK_ON_HIGH_RISK,
+  };
+  process.env.AUTOSKILL_SIDECAR_URL = "http://127.0.0.1:9876";
+  process.env.AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED = "true";
+  process.env.AUTOSKILL_RUNTIME_CONTEXT_TIMEOUT_MS = "250";
+  process.env.AUTOSKILL_MAX_CONTEXT_HINT_TOKENS = "700";
+  process.env.AUTOSKILL_RUNTIME_TOOL_BOUNDARY_ENABLED = "true";
+  process.env.AUTOSKILL_RUNTIME_TOOL_BOUNDARY_BLOCK_ON_HIGH_RISK = "false";
+
+  try {
+    const config = resolveConfig({ workspaceDir: "/tmp/autoskill-test" });
+
+    assert.equal(config.sidecarUrl, "http://127.0.0.1:9876");
+    assert.equal(config.runtimeContextBroker.enabled, true);
+    assert.equal(config.runtimeContextBroker.timeoutMs, 250);
+    assert.equal(config.runtimeContextBroker.maxTokens, 700);
+    assert.equal(config.runtimeToolBoundary.enabled, true);
+    assert.equal(config.runtimeToolBoundary.blockOnHighRisk, false);
+  } finally {
+    for (const [key, value] of Object.entries({
+      AUTOSKILL_SIDECAR_URL: previous.sidecarUrl,
+      AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED: previous.brokerEnabled,
+      AUTOSKILL_RUNTIME_CONTEXT_TIMEOUT_MS: previous.brokerTimeout,
+      AUTOSKILL_MAX_CONTEXT_HINT_TOKENS: previous.brokerTokens,
+      AUTOSKILL_RUNTIME_TOOL_BOUNDARY_ENABLED: previous.toolBoundary,
+      AUTOSKILL_RUNTIME_TOOL_BOUNDARY_BLOCK_ON_HIGH_RISK: previous.blockHighRisk,
+    })) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test("explicit plugin config wins over environment fallbacks", () => {
+  const previous = process.env.AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED;
+  process.env.AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED = "true";
+
+  try {
+    const config = resolveConfig({
+      workspaceDir: "/tmp/autoskill-test",
+      context: {
+        pluginConfig: {
+          runtimeContextBroker: {
+            enabled: false,
+          },
+        },
+      },
+    });
+
+    assert.equal(config.runtimeContextBroker.enabled, false);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED;
+    } else {
+      process.env.AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED = previous;
+    }
   }
 });
 

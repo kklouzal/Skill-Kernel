@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -33,6 +34,7 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     embedding_provider: str = "hash"
     embedding_model: str = "autoskill-hash-embedding.v1"
+    embedding_dim: int = 1536
     embedding_api_base_url: str | None = None
     embedding_api_key: str | None = None
     embedding_timeout_seconds: float = 30.0
@@ -49,4 +51,6 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    if os.environ.get("AUTOSKILL_IGNORE_ENV_FILE"):
+        return Settings(_env_file=None)
     return Settings()

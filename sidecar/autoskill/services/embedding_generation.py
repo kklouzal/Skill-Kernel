@@ -92,6 +92,7 @@ def build_text_embedder_from_settings(settings: object) -> TextEmbedder:
     if provider == "openai_compatible":
         base_url = getattr(settings, "embedding_api_base_url", None)
         api_key = getattr(settings, "embedding_api_key", None)
+        embedding_dim = int(getattr(settings, "embedding_dim", EMBEDDING_DIM) or EMBEDDING_DIM)
         if not base_url or not api_key:
             raise ValueError(
                 "embedding_api_base_url and embedding_api_key are required for openai_compatible"
@@ -100,7 +101,7 @@ def build_text_embedder_from_settings(settings: object) -> TextEmbedder:
             base_url=str(base_url),
             api_key=str(api_key),
             model=model,
-            embedding_dim=EMBEDDING_DIM,
+            embedding_dim=embedding_dim,
             timeout_seconds=float(getattr(settings, "embedding_timeout_seconds", 30.0)),
         )
     raise ValueError(f"unsupported embedding provider: {provider}")
