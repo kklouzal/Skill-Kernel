@@ -49,6 +49,16 @@ SENSITIVE_FILE_HARVEST = re.compile(
     r"(?is)\b(read|cat|open|scan|index|embed|upload|copy)\b.{0,100}"
     r"(~?/\.ssh\b|/etc/shadow\b|/etc/passwd\b|\.env\b|credentials?\.(json|yaml|yml)\b)"
 )
+BUNDLE_SAFETY_BOUNDARY = re.compile(
+    r"(?is)\b(never|do\s+not|don't|must\s+not|forbid(?:den)?|avoid)\b.{0,100}"
+    r"\b(secret|token|password|api[_ -]?key|credential|authorization|ssh[_ -]?key)s?\b"
+)
+BUNDLE_SENSITIVE_SOURCE = re.compile(
+    r"(?is)\b(secret|token|password|api[_ -]?key|credential|authorization|ssh[_ -]?key)s?\b"
+)
+BUNDLE_EXFIL_ACTION = re.compile(
+    r"(?is)\b(upload|send|post|exfiltrate|dump|log|copy|collect)\b"
+)
 
 
 def scan_text(text: str) -> list[ScannerFinding]:
@@ -128,5 +138,41 @@ def scan_text(text: str) -> list[ScannerFinding]:
     return findings
 
 
+def scan_text_bundle(parts: list[str]) -> list[ScannerFinding]:
+    """Scan a co-loadable rendered context bundle, not only each artifact alone."""
+
+    findings: list[ScannerFinding] = []
+    for part in parts:
+        findings.extend(scan_text(part))
+    combined = "\n\n--- autoskill-context-boundary ---\n\n".join(parts)
+    findings.extend(scan_text(combined))
+    chain_text = BUNDLE_SAFETY_BOUNDARY.sub("", combined)
+    if (
+        len(parts) > 1
+        and BUNDLE_SENSITIVE_SOURCE.search(chain_text)
+        and BUNDLE_EXFIL_ACTION.search(chain_text)
+    ):
+        findings.append(
+            ScannerFinding(
+                FindingSeverity.CRITICAL,
+                "bundle-secret-exfiltration-chain",
+                "co-loaded context forms a potential secret exfiltration chain",
+            )
+        )
+    return _dedupe_findings(findings)
+
+
 def has_blocking_findings(findings: list[ScannerFinding]) -> bool:
     return any(f.severity in {FindingSeverity.ERROR, FindingSeverity.CRITICAL} for f in findings)
+
+
+def _dedupe_findings(findings: list[ScannerFinding]) -> list[ScannerFinding]:
+    seen: set[tuple[FindingSeverity, str, str]] = set()
+    deduped: list[ScannerFinding] = []
+    for finding in findings:
+        key = (finding.severity, finding.code, finding.message)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(finding)
+    return deduped

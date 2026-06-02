@@ -11,7 +11,12 @@ from autoskill.db.context import ContextGovernanceStore
 from autoskill.db.memory import MemoryGovernanceStore
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalStore
 from autoskill.services.embedding_generation import TextEmbedder
-from autoskill.services.scanner import has_blocking_findings, scan_text
+from autoskill.services.scanner import (
+    FindingSeverity,
+    ScannerFinding,
+    has_blocking_findings,
+    scan_text_bundle,
+)
 from pydantic import BaseModel, Field
 
 BROKER_POLICY_VERSION = "bootstrap.v1"
@@ -340,15 +345,23 @@ async def build_context_hint(
 
     selected = selected[: policy.max_rendered_skills]
     hint = _render_hint(selected, max_tokens=max(1, request.max_tokens))
-    if has_blocking_findings(scan_text(hint)):
+    bundle_findings = _scan_rendered_bundle(selected, hint)
+    if has_blocking_findings(bundle_findings):
+        scanner_codes = [finding.code for finding in bundle_findings]
         response = _policy_response(
             policy,
             decision="defer_skill",
-            cache_status="render-scan-blocked",
+            cache_status="bundle-scan-blocked",
             retrieval_log_id=retrieval_log_id,
-            suppressed=[*suppressed, {"reason": "render-scan-blocked"}],
+            suppressed=[
+                *suppressed,
+                {
+                    "reason": "bundle-scan-blocked",
+                    "scanner_codes": scanner_codes,
+                },
+            ],
             archive_promotion_skill_ids=archive_promotion_skill_ids,
-            reason_codes=["render-scan-blocked"],
+            reason_codes=["bundle-scan-blocked", *scanner_codes],
         )
         await _record_context_hint(retrieval, result.retrieval_log_id, response)
         await _record_context_governance(context_governance, request, response)
@@ -582,6 +595,27 @@ def _render_hint(candidates: list[RetrievalCandidate], *, max_tokens: int) -> st
     if len(rendered) <= budget_chars:
         return rendered
     return rendered[: max(0, budget_chars - 3)].rstrip() + "..."
+
+
+def _scan_rendered_bundle(
+    candidates: list[RetrievalCandidate],
+    hint: str,
+) -> list[ScannerFinding]:
+    parts = [candidate.summary for candidate in candidates if candidate.summary.strip()]
+    findings = scan_text_bundle([*parts, hint])
+    has_conflict_edge = any(
+        str(candidate.metadata.get("graph_edge_kind", "")) == "conflict"
+        for candidate in candidates
+    )
+    if has_conflict_edge:
+        findings.append(
+            ScannerFinding(
+                FindingSeverity.ERROR,
+                "bundle-conflict-edge",
+                "conflict graph edges cannot be co-loaded as runtime skill hints",
+            )
+        )
+    return findings
 
 
 def _compact(text: str, limit: int) -> str:

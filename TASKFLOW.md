@@ -227,16 +227,26 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Validation passed for deterministic context compiler gate execution: focused compiler/admin tests passed with 20 tests, `uv run ruff check sidecar`, `uv run pytest` with 194 tests, `uv run python -m compileall -q sidecar`, and `git diff --check` passed; a rebuilt compose sidecar/Postgres smoke called `/v1/context/compile-skillir` with control auth and verified exactly one context artifact, compile run, budget event, and semantic compression trial persisted for the smoke workspace, then compose was cleaned down without removing the persistent volume.
 - Writer activation compile-proof gating is implemented: staged writer manifests can carry context compile-run/artifact/output-manifest proof, and direct/queued writer apply with `activation_gate_required=true` fails closed unless the real activation gate can match a passed `context_compile_run` and passed `skill_md` context artifact to the staged manifest text hash.
 - Validation passed for writer activation compile-proof gating: focused worker writer-apply tests passed, focused audit/topology activation tests passed, `uv run ruff check sidecar`, `uv run pytest` with 195 tests, `uv run python -m compileall -q sidecar`, and `git diff --check` passed; a real compose Postgres smoke blocked missing proof with `context-compile-proof-missing`, allowed matching passed compile/artifact proof, and blocked mismatched output-manifest proof with `context-compile-run-not-found`.
+- Rendered context bundle scanning is implemented for broker-selected skill sets:
+  `scan_text_bundle` checks co-loadable context across artifact boundaries,
+  detects cross-skill secret-exfiltration chains, and broker rendering now fails
+  closed on bundle scanner findings or conflict graph edges before a runtime hint
+  is exposed.
+- Validation passed for context bundle scanning: focused scanner/compiler/broker
+  tests passed with 32 tests; full `uv run ruff check sidecar`,
+  `uv run pytest` with 199 tests, `uv run python -m compileall -q sidecar`,
+  and `git diff --check` passed.
 
 ## Next Gates
 
 1. Wire deterministic context compiler gate execution into candidate persistence and repair/materialization staging so newly staged manifests receive first-class compile-run proof automatically instead of requiring caller-supplied proof.
-2. Run `/v1/deployment/readiness` against the intended deployment workspace after seeding/qualifying the real executor, text, embedding, broker policy, and production replay records.
-3. Enable the production plugin policy outside the development profile and run a full gateway capture/spool/replay smoke.
-4. Populate broker replay episodes from redacted deployment telemetry, then run stored-corpus replay/canary tuning against real production episodes.
-5. Run `/v1/profiles/embeddings/validate-production` or a bounded `embeddings.generate` smoke against the configured local embedding endpoint with the intended `AUTOSKILL_EMBEDDING_DIM`.
-6. Run `/v1/profiles/embeddings/validate-production` against the real configured endpoint/credentials in the deployment environment.
-7. Roll out live repair/import execution only after operator config enables the plugin and production replay/embedding validation passes.
+2. Persist bundle scanner verdict metadata on broker context artifacts/retrieval logs so later revocation and replay can trace exact co-load risk decisions by bundle hash.
+3. Run `/v1/deployment/readiness` against the intended deployment workspace after seeding/qualifying the real executor, text, embedding, broker policy, and production replay records.
+4. Enable the production plugin policy outside the development profile and run a full gateway capture/spool/replay smoke.
+5. Populate broker replay episodes from redacted deployment telemetry, then run stored-corpus replay/canary tuning against real production episodes.
+6. Run `/v1/profiles/embeddings/validate-production` or a bounded `embeddings.generate` smoke against the configured local embedding endpoint with the intended `AUTOSKILL_EMBEDDING_DIM`.
+7. Run `/v1/profiles/embeddings/validate-production` against the real configured endpoint/credentials in the deployment environment.
+8. Roll out live repair/import execution only after operator config enables the plugin and production replay/embedding validation passes.
 
 ## Known Risks
 

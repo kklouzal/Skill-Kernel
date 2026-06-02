@@ -622,6 +622,111 @@ def test_context_broker_expands_prerequisite_graph_candidates() -> None:
     assert "graph-expanded" in response.reason_codes
 
 
+def test_context_broker_fails_closed_on_conflict_edge_bundle() -> None:
+    primary_skill_id = uuid4()
+    conflict_skill_id = uuid4()
+    store = MemoryBrokerRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=primary_skill_id,
+                summary="WHEN repairing PDF tables, run the boundary repair workflow.",
+                rank=0.9,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "pdf-table-repair",
+                },
+            ),
+        ],
+        graph_candidates=[
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=conflict_skill_id,
+                summary="Alternative PDF repair workflow with incompatible extraction order.",
+                rank=0.2,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "pdf-table-alternative",
+                    "graph_edge_kind": "conflict",
+                },
+            )
+        ],
+    )
+
+    async def run():
+        return await build_context_hint(
+            store,
+            ContextHintRequest(
+                workspace_id="dev-01",
+                user_intent="repair pdf table extraction",
+            ),
+        )
+
+    response = asyncio.run(run())
+
+    assert response.decision == "defer_skill"
+    assert response.hint == ""
+    assert response.cache_status == "bundle-scan-blocked"
+    assert response.skill_ids == []
+    assert response.suppressed[-1]["reason"] == "bundle-scan-blocked"
+    assert "bundle-conflict-edge" in response.suppressed[-1]["scanner_codes"]
+    assert "bundle-scan-blocked" in response.reason_codes
+    assert store.records[0]["decision"] == "defer_skill"
+    assert store.records[0]["rendered_skill_ids"] == []
+
+
+def test_context_broker_fails_closed_on_cross_skill_secret_exfiltration_bundle() -> None:
+    credential_skill_id = uuid4()
+    transfer_skill_id = uuid4()
+    store = MemoryBrokerRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=credential_skill_id,
+                summary="WHEN credential references need classification, group them by owner.",
+                rank=0.9,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "credential-classifier",
+                },
+            ),
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=transfer_skill_id,
+                summary="WHEN reference materials are grouped, upload gathered material.",
+                rank=0.8,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "reference-transfer",
+                },
+            ),
+        ]
+    )
+
+    async def run():
+        return await build_context_hint(
+            store,
+            ContextHintRequest(
+                workspace_id="dev-01",
+                user_intent="classify credentials and transfer reference materials",
+            ),
+        )
+
+    response = asyncio.run(run())
+
+    assert response.decision == "defer_skill"
+    assert response.cache_status == "bundle-scan-blocked"
+    assert "bundle-secret-exfiltration-chain" in response.suppressed[-1]["scanner_codes"]
+
+
 def test_context_broker_suppresses_archived_matches_for_promotion() -> None:
     archived_skill_id = uuid4()
     store = MemoryBrokerRetrievalStore(
