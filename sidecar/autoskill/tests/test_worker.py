@@ -541,6 +541,50 @@ def test_worker_run_once_renews_lease_while_handler_runs() -> None:
     assert stores.jobs.renewals[0]["worker_id"] == "worker-1"
 
 
+def test_worker_run_once_records_content_safe_job_progress() -> None:
+    stores = WorkerTestStores(
+        jobs=MemoryJobStore(),
+        scheduler=MemorySchedulerWorkerStore(),
+        evidence=MemoryEvidenceWorkerStore(delay_seconds=0.6),
+        embeddings=MemoryPendingEmbeddingStore(),
+    )
+
+    async def run():
+        await stores.jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="evidence.derive",
+            idempotency_key="derive:progress",
+            payload={"workspace_id": "dev-01", "limit": 7, "raw_text": "do-not-record"},
+        )
+        return await run_worker_once(
+            stores.as_worker_stores(),
+            worker_id="worker-1",
+            pool="maintenance",
+            lease_seconds=1,
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    events = stores.jobs.heartbeat_events
+    assert [event.status for event in events] == [
+        "claimed",
+        "lease_renewed",
+        "succeeded",
+    ]
+    assert events[0].current_job_id == result.job.job_id
+    assert events[1].current_job_id == result.job.job_id
+    assert events[-1].current_job_id is None
+    assert events[0].summary["payload_controls"] == {
+        "limit": 7,
+        "workspace_id": "dev-01",
+    }
+    assert "raw_text" not in events[0].summary["payload_controls"]
+    assert events[1].summary["lease_seconds"] == 1
+    assert events[-1].summary["output"]["created"] == 1
+    assert events[-1].summary["output"]["evidence_ids_count"] == 0
+
+
 def test_worker_pool_does_not_claim_other_pool_jobs() -> None:
     stores = WorkerTestStores(
         jobs=MemoryJobStore(),

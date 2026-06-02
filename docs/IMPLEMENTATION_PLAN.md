@@ -70,7 +70,7 @@ Deliverables:
 - sidecar-owned schedules;
 - jobs, attempts, leases, idempotency keys;
 - job trace context; implemented with enqueue-supplied or generated `trace_id`/`span_id`, non-null persisted job trace/span roots, scheduled-job trace generation, and trace-preserving job JSON responses.
-- worker pools; implemented as explicit scheduler/maintenance/mutation run-once dispatch, bounded loop entrypoints, configured per-pool loop concurrency, persistent worker heartbeats, and worker health summaries.
+- worker pools; implemented as explicit scheduler/maintenance/mutation run-once dispatch, bounded loop entrypoints, configured per-pool loop concurrency, persistent worker heartbeats, content-safe single-job progress phases, and worker health summaries.
 
 Acceptance:
 

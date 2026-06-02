@@ -187,6 +187,14 @@ async def run_worker_once(
 
     definition = JOB_DEFINITIONS.get(job.job_kind)
     span = await _start_job_span(stores, job, worker_id=worker_id, pool=pool)
+    await _record_job_progress(
+        stores,
+        job,
+        worker_id=worker_id,
+        pool=pool,
+        phase="claimed",
+        summary=_job_progress_summary(job, phase="claimed"),
+    )
     if definition is None:
         error = f"unsupported job kind: {job.job_kind}"
         completed = await stores.jobs.complete_job(
@@ -200,6 +208,19 @@ async def run_worker_once(
             span_id=span.span_id,
             status="error",
             error=error,
+        )
+        await _record_job_progress(
+            stores,
+            completed or job,
+            worker_id=worker_id,
+            pool=pool,
+            phase="failed",
+            summary=_job_progress_summary(
+                completed or job,
+                phase="failed",
+                error=error,
+            ),
+            clear_current_job=True,
         )
         return WorkerRunResult(claimed=True, job=completed or job, status="failed", error=error)
 
@@ -225,6 +246,19 @@ async def run_worker_once(
             status="error",
             error=message,
         )
+        await _record_job_progress(
+            stores,
+            completed or job,
+            worker_id=worker_id,
+            pool=pool,
+            phase="failed",
+            summary=_job_progress_summary(
+                completed or job,
+                phase="failed",
+                error=message,
+            ),
+            clear_current_job=True,
+        )
         return WorkerRunResult(claimed=True, job=completed or job, status="failed", error=message)
 
     completed = await stores.jobs.complete_job(
@@ -237,6 +271,19 @@ async def run_worker_once(
         span_id=span.span_id,
         status="ok",
         output=output,
+    )
+    await _record_job_progress(
+        stores,
+        completed or job,
+        worker_id=worker_id,
+        pool=pool,
+        phase="succeeded",
+        summary=_job_progress_summary(
+            completed or job,
+            phase="succeeded",
+            output=output,
+        ),
+        clear_current_job=True,
     )
     return WorkerRunResult(
         claimed=True,
@@ -347,6 +394,18 @@ async def _run_with_lease_renewal(
             with suppress(asyncio.CancelledError):
                 await task
             raise RuntimeError("job lease renewal failed")
+        await _record_job_progress(
+            stores,
+            renewed,
+            worker_id=worker_id,
+            pool=JOB_DEFINITIONS[job.job_kind].pool,
+            phase="lease_renewed",
+            summary=_job_progress_summary(
+                renewed,
+                phase="lease_renewed",
+                lease_seconds=lease_seconds,
+            ),
+        )
 
 
 async def build_worker_health(
@@ -432,6 +491,99 @@ async def _finish_job_span(
         status=status,  # type: ignore[arg-type]
         safe_attributes=attributes,
     )
+
+
+async def _record_job_progress(
+    stores: WorkerStores,
+    job: JobRecord,
+    *,
+    worker_id: str,
+    pool: WorkerPool,
+    phase: str,
+    summary: dict[str, Any],
+    clear_current_job: bool = False,
+) -> None:
+    """Persist content-safe worker progress through the existing heartbeat surface."""
+    await stores.jobs.record_worker_heartbeat(
+        worker_id=worker_id,
+        pool=pool,
+        concurrency=1,
+        status=phase,
+        current_job_id=None if clear_current_job else job.job_id,
+        summary=summary,
+    )
+
+
+def _job_progress_summary(
+    job: JobRecord,
+    *,
+    phase: str,
+    lease_seconds: int | None = None,
+    output: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    payload = _payload_dict(job.payload)
+    summary: dict[str, Any] = {
+        "phase": phase,
+        "job_id": str(job.job_id),
+        "job_kind": job.job_kind,
+        "attempt": job.attempts,
+        "max_attempts": job.max_attempts,
+        "workspace_key": _payload_workspace(job) or job.workspace_key,
+        "payload_controls": _payload_progress_controls(payload),
+    }
+    if lease_seconds is not None:
+        summary["lease_seconds"] = lease_seconds
+    if output is not None:
+        summary["output"] = _output_progress_summary(output)
+    if error:
+        summary["error"] = error[:500]
+    return summary
+
+
+def _payload_progress_controls(payload: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "limit",
+        "min_support",
+        "max_archive",
+        "archive_threshold",
+        "embedding_profile_key",
+        "embedding_model",
+        "executor_profile_key",
+        "policy_version",
+        "operation_id",
+        "decision_id",
+        "request_id",
+        "workspace_id",
+    }
+    controls: dict[str, Any] = {}
+    for key in sorted(allowed):
+        if key not in payload:
+            continue
+        value = payload[key]
+        if isinstance(value, str):
+            controls[key] = value[:200]
+        elif isinstance(value, int | float | bool) or value is None:
+            controls[key] = value
+        elif isinstance(value, list):
+            controls[key] = [str(item)[:100] for item in value[:10]]
+    return controls
+
+
+def _output_progress_summary(output: dict[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {"keys": sorted(output.keys())[:50]}
+    for key, value in output.items():
+        if isinstance(value, bool | int | float) or value is None:
+            safe[key] = value
+        elif isinstance(value, str) and key.endswith(
+            ("_id", "_ids", "_status", "_state", "_model")
+        ):
+            safe[key] = value[:200]
+        elif isinstance(value, list):
+            safe[f"{key}_count"] = len(value)
+        elif isinstance(value, dict):
+            safe[f"{key}_keys"] = sorted(str(item) for item in value)[:25]
+    return safe
 
 
 async def _run_scheduler_tick(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:

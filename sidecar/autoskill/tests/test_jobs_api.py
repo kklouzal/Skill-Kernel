@@ -19,6 +19,7 @@ class MemoryJobStore:
     def __init__(self) -> None:
         self.jobs: dict[str, JobRecord] = {}
         self.heartbeats: dict[str, WorkerHeartbeatRecord] = {}
+        self.heartbeat_events: list[WorkerHeartbeatRecord] = []
         self.renewals: list[dict[str, object]] = []
         self.closed = False
 
@@ -186,6 +187,7 @@ class MemoryJobStore:
             last_seen_at=now,
         )
         self.heartbeats[worker_id] = heartbeat
+        self.heartbeat_events.append(heartbeat)
         return heartbeat
 
     async def list_worker_heartbeats(
