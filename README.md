@@ -4,7 +4,8 @@ SkillKernel is the project home for **OpenClaw AutoSkill Manager**, internal cod
 
 The closed-design handoff is the controlling source for architecture and implementation priorities:
 
-- `openclaw-autoskill-ultimate-v9-closed-design-handoff.md`
+- `skillkernel-openclaw-autoskill-ultimate-v16-coherence-closed-implementation-handoff.md`
+- `openclaw-autoskill-ultimate-v9-closed-design-handoff.md` is retained as an earlier baseline.
 
 The v1 implementation follows the handoff's fixed architecture:
 
@@ -16,36 +17,34 @@ The v1 implementation follows the handoff's fixed architecture:
 
 ## Current Status
 
-This repository is in Phase 0/1 bootstrap.
+This repository is in Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 Implemented now:
 
-- project structure and durable local instructions;
-- sidecar API skeleton with health/status/ingest/context-hint endpoints;
+- project structure, durable local instructions, and implementation plan tracking;
+- sidecar API with health/status, ingest, context hints, retrieval, embeddings, worker, topology, profile, drift, writer, and control endpoints;
 - DB-backed idempotent ingest for redacted event envelopes;
 - optional bearer-token auth for event ingest;
 - optional bearer-token auth for control/job APIs;
-- Postgres-backed job enqueue, idempotency, claim, completion, and expired-lease recovery primitives;
-- sidecar-owned scheduler tick primitive that creates idempotent jobs from due schedules;
-- deterministic evidence derivation from redacted raw events with provenance edges;
-- retrieval schema support for body index documents, pgvector embeddings, lexical indexes, and retrieval logs;
-- deterministic lexical retrieval API over evidence/body-index records;
-- embedding upsert/search primitives with fixed `vector(1536)` validation and pgvector cosine search;
-- typed event envelope, SkillIR, scanner, compiler, redaction, audit hash, and path-contained writer primitives;
-- initial Postgres migration covering the core v9 control-plane tables;
-- OpenClaw plugin/hook package skeleton with local redaction, bounded spool, forwarding, and replay utilities;
-- OpenClaw plugin diagnostics for sidecar status and spool size;
-- hook-package smoke tests that import the actual handlers and verify forwarded redacted envelopes;
-- focused Python and Node tests for deterministic primitives.
+- Postgres-backed job enqueue, idempotency, claim, completion, expired-lease recovery, heartbeat, and lease-renewal primitives;
+- sidecar-owned scheduler tick primitive and durable worker pools for scheduler, maintenance, and mutation jobs;
+- deterministic evidence derivation from redacted raw events with provenance edges and recurring-evidence clusters;
+- retrieval schema support for body index documents, pgvector embeddings, lexical indexes, vector fusion, retrieval logs, and broker telemetry;
+- profile-owned embedding storage and search with variable-dimension support;
+- typed event envelope, SkillIR, SkillGraphIR, scanner, compiler, redaction, audit hash, trace spine, and path-contained writer primitives;
+- staged writer apply/rollback, provenance traversal, revocation invalidation, canary freeze, and mutation-worker rollback paths;
+- topology proposal, trial, apply, downstream action, and invalidation primitives;
+- curation, utility, duplicate-merge probe planning, repair proposal planning, drift probes, false-positive controls, and HTTP-status contract probes;
+- OpenClaw plugin/hook package with local redaction, bounded spool, forwarding, replay utilities, and smoke-tested hook loading;
+- focused Python, Node, and local Postgres compose smoke validation for deterministic primitives.
 
 Not implemented yet:
 
-- full installed-plugin proof against the live OpenClaw gateway;
-- embedding generation workers;
-- durable worker dispatch loops;
-- LLM proposal operations;
-- evaluator/probe execution;
-- autonomous apply.
+- production plugin policy enablement outside the development profile;
+- production embedding provider live validation once credentials and endpoint are configured;
+- richer broker replay and canary policy feedback for compose/decompose routing decisions;
+- optional operator-approved import materialization for external skills;
+- autonomous execution of repair proposals.
 
 ## Development
 
