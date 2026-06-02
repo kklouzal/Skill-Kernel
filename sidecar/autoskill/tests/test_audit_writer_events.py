@@ -103,6 +103,28 @@ def test_audit_hash_chain_verifies() -> None:
     assert verify_hash_chain([first, second])
 
 
+def test_audit_hash_chain_verifies_bounded_segment() -> None:
+    first = AuditRecord(action="create", subject_type="skill", subject_id="one").sealed()
+    second = AuditRecord(
+        action="activate",
+        subject_type="skill",
+        subject_id="one",
+        previous_hash=first.audit_hash,
+    ).sealed()
+    third = AuditRecord(
+        action="promote",
+        subject_type="skill",
+        subject_id="one",
+        previous_hash=second.audit_hash,
+    ).sealed()
+
+    assert verify_hash_chain([second, third]) is False
+    assert verify_hash_chain(
+        [second, third],
+        initial_previous_hash=first.audit_hash,
+    )
+
+
 def test_writer_rejects_path_escape(tmp_path: Path) -> None:
     with pytest.raises(PathContainmentError):
         resolve_contained(tmp_path, "../outside")

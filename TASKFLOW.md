@@ -519,6 +519,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   decompose operation counts independently, includes planned-trial status
   breakdowns by operation kind and trial kind, and returns bounded recent
   operation samples without activating or mutating topology state.
+- Bounded audit integrity checks now verify partial recent windows as anchored
+  hash-chain segments instead of incorrectly requiring the oldest returned row
+  to be the genesis record; full-chain verification semantics remain available
+  by using a genesis-anchored record list.
 
 ## Next Gates
 

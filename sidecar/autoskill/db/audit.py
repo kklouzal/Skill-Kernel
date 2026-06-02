@@ -115,7 +115,12 @@ class AsyncpgAuditStore(AsyncpgPoolOwner):
 
     async def verify_chain(self, *, workspace_key: str | None = None, limit: int = 1000) -> bool:
         records = await self.list_recent(workspace_key=workspace_key, limit=limit)
-        return verify_hash_chain(list(reversed(records)))
+        ordered = list(reversed(records))
+        initial_previous_hash = ordered[0].previous_hash if ordered else None
+        return verify_hash_chain(
+            ordered,
+            initial_previous_hash=initial_previous_hash,
+        )
 
 
 def _record_from_row(row: asyncpg.Record) -> AuditRecord:

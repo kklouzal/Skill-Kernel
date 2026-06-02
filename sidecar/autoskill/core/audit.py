@@ -24,8 +24,12 @@ class AuditRecord(BaseModel):
         return self.model_copy(update={"audit_hash": sha256_json(data)})
 
 
-def verify_hash_chain(records: list[AuditRecord]) -> bool:
-    previous: str | None = None
+def verify_hash_chain(
+    records: list[AuditRecord],
+    *,
+    initial_previous_hash: str | None = None,
+) -> bool:
+    previous = initial_previous_hash
     for record in records:
         if record.previous_hash != previous:
             return False
@@ -33,4 +37,3 @@ def verify_hash_chain(records: list[AuditRecord]) -> bool:
             return False
         previous = record.audit_hash
     return True
-
