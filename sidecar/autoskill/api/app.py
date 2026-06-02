@@ -2237,6 +2237,7 @@ def create_app(
                 else None
             ),
             policy=policy,
+            memory_governance=memory_governance,
         )
 
     @app.get(

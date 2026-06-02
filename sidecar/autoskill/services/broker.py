@@ -8,6 +8,7 @@ from uuid import UUID
 
 from autoskill.db.compatibility import CompatibilityStore
 from autoskill.db.context import ContextGovernanceStore
+from autoskill.db.memory import MemoryGovernanceStore
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalStore
 from autoskill.services.embedding_generation import TextEmbedder
 from autoskill.services.scanner import has_blocking_findings, scan_text
@@ -115,6 +116,8 @@ class ContextHintRequest(BaseModel):
     span_id: UUID | None = None
     parent_span_id: UUID | None = None
     executor_profile_id: UUID | None = None
+    memory_influence_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    memory_influence_run_id: str | None = None
     user_intent: str | None = None
     max_tokens: int = 600
 
@@ -237,6 +240,7 @@ async def build_context_hint(
     *,
     cache: ContextHintCache | None = None,
     context_governance: ContextGovernanceStore | None = None,
+    memory_governance: MemoryGovernanceStore | None = None,
     compatibility: CompatibilityStore | None = None,
     semantic_embedder: TextEmbedder | None = None,
     semantic_embedding_profile_id: UUID | None = None,
@@ -253,6 +257,7 @@ async def build_context_hint(
     if cache is not None:
         cached = cache.get(request, query, policy)
         if cached is not None:
+            await _record_memory_influence(memory_governance, request, cached)
             return cached
 
     result = await retrieval.lexical_query(
@@ -294,6 +299,7 @@ async def build_context_hint(
         )
         await _record_context_hint(retrieval, result.retrieval_log_id, response)
         await _record_context_governance(context_governance, request, response)
+        await _record_memory_influence(memory_governance, request, response)
         if cache is not None:
             cache.set(request, query, response, policy)
         return response
@@ -324,6 +330,7 @@ async def build_context_hint(
         )
         await _record_context_hint(retrieval, result.retrieval_log_id, response)
         await _record_context_governance(context_governance, request, response)
+        await _record_memory_influence(memory_governance, request, response)
         if cache is not None:
             cache.set(request, query, response, policy)
         return response
@@ -342,6 +349,7 @@ async def build_context_hint(
         )
         await _record_context_hint(retrieval, result.retrieval_log_id, response)
         await _record_context_governance(context_governance, request, response)
+        await _record_memory_influence(memory_governance, request, response)
         if cache is not None:
             cache.set(request, query, response, policy)
         return response
@@ -359,6 +367,7 @@ async def build_context_hint(
     )
     await _record_context_hint(retrieval, result.retrieval_log_id, response)
     await _record_context_governance(context_governance, request, response)
+    await _record_memory_influence(memory_governance, request, response)
     if cache is not None:
         cache.set(request, query, response, policy)
     return response
@@ -795,6 +804,38 @@ async def _record_context_governance(
             "reason_codes": response.reason_codes,
         },
     )
+
+
+async def _record_memory_influence(
+    memory_governance: MemoryGovernanceStore | None,
+    request: ContextHintRequest,
+    response: ContextHintResponse,
+) -> None:
+    memory_ids = list(dict.fromkeys(request.memory_influence_ids))
+    if not memory_ids:
+        return
+    if memory_governance is None:
+        raise RuntimeError("memory influence recording requires a memory governance store")
+    decision = {
+        "control_surface": "runtime_context_broker",
+        "decision": response.decision,
+        "cache_status": response.cache_status,
+        "retrieval_log_id": response.retrieval_log_id,
+        "rendered_skill_ids": response.skill_ids,
+        "suppressed_count": len(response.suppressed),
+        "reason_codes": response.reason_codes,
+        "broker_policy_version": response.broker_policy_version,
+        "broker_policy_version_id": response.broker_policy_version_id,
+    }
+    for memory_id in memory_ids:
+        await memory_governance.record_control_flow_event(
+            workspace_key=request.workspace_id,
+            source_kind="memory",
+            source_id=memory_id,
+            influence_kind="retrieval",
+            run_id=request.memory_influence_run_id,
+            decision=decision,
+        )
 
 
 def _visibility_state(response: ContextHintResponse) -> str:

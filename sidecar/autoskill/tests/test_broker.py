@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
+from autoskill.db.memory import NullMemoryGovernanceStore
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalResult
 from autoskill.services.broker import (
     BrokerPolicy,
@@ -254,6 +255,75 @@ def test_context_broker_renders_scanned_skill_candidates() -> None:
     assert context.artifacts[0]["max_tokens"] == 120
     assert context.ledgers[0]["visibility_state"] == "skill_visible"
     assert context.ledgers[0]["context_artifact_id"] == context.artifacts[0]["context_artifact_id"]
+
+
+def test_context_broker_records_memory_control_flow_without_injecting_memory() -> None:
+    skill_id = uuid4()
+    evidence_id = uuid4()
+    store = MemoryBrokerRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=skill_id,
+                summary="WHEN logs need triage, use the deterministic incident summary skill.",
+                rank=0.9,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "incident-summary",
+                },
+            )
+        ]
+    )
+    memory = NullMemoryGovernanceStore()
+
+    async def run():
+        quarantined = await memory.quarantine_memory(
+            workspace_key="dev-01",
+            source_object_type="evidence",
+            source_object_id=evidence_id,
+            proposed_memory={
+                "summary": "Private operator preference that must not be injected."
+            },
+            taint={"source": "derived"},
+            scanner_findings={"status": "passed"},
+        )
+        approved = await memory.decide_memory_quarantine(
+            workspace_key="dev-01",
+            quarantine_id=quarantined.quarantine_id,
+            status="approved",
+            operator_id="operator",
+            rationale="bounded test approval",
+        )
+        response = await build_context_hint(
+            store,
+            ContextHintRequest(
+                workspace_id="dev-01",
+                user_intent="summarize the incident logs",
+                memory_influence_ids=[approved.quarantine_id],
+                memory_influence_run_id="broker-run-1",
+                max_tokens=120,
+            ),
+            memory_governance=memory,
+        )
+        return approved, response
+
+    approved, response = asyncio.run(run())
+
+    assert response.decision == "skill_hint"
+    assert "Private operator preference" not in response.hint
+    assert len(memory.control_flow_events) == 1
+    event = memory.control_flow_events[0]
+    assert event.source_kind == "memory"
+    assert event.source_id == approved.quarantine_id
+    assert event.influence_kind == "retrieval"
+    assert event.run_id == "broker-run-1"
+    assert event.decision["control_surface"] == "runtime_context_broker"
+    assert event.decision["decision"] == "skill_hint"
+    assert event.decision["rendered_skill_ids"] == [str(skill_id)]
+    assert "exact-rerank" in event.decision["reason_codes"]
+    assert "Private operator preference" not in str(event.decision)
 
 
 def test_context_broker_can_render_vector_fused_candidates_when_lexical_is_empty() -> None:

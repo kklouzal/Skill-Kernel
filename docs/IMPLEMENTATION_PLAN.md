@@ -298,7 +298,10 @@ Deliverables:
   external-skill-inventory influence over retrieval, routing, mutation, archive,
   promotion, and rollback decisions;
 - control-authenticated operator APIs for recording/listing memory quarantine,
-  deciding quarantined memory, and recording/listing control-flow events.
+  deciding quarantined memory, and recording/listing control-flow events;
+- runtime broker memory-influence audit wiring; implemented as bounded
+  `memory_influence_ids` on context-hint requests that record memory-to-retrieval
+  control-flow events without injecting proposed memory text into runtime hints.
 
 Acceptance:
 
@@ -307,7 +310,10 @@ Acceptance:
 - invalid quarantine decisions and invalid control-flow source/influence kinds
   fail before persistence;
 - focused admin tests prove pending quarantine, explicit approval, and
-  memory-influenced retrieval event recording through the API surface.
+  memory-influenced retrieval event recording through the API surface;
+- focused broker tests prove approved memory references create content-safe
+  retrieval control-flow events while rendered hints remain sourced from scanned
+  skill body-index documents.
 
 ## Phase 10 - Production Hardening and Operator Readiness
 
