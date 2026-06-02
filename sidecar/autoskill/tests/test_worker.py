@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from autoskill.api.app import WorkerRunOnceRequest, create_app
+from autoskill.core.hashing import sha256_text
 from autoskill.db.activation import ActivationReadiness
 from autoskill.db.contracts import ContractExtractResult, DriftCheckResult, DriftRepairEventRecord
 from autoskill.db.evaluations import EvaluationRunResult
@@ -151,23 +152,49 @@ class MemoryActivationGateStore:
         workspace_key: str,
         skill_version_id,
         executor_profile_id=None,
+        require_context_compile_proof: bool = False,
+        context_compile_run_id=None,
+        context_artifact_id=None,
+        compiled_text_hash=None,
+        context_output_manifest_hash=None,
     ) -> ActivationReadiness:
         self.calls.append(
             {
                 "workspace_key": workspace_key,
                 "skill_version_id": skill_version_id,
                 "executor_profile_id": executor_profile_id,
+                "require_context_compile_proof": require_context_compile_proof,
+                "context_compile_run_id": context_compile_run_id,
+                "context_artifact_id": context_artifact_id,
+                "compiled_text_hash": compiled_text_hash,
+                "context_output_manifest_hash": context_output_manifest_hash,
             }
         )
+        proof_missing = require_context_compile_proof and (
+            context_compile_run_id is None
+            or context_artifact_id is None
+            or not compiled_text_hash
+            or not context_output_manifest_hash
+        )
+        blockers = list(self.blockers)
+        if proof_missing:
+            blockers.append("context-compile-proof-missing")
+        allowed = self.allowed and not proof_missing
         return ActivationReadiness(
-            allowed=self.allowed,
+            allowed=allowed,
             skill_version_id=skill_version_id,
             executor_profile_id=executor_profile_id,
-            scanner_status="passed" if self.allowed else "blocked",
-            evaluator_status="passed" if self.allowed else "failed",
-            latest_evaluation_status="passed" if self.allowed else "failed",
-            compatibility_status="compatible" if self.allowed else "blocked",
-            blockers=list(self.blockers),
+            scanner_status="passed" if allowed else "blocked",
+            evaluator_status="passed" if allowed else "failed",
+            latest_evaluation_status="passed" if allowed else "failed",
+            compatibility_status="compatible" if allowed else "blocked",
+            context_compile_run_id=context_compile_run_id,
+            context_artifact_id=context_artifact_id,
+            context_compile_status="passed" if allowed else "failed",
+            context_safety_status="passed" if allowed else "blocked",
+            context_equivalence_status="passed" if allowed else "failed",
+            context_budget_status="passed" if allowed else "over_budget",
+            blockers=blockers,
         )
 
 
@@ -1342,6 +1369,9 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
     active_root = workspace_root / "skills" / "autoskill" / "approved-skill"
     skill_version_id = uuid4()
     executor_profile_id = uuid4()
+    context_compile_run_id = uuid4()
+    context_artifact_id = uuid4()
+    context_output_manifest_hash = "context-compile-manifest-hash"
     transaction_id = None
 
     async def run():
@@ -1359,6 +1389,9 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
             skill_version_id=skill_version_id,
             slug="approved-skill",
             compiled_skill_md="WHEN approved\nDO safe behavior\n",
+            context_compile_run_id=context_compile_run_id,
+            context_artifact_id=context_artifact_id,
+            context_output_manifest_hash=context_output_manifest_hash,
         )
         await jobs.enqueue_job(
             workspace_key="dev-01",
@@ -1430,6 +1463,11 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
             "workspace_key": "dev-01",
             "skill_version_id": skill_version_id,
             "executor_profile_id": executor_profile_id,
+            "require_context_compile_proof": True,
+            "context_compile_run_id": context_compile_run_id,
+            "context_artifact_id": context_artifact_id,
+            "compiled_text_hash": sha256_text("WHEN approved\nDO safe behavior\n"),
+            "context_output_manifest_hash": context_output_manifest_hash,
         }
     ]
 
@@ -1492,6 +1530,62 @@ def test_mutation_worker_apply_fails_closed_when_activation_gate_blocks(tmp_path
     assert "activation gate blocked" in result.error
     assert "proposal-gate-not-passed" in result.error
     assert not (workspace_root / "skills" / "autoskill" / "blocked-skill").exists()
+
+
+def test_mutation_worker_apply_fails_closed_without_context_compile_proof(tmp_path) -> None:
+    jobs = MemoryJobStore()
+    governance = MemoryGovernanceStore()
+    activation_gate = MemoryActivationGateStore()
+    workspace_root = tmp_path / "workspace"
+    staging_root = workspace_root / ".autoskill" / "staging"
+    archive_root = workspace_root / ".autoskill" / "archive"
+
+    async def run():
+        transaction = await governance.start_transaction(
+            workspace_key="dev-01",
+            transaction_kind="compile",
+            idempotency_key="apply:missing-context-proof",
+            plan_hash="apply-plan-missing-context-proof",
+        )
+        staged = stage_compiled_skill(
+            staging_root,
+            staging_id=uuid4(),
+            skill_version_id=uuid4(),
+            slug="missing-context-proof",
+            compiled_skill_md="WHEN missing proof\nDO safe behavior\n",
+        )
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="writer.apply",
+            idempotency_key="writer-apply:missing-context-proof",
+            payload={
+                "policy_approved": True,
+                "activation_gate_required": True,
+                "evolution_transaction_id": str(transaction.transaction.evolution_transaction_id),
+                "manifest_relative_path": staged.manifest_relative_path,
+            },
+            max_attempts=1,
+        )
+        return await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=MemoryPendingEmbeddingStore(),
+                governance=governance,
+                activation_gate=activation_gate,
+                workspace_root=workspace_root,
+                archive_root=archive_root,
+            ),
+            worker_id="mutation-worker",
+            pool="mutation",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "failed"
+    assert "context-compile-proof-missing" in result.error
+    assert not (workspace_root / "skills" / "autoskill" / "missing-context-proof").exists()
 
 
 def test_mutation_worker_apply_fails_closed_without_policy_approval(tmp_path) -> None:

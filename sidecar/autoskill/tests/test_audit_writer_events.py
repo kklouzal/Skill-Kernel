@@ -670,12 +670,18 @@ class MemoryActivationGate:
         workspace_key,
         skill_version_id,
         executor_profile_id=None,
+        require_context_compile_proof=False,
+        context_compile_run_id=None,
+        context_artifact_id=None,
+        compiled_text_hash=None,
+        context_output_manifest_hash=None,
     ):
         self.calls.append(
             {
                 "workspace_key": workspace_key,
                 "skill_version_id": skill_version_id,
                 "executor_profile_id": executor_profile_id,
+                "require_context_compile_proof": require_context_compile_proof,
             }
         )
         return ActivationReadiness(
@@ -686,5 +692,11 @@ class MemoryActivationGate:
             evaluator_status="passed" if self.allowed else "failed",
             latest_evaluation_status="passed" if self.allowed else "failed",
             compatibility_status="compatible" if self.allowed else "blocked",
+            context_compile_run_id=context_compile_run_id,
+            context_artifact_id=context_artifact_id,
+            context_compile_status="passed" if self.allowed else "failed",
+            context_safety_status="passed" if self.allowed else "blocked",
+            context_equivalence_status="passed" if self.allowed else "failed",
+            context_budget_status="passed" if self.allowed else "over_budget",
             blockers=[] if self.allowed else ["proposal-gate-not-passed"],
         )

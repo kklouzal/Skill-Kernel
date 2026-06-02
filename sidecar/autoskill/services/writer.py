@@ -55,6 +55,7 @@ class StagedSkillArtifact:
     manifest_sha256: str
     files: list[StagedFile]
     scanner_findings: list[ScannerFinding]
+    context_gate: dict[str, object]
 
     @property
     def ok(self) -> bool:
@@ -67,6 +68,7 @@ class StagedSkillArtifact:
             slug=self.slug,
             files=self.files,
             scanner_findings=self.scanner_findings,
+            context_gate=self.context_gate,
         )
 
 
@@ -168,6 +170,9 @@ def stage_compiled_skill(
     slug: str,
     compiled_skill_md: str,
     max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
+    context_compile_run_id: UUID | None = None,
+    context_artifact_id: UUID | None = None,
+    context_output_manifest_hash: str | None = None,
     overwrite: bool = False,
 ) -> StagedSkillArtifact:
     """Stage a scanned runtime SKILL.md and manifest without activating it."""
@@ -181,6 +186,9 @@ def stage_compiled_skill(
         text=compiled_skill_md,
         max_context_tokens=max_context_tokens,
         scanner_findings=scanner_findings,
+        context_compile_run_id=context_compile_run_id,
+        context_artifact_id=context_artifact_id,
+        context_output_manifest_hash=context_output_manifest_hash,
     )
     if context_gate["budget_status"] != "passed":
         raise WriterPolicyError("compiled skill exceeds context token budget")
@@ -215,6 +223,7 @@ def stage_compiled_skill(
         manifest_sha256=sha256_json(manifest),
         files=[staged_file],
         scanner_findings=scanner_findings,
+        context_gate=context_gate,
     )
 
 
@@ -682,10 +691,13 @@ def _context_gate(
     text: str,
     max_context_tokens: int,
     scanner_findings: list[ScannerFinding],
+    context_compile_run_id: UUID | None = None,
+    context_artifact_id: UUID | None = None,
+    context_output_manifest_hash: str | None = None,
 ) -> dict[str, object]:
     token_count = _estimate_tokens(text)
     safety_status = "blocked" if has_blocking_findings(scanner_findings) else "passed"
-    return {
+    gate: dict[str, object] = {
         "loadability_class": "runtime_skill_body",
         "artifact_kind": "skill_md",
         "text_hash": sha256_text(text),
@@ -696,6 +708,13 @@ def _context_gate(
         "budget_status": "passed" if token_count <= max(1, max_context_tokens) else "over_budget",
         "scanner_codes": [finding.code for finding in scanner_findings],
     }
+    if context_compile_run_id is not None:
+        gate["context_compile_run_id"] = str(context_compile_run_id)
+    if context_artifact_id is not None:
+        gate["context_artifact_id"] = str(context_artifact_id)
+    if context_output_manifest_hash is not None:
+        gate["context_output_manifest_hash"] = context_output_manifest_hash
+    return gate
 
 
 def _validate_context_gate(manifest: dict[str, object]) -> None:

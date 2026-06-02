@@ -167,8 +167,11 @@ Acceptance:
   compose Postgres smoke.
 - SkillIR context-gate execution records those governance rows from the
   deterministic compiler in one control-authenticated API call; implemented and
-  validated with focused compiler/admin tests. Next gate is enforcing a matching
-  passed compile-run before writer/staging activation.
+  validated with focused compiler/admin tests.
+- Writer activation gates can require staged manifests to carry matching
+  context compile-run proof, and the real activation gate verifies the passed
+  compile run plus passed `skill_md` context artifact against the manifest text
+  hash before writer apply proceeds.
 - opt-in runtime tool-call boundary enforcement is implemented on
   `before_tool_call`, preserving capture-only behavior by default and returning
   terminal OpenClaw block decisions for deterministic high-risk tool patterns
@@ -252,6 +255,10 @@ Acceptance:
 - verified staged manifests can atomically replace one active autoskill directory, snapshot the previous active directory into `.autoskill/archive`, reject active snapshot symlinks and manifest target escapes, and restore the previous active directory from a verified archive snapshot; implemented and validated with focused writer tests;
 - active-root apply/rollback service wrappers record governance transaction items/statuses and restore the previous active state if post-apply governance recording fails; implemented and validated with focused writer tests;
 - sidecar writer endpoints apply and roll back verified manifests through the transaction-aware writer service; implemented and validated with focused writer/API tests and compose/Postgres smoke coverage;
+- direct and queued writer apply with `activation_gate_required=true` fails
+  closed unless the staged manifest's context gate matches a passed persisted
+  compile run and passed context artifact for the skill version; implemented and
+  validated with focused tests plus a real compose Postgres smoke.
 - runtime context hint cache can be invalidated by workspace/skill ID through a control endpoint, and freeze/critical-canary paths evict affected skill hints immediately;
 - writer apply/rollback transaction items are discoverable by provenance traversal from their evolution transaction root; implemented and validated with focused writer/governance tests plus compose/Postgres smoke coverage;
 - canary critical failures record canary evidence, mark the skill `frozen`, store the freeze reason, record a transaction item, and queue a rollback revocation request when the canary is transaction-scoped; implemented and validated with focused tests plus compose/Postgres smoke coverage;

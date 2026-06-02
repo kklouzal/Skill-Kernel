@@ -1537,10 +1537,20 @@ async def _check_writer_activation_gate(
     skill_version_id = _payload_uuid(manifest, "skill_version_id")
     if skill_version_id is None:
         raise ValueError("writer apply activation gate requires manifest skill_version_id")
+    context_gate_value = manifest.get("context_gate")
+    context_gate = context_gate_value if isinstance(context_gate_value, dict) else {}
     readiness = await stores.activation_gate.check_activation_readiness(
         workspace_key=workspace,
         skill_version_id=skill_version_id,
         executor_profile_id=_payload_uuid(job.payload, "executor_profile_id"),
+        require_context_compile_proof=True,
+        context_compile_run_id=_payload_uuid(context_gate, "context_compile_run_id"),
+        context_artifact_id=_payload_uuid(context_gate, "context_artifact_id"),
+        compiled_text_hash=_payload_str(context_gate, "text_hash"),
+        context_output_manifest_hash=_payload_str(
+            context_gate,
+            "context_output_manifest_hash",
+        ),
     )
     if not readiness.allowed:
         raise ValueError(
