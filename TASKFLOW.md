@@ -294,20 +294,36 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   context hint returned the active diagram-accessibility skill with bundle scan
   passed; `scripts/autoskill_red_team.py` passed 9/9; and backup plus restore
   dry-run verified `autoskill-backup-20260602T163525Z`.
+- Broker replay corpus growth workflow is implemented:
+  `scripts/autoskill_replay_corpus.py candidates` lists content-safe retrieval
+  telemetry candidates by retrieval log ID, query hash, decision, and selected
+  skill IDs/slugs without storing or reconstructing prompt text;
+  `record --plan` creates replay episodes only from an operator-supplied
+  redacted intent plan. The first telemetry-derived Dev-01 pass added
+  `telemetry-unreadable-labels`,
+  `telemetry-diagrams-unreadable-labels`, and
+  `telemetry-repair-accessibility-annotations`, expanding the production replay
+  corpus from 3 to 6 episodes; stored replay then matched 6/6 with no
+  degradation.
+- OpenClaw plugin inspection visibility is resolved operationally: hook-only
+  runtime details require `openclaw plugins inspect autoskill --json --runtime`;
+  that command now reports `imported=true`, `hookCount=11`, all 11 typed hooks,
+  and no diagnostics for the live installed plugin.
 
 ## Next Gates
 
-1. Populate more broker replay episodes from sustained redacted deployment telemetry, then run stored-corpus replay/canary tuning against those real episodes.
+1. Continue collecting sustained Dev-01 telemetry and add only distinct,
+   operator-reviewed replay episodes from real usage, then run replay/canary
+   tuning on the enlarged corpus.
 2. Run `scripts/autoskill_backup.py` to an operator-approved backup location after the production roots contain activated SkillKernel-owned skills, then verify with `scripts/autoskill_restore.py --dry-run`.
 3. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
 
 ## Known Risks
 
 - Installed-plugin runtime loading is now smoke-tested under the dev profile and
-  live Dev-01 capture is working, but `openclaw plugins inspect autoskill --json`
-  still reports `hookCount=0`/`imported=false` while the running gateway invokes
-  hooks and the sidecar receives events; treat this as an OpenClaw
-  registry/inspection visibility gap until separately fixed.
+  live Dev-01 capture is working. Use `openclaw plugins inspect autoskill --json
+  --runtime` for hook-only runtime details; plain inspect reports static
+  capability inventory and does not load hook registrations.
 - Runtime tool boundary blocking is available but disabled by default
   until explicitly enabled by operator config.
 - Spool replay is best-effort from capture hooks and covered by plugin-level

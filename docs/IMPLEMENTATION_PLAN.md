@@ -391,6 +391,10 @@ Deliverables:
   controls, dynamic fetch-exec, policy override, credential exfiltration,
   destructive host commands, sensitive-file harvest, cross-artifact bundle
   exfiltration chains, and allowed secret-boundary language;
+- content-safe broker replay corpus mining; implemented as
+  `scripts/autoskill_replay_corpus.py`, which lists retrieval telemetry
+  candidates by log ID/query hash/selected skill metadata and records replay
+  episodes only from an explicit operator plan containing redacted intents;
 - production preflight remains sidecar-state-only and does not install the
   plugin, write runtime skills, activate autonomous apply, or mutate live
   OpenClaw configuration;
@@ -409,3 +413,6 @@ Acceptance:
 - readiness reporting is an operator preflight; the current Dev-01 deployment
   also passed live gateway capture/hint validation, stored broker replay,
   production embedding validation, red-team smoke, and backup/restore dry-run.
+- telemetry-derived replay episode creation does not persist or reconstruct raw
+  prompts; operators must supply redacted replay intent text when promoting a
+  retrieval log into the replay corpus.

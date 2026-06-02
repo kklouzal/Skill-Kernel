@@ -98,6 +98,26 @@ Run the deterministic scanner red-team smoke:
 python scripts/autoskill_red_team.py --output /tmp/autoskill-red-team.json
 ```
 
+List content-safe broker replay candidates from retrieval telemetry:
+
+```bash
+python scripts/autoskill_replay_corpus.py candidates --workspace-id dev-01 --distinct-query-hash
+```
+
+Record replay episodes from an operator-supplied JSON plan. The plan must
+provide explicit `redacted_user_intent` text; retrieval telemetry stores hashes
+and selected skill IDs, not raw prompts.
+
+```bash
+python scripts/autoskill_replay_corpus.py record --plan /path/to/replay-plan.json
+```
+
+Inspect the installed hook-only plugin runtime surface:
+
+```bash
+openclaw plugins inspect autoskill --json --runtime
+```
+
 ## Non-Negotiables
 
 - No per-skill databases.

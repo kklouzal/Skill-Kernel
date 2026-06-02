@@ -58,3 +58,49 @@ def test_backup_manifest_verification_detects_content_hashes(tmp_path: Path) -> 
 
     loaded = restore._load_manifest(backup_root / "manifest.json")
     restore._verify_manifest(backup_root, loaded)
+
+
+def test_replay_corpus_tags_are_deduplicated() -> None:
+    replay_corpus = _load_script("autoskill_replay_corpus")
+
+    assert replay_corpus._tags(["production", "redacted", "production", " "]) == [
+        "production",
+        "redacted",
+    ]
+
+
+def test_replay_corpus_rejects_sensitive_redacted_intent() -> None:
+    replay_corpus = _load_script("autoskill_replay_corpus")
+
+    try:
+        replay_corpus._required_redacted_intent(
+            {"redacted_user_intent": "Authorization: Bearer secret"}
+        )
+    except SystemExit as exc:
+        assert "sensitive" in str(exc)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("expected sensitive intent rejection")
+
+
+def test_replay_corpus_candidate_json_is_content_safe() -> None:
+    replay_corpus = _load_script("autoskill_replay_corpus")
+
+    candidate = replay_corpus.ReplayCandidate(
+        retrieval_log_id="log-1",
+        created_at="2026-06-02T16:00:00+00:00",
+        decision="skill_hint",
+        query_hash="hash-only",
+        reason_codes=["exact-rerank"],
+        candidate_skill_ids=["skill-1"],
+        rendered_skill_ids=["skill-1"],
+        rendered_skill_slugs=["diagram-accessibility"],
+        candidate_count=1,
+        rendered_skill_count=1,
+        already_recorded=False,
+        query_hash_recorded=False,
+    ).to_json()
+
+    assert candidate["query_hash"] == "hash-only"
+    assert candidate["query_hash_recorded"] is False
+    assert "redacted_user_intent" not in candidate
+    assert "prompt" not in candidate
