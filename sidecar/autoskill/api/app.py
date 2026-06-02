@@ -13,7 +13,7 @@ from autoskill import __version__
 from autoskill.core.config import get_settings
 from autoskill.core.events import IngestRequest, IngestResult
 from autoskill.core.hashing import sha256_text
-from autoskill.core.skillir import EffectSignature
+from autoskill.core.skillir import EffectSignature, SkillIR
 from autoskill.db.activation import (
     ActivationGateStore,
     AsyncpgActivationGateStore,
@@ -96,6 +96,11 @@ from autoskill.services.broker import (
     replay_broker_policy,
 )
 from autoskill.services.candidates import propose_candidate_skills
+from autoskill.services.compiler import (
+    DEFAULT_DESCRIPTION_MAX_CHARS,
+    DEFAULT_MAX_CONTEXT_TOKENS,
+    compile_skill_with_context_governance,
+)
 from autoskill.services.embedding_generation import (
     build_text_embedder_from_profile,
     build_text_embedder_from_settings,
@@ -378,6 +383,23 @@ class ContextArtifactRecordRequest(BaseModel):
 
 class ContextArtifactResponse(BaseModel):
     artifact: dict[str, object]
+
+
+class ContextSkillIRCompileRequest(BaseModel):
+    workspace_id: str
+    skillir: SkillIR
+    skill_id: UUID | None = None
+    skill_version_id: UUID | None = None
+    candidate_id: UUID | None = None
+    source_object_type: str = "skill_version"
+    source_object_id: UUID | None = None
+    max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS
+    target_runtime_tokens: int = 350
+    description_max_chars: int = DEFAULT_DESCRIPTION_MAX_CHARS
+
+
+class ContextSkillIRCompileResponse(BaseModel):
+    result: dict[str, object]
 
 
 class ContextTokenLedgerRequest(BaseModel):
@@ -3034,6 +3056,30 @@ def create_app(
             metadata=request.metadata,
         )
         return ContextArtifactResponse(artifact=artifact.to_json())
+
+    @app.post(
+        "/v1/context/compile-skillir",
+        response_model=ContextSkillIRCompileResponse,
+    )
+    async def compile_context_skillir(
+        request: ContextSkillIRCompileRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ContextSkillIRCompileResponse:
+        _require_control_auth(authorization)
+        result = await compile_skill_with_context_governance(
+            request.skillir,
+            context_governance,
+            workspace_key=request.workspace_id,
+            skill_id=request.skill_id,
+            skill_version_id=request.skill_version_id,
+            candidate_id=request.candidate_id,
+            source_object_type=request.source_object_type,
+            source_object_id=request.source_object_id,
+            max_context_tokens=max(1, min(request.max_context_tokens, 10_000)),
+            target_runtime_tokens=max(1, min(request.target_runtime_tokens, 10_000)),
+            description_max_chars=max(1, min(request.description_max_chars, 1_000)),
+        )
+        return ContextSkillIRCompileResponse(result=result.to_json())
 
     @app.post("/v1/context/token-ledger", response_model=ContextTokenLedgerResponse)
     async def record_context_token_ledger(

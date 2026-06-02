@@ -3,12 +3,16 @@ from __future__ import annotations
 import textwrap
 from dataclasses import dataclass
 from math import ceil
+from uuid import UUID
 
-from autoskill.core.hashing import sha256_text
+from autoskill.core.hashing import sha256_json, sha256_text
 from autoskill.core.skillir import SkillIR
+from autoskill.db.context import ContextGovernanceStore
 from autoskill.services.scanner import ScannerFinding, has_blocking_findings, scan_text
 
 DEFAULT_MAX_CONTEXT_TOKENS = 1200
+DEFAULT_DESCRIPTION_MAX_CHARS = 160
+CONTEXT_COMPILER_VERSION = "autoskill-context-compiler.v1"
 
 
 @dataclass(frozen=True)
@@ -29,6 +33,48 @@ class CompiledSkill:
     @property
     def token_over_budget(self) -> bool:
         return self.estimated_tokens > self.max_context_tokens
+
+
+@dataclass(frozen=True)
+class ContextCompilationResult:
+    compiled: CompiledSkill
+    context_artifact: dict[str, object]
+    compile_run: dict[str, object]
+    budget_event: dict[str, object]
+    semantic_compression_trial: dict[str, object]
+    status: str
+    reject_reason: str | None
+    required_requirements: int
+    preserved_requirements: int
+    lost_requirements: int
+    added_unsupported_requirements: int
+    semantic_equivalence_score: float
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "reject_reason": self.reject_reason,
+            "compiled_sha256": self.compiled.sha256,
+            "estimated_tokens": self.compiled.estimated_tokens,
+            "max_context_tokens": self.compiled.max_context_tokens,
+            "scanner_findings": [
+                {
+                    "severity": str(finding.severity),
+                    "code": finding.code,
+                    "message": finding.message,
+                }
+                for finding in self.compiled.scanner_findings
+            ],
+            "required_requirements": self.required_requirements,
+            "preserved_requirements": self.preserved_requirements,
+            "lost_requirements": self.lost_requirements,
+            "added_unsupported_requirements": self.added_unsupported_requirements,
+            "semantic_equivalence_score": self.semantic_equivalence_score,
+            "context_artifact": self.context_artifact,
+            "compile_run": self.compile_run,
+            "budget_event": self.budget_event,
+            "semantic_compression_trial": self.semantic_compression_trial,
+        }
 
 
 def _bullets(items: list[str]) -> str:
@@ -131,6 +177,201 @@ def compile_skill(
     )
 
 
+async def compile_skill_with_context_governance(
+    skill: SkillIR,
+    store: ContextGovernanceStore,
+    *,
+    workspace_key: str,
+    skill_id: UUID | None = None,
+    skill_version_id: UUID | None = None,
+    candidate_id: UUID | None = None,
+    max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
+    target_runtime_tokens: int = 350,
+    description_max_chars: int = DEFAULT_DESCRIPTION_MAX_CHARS,
+    source_object_type: str = "skill_version",
+    source_object_id: UUID | None = None,
+    compiler_version: str = CONTEXT_COMPILER_VERSION,
+) -> ContextCompilationResult:
+    """Compile SkillIR and persist v16 context-gate governance records.
+
+    This is a deterministic control-plane helper only. It records artifact,
+    budget, and semantic-equivalence evidence; it does not stage or activate
+    runtime files.
+    """
+
+    compiled = compile_skill(skill, max_context_tokens=max_context_tokens)
+    source_object_id = source_object_id or skill_version_id or candidate_id
+    requirements = _required_runtime_requirements(skill)
+    preserved = [requirement for requirement in requirements if requirement in compiled.skill_md]
+    lost_requirements = len(requirements) - len(preserved)
+    added_unsupported_requirements = 0
+    semantic_equivalence_score = 1.0 if requirements and lost_requirements == 0 else 0.0
+    description_over_budget = len(skill.description) > max(1, description_max_chars)
+    blocking_scanner = has_blocking_findings(compiled.scanner_findings)
+    reject_reason = _context_reject_reason(
+        blocking_scanner=blocking_scanner,
+        description_over_budget=description_over_budget,
+        token_over_budget=compiled.token_over_budget,
+        lost_requirements=lost_requirements,
+    )
+    status = "passed" if reject_reason is None else "failed"
+    safety_status = "blocked" if blocking_scanner else "passed"
+    equivalence_status = "passed" if lost_requirements == 0 else "failed"
+
+    artifact = await store.record_artifact(
+        workspace_key=workspace_key,
+        artifact_kind="skill_md",
+        source_object_type=source_object_type,
+        source_object_id=source_object_id,
+        skill_id=skill_id,
+        skill_version_id=skill_version_id,
+        text=compiled.skill_md,
+        max_tokens=max_context_tokens,
+        safety_status=safety_status,
+        equivalence_status=equivalence_status,
+        shadowing_status="pending",
+        metadata={
+            "loadability_class": "runtime_on_skill_load",
+            "compiler": compiler_version,
+            "skill_slug": skill.slug,
+            "description_char_count": len(skill.description),
+            "description_max_chars": max(1, description_max_chars),
+            "required_requirements": len(requirements),
+            "preserved_requirements": len(preserved),
+            "lost_requirements": lost_requirements,
+            "scanner_codes": [finding.code for finding in compiled.scanner_findings],
+        },
+    )
+
+    manifest = {
+        "schema": "autoskill.context-compile-manifest.v1",
+        "compiler_version": compiler_version,
+        "skill_slug": skill.slug,
+        "compiled_sha256": compiled.sha256,
+        "loadability_class": "runtime_on_skill_load",
+        "token_count": compiled.estimated_tokens,
+        "max_tokens": max_context_tokens,
+        "status": status,
+        "reject_reason": reject_reason,
+    }
+    compile_run = await store.record_compile_run(
+        workspace_key=workspace_key,
+        compiler_version=compiler_version,
+        input_skillir_hash=sha256_text(skill.model_dump_json(by_alias=True)),
+        output_manifest_hash=sha256_json(manifest),
+        actual_runtime_tokens=compiled.estimated_tokens,
+        status=status,
+        skill_id=skill_id,
+        skill_version_id=skill_version_id,
+        candidate_id=candidate_id,
+        context_artifact_id=artifact.context_artifact_id,
+        target_runtime_tokens=target_runtime_tokens,
+        compression_ratio=_compression_ratio(
+            source_tokens=_estimate_tokens(skill.model_dump_json(by_alias=True)),
+            candidate_tokens=compiled.estimated_tokens,
+        ),
+        semantic_equivalence_score=semantic_equivalence_score,
+        reject_reason=reject_reason,
+        metadata={
+            "loadability_class": "runtime_on_skill_load",
+            "budget_status": artifact.budget_status,
+            "safety_status": safety_status,
+            "equivalence_status": equivalence_status,
+            "description_over_budget": description_over_budget,
+            "model_assist_used": False,
+        },
+    )
+    budget_event = await store.record_budget_event(
+        workspace_key=workspace_key,
+        event_type="compile_budget_gate",
+        decision="accept" if status == "passed" else "reject_change",
+        skill_id=skill_id,
+        skill_version_id=skill_version_id,
+        context_artifact_id=artifact.context_artifact_id,
+        tokens_delta=compiled.estimated_tokens - max(1, target_runtime_tokens),
+        evidence={
+            "gate": "token_budget_governor",
+            "target_runtime_tokens": max(1, target_runtime_tokens),
+            "max_context_tokens": max(1, max_context_tokens),
+            "actual_runtime_tokens": compiled.estimated_tokens,
+            "budget_status": artifact.budget_status,
+            "reject_reason": reject_reason,
+        },
+        metadata={"compiler_version": compiler_version, "skill_slug": skill.slug},
+    )
+    compression_trial = await store.record_semantic_compression_trial(
+        workspace_key=workspace_key,
+        skill_id=skill_id,
+        source_revision_id=None,
+        candidate_revision_id=skill_version_id,
+        source_tokens=_estimate_tokens(skill.model_dump_json(by_alias=True)),
+        candidate_tokens=compiled.estimated_tokens,
+        preserved_requirements=len(preserved),
+        lost_requirements=lost_requirements,
+        added_unsupported_requirements=added_unsupported_requirements,
+        equivalence_score=semantic_equivalence_score,
+        status="passed" if equivalence_status == "passed" else "failed",
+        candidate_context_artifact_id=artifact.context_artifact_id,
+        metadata={
+            "compiler_version": compiler_version,
+            "skill_slug": skill.slug,
+            "method": "deterministic_exact_requirement_render",
+        },
+    )
+    return ContextCompilationResult(
+        compiled=compiled,
+        context_artifact=artifact.to_json(),
+        compile_run=compile_run.to_json(),
+        budget_event=budget_event.to_json(),
+        semantic_compression_trial=compression_trial.to_json(),
+        status=status,
+        reject_reason=reject_reason,
+        required_requirements=len(requirements),
+        preserved_requirements=len(preserved),
+        lost_requirements=lost_requirements,
+        added_unsupported_requirements=added_unsupported_requirements,
+        semantic_equivalence_score=semantic_equivalence_score,
+    )
+
+
 def _estimate_tokens(text: str) -> int:
     # Conservative local estimate; real provider tokenizers can replace this later.
     return ceil(len(text) / 4)
+
+
+def _required_runtime_requirements(skill: SkillIR) -> list[str]:
+    fields = (
+        skill.applicability,
+        skill.inputs,
+        skill.preconditions,
+        skill.steps,
+        skill.outputs,
+        skill.effects,
+        skill.verification,
+        skill.failure_handling,
+        skill.do_not_use_when,
+        skill.never,
+    )
+    return [item.strip() for values in fields for item in values if item.strip()]
+
+
+def _context_reject_reason(
+    *,
+    blocking_scanner: bool,
+    description_over_budget: bool,
+    token_over_budget: bool,
+    lost_requirements: int,
+) -> str | None:
+    if blocking_scanner:
+        return "scanner_blocked"
+    if description_over_budget:
+        return "description_over_budget"
+    if token_over_budget:
+        return "over_context_budget"
+    if lost_requirements:
+        return "semantic_loss"
+    return None
+
+
+def _compression_ratio(*, source_tokens: int, candidate_tokens: int) -> float:
+    return candidate_tokens / max(source_tokens, 1)

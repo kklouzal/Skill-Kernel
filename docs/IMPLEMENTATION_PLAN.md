@@ -146,6 +146,11 @@ Deliverables:
   `semantic_compression_trials`, giving the future deterministic compiler a
   content-safe place to persist token-budget, semantic-equivalence, and
   compression-trial decisions.
+- deterministic context compiler gate execution; implemented as
+  `/v1/context/compile-skillir`, compiling SkillIR into runtime `SKILL.md`,
+  recording a context artifact, compile run, token-budget decision, and
+  semantic-compression trial, and failing closed for scanner, description,
+  token-budget, or semantic-loss rejections without staging or activating files.
 
 Acceptance:
 
@@ -160,6 +165,10 @@ Acceptance:
   compression trials can be recorded without storing compiled text or prompt
   bodies; implemented and validated through focused admin tests plus a real
   compose Postgres smoke.
+- SkillIR context-gate execution records those governance rows from the
+  deterministic compiler in one control-authenticated API call; implemented and
+  validated with focused compiler/admin tests. Next gate is enforcing a matching
+  passed compile-run before writer/staging activation.
 - opt-in runtime tool-call boundary enforcement is implemented on
   `before_tool_call`, preserving capture-only behavior by default and returning
   terminal OpenClaw block decisions for deterministic high-risk tool patterns

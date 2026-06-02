@@ -1,6 +1,9 @@
+import asyncio
+
 import pytest
 from autoskill.core.skillir import SkillIR
-from autoskill.services.compiler import compile_skill
+from autoskill.db.context import NullContextGovernanceStore
+from autoskill.services.compiler import compile_skill, compile_skill_with_context_governance
 from autoskill.services.scanner import has_blocking_findings, scan_text
 from pydantic import ValidationError
 
@@ -52,6 +55,72 @@ def test_compiler_applies_context_token_budget() -> None:
     compiled = compile_skill(valid_skill(), max_context_tokens=1)
     assert compiled.token_over_budget
     assert not compiled.ok
+
+
+def test_context_compiler_records_governance_gate_pass() -> None:
+    result = asyncio.run(
+        compile_skill_with_context_governance(
+            valid_skill(),
+            NullContextGovernanceStore(),
+            workspace_key="dev-01",
+        )
+    )
+
+    assert result.status == "passed"
+    assert result.reject_reason is None
+    assert result.context_artifact["artifact_kind"] == "skill_md"
+    assert result.context_artifact["metadata"]["loadability_class"] == "runtime_on_skill_load"
+    assert result.compile_run["status"] == "passed"
+    assert result.compile_run["context_artifact_id"] == result.context_artifact[
+        "context_artifact_id"
+    ]
+    assert result.budget_event["decision"] == "accept"
+    assert result.semantic_compression_trial["status"] == "passed"
+    assert result.lost_requirements == 0
+    assert result.semantic_equivalence_score == 1.0
+
+
+def test_context_compiler_manifest_hash_is_deterministic() -> None:
+    skill = valid_skill()
+    first = asyncio.run(
+        compile_skill_with_context_governance(
+            skill,
+            NullContextGovernanceStore(),
+            workspace_key="dev-01",
+        )
+    )
+    second = asyncio.run(
+        compile_skill_with_context_governance(
+            skill,
+            NullContextGovernanceStore(),
+            workspace_key="dev-01",
+        )
+    )
+
+    assert first.context_artifact["context_artifact_id"] != second.context_artifact[
+        "context_artifact_id"
+    ]
+    assert first.compile_run["output_manifest_hash"] == second.compile_run[
+        "output_manifest_hash"
+    ]
+
+
+def test_context_compiler_rejects_over_budget_artifact() -> None:
+    result = asyncio.run(
+        compile_skill_with_context_governance(
+            valid_skill(),
+            NullContextGovernanceStore(),
+            workspace_key="dev-01",
+            max_context_tokens=1,
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.reject_reason == "over_context_budget"
+    assert result.context_artifact["budget_status"] == "over_budget"
+    assert result.compile_run["status"] == "failed"
+    assert result.budget_event["decision"] == "reject_change"
+    assert result.semantic_compression_trial["status"] == "passed"
 
 
 def test_scanner_blocks_hidden_comments_and_fetch_exec() -> None:

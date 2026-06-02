@@ -6,6 +6,7 @@ from autoskill.api.app import (
     ContextArtifactRecordRequest,
     ContextBudgetEventRequest,
     ContextCompileRunRequest,
+    ContextSkillIRCompileRequest,
     ContextTokenLedgerOutcomeRequest,
     ContextTokenLedgerRequest,
     ControlFlowEventRequest,
@@ -23,6 +24,7 @@ from autoskill.api.app import (
 )
 from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.core.config import get_settings
+from autoskill.core.skillir import SkillIR
 from autoskill.db.broker_policy import NullBrokerPolicyStore
 from autoskill.db.jobs import NullJobStore
 from autoskill.db.profiles import ExecutorProfileRecord, ModelProfileRecord
@@ -600,6 +602,43 @@ def test_v14_trace_diagnostics_profiles_and_context_surfaces() -> None:
     assert budget_event.event["evidence"]["gate"] == "token_budget_governor"
     assert compression_trial.trial["equivalence_score"] == 0.96
     assert compression_trial.trial["status"] == "passed"
+
+
+def test_context_compile_skillir_endpoint_records_deterministic_gate() -> None:
+    app = create_app()
+    route = next(route for route in app.routes if route.path == "/v1/context/compile-skillir")
+    skill = SkillIR(
+        slug="autoskill-example",
+        name="autoskill-example",
+        description="Handle repeated workflow checks.",
+        applicability=["A repeated workflow has validated evidence."],
+        inputs=["User goal and cited evidence IDs."],
+        preconditions=["Evidence is mature enough for proposal."],
+        steps=["Inspect evidence.", "Run deterministic checks.", "Return bounded result."],
+        outputs=["Bounded action or no-op decision."],
+        effects=["Selected workflow path is evaluated without activation."],
+        verification=["Confirm all required gates pass."],
+        failure_handling=["Stop and report the blocking gate."],
+        do_not_use_when=["The task lacks grounded evidence."],
+        never=["Never include raw secrets or private user facts."],
+        evidence_ids=["evidence-1"],
+    )
+
+    async def run():
+        return await route.endpoint(
+            request=ContextSkillIRCompileRequest(
+                workspace_id="dev-01",
+                skillir=skill,
+            )
+        )
+
+    response = asyncio.run(run())
+
+    assert response.result["status"] == "passed"
+    assert response.result["context_artifact"]["artifact_kind"] == "skill_md"
+    assert response.result["compile_run"]["status"] == "passed"
+    assert response.result["budget_event"]["decision"] == "accept"
+    assert response.result["semantic_compression_trial"]["status"] == "passed"
 
 
 def test_topology_proposal_endpoint_persists_propose_only_operation() -> None:
