@@ -254,6 +254,9 @@ async def build_context_hint(
             decision="no_skill",
             cache_status="empty-intent",
         )
+    memory_block = await _validate_memory_influence(memory_governance, request, policy)
+    if memory_block is not None:
+        return memory_block
     if cache is not None:
         cached = cache.get(request, query, policy)
         if cached is not None:
@@ -836,6 +839,60 @@ async def _record_memory_influence(
             run_id=request.memory_influence_run_id,
             decision=decision,
         )
+
+
+async def _validate_memory_influence(
+    memory_governance: MemoryGovernanceStore | None,
+    request: ContextHintRequest,
+    policy: BrokerPolicy,
+) -> ContextHintResponse | None:
+    memory_ids = list(dict.fromkeys(request.memory_influence_ids))
+    if not memory_ids:
+        return None
+    if memory_governance is None:
+        return _policy_response(
+            policy,
+            decision="no_skill",
+            cache_status="memory-governance-unavailable",
+            reason_codes=["memory-governance-unavailable"],
+        )
+    for memory_id in memory_ids:
+        record = await memory_governance.get_memory_quarantine(
+            workspace_key=request.workspace_id,
+            quarantine_id=memory_id,
+        )
+        if record is not None and record.status == "approved":
+            continue
+        status = record.status if record is not None else "missing"
+        decision = {
+            "control_surface": "runtime_context_broker",
+            "decision": "blocked_memory_influence",
+            "cache_status": "memory-influence-blocked",
+            "blocked_memory_id": str(memory_id),
+            "memory_status": status,
+            "reason_codes": ["memory-influence-not-approved"],
+            "broker_policy_version": policy.version,
+            "broker_policy_version_id": (
+                str(policy.broker_policy_version_id)
+                if policy.broker_policy_version_id
+                else None
+            ),
+        }
+        await memory_governance.record_control_flow_event(
+            workspace_key=request.workspace_id,
+            source_kind="memory",
+            source_id=memory_id,
+            influence_kind="retrieval",
+            run_id=request.memory_influence_run_id,
+            decision=decision,
+        )
+        return _policy_response(
+            policy,
+            decision="no_skill",
+            cache_status="memory-influence-blocked",
+            reason_codes=["memory-influence-not-approved"],
+        )
+    return None
 
 
 def _visibility_state(response: ContextHintResponse) -> str:

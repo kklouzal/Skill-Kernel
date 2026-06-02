@@ -148,6 +148,14 @@ class MemoryGovernanceStore(Protocol):
     ) -> MemoryQuarantineRecord | None:
         """Approve, reject, or expire a quarantined memory candidate."""
 
+    async def get_memory_quarantine(
+        self,
+        *,
+        workspace_key: str,
+        quarantine_id: UUID,
+    ) -> MemoryQuarantineRecord | None:
+        """Fetch one quarantined memory candidate for trust-state checks."""
+
     async def list_memory_quarantine(
         self,
         *,
@@ -246,6 +254,17 @@ class NullMemoryGovernanceStore:
             )
             self.quarantined[index] = updated
             return updated
+        return None
+
+    async def get_memory_quarantine(
+        self,
+        *,
+        workspace_key: str,
+        quarantine_id: UUID,
+    ) -> MemoryQuarantineRecord | None:
+        for record in self.quarantined:
+            if record.workspace_key == workspace_key and record.quarantine_id == quarantine_id:
+                return record
         return None
 
     async def list_memory_quarantine(
@@ -384,6 +403,29 @@ class AsyncpgMemoryGovernanceStore(AsyncpgPoolOwner):
                 quarantine_id,
                 status,
                 _json(decision),
+            )
+        if row is None:
+            return None
+        return MemoryQuarantineRecord.from_row({**dict(row), "workspace_key": workspace_key})
+
+    async def get_memory_quarantine(
+        self,
+        *,
+        workspace_key: str,
+        quarantine_id: UUID,
+    ) -> MemoryQuarantineRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT mq.*
+                FROM autoskill.memory_quarantine mq
+                JOIN autoskill.workspaces w ON w.workspace_id = mq.workspace_id
+                WHERE w.external_key = $1
+                  AND mq.quarantine_id = $2
+                """,
+                workspace_key,
+                quarantine_id,
             )
         if row is None:
             return None

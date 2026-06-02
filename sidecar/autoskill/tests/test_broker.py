@@ -326,6 +326,82 @@ def test_context_broker_records_memory_control_flow_without_injecting_memory() -
     assert "Private operator preference" not in str(event.decision)
 
 
+def test_context_broker_blocks_unapproved_memory_before_retrieval() -> None:
+    evidence_id = uuid4()
+    store = MemoryBrokerRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=uuid4(),
+                summary="WHEN logs need triage, use the deterministic incident summary skill.",
+                rank=0.9,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "incident-summary",
+                },
+            )
+        ]
+    )
+    memory = NullMemoryGovernanceStore()
+
+    async def run():
+        pending = await memory.quarantine_memory(
+            workspace_key="dev-01",
+            source_object_type="evidence",
+            source_object_id=evidence_id,
+            proposed_memory={"summary": "Unapproved memory must not steer retrieval."},
+            taint={"source": "derived"},
+            scanner_findings={"status": "passed"},
+        )
+        return await build_context_hint(
+            store,
+            ContextHintRequest(
+                workspace_id="dev-01",
+                user_intent="summarize the incident logs",
+                memory_influence_ids=[pending.quarantine_id],
+                memory_influence_run_id="broker-run-2",
+            ),
+            memory_governance=memory,
+        )
+
+    response = asyncio.run(run())
+
+    assert response.decision == "no_skill"
+    assert response.cache_status == "memory-influence-blocked"
+    assert response.reason_codes == ["memory-influence-not-approved"]
+    assert store.calls == []
+    assert len(memory.control_flow_events) == 1
+    event = memory.control_flow_events[0]
+    assert event.decision["decision"] == "blocked_memory_influence"
+    assert event.decision["memory_status"] == "pending"
+    assert event.run_id == "broker-run-2"
+    assert "Unapproved memory" not in str(event.decision)
+
+
+def test_context_broker_blocks_memory_influence_without_governance_store() -> None:
+    store = MemoryBrokerRetrievalStore([])
+
+    async def run():
+        return await build_context_hint(
+            store,
+            ContextHintRequest(
+                workspace_id="dev-01",
+                user_intent="summarize the incident logs",
+                memory_influence_ids=[uuid4()],
+            ),
+            memory_governance=None,
+        )
+
+    response = asyncio.run(run())
+
+    assert response.decision == "no_skill"
+    assert response.cache_status == "memory-governance-unavailable"
+    assert response.reason_codes == ["memory-governance-unavailable"]
+    assert store.calls == []
+
+
 def test_context_broker_can_render_vector_fused_candidates_when_lexical_is_empty() -> None:
     skill_id = uuid4()
     store = MemoryBrokerRetrievalStore(

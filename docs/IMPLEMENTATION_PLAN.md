@@ -301,7 +301,11 @@ Deliverables:
   deciding quarantined memory, and recording/listing control-flow events;
 - runtime broker memory-influence audit wiring; implemented as bounded
   `memory_influence_ids` on context-hint requests that record memory-to-retrieval
-  control-flow events without injecting proposed memory text into runtime hints.
+  control-flow events without injecting proposed memory text into runtime hints;
+- runtime memory-influence trust gating; implemented so broker requests must
+  resolve every cited memory ID to an approved quarantined memory before
+  retrieval/cache lookup, while pending/missing memory references fail closed and
+  record content-safe blocked influence events.
 
 Acceptance:
 
@@ -313,7 +317,8 @@ Acceptance:
   memory-influenced retrieval event recording through the API surface;
 - focused broker tests prove approved memory references create content-safe
   retrieval control-flow events while rendered hints remain sourced from scanned
-  skill body-index documents.
+  skill body-index documents, and unapproved memory references block before
+  retrieval.
 
 ## Phase 10 - Production Hardening and Operator Readiness
 
