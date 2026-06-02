@@ -1,7 +1,7 @@
 import asyncio
 
 import pytest
-from autoskill.core.skillir import SkillIR, SupportArtifact
+from autoskill.core.skillir import RuntimeGuardTemplate, SkillIR, SupportArtifact
 from autoskill.db.context import NullContextGovernanceStore
 from autoskill.services.compiler import compile_skill, compile_skill_with_context_governance
 from autoskill.services.scanner import has_blocking_findings, scan_text, scan_text_bundle
@@ -46,9 +46,44 @@ def test_compiler_emits_required_sections() -> None:
     assert "## OUTPUTS" in compiled.skill_md
     assert "## EFFECTS" in compiled.skill_md
     assert "## TOOL TEMPLATES" in compiled.skill_md
+    assert "## RUNTIME GUARDS" in compiled.skill_md
     assert "## NEVER" in compiled.skill_md
     assert compiled.estimated_tokens > 0
     assert compiled.sha256
+
+
+def test_compiler_emits_declarative_runtime_guard_templates() -> None:
+    skill = valid_skill().model_copy(
+        update={
+            "runtime_guards": [
+                RuntimeGuardTemplate(
+                    template_id="capability_warning",
+                    mode="warn",
+                    condition_summary="Required repo access is unavailable.",
+                    operator_message="Warn that the skill can only provide analysis.",
+                    required_capabilities=["repo_read"],
+                )
+            ]
+        }
+    )
+
+    compiled = compile_skill(skill)
+
+    assert compiled.ok
+    assert "`capability_warning` (warn)" in compiled.skill_md
+    assert "Required capabilities: repo_read" in compiled.skill_md
+
+
+def test_skillir_rejects_arbitrary_runtime_guard_templates() -> None:
+    with pytest.raises(ValidationError):
+        RuntimeGuardTemplate.model_validate(
+            {
+                "template_id": "custom_python_exec",
+                "mode": "preflight",
+                "condition_summary": "Run arbitrary generated guard logic.",
+                "operator_message": "Execute custom code.",
+            }
+        )
 
 
 def test_compiler_applies_context_token_budget() -> None:
@@ -126,6 +161,36 @@ def test_context_compiler_registers_support_artifact_excerpts() -> None:
     assert result.compile_run["metadata"]["support_artifact_count"] == 2
     assert result.compile_run["metadata"]["support_artifact_hashes"]
     assert result.compile_run["output_manifest_hash"]
+
+
+def test_context_compiler_records_runtime_guard_metadata() -> None:
+    skill = valid_skill().model_copy(
+        update={
+            "runtime_guards": [
+                RuntimeGuardTemplate(
+                    template_id="drift_block",
+                    mode="drift_check",
+                    condition_summary="A required API contract is currently violated.",
+                    operator_message="Block activation until drift is repaired or waived.",
+                )
+            ]
+        }
+    )
+
+    result = asyncio.run(
+        compile_skill_with_context_governance(
+            skill,
+            NullContextGovernanceStore(),
+            workspace_key="dev-01",
+        )
+    )
+
+    assert result.status == "passed"
+    assert result.context_artifact["metadata"]["runtime_guard_count"] == 1
+    assert result.context_artifact["metadata"]["runtime_guard_templates"] == [
+        "drift_block"
+    ]
+    assert result.compile_run["metadata"]["runtime_guard_count"] == 1
 
 
 def test_context_compiler_requires_probe_evidence_when_activation_grade() -> None:

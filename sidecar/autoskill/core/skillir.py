@@ -35,6 +35,37 @@ class SupportArtifact(BaseModel):
     ] = "never_loaded"
 
 
+class RuntimeGuardTemplate(BaseModel):
+    template_id: Literal[
+        "preflight_check",
+        "verify_only_check",
+        "capability_warning",
+        "sibling_disambiguation_hint",
+        "drift_block",
+    ]
+    mode: Literal[
+        "preflight",
+        "verify_only",
+        "warn",
+        "context_hint",
+        "block",
+        "drift_check",
+        "capability_check",
+        "shadowing_hint",
+    ]
+    condition_summary: str
+    operator_message: str
+    required_capabilities: list[str] = Field(default_factory=list)
+
+    @field_validator("condition_summary", "operator_message")
+    @classmethod
+    def validate_compact_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text or "\n" in text or len(text) > 180:
+            raise ValueError("runtime guard text must be one compact line")
+        return text
+
+
 class EffectSignature(BaseModel):
     outputs: list[str] = Field(default_factory=list)
     effects: list[str] = Field(default_factory=list)
@@ -73,6 +104,7 @@ class SkillIR(BaseModel):
     dependencies: list[str] = Field(default_factory=list)
     conflicts: list[str] = Field(default_factory=list)
     environment_contracts: list[EnvironmentContract] = Field(default_factory=list)
+    runtime_guards: list[RuntimeGuardTemplate] = Field(default_factory=list)
     support_artifacts: list[SupportArtifact] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
     required_capabilities: list[str] = Field(default_factory=list)

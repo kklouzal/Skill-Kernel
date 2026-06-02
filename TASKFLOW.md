@@ -366,6 +366,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   unsupported topology operations. Focused usage/worker tests passed, and full
   validation passed with `uv run ruff check sidecar`, `uv run pytest` (222
   tests), `uv run python -m compileall -q sidecar`, and `git diff --check`.
+- Usage/topology recommendation consumption is implemented for propose-only
+  compose planning: control-authenticated `/v1/topology/propose-from-usage`
+  reads ranked usage recommendations, converts accepted recurring co-usage
+  clusters into existing topology proposal/persistence records, and returns
+  blocked or unsupported improve/decompose signals as explicit skipped records
+  until their upstream recommendations carry enough subject/successor structure.
+  Validation passed with focused topology/usage tests, full sidecar tests,
+  ruff, compileall, plugin check/tests, compose config, and diff hygiene.
+- Runtime guard-template SkillIR support is implemented as declarative,
+  preapproved controls only: generated skills can declare fixed guard templates
+  such as capability warnings, verify-only checks, sibling-disambiguation hints,
+  and drift blocks; the compiler renders them into runtime skill text and records
+  guard metadata in context-governance artifacts without accepting arbitrary
+  executable guard code.
 
 ## Next Gates
 
@@ -373,9 +387,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
    operator-reviewed replay episodes from real usage, then run replay/canary
    tuning on the enlarged corpus.
 2. Run `scripts/autoskill_backup.py` to an operator-approved backup location after the production roots contain activated SkillKernel-owned skills, then verify with `scripts/autoskill_restore.py --dry-run`.
-3. Persist or consume the new usage/topology recommendations in propose-only
-   compose/decompose/improve planning and broker-abstain decisions only after
-   sustained telemetry confirms the aggregate signals are stable.
+3. Extend usage/topology recommendation payloads with enough structured subject,
+   successor, and negative-signal detail for improve/decompose planning and
+   broker-abstain decisions after sustained telemetry confirms the aggregate
+   signals are stable.
 4. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
 
 ## Known Risks
@@ -393,7 +408,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   testing.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
 - Worker health now includes persistent heartbeat records, long-running handlers renew job leases, and single-job worker runs emit content-safe progress phases through heartbeat summaries. Future lengthy semantic handlers may still add deeper domain-specific counters when their internal phases mature.
-- Evidence derivation now creates observed event evidence plus deterministic recurring evidence clusters, and `usage.aggregate` now mines retrieval/attribution co-use windows into topology evidence tables. Remaining work is consumer-side ranking/threshold tuning for compose, decompose, improve, and broker-abstain decisions plus additional contrastive evidence mining beyond evaluator replay maturity.
+- Evidence derivation now creates observed event evidence plus deterministic recurring evidence clusters, and `usage.aggregate` now mines retrieval/attribution co-use windows into topology evidence tables. Accepted recurring co-use clusters can now become propose-only compose topology operations; remaining work is structured improve/decompose and broker-abstain consumption plus additional contrastive evidence mining beyond evaluator replay maturity.
 - Memory quarantine/control-flow tables and operator APIs now exist, the runtime broker can record approved memory-influenced retrieval decisions without injecting memory text while blocking unapproved memory references before retrieval, and repair/writer mutation paths now gate and log approved or blocked memory influence.
 - Embedding generation defaults to deterministic local hash embeddings unless an active qualified embedding profile is configured; storage now supports profile-scoped variable dimensions, with the default 1536-dimensional path retaining the indexed HNSW fast path.
 - Runtime context broker is still conservative: vector fusion is available for local deterministic hash embeddings, policy artifact replay/canary primitives exist, and stored redacted replay episodes can drive policy replay; production replay quality still depends on deployment telemetry being populated.
@@ -415,10 +430,12 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Utility rollups are deterministic v1 scoring, not full intervention scoring yet; curation now handles archived promotion, explicit duplicate merge/archive, low-utility archive, active-bank budget overflow, context-value/token-waste features, evaluator blocking, duplicate merge probe planning, and planned split/improvement/disambiguation actions with structured repair proposals. Conservative repair execution now claims planned repairs, records governance/provenance, queues evaluator or policy-approved writer work, and can generate guarded staged repair manifests from policy-approved bounded proposals.
 - Context-value/token ledgers feed utility rollups and repair planning, but
   usage-cluster consumers still need to use context-value-per-token and token
-  waste outcomes before they fully drive compose, decompose,
+  waste outcomes before they fully drive improve, decompose,
   tighten-description, or broker-abstain actions.
 - Support artifacts now have SkillIR/schema representation, writer-manifest
   scan/token/provenance coverage, apply/archive/rollback handling, and
-  declaration-only context-governance excerpt registration. Remaining support
-  work is sustained operational validation of retrieval policy boundaries.
+  declaration-only context-governance excerpt registration. Runtime guard
+  templates now have fixed declarative SkillIR representation and compiler
+  projection. Remaining support work is sustained operational validation of
+  retrieval policy boundaries.
 - Contract/drift checks are deterministic v1 path/command/env/package/schema/TCP/HTTP-status probes only; drift probe creation/retirement, localized repair metadata, live API status probes, operator false-positive suppression, and conservative repair execution/recheck queueing are implemented.

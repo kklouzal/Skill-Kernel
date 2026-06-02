@@ -103,6 +103,24 @@ def _tool_templates(skill: SkillIR) -> str:
     return "\n".join(blocks)
 
 
+def _runtime_guards(skill: SkillIR) -> str:
+    if not skill.runtime_guards:
+        return "- None."
+    blocks: list[str] = []
+    for guard in skill.runtime_guards:
+        caps = ", ".join(guard.required_capabilities) or "none"
+        blocks.append(
+            "\n".join(
+                [
+                    f"- `{guard.template_id}` ({guard.mode}): {guard.condition_summary}",
+                    f"  - Message: {guard.operator_message}",
+                    f"  - Required capabilities: {caps}",
+                ]
+            )
+        )
+    return "\n".join(blocks)
+
+
 def render_skill_md(skill: SkillIR) -> str:
     frontmatter = textwrap.dedent(
         f"""\
@@ -142,6 +160,9 @@ def render_skill_md(skill: SkillIR) -> str:
 
         ## TOOL TEMPLATES
         {_tool_templates(skill)}
+
+        ## RUNTIME GUARDS
+        {_runtime_guards(skill)}
 
         ## VERIFY
         {_bullets(skill.verification)}
@@ -254,6 +275,10 @@ async def compile_skill_with_context_governance(
             "lost_requirements": lost_requirements,
             "scanner_codes": [finding.code for finding in compiled.scanner_findings],
             "probe_evidence_required": require_probe_evidence,
+            "runtime_guard_count": len(skill.runtime_guards),
+            "runtime_guard_templates": [
+                guard.template_id for guard in skill.runtime_guards
+            ],
             "routing_equivalence_evidence": _safe_gate_evidence(
                 routing_equivalence_evidence
             ),
@@ -277,6 +302,7 @@ async def compile_skill_with_context_governance(
         "skill_slug": skill.slug,
         "compiled_sha256": compiled.sha256,
         "support_artifact_count": len(support_artifacts),
+        "runtime_guard_count": len(skill.runtime_guards),
         "support_artifact_hashes": [
             artifact["text_hash"] for artifact in support_artifacts
         ],
@@ -315,6 +341,7 @@ async def compile_skill_with_context_governance(
             "probe_evidence_required": require_probe_evidence,
             "probe_reject_reason": probe_reject_reason,
             "support_artifact_count": len(support_artifacts),
+            "runtime_guard_count": len(skill.runtime_guards),
             "support_artifact_hashes": [
                 artifact["text_hash"] for artifact in support_artifacts
             ],

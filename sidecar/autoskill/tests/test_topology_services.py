@@ -2,11 +2,12 @@ import asyncio
 from dataclasses import replace
 from uuid import uuid4
 
-from autoskill.api.app import TopologyApplyRequest, create_app
+from autoskill.api.app import TopologyApplyRequest, TopologyUsageProposalRequest, create_app
 from autoskill.core.skillir import EffectSignature
 from autoskill.db.activation import ActivationReadiness
 from autoskill.db.governance import NullGovernanceStore
 from autoskill.db.topology import NullTopologyStore
+from autoskill.db.usage import UsageTopologyRecommendation
 from autoskill.services.topology import (
     ComposeTopologyRequest,
     DecomposeTopologyRequest,
@@ -17,6 +18,34 @@ from autoskill.services.topology import (
     propose_decomposition,
     propose_improvement,
 )
+
+
+class MemoryTopologyUsageStore:
+    def __init__(self, recommendations: list[UsageTopologyRecommendation]) -> None:
+        self.recommendations = recommendations
+        self.calls: list[dict[str, object]] = []
+
+    async def recommend_topology_operations(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        min_support: int = 3,
+        min_success_count: int = 1,
+        max_failure_ratio: float = 0.25,
+        min_sequence_count: int = 1,
+    ) -> list[UsageTopologyRecommendation]:
+        self.calls.append(
+            {
+                "workspace_key": workspace_key,
+                "limit": limit,
+                "min_support": min_support,
+                "min_success_count": min_success_count,
+                "max_failure_ratio": max_failure_ratio,
+                "min_sequence_count": min_sequence_count,
+            }
+        )
+        return self.recommendations[:limit]
 
 
 class MemoryTopologyActivationGate:
@@ -488,6 +517,131 @@ def test_topology_apply_api_activation_gate_blocks_state_change() -> None:
     assert getattr(raised, "status_code", None) == 409
     assert activation_gate.calls[0]["skill_version_id"] == skill_version_id
     assert topology.operations[0].status == "candidate"
+
+
+def test_topology_usage_recommendations_can_persist_compose_proposals() -> None:
+    first_skill = uuid4()
+    second_skill = uuid4()
+    evidence_id = uuid4()
+    usage = MemoryTopologyUsageStore(
+        [
+            UsageTopologyRecommendation(
+                skill_usage_cluster_id=uuid4(),
+                cluster_key=f"compose:{first_skill}:{second_skill}",
+                skill_ids=[first_skill, second_skill],
+                evidence_ids=[evidence_id],
+                recommended_operation="compose",
+                support_count=5,
+                success_count=4,
+                failure_count=0,
+                sequence_count=5,
+                operation_score=18.0,
+                blockers=[],
+                metadata={
+                    "source": "usage.aggregate",
+                    "topology_signal": "recurring_co_usage",
+                },
+            )
+        ]
+    )
+    topology = NullTopologyStore()
+    app = create_app(
+        usage_store=usage,
+        topology_store=topology,
+        governance_store=NullGovernanceStore(),
+    )
+    route = next(
+        route for route in app.routes if route.path == "/v1/topology/propose-from-usage"
+    )
+
+    async def run():
+        return await route.endpoint(
+            request=TopologyUsageProposalRequest(
+                workspace_id="dev-01",
+                limit=3,
+                min_support=4,
+                persist=True,
+            )
+        )
+
+    response = asyncio.run(run())
+
+    assert response.recommendations_scanned == 1
+    assert response.skipped == []
+    assert len(response.proposals) == 1
+    proposal = response.proposals[0]["proposal"]
+    assert proposal["operation_kind"] == "compose"
+    assert proposal["status"] == "candidate"
+    assert proposal["evidence_ids"] == [str(evidence_id)]
+    assert response.proposals[0]["persistence"]["operation"]["operation_kind"] == "compose"
+    assert topology.operations[0].evidence_ids == [evidence_id]
+    assert usage.calls == [
+        {
+            "workspace_key": "dev-01",
+            "limit": 3,
+            "min_support": 4,
+            "min_success_count": 1,
+            "max_failure_ratio": 0.25,
+            "min_sequence_count": 1,
+        }
+    ]
+
+
+def test_topology_usage_recommendations_skip_blocked_or_unsupported_signals() -> None:
+    skill_id = uuid4()
+    usage = MemoryTopologyUsageStore(
+        [
+            UsageTopologyRecommendation(
+                skill_usage_cluster_id=uuid4(),
+                cluster_key=f"compose:{skill_id}",
+                skill_ids=[skill_id],
+                evidence_ids=[],
+                recommended_operation="compose",
+                support_count=1,
+                success_count=0,
+                failure_count=1,
+                sequence_count=0,
+                operation_score=-1.0,
+                blockers=["usage cluster support below threshold"],
+                metadata={"source": "usage.aggregate"},
+            ),
+            UsageTopologyRecommendation(
+                skill_usage_cluster_id=uuid4(),
+                cluster_key=f"improve:{skill_id}",
+                skill_ids=[skill_id],
+                evidence_ids=[],
+                recommended_operation="improve",
+                support_count=5,
+                success_count=5,
+                failure_count=0,
+                sequence_count=5,
+                operation_score=20.0,
+                blockers=[],
+                metadata={"source": "usage.aggregate"},
+            ),
+        ]
+    )
+    app = create_app(usage_store=usage, topology_store=NullTopologyStore())
+    route = next(
+        route for route in app.routes if route.path == "/v1/topology/propose-from-usage"
+    )
+
+    async def run():
+        return await route.endpoint(
+            request=TopologyUsageProposalRequest(workspace_id="dev-01", persist=False)
+        )
+
+    response = asyncio.run(run())
+
+    assert response.recommendations_scanned == 2
+    assert response.proposals == []
+    assert [item["skipped_reason"] for item in response.skipped] == [
+        "recommendation blocked by usage thresholds",
+        (
+            "usage recommendation lacks enough structured data "
+            "for a propose-only topology operation"
+        ),
+    ]
 
 
 def test_topology_compose_apply_requires_broker_trials() -> None:

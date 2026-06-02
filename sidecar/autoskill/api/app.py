@@ -81,7 +81,12 @@ from autoskill.db.retrieval import AsyncpgRetrievalStore, NullRetrievalStore, Re
 from autoskill.db.scheduler import AsyncpgSchedulerStore, NullSchedulerStore, SchedulerStore
 from autoskill.db.skills import AsyncpgSkillStore, NullSkillStore, SkillStore
 from autoskill.db.topology import AsyncpgTopologyStore, NullTopologyStore, TopologyStore
-from autoskill.db.usage import AsyncpgUsageStore, NullUsageStore, UsageStore
+from autoskill.db.usage import (
+    AsyncpgUsageStore,
+    NullUsageStore,
+    UsageStore,
+    UsageTopologyRecommendation,
+)
 from autoskill.db.utility import AsyncpgUtilityStore, NullUtilityStore, UtilityStore
 from autoskill.services.broker import (
     BrokerCanaryFeedback,
@@ -526,6 +531,22 @@ class TopologyProposalRequest(BaseModel):
 class TopologyProposalResponse(BaseModel):
     proposal: dict[str, object]
     persistence: dict[str, object] | None = None
+
+
+class TopologyUsageProposalRequest(BaseModel):
+    workspace_id: str
+    limit: int = 10
+    min_support: int = 3
+    min_success_count: int = 1
+    max_failure_ratio: float = 0.25
+    min_sequence_count: int = 1
+    persist: bool = True
+
+
+class TopologyUsageProposalResponse(BaseModel):
+    recommendations_scanned: int
+    proposals: list[dict[str, object]]
+    skipped: list[dict[str, object]]
 
 
 class TopologyApplyRequest(BaseModel):
@@ -1862,6 +1883,79 @@ def _build_topology_proposal(request: TopologyProposalRequest):
         status_code=http_status.HTTP_400_BAD_REQUEST,
         detail="operation_kind must be improve, compose, or decompose",
     )
+
+
+def _topology_skill_from_usage_id(skill_id: UUID) -> TopologySkill:
+    short_id = str(skill_id)[:8]
+    return TopologySkill(
+        slug=f"usage-observed-skill-{short_id}",
+        skill_id=skill_id,
+        effects=EffectSignature(
+            outputs=[f"usage-observed-output:{short_id}"],
+            effects=[f"usage-observed-effect:{short_id}"],
+        ),
+    )
+
+
+def _usage_topology_proposal_request(
+    recommendation: UsageTopologyRecommendation,
+) -> TopologyProposalRequest | None:
+    if not recommendation.accepted:
+        return None
+    if recommendation.recommended_operation != "compose":
+        return None
+    if len(recommendation.skill_ids) < 2:
+        return None
+    components = [
+        _topology_skill_from_usage_id(skill_id)
+        for skill_id in recommendation.skill_ids
+    ]
+    output_terms = [
+        term
+        for component in components
+        for term in (
+            component.effects.outputs + component.effects.effects
+        )
+    ]
+    composed_slug = (
+        "usage-composed-"
+        + sha256_text(recommendation.cluster_key)[:12]
+    )
+    return TopologyProposalRequest(
+        workspace_id="",
+        operation_kind="compose",
+        components=[
+            TopologySkillPayload(
+                slug=component.slug,
+                skill_id=component.skill_id,
+                effects=component.effects.model_dump(mode="json"),
+            )
+            for component in components
+        ],
+        composed_output=TopologySkillPayload(
+            slug=composed_slug,
+            effects={
+                "outputs": output_terms,
+                "effects": [
+                    "usage-backed composed workflow candidate",
+                    f"usage support count: {recommendation.support_count}",
+                ],
+            },
+        ),
+        evidence_ids=[str(evidence_id) for evidence_id in recommendation.evidence_ids],
+        required_effects_by_component={},
+        persist=True,
+    )
+
+
+def _usage_recommendation_skip(
+    recommendation: UsageTopologyRecommendation,
+    *,
+    reason: str,
+) -> dict[str, object]:
+    payload = recommendation.to_json()
+    payload["skipped_reason"] = reason
+    return payload
 
 
 async def _check_writer_activation_gate_for_api(
@@ -3291,6 +3385,76 @@ def create_app(
         return TopologyProposalResponse(
             proposal=proposal.to_json(),
             persistence=persistence,
+        )
+
+    @app.post(
+        "/v1/topology/propose-from-usage",
+        response_model=TopologyUsageProposalResponse,
+    )
+    async def propose_topology_operations_from_usage(
+        request: TopologyUsageProposalRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> TopologyUsageProposalResponse:
+        _require_control_auth(authorization)
+        recommendations = await usage.recommend_topology_operations(
+            workspace_key=request.workspace_id,
+            limit=request.limit,
+            min_support=request.min_support,
+            min_success_count=request.min_success_count,
+            max_failure_ratio=request.max_failure_ratio,
+            min_sequence_count=request.min_sequence_count,
+        )
+        proposals: list[dict[str, object]] = []
+        skipped: list[dict[str, object]] = []
+        for recommendation in recommendations:
+            if not recommendation.accepted:
+                skipped.append(
+                    _usage_recommendation_skip(
+                        recommendation,
+                        reason="recommendation blocked by usage thresholds",
+                    )
+                )
+                continue
+            proposal_request = _usage_topology_proposal_request(recommendation)
+            if proposal_request is None:
+                skipped.append(
+                    _usage_recommendation_skip(
+                        recommendation,
+                        reason=(
+                            "usage recommendation lacks enough structured data "
+                            "for a propose-only topology operation"
+                        ),
+                    )
+                )
+                continue
+            proposal = _build_topology_proposal(
+                proposal_request.model_copy(
+                    update={
+                        "workspace_id": request.workspace_id,
+                        "persist": request.persist,
+                    }
+                )
+            )
+            persistence = None
+            if request.persist:
+                persisted = await persist_topology_proposal(
+                    topology,
+                    governance,
+                    workspace_key=request.workspace_id,
+                    proposal=proposal,
+                )
+                persistence = persisted.to_json()
+            proposals.append(
+                {
+                    "recommendation": recommendation.to_json(),
+                    "proposal": proposal.to_json(),
+                    "persistence": persistence,
+                }
+            )
+        return TopologyUsageProposalResponse(
+            recommendations_scanned=len(recommendations),
+            proposals=proposals,
+            skipped=skipped,
         )
 
     @app.post("/v1/topology/apply", response_model=TopologyApplyResponse)
