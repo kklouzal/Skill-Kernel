@@ -26,7 +26,7 @@ from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.core.config import get_settings
 from autoskill.core.skillir import SkillIR
 from autoskill.db.broker_policy import NullBrokerPolicyStore
-from autoskill.db.jobs import NullJobStore
+from autoskill.db.jobs import JobQueueSummary, NullJobStore
 from autoskill.db.profiles import ExecutorProfileRecord, ModelProfileRecord
 from autoskill.db.skills import SkillRecord
 from autoskill.db.topology import NullTopologyStore
@@ -225,6 +225,16 @@ class MemoryReadinessProfileStore:
         return profiles[:limit]
 
 
+class MemoryReadinessJobStore(NullJobStore):
+    def __init__(self, summaries: dict[str | None, JobQueueSummary]) -> None:
+        self.summaries = summaries
+        self.summary_calls: list[str | None] = []
+
+    async def summary(self, *, workspace_key: str | None = None) -> JobQueueSummary:
+        self.summary_calls.append(workspace_key)
+        return self.summaries.get(workspace_key, JobQueueSummary(counts={}, by_kind={}))
+
+
 def test_skills_endpoint_lists_persisted_skill_metadata() -> None:
     skill_store = MemorySkillStore()
     app = create_app(skill_store=skill_store)
@@ -357,6 +367,65 @@ def test_deployment_readiness_passes_when_required_gates_are_present(
     assert response.blockers == []
     assert response.checks["active_broker_policy"]["version"] == "prod.v1"
     assert response.checks["active_embedding_profile"]["dimensions"] == [768]
+
+    get_settings.cache_clear()
+
+
+def test_deployment_readiness_ignores_failed_jobs_from_other_workspaces(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    monkeypatch.setenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", "true")
+    get_settings.cache_clear()
+
+    broker_policies = NullBrokerPolicyStore()
+
+    async def seed_broker_policy() -> None:
+        await broker_policies.upsert_policy_version(
+            workspace_key="dev-01",
+            version="prod.v1",
+            policy={"max_tokens": 800},
+            status="active",
+        )
+        await broker_policies.record_replay_episode(
+            workspace_key="dev-01",
+            episode_key="prod-episode-1",
+            redacted_user_intent="Diagnose a bounded OpenClaw failure.",
+            expected_decision="skill_hint",
+            tags=["production"],
+        )
+
+    asyncio.run(seed_broker_policy())
+    job_store = MemoryReadinessJobStore(
+        {
+            None: JobQueueSummary(
+                counts={"failed": 3},
+                by_kind={"smoke.only": {"failed": 3}},
+            ),
+            "dev-01": JobQueueSummary(counts={}, by_kind={}),
+        }
+    )
+    app = create_app(
+        job_store=job_store,
+        profile_store=MemoryReadinessProfileStore(),
+        broker_policy_store=broker_policies,
+    )
+    route = next(route for route in app.routes if route.path == "/v1/deployment/readiness")
+
+    async def run():
+        return await route.endpoint(
+            authorization="Bearer control-token",
+            workspace_id="dev-01",
+            replay_tag="production",
+        )
+
+    response = asyncio.run(run())
+
+    assert response.ready is True
+    assert "job_queue_has_no_failed_jobs" not in response.warnings
+    assert job_store.summary_calls == ["dev-01"]
 
     get_settings.cache_clear()
 

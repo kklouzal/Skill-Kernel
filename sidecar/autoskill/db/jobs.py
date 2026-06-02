@@ -185,7 +185,7 @@ class JobStore(Protocol):
     async def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[JobRecord]:
         """List recent jobs."""
 
-    async def summary(self) -> JobQueueSummary:
+    async def summary(self, *, workspace_key: str | None = None) -> JobQueueSummary:
         """Return queue counts by status."""
 
     async def record_worker_heartbeat(
@@ -278,7 +278,7 @@ class NullJobStore:
     async def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[JobRecord]:
         return []
 
-    async def summary(self) -> JobQueueSummary:
+    async def summary(self, *, workspace_key: str | None = None) -> JobQueueSummary:
         return JobQueueSummary(counts={}, by_kind={})
 
     async def record_worker_heartbeat(
@@ -541,23 +541,29 @@ class AsyncpgJobStore(AsyncpgPoolOwner):
             )
             return [JobRecord.from_row(row) for row in rows]
 
-    async def summary(self) -> JobQueueSummary:
+    async def summary(self, *, workspace_key: str | None = None) -> JobQueueSummary:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             status_rows = await conn.fetch(
                 """
                 SELECT status, count(*)::int AS count
-                FROM autoskill.jobs
+                FROM autoskill.jobs j
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE ($1::text IS NULL OR w.external_key = $1)
                 GROUP BY status
-                """
+                """,
+                workspace_key,
             )
             kind_rows = await conn.fetch(
                 """
                 SELECT job_kind, status, count(*)::int AS count
-                FROM autoskill.jobs
+                FROM autoskill.jobs j
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE ($1::text IS NULL OR w.external_key = $1)
                 GROUP BY job_kind, status
                 ORDER BY job_kind, status
-                """
+                """,
+                workspace_key,
             )
             by_kind: dict[str, dict[str, int]] = {}
             for row in kind_rows:

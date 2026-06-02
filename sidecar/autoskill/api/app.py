@@ -1690,7 +1690,7 @@ async def _deployment_readiness_report(
         detail={"tag": replay_tag, "sampled": len(replay_episodes)},
     )
 
-    job_summary = await jobs.summary()
+    job_summary = await jobs.summary(workspace_key=workspace_id)
     _readiness_check(
         checks,
         blockers,

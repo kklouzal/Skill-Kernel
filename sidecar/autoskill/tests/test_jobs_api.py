@@ -154,10 +154,13 @@ class MemoryJobStore:
             jobs = [job for job in jobs if job.status == status]
         return jobs[:limit]
 
-    async def summary(self) -> JobQueueSummary:
+    async def summary(self, *, workspace_key: str | None = None) -> JobQueueSummary:
         counts: dict[str, int] = {}
         by_kind: dict[str, dict[str, int]] = {}
-        for job in self.jobs.values():
+        jobs = list(self.jobs.values())
+        if workspace_key is not None:
+            jobs = [job for job in jobs if job.workspace_key == workspace_key]
+        for job in jobs:
             counts[job.status] = counts.get(job.status, 0) + 1
             kind_counts = by_kind.setdefault(job.job_kind, {})
             kind_counts[job.status] = kind_counts.get(job.status, 0) + 1

@@ -402,7 +402,10 @@ class AsyncpgProfileQualificationStore(AsyncpgPoolOwner):
             await conn.execute(
                 """
                 UPDATE autoskill.embedding_profiles
-                SET status = $3,
+                SET status = CASE
+                      WHEN $3 = 'qualified' AND status = 'active' THEN 'active'
+                      ELSE $3
+                    END,
                     qualification = qualification || $4::jsonb,
                     updated_at = now()
                 WHERE workspace_id = $1
