@@ -43,8 +43,9 @@ class HistoricalDiscoveryItem:
     trust_level: str
     taint: dict[str, Any]
     metadata: dict[str, Any]
+    path: Path | None = None
 
-    def to_source_input(self) -> HistoricalSourceInput:
+    def to_source_input(self, *, status: str = "inventory_only") -> HistoricalSourceInput:
         return HistoricalSourceInput(
             source_kind=self.source_kind,
             source_key=self.source_key,
@@ -54,7 +55,7 @@ class HistoricalDiscoveryItem:
             trust_level=self.trust_level,
             taint=self.taint,
             metadata=self.metadata,
-            status="inventory_only",
+            status=status,
         )
 
     def to_json(self) -> dict[str, object]:
@@ -286,6 +287,7 @@ def _discovery_item(
             "risk_class": risk_class,
             "import_recommendation": _recommendation(source_kind),
         },
+        path=path,
     )
 
 

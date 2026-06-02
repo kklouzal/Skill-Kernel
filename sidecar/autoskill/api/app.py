@@ -121,6 +121,7 @@ from autoskill.services.embedding_generation import (
 )
 from autoskill.services.evaluation_runner import run_pending_proposal_gates_with_trace
 from autoskill.services.historical_discovery import discover_historical_sources
+from autoskill.services.historical_import import import_historical_sources
 from autoskill.services.llm import LLMClient
 from autoskill.services.matching import SkillMatchRequest, match_existing_skills
 from autoskill.services.opportunity import mine_opportunities
@@ -455,6 +456,26 @@ class HistoricalImportDiscoverResponse(BaseModel):
     source_counts: dict[str, int]
     items: list[dict[str, object]]
     upsert: dict[str, object] | None = None
+
+
+class HistoricalImportParseRequest(BaseModel):
+    workspace_id: str
+    roots: list[Path]
+    source_allowlist: list[str] | None = None
+    source_denylist: list[str] | None = None
+    max_files: int = 100
+    max_bytes: int = 10_000_000
+    max_chunks: int = 500
+    idempotency_key: str = "historical-import:manual"
+
+
+class HistoricalImportParseResponse(BaseModel):
+    discovery: dict[str, object]
+    run: dict[str, object]
+    chunks: dict[str, object]
+    parsed_sources: int
+    skipped_sources: int
+    parse_errors: list[dict[str, object]]
 
 
 class HistoricalImportSourceRevokeRequest(BaseModel):
@@ -2934,6 +2955,42 @@ def create_app(
                 detail=str(error),
             ) from error
         return HistoricalImportDiscoverResponse(**inventory.to_json())
+
+    @app.post(
+        "/v1/historical-import/parse",
+        response_model=HistoricalImportParseResponse,
+    )
+    async def parse_historical_import_sources(
+        request: HistoricalImportParseRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> HistoricalImportParseResponse:
+        _require_control_auth(authorization)
+        try:
+            result = await import_historical_sources(
+                historical_import,
+                workspace_key=request.workspace_id,
+                roots=request.roots,
+                source_allowlist=(
+                    set(request.source_allowlist)
+                    if request.source_allowlist is not None
+                    else None
+                ),
+                source_denylist=(
+                    set(request.source_denylist)
+                    if request.source_denylist is not None
+                    else None
+                ),
+                max_files=max(1, min(request.max_files, 10_000)),
+                max_bytes=max(1, min(request.max_bytes, 1_000_000_000)),
+                max_chunks=max(1, min(request.max_chunks, 20_000)),
+                idempotency_key=request.idempotency_key,
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return HistoricalImportParseResponse(**result.to_json())
 
     @app.post(
         "/v1/historical-import/sources/revoke",

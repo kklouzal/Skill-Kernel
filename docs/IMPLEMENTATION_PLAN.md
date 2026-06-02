@@ -158,6 +158,13 @@ Deliverables:
   summaries, path hashing instead of raw path persistence, allow/deny filters,
   max file/byte limits, preview-only mode, durable `historical_import.discover`
   worker registration, and optional inventory-only source upsert;
+- historical structured import substrate; implemented as bounded
+  `historical_import.parse` control/worker flow with run/checkpoint rows,
+  transient in-memory raw paths, source upsert, redacted chunk recording,
+  transcript JSONL turn parsing, Markdown memory/context/taskflow section
+  parsing, session-store metadata parsing, trajectory/diagnostic JSON summary
+  parsing, existing-skill read-only section parsing, max chunk limits, and
+  duplicate-safe reruns;
 - imported chunk downstream readiness; implemented by existing evidence and
   embedding source discovery paths consuming observed historical chunks only
   after storage-time redaction and taint labeling.
@@ -178,10 +185,11 @@ Acceptance:
   invalidation;
 - historical chunks can become observed evidence and embedding sources, but
   cannot directly activate skills, broker runtime context, or trusted memory;
-- remaining historical ingestion work is structure-aware content parsers,
-  import run/checkpoint records, source-item granularity beyond file-level
-  inventory, executing full source-revocation traversal into derived
-  evidence/embeddings/memory/candidates, and bounded bootstrap consolidation.
+- remaining historical ingestion work is richer datasource coverage for
+  trajectory/session-corpus/task/plugin/media/observability sources, source-item
+  lineage beyond file/section/line granularity, executing full source-revocation
+  traversal into derived evidence/embeddings/memory/candidates, and bounded
+  bootstrap consolidation.
 
 ## Phase 5 - Runtime Context Broker
 

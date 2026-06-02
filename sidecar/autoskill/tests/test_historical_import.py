@@ -6,6 +6,7 @@ from autoskill.api.app import (
     HistoricalImportChunkItem,
     HistoricalImportChunkRecordRequest,
     HistoricalImportDiscoverRequest,
+    HistoricalImportParseRequest,
     HistoricalImportSourceItem,
     HistoricalImportSourceRevokeRequest,
     HistoricalImportSourceUpsertRequest,
@@ -16,6 +17,7 @@ from autoskill.db.historical import (
     HistoricalChunkInput,
     HistoricalChunkRecord,
     HistoricalChunkRecordResult,
+    HistoricalImportRunRecord,
     HistoricalImportStore,
     HistoricalSourceInput,
     HistoricalSourceRecord,
@@ -27,6 +29,7 @@ from autoskill.services.historical_discovery import (
     discover_historical_sources,
     ensure_historical_discovery_schedule,
 )
+from autoskill.services.historical_import import import_historical_sources
 from autoskill.services.worker import WorkerStores, run_worker_once
 from autoskill.tests.test_jobs_api import MemoryJobStore
 
@@ -35,6 +38,7 @@ class MemoryHistoricalImportStore(HistoricalImportStore):
     def __init__(self) -> None:
         self.sources: dict[tuple[str, str, str, str], HistoricalSourceRecord] = {}
         self.chunks: dict[tuple[str, str, str, str, int, str], HistoricalChunkRecord] = {}
+        self.runs: dict[str, HistoricalImportRunRecord] = {}
 
     async def upsert_sources(
         self,
@@ -240,6 +244,36 @@ class MemoryHistoricalImportStore(HistoricalImportStore):
             sources_revoked=1,
             chunks_revoked=chunks_revoked,
         )
+
+    async def record_import_run(
+        self,
+        *,
+        workspace_key: str,
+        run_kind: str,
+        idempotency_key: str,
+        status: str,
+        checkpoint: dict[str, object] | None = None,
+        stats: dict[str, object] | None = None,
+    ) -> HistoricalImportRunRecord:
+        now = datetime.now(UTC)
+        existing = self.runs.get(idempotency_key)
+        run = HistoricalImportRunRecord(
+            historical_import_run_id=(
+                existing.historical_import_run_id if existing is not None else uuid4()
+            ),
+            workspace_id=existing.workspace_id if existing is not None else uuid4(),
+            workspace_key=workspace_key,
+            run_kind=run_kind,
+            idempotency_key=idempotency_key,
+            status=status,
+            checkpoint=checkpoint or {},
+            stats=stats or {},
+            started_at=existing.started_at if existing is not None else now,
+            completed_at=now if status in {"completed", "failed", "cancelled"} else None,
+            updated_at=now,
+        )
+        self.runs[idempotency_key] = run
+        return run
 
 
 def test_historical_import_source_inventory_is_idempotent() -> None:
@@ -703,3 +737,134 @@ def test_historical_discovery_worker_job_records_inventory(tmp_path) -> None:
     assert result.output["scanned_files"] == 1
     assert result.output["upsert"]["created"] == 1
     assert list(historical.sources.values())[0].source_kind == "workspace_memory"
+
+
+def test_historical_import_parses_transcripts_and_markdown_sections(tmp_path) -> None:
+    root = tmp_path / "workspace"
+    sessions = root / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "abc.jsonl").write_text(
+        '{"role":"user","content":"Fix the failing pytest case"}\n'
+        '{"role":"tool","content":"ModuleNotFoundError for package"}\n',
+        encoding="utf-8",
+    )
+    (root / "MEMORY.md").write_text(
+        "# Build notes\nAlways run pytest before deploy.\n",
+        encoding="utf-8",
+    )
+    store = MemoryHistoricalImportStore()
+
+    result = asyncio.run(
+        import_historical_sources(
+            store,
+            workspace_key="dev-01",
+            roots=[root],
+            max_files=10,
+            max_chunks=10,
+            idempotency_key="historical-import:test",
+        )
+    )
+
+    assert result.parsed_sources == 2
+    assert result.chunks.created == 3
+    assert result.run.status == "completed"
+    assert result.run.checkpoint["parsed_sources"] == 2
+    kinds = {chunk.chunk_kind for chunk in store.chunks.values()}
+    assert "transcript_turn" in kinds
+    assert "workspace_memory_section" in kinds
+    assert any(chunk.taint.get("raw_transcript") for chunk in store.chunks.values())
+    memory_chunk = next(
+        chunk for chunk in store.chunks.values() if chunk.chunk_kind == "workspace_memory_section"
+    )
+    assert memory_chunk.taint["memory_poisoning_suspected"] is True
+
+
+def test_historical_import_is_idempotent_for_duplicate_chunks(tmp_path) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "TASKFLOW.md").write_text("# Gate\nRun replay before promote.\n", encoding="utf-8")
+    store = MemoryHistoricalImportStore()
+
+    async def run():
+        first = await import_historical_sources(
+            store,
+            workspace_key="dev-01",
+            roots=[root],
+            idempotency_key="historical-import:taskflow",
+        )
+        second = await import_historical_sources(
+            store,
+            workspace_key="dev-01",
+            roots=[root],
+            idempotency_key="historical-import:taskflow",
+        )
+        return first, second
+
+    first, second = asyncio.run(run())
+    assert first.chunks.created == 1
+    assert second.chunks.created == 0
+    assert second.chunks.skipped == 1
+    assert store.runs["historical-import:taskflow"].status == "completed"
+
+
+def test_historical_import_parse_api_route(tmp_path) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "AGENTS.md").write_text("# Boundaries\nNever store raw secrets.\n", encoding="utf-8")
+    store = MemoryHistoricalImportStore()
+    app = create_app(historical_import_store=store)
+    routes = {(route.path, next(iter(route.methods))): route for route in app.routes}
+
+    result = asyncio.run(
+        routes[("/v1/historical-import/parse", "POST")].endpoint(
+            request=HistoricalImportParseRequest(
+                workspace_id="dev-01",
+                roots=[root],
+                idempotency_key="historical-import:api",
+            )
+        )
+    )
+
+    assert result.parsed_sources == 1
+    assert result.chunks["created"] == 1
+    assert result.run["status"] == "completed"
+    assert list(store.sources.values())[0].status == "imported"
+
+
+def test_historical_import_parse_worker_job(tmp_path) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "TASKFLOW.md").write_text("# Next\nRun canary replay.\n", encoding="utf-8")
+    jobs = MemoryJobStore()
+    historical = MemoryHistoricalImportStore()
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="historical_import.parse",
+            idempotency_key="historical-import-parse:dev-01",
+            payload={
+                "workspace_id": "dev-01",
+                "max_files": 10,
+                "idempotency_key": "historical-import:worker",
+            },
+        )
+        return await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemoryHistoricalDiscoveryScheduleStore(),
+                evidence=None,  # type: ignore[arg-type]
+                embeddings=None,  # type: ignore[arg-type]
+                historical_import=historical,
+                historical_import_roots=[root],
+            ),
+            worker_id="worker-1",
+            pool="maintenance",
+        )
+
+    result = asyncio.run(run())
+    assert result.claimed
+    assert result.status == "succeeded"
+    assert result.output is not None
+    assert result.output["parsed_sources"] == 1
+    assert result.output["chunks"]["created"] == 1

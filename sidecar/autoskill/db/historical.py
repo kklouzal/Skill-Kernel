@@ -256,6 +256,52 @@ class HistoricalSourceRevokeResult:
         }
 
 
+@dataclass(frozen=True)
+class HistoricalImportRunRecord:
+    historical_import_run_id: UUID
+    workspace_id: UUID | None
+    workspace_key: str | None
+    run_kind: str
+    idempotency_key: str
+    status: str
+    checkpoint: dict[str, Any]
+    stats: dict[str, Any]
+    started_at: datetime
+    completed_at: datetime | None
+    updated_at: datetime
+
+    @classmethod
+    def from_row(cls, row: asyncpg.Record | dict[str, Any]) -> HistoricalImportRunRecord:
+        return cls(
+            historical_import_run_id=row["historical_import_run_id"],
+            workspace_id=_row_get(row, "workspace_id"),
+            workspace_key=_row_get(row, "workspace_key"),
+            run_kind=row["run_kind"],
+            idempotency_key=row["idempotency_key"],
+            status=row["status"],
+            checkpoint=_json_dict(_row_get(row, "checkpoint")),
+            stats=_json_dict(_row_get(row, "stats")),
+            started_at=row["started_at"],
+            completed_at=_row_get(row, "completed_at"),
+            updated_at=row["updated_at"],
+        )
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "historical_import_run_id": str(self.historical_import_run_id),
+            "workspace_id": str(self.workspace_id) if self.workspace_id else None,
+            "workspace_key": self.workspace_key,
+            "run_kind": self.run_kind,
+            "idempotency_key": self.idempotency_key,
+            "status": self.status,
+            "checkpoint": self.checkpoint,
+            "stats": self.stats,
+            "started_at": self.started_at.isoformat(),
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "updated_at": self.updated_at.isoformat(),
+        }
+
+
 class HistoricalImportStore(Protocol):
     async def upsert_sources(
         self,
@@ -285,6 +331,17 @@ class HistoricalImportStore(Protocol):
         workspace_key: str,
         historical_import_source_id: UUID,
     ) -> HistoricalSourceRevokeResult: ...
+
+    async def record_import_run(
+        self,
+        *,
+        workspace_key: str,
+        run_kind: str,
+        idempotency_key: str,
+        status: str,
+        checkpoint: dict[str, Any] | None = None,
+        stats: dict[str, Any] | None = None,
+    ) -> HistoricalImportRunRecord: ...
 
 
 class NullHistoricalImportStore:
@@ -320,6 +377,31 @@ class NullHistoricalImportStore:
         historical_import_source_id: UUID,
     ) -> HistoricalSourceRevokeResult:
         return HistoricalSourceRevokeResult(source=None, sources_revoked=0, chunks_revoked=0)
+
+    async def record_import_run(
+        self,
+        *,
+        workspace_key: str,
+        run_kind: str,
+        idempotency_key: str,
+        status: str,
+        checkpoint: dict[str, Any] | None = None,
+        stats: dict[str, Any] | None = None,
+    ) -> HistoricalImportRunRecord:
+        now = datetime.now()
+        return HistoricalImportRunRecord(
+            historical_import_run_id=UUID("00000000-0000-0000-0000-000000000000"),
+            workspace_id=None,
+            workspace_key=workspace_key,
+            run_kind=run_kind,
+            idempotency_key=idempotency_key,
+            status=status,
+            checkpoint=checkpoint or {},
+            stats=stats or {},
+            started_at=now,
+            completed_at=now if status in {"completed", "failed", "cancelled"} else None,
+            updated_at=now,
+        )
 
 
 class AsyncpgHistoricalImportStore(AsyncpgPoolOwner):
@@ -631,6 +713,72 @@ class AsyncpgHistoricalImportStore(AsyncpgPoolOwner):
                 sources_revoked=1,
                 chunks_revoked=_execute_count(chunks_result),
             )
+
+    async def record_import_run(
+        self,
+        *,
+        workspace_key: str,
+        run_kind: str,
+        idempotency_key: str,
+        status: str,
+        checkpoint: dict[str, Any] | None = None,
+        stats: dict[str, Any] | None = None,
+    ) -> HistoricalImportRunRecord:
+        if status not in {"running", "completed", "failed", "cancelled"}:
+            raise ValueError("status must be a historical import run status")
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                INSERT INTO autoskill.historical_import_runs (
+                  historical_import_run_id,
+                  workspace_id,
+                  run_kind,
+                  idempotency_key,
+                  status,
+                  checkpoint,
+                  stats,
+                  completed_at
+                )
+                VALUES (
+                  $1, $2, $3, $4, $5, $6::jsonb, $7::jsonb,
+                  CASE WHEN $5 IN ('completed','failed','cancelled') THEN now() ELSE NULL END
+                )
+                ON CONFLICT (workspace_id, idempotency_key)
+                DO UPDATE SET
+                  run_kind = EXCLUDED.run_kind,
+                  status = EXCLUDED.status,
+                  checkpoint = EXCLUDED.checkpoint,
+                  stats = EXCLUDED.stats,
+                  completed_at = CASE
+                    WHEN EXCLUDED.status IN ('completed','failed','cancelled') THEN now()
+                    ELSE autoskill.historical_import_runs.completed_at
+                  END,
+                  updated_at = now()
+                RETURNING
+                  historical_import_run_id,
+                  workspace_id,
+                  $8::text AS workspace_key,
+                  run_kind,
+                  idempotency_key,
+                  status,
+                  checkpoint,
+                  stats,
+                  started_at,
+                  completed_at,
+                  updated_at
+                """,
+                uuid4(),
+                workspace_id,
+                run_kind,
+                idempotency_key,
+                status,
+                json.dumps(checkpoint or {}),
+                json.dumps(stats or {}),
+                workspace_key,
+            )
+            return HistoricalImportRunRecord.from_row(row)
 
 
 def _validate_source_input(source: HistoricalSourceInput) -> None:

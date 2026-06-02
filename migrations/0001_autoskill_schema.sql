@@ -960,6 +960,25 @@ CREATE INDEX IF NOT EXISTS idx_historical_import_sources_workspace_status
 CREATE INDEX IF NOT EXISTS idx_historical_import_chunks_source
   ON autoskill.historical_import_chunks(historical_import_source_id, item_key, chunk_index);
 
+CREATE TABLE IF NOT EXISTS autoskill.historical_import_runs (
+  historical_import_run_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  run_kind text NOT NULL,
+  idempotency_key text NOT NULL,
+  status text NOT NULL CHECK (
+    status IN ('running','completed','failed','cancelled')
+  ),
+  checkpoint jsonb NOT NULL DEFAULT '{}'::jsonb,
+  stats jsonb NOT NULL DEFAULT '{}'::jsonb,
+  started_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_historical_import_runs_workspace_status
+  ON autoskill.historical_import_runs(workspace_id, status, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS autoskill.memory_quarantine (
   quarantine_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),

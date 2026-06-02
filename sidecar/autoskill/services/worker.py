@@ -43,6 +43,7 @@ from autoskill.services.evaluation_runner import run_pending_proposal_gates_with
 from autoskill.services.external_import import materialize_external_skill_import
 from autoskill.services.external_inventory import scan_external_skill_roots
 from autoskill.services.historical_discovery import discover_historical_sources
+from autoskill.services.historical_import import import_historical_sources
 from autoskill.services.opportunity import mine_opportunities
 from autoskill.services.writer import (
     apply_staged_manifest_with_governance,
@@ -1441,6 +1442,44 @@ async def _run_historical_import_discover(
     return inventory.to_json()
 
 
+async def _run_historical_import_parse(
+    stores: WorkerStores,
+    job: JobRecord,
+) -> dict[str, Any]:
+    if stores.historical_import is None:
+        raise ValueError("historical import store is required for historical parsing")
+    workspace = _payload_workspace(job)
+    if workspace is None:
+        raise ValueError("historical import parsing requires workspace_id")
+    roots = stores.historical_import_roots or []
+    payload = _payload_dict(job.payload)
+    result = await import_historical_sources(
+        stores.historical_import,
+        workspace_key=workspace,
+        roots=roots,
+        source_allowlist=_payload_string_set(payload.get("source_allowlist")),
+        source_denylist=_payload_string_set(payload.get("source_denylist")),
+        max_files=_payload_int(job.payload, "max_files", default=100, minimum=1, maximum=10_000),
+        max_bytes=_payload_int(
+            job.payload,
+            "max_bytes",
+            default=10_000_000,
+            minimum=1,
+            maximum=1_000_000_000,
+        ),
+        max_chunks=_payload_int(
+            job.payload,
+            "max_chunks",
+            default=500,
+            minimum=1,
+            maximum=20_000,
+        ),
+        idempotency_key=_payload_str(job.payload, "idempotency_key")
+        or f"historical-import:job:{job.job_id}",
+    )
+    return result.to_json()
+
+
 async def _run_external_skill_materialize_import(
     stores: WorkerStores,
     job: JobRecord,
@@ -2274,6 +2313,11 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "historical_import.discover",
         "maintenance",
         _run_historical_import_discover,
+    ),
+    "historical_import.parse": JobDefinition(
+        "historical_import.parse",
+        "maintenance",
+        _run_historical_import_parse,
     ),
     "topology.apply_downstream": JobDefinition(
         "topology.apply_downstream",

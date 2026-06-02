@@ -477,6 +477,22 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   plugin/autoskill`, `docker compose config --quiet`, `git diff --check`,
   idempotent compose Postgres migration, and a DB-backed smoke proving discovery
   upsert, chunk redaction, and source/chunk revocation.
+- Historical structured import parsing and checkpointing now exists as the next
+  Phase 5/14 layer: `historical_import.parse` runs through the control API or
+  maintenance worker, carries raw file paths only transiently during authorized
+  configured-root scans, records `historical_import_runs` checkpoint/stat rows,
+  upserts imported sources, records redacted chunks, and supports duplicate-safe
+  reruns. The first parser set covers transcript JSONL turns, Markdown memory,
+  workspace-context, taskflow sections, session-store metadata, trajectory or
+  diagnostic JSON summaries, and existing-skill sections as read-only external
+  skill evidence. Focused validation passed with parser/service/API/worker
+  tests; full validation passed with `uv run ruff check sidecar scripts`, `uv
+  run pytest -q` (246 tests), `uv run python -m compileall -q sidecar scripts`,
+  `npm test --prefix plugin/autoskill` (18 tests), `npm run check --prefix
+  plugin/autoskill`, `docker compose config --quiet`, `git diff --check`,
+  idempotent compose Postgres migration, and a DB-backed smoke proving
+  transcript/memory parse, run checkpoint completion, redaction, and
+  duplicate-safe rerun behavior.
 
 ## Next Gates
 
@@ -486,11 +502,11 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 2. Promote or replace the operator smoke runtime skill with the first genuinely
    useful SkillKernel-owned runtime skill once replay/probe evidence supports a
    non-smoke activation target.
-3. Build the next historical-import layer on top of the new discovery substrate:
-   structure-preserving parsers for the highest-value local sources, importer
-   run/checkpoint records, source-item granularity beyond file-level inventory,
-   and full source-revocation traversal from historical source rows into
-   chunks/evidence/embeddings/memory/candidates.
+3. Build the next historical-import layer on top of the new parse substrate:
+   richer datasource coverage for trajectory/session-corpus/task/plugin/media
+   and observability sources, source-item lineage beyond file/section/line
+   granularity, and full source-revocation traversal from historical source rows
+   into chunks/evidence/embeddings/memory/candidates.
 4. Consume the new improve/decompose usage recommendations into propose-only
    topology or repair planning once sustained telemetry confirms their aggregate
    signals are stable, including successor/boundary detail for decomposition.
