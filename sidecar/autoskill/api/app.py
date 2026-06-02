@@ -1564,7 +1564,8 @@ def create_app(
 
     @app.post("/v1/runtime/context-hint", response_model=ContextHintResponse)
     async def context_hint(request: ContextHintRequest) -> ContextHintResponse:
-        if not get_settings().runtime_context_broker_enabled:
+        settings = get_settings()
+        if not settings.runtime_context_broker_enabled:
             return bootstrap_context_hint(request)
         return await build_context_hint(
             retrieval,
@@ -1572,6 +1573,11 @@ def create_app(
             cache=broker_cache,
             context_governance=context_governance,
             compatibility=compatibility,
+            semantic_embedder=(
+                build_text_embedder_from_settings(settings)
+                if settings.embedding_provider == "hash"
+                else None
+            ),
         )
 
     @app.post(

@@ -68,6 +68,22 @@ class RetrievalStore(Protocol):
     ) -> RetrievalResult:
         """Run deterministic lexical retrieval and log the decision."""
 
+    async def semantic_query(
+        self,
+        *,
+        workspace_key: str,
+        embedding_model: str,
+        embedding: list[float],
+        embedding_profile_id: UUID | None = None,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
+        session_id: str | None = None,
+        turn_id: str | None = None,
+        limit: int = 10,
+    ) -> RetrievalResult:
+        """Run deterministic vector retrieval and log the decision."""
+
     async def expand_skill_graph(
         self,
         *,
@@ -112,6 +128,22 @@ class NullRetrievalStore:
         *,
         workspace_key: str,
         query: str,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
+        session_id: str | None = None,
+        turn_id: str | None = None,
+        limit: int = 10,
+    ) -> RetrievalResult:
+        return RetrievalResult(retrieval_log_id=None, decision="no_candidates", candidates=[])
+
+    async def semantic_query(
+        self,
+        *,
+        workspace_key: str,
+        embedding_model: str,
+        embedding: list[float],
+        embedding_profile_id: UUID | None = None,
         trace_id: UUID | None = None,
         span_id: UUID | None = None,
         parent_span_id: UUID | None = None,
@@ -285,6 +317,154 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
                 session_id=session_id,
                 turn_id=turn_id,
                 query=query,
+                decision=decision,
+                candidates=candidates,
+            )
+
+        return RetrievalResult(
+            retrieval_log_id=log_id,
+            decision=decision,
+            candidates=candidates,
+        )
+
+    async def semantic_query(
+        self,
+        *,
+        workspace_key: str,
+        embedding_model: str,
+        embedding: list[float],
+        embedding_profile_id: UUID | None = None,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
+        session_id: str | None = None,
+        turn_id: str | None = None,
+        limit: int = 10,
+    ) -> RetrievalResult:
+        if not embedding:
+            return RetrievalResult(retrieval_log_id=None, decision="empty_query", candidates=[])
+
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            rows = await conn.fetch(
+                """
+                WITH nearest AS (
+                  SELECT
+                    e.*,
+                    (e.embedding <=> $3::vector)::float AS distance
+                  FROM autoskill.embeddings e
+                  WHERE e.workspace_id = $1
+                    AND (
+                      ($4::uuid IS NOT NULL AND e.embedding_profile_id = $4)
+                      OR ($4::uuid IS NULL AND e.embedding_profile_id IS NULL
+                        AND e.embedding_model = $2)
+                    )
+                    AND e.embedding_dim = $6
+                  ORDER BY e.embedding <=> $3::vector
+                  LIMIT $5
+                ),
+                body_candidates AS (
+                  SELECT
+                    'body_index_document'::text AS object_type,
+                    d.body_index_document_id AS object_id,
+                    d.skill_id,
+                    left(d.text_content, 240) AS summary,
+                    greatest(0.0, 1.0 - n.distance)::float AS rank,
+                    jsonb_build_object(
+                      'document_kind', d.document_kind,
+                      'secret_scan_status', d.secret_scan_status,
+                      'taint', d.taint,
+                      'skill_version_id', d.skill_version_id,
+                      'lifecycle_state', s.lifecycle_state,
+                      'slug', s.slug,
+                      'retrieval_mode', 'vector',
+                      'semantic_distance', n.distance
+                    ) AS metadata
+                  FROM nearest n
+                  JOIN autoskill.body_index_documents d
+                    ON n.object_type = 'body_index_document'
+                   AND n.object_id = d.body_index_document_id
+                  LEFT JOIN autoskill.skills s ON s.skill_id = d.skill_id
+                ),
+                evidence_candidates AS (
+                  SELECT
+                    'evidence_item'::text AS object_type,
+                    ev.evidence_id AS object_id,
+                    NULL::uuid AS skill_id,
+                    ev.summary,
+                    greatest(0.0, 1.0 - n.distance)::float AS rank,
+                    jsonb_build_object(
+                      'kind', ev.kind,
+                      'maturity', ev.maturity,
+                      'trust', ev.trust,
+                      'taint', ev.taint,
+                      'source_event_id', ev.source_event_id,
+                      'retrieval_mode', 'vector',
+                      'semantic_distance', n.distance
+                    ) AS metadata
+                  FROM nearest n
+                  JOIN autoskill.evidence_items ev
+                    ON n.object_type = 'evidence_item'
+                   AND n.object_id = ev.evidence_id
+                  WHERE ev.revoked_at IS NULL
+                ),
+                external_skill_candidates AS (
+                  SELECT
+                    'external_skill'::text AS object_type,
+                    ex.external_skill_id AS object_id,
+                    NULL::uuid AS skill_id,
+                    left(
+                      COALESCE(ex.name, ex.slug) || ': ' || COALESCE(ex.description, ''),
+                      240
+                    ) AS summary,
+                    greatest(0.0, 1.0 - n.distance)::float AS rank,
+                    jsonb_build_object(
+                      'source', ex.source,
+                      'root_path_hash', ex.root_path_hash,
+                      'slug', ex.slug,
+                      'status', ex.status,
+                      'ownership', 'external',
+                      'file_hash', ex.file_hash,
+                      'risk_summary', ex.risk_summary,
+                      'retrieval_mode', 'vector',
+                      'semantic_distance', n.distance
+                    ) AS metadata
+                  FROM nearest n
+                  JOIN autoskill.external_skill_inventory ex
+                    ON n.object_type = 'external_skill'
+                   AND n.object_id = ex.external_skill_id
+                  WHERE ex.status IN ('visible', 'changed')
+                )
+                SELECT *
+                FROM (
+                  SELECT * FROM body_candidates
+                  UNION ALL
+                  SELECT * FROM evidence_candidates
+                  UNION ALL
+                  SELECT * FROM external_skill_candidates
+                ) candidates
+                ORDER BY rank DESC, summary ASC
+                LIMIT $5
+                """,
+                workspace_id,
+                embedding_model,
+                _vector_literal(embedding),
+                embedding_profile_id,
+                limit,
+                len(embedding),
+            )
+            candidates = [RetrievalCandidate.from_row(row) for row in rows]
+            decision = "semantic_candidates_found" if candidates else "semantic_no_candidates"
+            log_id = await _insert_retrieval_log(
+                conn,
+                workspace_id=workspace_id,
+                trace_id=trace_id or uuid4(),
+                span_id=span_id or uuid4(),
+                parent_span_id=parent_span_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                query=f"semantic:{embedding_model}:{len(embedding)}",
                 decision=decision,
                 candidates=candidates,
             )
@@ -577,6 +757,10 @@ def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:
         return row[key]
     except KeyError:
         return None
+
+
+def _vector_literal(embedding: list[float]) -> str:
+    return "[" + ",".join(str(float(value)) for value in embedding) + "]"
 
 
 def _object_keys(objects: list[dict[str, str]]) -> list[tuple[str, UUID]]:

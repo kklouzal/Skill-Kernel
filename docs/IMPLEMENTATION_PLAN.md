@@ -128,7 +128,7 @@ Acceptance:
 Deliverables:
 
 - deterministic broker planner;
-- set-aware context renderer; implemented as a conservative retrieval-backed first pass with duplicate skill suppression and prerequisite graph expansion;
+- set-aware context renderer; implemented as a conservative retrieval-backed first pass with duplicate skill suppression, prerequisite graph expansion, and local-hash vector fusion before compatibility/selection gates;
 - cache-backed context hint endpoint; endpoint is present behind a disabled-by-default config gate with short in-process cache;
 - shadowing logs; broker suppression/rendering telemetry is attached to retrieval logs, and outcome/correction-based shadowing detection records attribution events.
 - external-skill inventory awareness; implemented as control-authenticated upsert/list APIs, hashed-root/file-hash/status/risk metadata persistence, read-only scanner job wiring, lexical retrieval of visible/changed external skills, broker suppression as non-runtime collisions, and duplicate-match `external_collision_review` decisions that block automatic candidate creation.

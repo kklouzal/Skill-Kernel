@@ -8,6 +8,7 @@ from uuid import UUID
 from autoskill.db.compatibility import CompatibilityStore
 from autoskill.db.context import ContextGovernanceStore
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalStore
+from autoskill.services.embedding_generation import TextEmbedder
 from autoskill.services.scanner import has_blocking_findings, scan_text
 from pydantic import BaseModel, Field
 
@@ -106,6 +107,8 @@ async def build_context_hint(
     cache: ContextHintCache | None = None,
     context_governance: ContextGovernanceStore | None = None,
     compatibility: CompatibilityStore | None = None,
+    semantic_embedder: TextEmbedder | None = None,
+    semantic_embedding_profile_id: UUID | None = None,
 ) -> ContextHintResponse:
     query = (request.user_intent or "").strip()
     if not query:
@@ -125,8 +128,26 @@ async def build_context_hint(
         turn_id=request.turn_id,
         limit=8,
     )
-    retrieval_log_id = str(result.retrieval_log_id) if result.retrieval_log_id else None
-    if not result.candidates:
+    semantic_result = None
+    if semantic_embedder is not None:
+        semantic_result = await retrieval.semantic_query(
+            workspace_key=request.workspace_id,
+            embedding_model=semantic_embedder.model,
+            embedding=semantic_embedder.embed(query),
+            embedding_profile_id=semantic_embedding_profile_id,
+            trace_id=request.trace_id,
+            span_id=request.span_id,
+            parent_span_id=request.parent_span_id,
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            limit=8,
+        )
+    candidates = [
+        *result.candidates,
+        *(semantic_result.candidates if semantic_result is not None else []),
+    ]
+    retrieval_log_id = _response_retrieval_log_id(result, semantic_result)
+    if not candidates:
         response = ContextHintResponse(
             decision="no_skill",
             cache_status="retrieval-empty",
@@ -141,11 +162,11 @@ async def build_context_hint(
 
     graph_candidates = await retrieval.expand_skill_graph(
         workspace_key=request.workspace_id,
-        skill_ids=_candidate_skill_ids(result.candidates),
+        skill_ids=_candidate_skill_ids(candidates),
         edge_kinds=GRAPH_EDGE_KINDS,
         limit=12,
     )
-    ranked = _rerank_candidates([*result.candidates, *graph_candidates], query)
+    ranked = _rerank_candidates([*candidates, *graph_candidates], query)
     ranked, compatibility_suppressed = await _apply_executor_compatibility(
         compatibility,
         request,
@@ -422,8 +443,21 @@ def _reason_codes(
     if selected:
         if any(candidate.metadata.get("graph_edge_kind") for candidate in selected):
             codes.add("graph-expanded")
+        if any(candidate.metadata.get("retrieval_mode") == "vector" for candidate in selected):
+            codes.add("vector-fused")
         codes.add("exact-rerank")
     return sorted(codes)
+
+
+def _response_retrieval_log_id(
+    lexical_result,
+    semantic_result,
+) -> str | None:
+    if lexical_result.retrieval_log_id is not None:
+        return str(lexical_result.retrieval_log_id)
+    if semantic_result is not None and semantic_result.retrieval_log_id is not None:
+        return str(semantic_result.retrieval_log_id)
+    return None
 
 
 async def _record_context_hint(

@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalResult
 from autoskill.services.broker import ContextHintCache, ContextHintRequest, build_context_hint
+from autoskill.services.embedding_generation import HashingTextEmbedder
 
 
 class MemoryBrokerRetrievalStore:
@@ -11,10 +12,13 @@ class MemoryBrokerRetrievalStore:
         self,
         candidates: list[RetrievalCandidate],
         graph_candidates: list[RetrievalCandidate] | None = None,
+        semantic_candidates: list[RetrievalCandidate] | None = None,
     ) -> None:
         self.candidates = candidates
         self.graph_candidates = graph_candidates or []
+        self.semantic_candidates = semantic_candidates or []
         self.calls: list[dict[str, object]] = []
+        self.semantic_calls: list[dict[str, object]] = []
         self.graph_calls: list[dict[str, object]] = []
         self.records: list[dict[str, object]] = []
 
@@ -46,6 +50,44 @@ class MemoryBrokerRetrievalStore:
             retrieval_log_id=uuid4(),
             decision="candidates_found" if self.candidates else "no_candidates",
             candidates=self.candidates,
+        )
+
+    async def semantic_query(
+        self,
+        *,
+        workspace_key: str,
+        embedding_model: str,
+        embedding: list[float],
+        embedding_profile_id=None,
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
+        session_id: str | None = None,
+        turn_id: str | None = None,
+        limit: int = 10,
+    ) -> RetrievalResult:
+        self.semantic_calls.append(
+            {
+                "workspace_key": workspace_key,
+                "embedding_model": embedding_model,
+                "embedding": embedding,
+                "embedding_profile_id": embedding_profile_id,
+                "trace_id": trace_id,
+                "span_id": span_id,
+                "parent_span_id": parent_span_id,
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "limit": limit,
+            }
+        )
+        return RetrievalResult(
+            retrieval_log_id=uuid4(),
+            decision=(
+                "semantic_candidates_found"
+                if self.semantic_candidates
+                else "semantic_no_candidates"
+            ),
+            candidates=self.semantic_candidates,
         )
 
     async def expand_skill_graph(
@@ -202,6 +244,50 @@ def test_context_broker_renders_scanned_skill_candidates() -> None:
     assert context.artifacts[0]["max_tokens"] == 120
     assert context.ledgers[0]["visibility_state"] == "skill_visible"
     assert context.ledgers[0]["context_artifact_id"] == context.artifacts[0]["context_artifact_id"]
+
+
+def test_context_broker_can_render_vector_fused_candidates_when_lexical_is_empty() -> None:
+    skill_id = uuid4()
+    store = MemoryBrokerRetrievalStore(
+        [],
+        semantic_candidates=[
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=skill_id,
+                summary="WHEN diagrams have tiny labels, use the accessibility repair skill.",
+                rank=0.88,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "diagram-accessibility-repair",
+                    "retrieval_mode": "vector",
+                    "semantic_distance": 0.12,
+                },
+            )
+        ],
+    )
+    embedder = HashingTextEmbedder(model="test-hash", embedding_dim=8)
+
+    async def run():
+        return await build_context_hint(
+            store,
+            ContextHintRequest(
+                workspace_id="dev-01",
+                user_intent="fix unreadable figure labels",
+                max_tokens=120,
+            ),
+            semantic_embedder=embedder,
+        )
+
+    response = asyncio.run(run())
+
+    assert response.decision == "skill_hint"
+    assert response.skill_ids == [str(skill_id)]
+    assert "vector-fused" in response.reason_codes
+    assert store.calls[0]["query"] == "fix unreadable figure labels"
+    assert store.semantic_calls[0]["embedding_model"] == "test-hash"
+    assert len(store.semantic_calls[0]["embedding"]) == 8
 
 
 def test_context_broker_suppresses_executor_blocked_skill_version() -> None:
