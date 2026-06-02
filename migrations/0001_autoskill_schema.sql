@@ -909,8 +909,10 @@ CREATE TABLE IF NOT EXISTS autoskill.historical_import_sources (
     source_kind IN (
       'session_store','transcript','transcript_corpus','trajectory','compaction_summary',
       'workspace_memory','workspace_context','task_record','taskflow_record',
-      'plugin_session_state','queued_injection','active_memory',
-      'diagnostics_export','channel_media','transcription',
+      'plugin_hook_manifest','plugin_manifest','plugin_session_state','plugin_source',
+      'queued_injection','active_memory',
+      'diagnostics_export','media_artifact','observability_export',
+      'channel_media','transcription',
       'preprocessing_artifact','existing_skill','other'
     )
   ),
@@ -965,8 +967,10 @@ ALTER TABLE autoskill.historical_import_sources
     source_kind IN (
       'session_store','transcript','transcript_corpus','trajectory','compaction_summary',
       'workspace_memory','workspace_context','task_record','taskflow_record',
-      'plugin_session_state','queued_injection','active_memory',
-      'diagnostics_export','channel_media','transcription',
+      'plugin_hook_manifest','plugin_manifest','plugin_session_state','plugin_source',
+      'queued_injection','active_memory',
+      'diagnostics_export','media_artifact','observability_export',
+      'channel_media','transcription',
       'preprocessing_artifact','existing_skill','other'
     )
   );
