@@ -87,6 +87,8 @@ services:
       - /workspace
       - --external-skill-root
       - /workspace/skills
+      - --historical-import-root
+      - /workspace
     working_dir: /workspace
     volumes:
       - /home/kklouzal/.openclaw/workspace:/workspace

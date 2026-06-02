@@ -242,6 +242,20 @@ class HistoricalChunkRecordResult:
         }
 
 
+@dataclass(frozen=True)
+class HistoricalSourceRevokeResult:
+    source: HistoricalSourceRecord | None
+    sources_revoked: int
+    chunks_revoked: int
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "source": self.source.to_json() if self.source is not None else None,
+            "sources_revoked": self.sources_revoked,
+            "chunks_revoked": self.chunks_revoked,
+        }
+
+
 class HistoricalImportStore(Protocol):
     async def upsert_sources(
         self,
@@ -264,6 +278,13 @@ class HistoricalImportStore(Protocol):
         workspace_key: str,
         chunks: list[HistoricalChunkInput],
     ) -> HistoricalChunkRecordResult: ...
+
+    async def revoke_source(
+        self,
+        *,
+        workspace_key: str,
+        historical_import_source_id: UUID,
+    ) -> HistoricalSourceRevokeResult: ...
 
 
 class NullHistoricalImportStore:
@@ -291,6 +312,14 @@ class NullHistoricalImportStore:
         chunks: list[HistoricalChunkInput],
     ) -> HistoricalChunkRecordResult:
         return HistoricalChunkRecordResult(created=0, skipped=len(chunks), chunks=[])
+
+    async def revoke_source(
+        self,
+        *,
+        workspace_key: str,
+        historical_import_source_id: UUID,
+    ) -> HistoricalSourceRevokeResult:
+        return HistoricalSourceRevokeResult(source=None, sources_revoked=0, chunks_revoked=0)
 
 
 class AsyncpgHistoricalImportStore(AsyncpgPoolOwner):
@@ -542,6 +571,67 @@ class AsyncpgHistoricalImportStore(AsyncpgPoolOwner):
                 chunks=records,
             )
 
+    async def revoke_source(
+        self,
+        *,
+        workspace_key: str,
+        historical_import_source_id: UUID,
+    ) -> HistoricalSourceRevokeResult:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            source = await conn.fetchrow(
+                """
+                UPDATE autoskill.historical_import_sources s
+                SET status = 'revoked',
+                    updated_at = now()
+                FROM autoskill.workspaces w
+                WHERE s.workspace_id = w.workspace_id
+                  AND w.external_key = $1
+                  AND s.historical_import_source_id = $2
+                RETURNING
+                  s.historical_import_source_id,
+                  s.workspace_id,
+                  w.external_key AS workspace_key,
+                  s.source_kind,
+                  s.source_key,
+                  s.fingerprint,
+                  s.parser_version,
+                  s.redaction_policy_version,
+                  s.trust_level,
+                  s.taint,
+                  s.metadata,
+                  s.status,
+                  s.last_seen_at,
+                  s.imported_at,
+                  s.created_at,
+                  s.updated_at
+                """,
+                workspace_key,
+                historical_import_source_id,
+            )
+            if source is None:
+                return HistoricalSourceRevokeResult(
+                    source=None,
+                    sources_revoked=0,
+                    chunks_revoked=0,
+                )
+            chunks_result = await conn.execute(
+                """
+                UPDATE autoskill.historical_import_chunks
+                SET status = 'revoked'
+                WHERE workspace_id = $1
+                  AND historical_import_source_id = $2
+                  AND status <> 'revoked'
+                """,
+                source["workspace_id"],
+                historical_import_source_id,
+            )
+            return HistoricalSourceRevokeResult(
+                source=HistoricalSourceRecord.from_row(source),
+                sources_revoked=1,
+                chunks_revoked=_execute_count(chunks_result),
+            )
+
 
 def _validate_source_input(source: HistoricalSourceInput) -> None:
     if source.source_kind not in HISTORICAL_SOURCE_KINDS:
@@ -587,3 +677,10 @@ def _json_dict(value: Any) -> dict[str, Any]:
         loaded = json.loads(value)
         return loaded if isinstance(loaded, dict) else {}
     return dict(value)
+
+
+def _execute_count(status: str) -> int:
+    try:
+        return int(status.rsplit(" ", 1)[-1])
+    except (ValueError, IndexError):
+        return 0

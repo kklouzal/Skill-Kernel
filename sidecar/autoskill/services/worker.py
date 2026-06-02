@@ -20,6 +20,7 @@ from autoskill.db.evaluations import EvaluationStore
 from autoskill.db.evidence import EvidenceStore
 from autoskill.db.external_skills import ExternalSkillStore
 from autoskill.db.governance import GovernanceStore, RevocationRequestRecord
+from autoskill.db.historical import HistoricalImportStore
 from autoskill.db.jobs import JobRecord, JobStore
 from autoskill.db.memory import MemoryGovernanceStore
 from autoskill.db.observability import NullObservabilityStore, ObservabilityStore
@@ -41,6 +42,7 @@ from autoskill.services.embedding_generation import (
 from autoskill.services.evaluation_runner import run_pending_proposal_gates_with_trace
 from autoskill.services.external_import import materialize_external_skill_import
 from autoskill.services.external_inventory import scan_external_skill_roots
+from autoskill.services.historical_discovery import discover_historical_sources
 from autoskill.services.opportunity import mine_opportunities
 from autoskill.services.writer import (
     apply_staged_manifest_with_governance,
@@ -140,6 +142,7 @@ class WorkerStores:
     evidence: EvidenceStore
     embeddings: EmbeddingStore
     external_skills: ExternalSkillStore | None = None
+    historical_import: HistoricalImportStore | None = None
     retrieval: RetrievalStore | None = None
     evaluations: EvaluationStore | None = None
     governance: GovernanceStore | None = None
@@ -159,6 +162,7 @@ class WorkerStores:
     workspace_root: Path | None = None
     archive_root: Path | None = None
     external_skill_roots: list[Path] | None = None
+    historical_import_roots: list[Path] | None = None
 
 
 @dataclass(frozen=True)
@@ -1405,6 +1409,38 @@ async def _run_external_skill_scan(stores: WorkerStores, job: JobRecord) -> dict
     return result.to_json()
 
 
+async def _run_historical_import_discover(
+    stores: WorkerStores,
+    job: JobRecord,
+) -> dict[str, Any]:
+    if stores.historical_import is None:
+        raise ValueError("historical import store is required for historical discovery")
+    workspace = _payload_workspace(job)
+    if workspace is None:
+        raise ValueError("historical discovery requires workspace_id")
+    roots = stores.historical_import_roots or []
+    payload = _payload_dict(job.payload)
+    source_allowlist = _payload_string_set(payload.get("source_allowlist"))
+    source_denylist = _payload_string_set(payload.get("source_denylist"))
+    inventory = await discover_historical_sources(
+        stores.historical_import,
+        workspace_key=workspace,
+        roots=roots,
+        source_allowlist=source_allowlist,
+        source_denylist=source_denylist,
+        max_files=_payload_int(job.payload, "max_files", default=500, minimum=1, maximum=10_000),
+        max_bytes=_payload_int(
+            job.payload,
+            "max_bytes",
+            default=25_000_000,
+            minimum=1,
+            maximum=1_000_000_000,
+        ),
+        preview_only=bool(payload.get("preview_only", False)),
+    )
+    return inventory.to_json()
+
+
 async def _run_external_skill_materialize_import(
     stores: WorkerStores,
     job: JobRecord,
@@ -2106,6 +2142,19 @@ def _payload_str(payload: dict[str, Any] | str | None, key: str) -> str | None:
     return str(value)
 
 
+def _payload_string_set(value: object) -> set[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, list):
+        values = value
+    else:
+        return None
+    strings = {str(item) for item in values if str(item).strip()}
+    return strings or None
+
+
 def _payload_int(
     payload: dict[str, Any] | str | None,
     key: str,
@@ -2220,6 +2269,11 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "external_skills.materialize_import",
         "mutation",
         _run_external_skill_materialize_import,
+    ),
+    "historical_import.discover": JobDefinition(
+        "historical_import.discover",
+        "maintenance",
+        _run_historical_import_discover,
     ),
     "topology.apply_downstream": JobDefinition(
         "topology.apply_downstream",

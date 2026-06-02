@@ -15,6 +15,7 @@ from autoskill.db.evaluations import AsyncpgEvaluationStore
 from autoskill.db.evidence import AsyncpgEvidenceStore
 from autoskill.db.external_skills import AsyncpgExternalSkillStore
 from autoskill.db.governance import AsyncpgGovernanceStore
+from autoskill.db.historical import AsyncpgHistoricalImportStore
 from autoskill.db.jobs import AsyncpgJobStore
 from autoskill.db.memory import AsyncpgMemoryGovernanceStore
 from autoskill.db.observability import AsyncpgObservabilityStore
@@ -24,6 +25,7 @@ from autoskill.db.topology import AsyncpgTopologyStore
 from autoskill.db.utility import AsyncpgUtilityStore
 from autoskill.services.embedding_generation import build_text_embedder_from_settings
 from autoskill.services.external_inventory import ensure_external_skill_scan_schedule
+from autoskill.services.historical_discovery import ensure_historical_discovery_schedule
 from autoskill.services.worker import WorkerLoopConfig, WorkerPool, WorkerStores, run_worker_loop
 
 
@@ -45,6 +47,10 @@ async def run_worker(args: argparse.Namespace) -> int:
         statement_timeout_ms=settings.statement_timeout_ms,
     )
     external_skills = AsyncpgExternalSkillStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
+    historical_import = AsyncpgHistoricalImportStore(
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
     )
@@ -110,12 +116,21 @@ async def run_worker(args: argparse.Namespace) -> int:
             interval_seconds=args.external_skill_scan_interval_seconds,
             source=args.external_skill_source,
         )
+        await ensure_historical_discovery_schedule(
+            scheduler,
+            workspace_key=args.workspace_id,
+            roots=args.historical_import_root,
+            interval_seconds=args.historical_import_scan_interval_seconds,
+            max_files=args.historical_import_max_files,
+            max_bytes=args.historical_import_max_bytes,
+        )
         summary = await run_worker_loop(
             WorkerStores(
                 jobs=jobs,
                 scheduler=scheduler,
                 evidence=evidence,
                 external_skills=external_skills,
+                historical_import=historical_import,
                 embeddings=embeddings,
                 evaluations=evaluations,
                 retrieval=retrieval,
@@ -132,6 +147,7 @@ async def run_worker(args: argparse.Namespace) -> int:
                 workspace_root=workspace_root,
                 archive_root=archive_root,
                 external_skill_roots=args.external_skill_root,
+                historical_import_roots=args.historical_import_root,
             ),
             WorkerLoopConfig(
                 worker_id=args.worker_id,
@@ -149,6 +165,7 @@ async def run_worker(args: argparse.Namespace) -> int:
         await scheduler.close()
         await evidence.close()
         await external_skills.close()
+        await historical_import.close()
         await embeddings.close()
         await evaluations.close()
         await retrieval.close()
@@ -194,6 +211,21 @@ def parse_args() -> argparse.Namespace:
         default="workspace-skill-root",
         help="Public source label for external skill inventory records.",
     )
+    parser.add_argument(
+        "--historical-import-root",
+        action="append",
+        type=Path,
+        default=[],
+        help="Read-only root to inventory for historical import discovery.",
+    )
+    parser.add_argument(
+        "--historical-import-scan-interval-seconds",
+        type=int,
+        default=12 * 60 * 60,
+        help="Default durable scan cadence for configured historical import roots.",
+    )
+    parser.add_argument("--historical-import-max-files", type=int, default=500)
+    parser.add_argument("--historical-import-max-bytes", type=int, default=25_000_000)
     return parser.parse_args()
 
 

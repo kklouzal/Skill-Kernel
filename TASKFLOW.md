@@ -461,6 +461,22 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   --prefix plugin/autoskill`, `docker compose config --quiet`, `git diff
   --check`, and a compose Postgres smoke proving historical chunk evidence
   derivation plus pending historical embedding-source discovery.
+- Historical import discovery and source revocation are now implemented as the
+  next Phase 5/14 layer: `historical_import.discover` performs bounded,
+  read-only inventory over operator-configured roots; classifies session stores,
+  transcripts, trajectories, memory/context files, taskflow records, diagnostics,
+  and existing skills; records byte/time/risk/source-count summaries; hashes
+  paths instead of persisting raw paths; supports preview-only, allow/deny,
+  max-file, and max-byte controls; can upsert inventory-only source rows; and
+  exposes both API and worker/CLI scheduling surfaces. Historical source
+  revocation now tombstones the source and its chunks. Focused validation passed
+  with historical discovery/revocation API, service, schedule, and worker tests;
+  full validation passed with `uv run ruff check sidecar scripts`, `uv run
+  pytest -q` (242 tests), `uv run python -m compileall -q sidecar scripts`,
+  `npm test --prefix plugin/autoskill` (18 tests), `npm run check --prefix
+  plugin/autoskill`, `docker compose config --quiet`, `git diff --check`,
+  idempotent compose Postgres migration, and a DB-backed smoke proving discovery
+  upsert, chunk redaction, and source/chunk revocation.
 
 ## Next Gates
 
@@ -470,11 +486,11 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 2. Promote or replace the operator smoke runtime skill with the first genuinely
    useful SkillKernel-owned runtime skill once replay/probe evidence supports a
    non-smoke activation target.
-3. Build the next historical-import layer on top of the new substrate: bounded
-   datasource discovery for configured agent/session/workspace roots,
+3. Build the next historical-import layer on top of the new discovery substrate:
    structure-preserving parsers for the highest-value local sources, importer
-   checkpoints, and revocation traversal from historical source rows into
-   chunks/evidence/memory/candidates.
+   run/checkpoint records, source-item granularity beyond file-level inventory,
+   and full source-revocation traversal from historical source rows into
+   chunks/evidence/embeddings/memory/candidates.
 4. Consume the new improve/decompose usage recommendations into propose-only
    topology or repair planning once sustained telemetry confirms their aggregate
    signals are stable, including successor/boundary detail for decomposition.

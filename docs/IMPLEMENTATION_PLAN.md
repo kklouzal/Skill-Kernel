@@ -151,8 +151,13 @@ Deliverables:
   content hash, token estimate, parser/redaction versions, trust, taint, and
   duplicate skip semantics;
 - control-authenticated historical import APIs; implemented for source
-  list/upsert and chunk recording without writing runtime skills or mutating
-  imported OpenClaw roots;
+  list/upsert, bounded dry-run discovery, source revocation, and chunk
+  recording without writing runtime skills or mutating imported OpenClaw roots;
+- historical datasource discovery substrate; implemented as read-only,
+  configured-root inventory with file/source classification, byte/time/risk
+  summaries, path hashing instead of raw path persistence, allow/deny filters,
+  max file/byte limits, preview-only mode, durable `historical_import.discover`
+  worker registration, and optional inventory-only source upsert;
 - imported chunk downstream readiness; implemented by existing evidence and
   embedding source discovery paths consuming observed historical chunks only
   after storage-time redaction and taint labeling.
@@ -165,12 +170,18 @@ Acceptance:
 - repeated source upserts and duplicate chunk records are idempotent;
 - chunk storage performs deterministic secret/email redaction at the DB-store
   boundary even when an importer caller mislabels raw text as redacted;
+- discovery does not parse sensitive content or store raw paths, and scheduled
+  backfill roots are operator-configured rather than inferred as broad read
+  permission;
+- historical source revocation tombstones source and chunk rows, giving
+  provenance traversal a concrete historical root before derived-object
+  invalidation;
 - historical chunks can become observed evidence and embedding sources, but
   cannot directly activate skills, broker runtime context, or trusted memory;
-- remaining historical ingestion work is datasource discovery, structure-aware
-  parsers, import run/checkpoint records, source-item granularity, revocation
-  traversal into derived evidence/embeddings/candidates, and bounded bootstrap
-  consolidation.
+- remaining historical ingestion work is structure-aware content parsers,
+  import run/checkpoint records, source-item granularity beyond file-level
+  inventory, executing full source-revocation traversal into derived
+  evidence/embeddings/memory/candidates, and bounded bootstrap consolidation.
 
 ## Phase 5 - Runtime Context Broker
 

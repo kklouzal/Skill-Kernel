@@ -120,6 +120,7 @@ from autoskill.services.embedding_generation import (
     generate_pending_embeddings,
 )
 from autoskill.services.evaluation_runner import run_pending_proposal_gates_with_trace
+from autoskill.services.historical_discovery import discover_historical_sources
 from autoskill.services.llm import LLMClient
 from autoskill.services.matching import SkillMatchRequest, match_existing_skills
 from autoskill.services.opportunity import mine_opportunities
@@ -431,6 +432,40 @@ class HistoricalImportChunkRecordResponse(BaseModel):
     created: int
     skipped: int
     chunks: list[dict[str, object]]
+
+
+class HistoricalImportDiscoverRequest(BaseModel):
+    workspace_id: str
+    roots: list[Path]
+    source_allowlist: list[str] | None = None
+    source_denylist: list[str] | None = None
+    max_files: int = 500
+    max_bytes: int = 25_000_000
+    preview_only: bool = True
+
+
+class HistoricalImportDiscoverResponse(BaseModel):
+    scanned_roots: int
+    scanned_files: int
+    skipped_files: int
+    estimated_bytes: int
+    oldest_mtime: str | None
+    newest_mtime: str | None
+    risk_classes: dict[str, int]
+    source_counts: dict[str, int]
+    items: list[dict[str, object]]
+    upsert: dict[str, object] | None = None
+
+
+class HistoricalImportSourceRevokeRequest(BaseModel):
+    workspace_id: str
+    historical_import_source_id: UUID
+
+
+class HistoricalImportSourceRevokeResponse(BaseModel):
+    source: dict[str, object] | None
+    sources_revoked: int
+    chunks_revoked: int
 
 
 class ContextArtifactRecordRequest(BaseModel):
@@ -1867,8 +1902,10 @@ def _worker_stores(
     activation_gate: ActivationGateStore,
     profiles: ProfileStore,
     memory_governance: MemoryGovernanceStore,
+    historical_import: HistoricalImportStore,
     writer_workspace_root: Path | None = None,
     external_skill_roots: list[Path] | None = None,
+    historical_import_roots: list[Path] | None = None,
 ) -> WorkerStores:
     settings = get_settings()
     workspace_root, _staging_root, archive_root = _writer_roots(writer_workspace_root)
@@ -1877,6 +1914,7 @@ def _worker_stores(
         scheduler=scheduler,
         evidence=evidence,
         external_skills=external_skills,
+        historical_import=historical_import,
         embeddings=embeddings,
         retrieval=retrieval,
         evaluations=evaluations,
@@ -1896,6 +1934,7 @@ def _worker_stores(
         workspace_root=workspace_root,
         archive_root=archive_root,
         external_skill_roots=external_skill_roots,
+        historical_import_roots=historical_import_roots,
     )
 
 
@@ -2243,6 +2282,7 @@ def create_app(
     activation_gate_store: ActivationGateStore | None = None,
     writer_workspace_root: Path | None = None,
     external_skill_roots: list[Path] | None = None,
+    historical_import_roots: list[Path] | None = None,
 ) -> FastAPI:
     store = event_store or _build_event_store()
     jobs = job_store or _build_job_store()
@@ -2861,6 +2901,56 @@ def create_app(
         return HistoricalImportSourceUpsertResponse(**result.to_json())
 
     @app.post(
+        "/v1/historical-import/discover",
+        response_model=HistoricalImportDiscoverResponse,
+    )
+    async def discover_historical_import_sources(
+        request: HistoricalImportDiscoverRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> HistoricalImportDiscoverResponse:
+        _require_control_auth(authorization)
+        try:
+            inventory = await discover_historical_sources(
+                historical_import,
+                workspace_key=request.workspace_id,
+                roots=request.roots,
+                source_allowlist=(
+                    set(request.source_allowlist)
+                    if request.source_allowlist is not None
+                    else None
+                ),
+                source_denylist=(
+                    set(request.source_denylist)
+                    if request.source_denylist is not None
+                    else None
+                ),
+                max_files=max(1, min(request.max_files, 10_000)),
+                max_bytes=max(1, min(request.max_bytes, 1_000_000_000)),
+                preview_only=request.preview_only,
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return HistoricalImportDiscoverResponse(**inventory.to_json())
+
+    @app.post(
+        "/v1/historical-import/sources/revoke",
+        response_model=HistoricalImportSourceRevokeResponse,
+    )
+    async def revoke_historical_import_source(
+        request: HistoricalImportSourceRevokeRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> HistoricalImportSourceRevokeResponse:
+        _require_control_auth(authorization)
+        result = await historical_import.revoke_source(
+            workspace_key=request.workspace_id,
+            historical_import_source_id=request.historical_import_source_id,
+        )
+        return HistoricalImportSourceRevokeResponse(**result.to_json())
+
+    @app.post(
         "/v1/historical-import/chunks",
         response_model=HistoricalImportChunkRecordResponse,
     )
@@ -3073,8 +3163,10 @@ def create_app(
                 activation_gate=activation_gate,
                 profiles=profiles,
                 memory_governance=memory_governance,
+                historical_import=historical_import,
                 writer_workspace_root=writer_workspace_root,
                 external_skill_roots=external_skill_roots,
+                historical_import_roots=historical_import_roots,
             ),
             worker_id=request.worker_id,
             pool=request.pool,
