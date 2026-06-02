@@ -493,6 +493,13 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   idempotent compose Postgres migration, and a DB-backed smoke proving
   transcript/memory parse, run checkpoint completion, redaction, and
   duplicate-safe rerun behavior.
+- Historical transcript-corpus export parsing is implemented as a distinct
+  Phase 5/14 datasource slice: discovery classifies `metadata.json`,
+  `summary.md`, and `transcript.jsonl` corpus files as `transcript_corpus`,
+  the migration/store validator accepts that source kind, metadata chunks keep
+  only safe keys, summary chunks are marked lossy/derived, and transcript turns
+  preserve direct-turn evidence while redacting storage text and never storing
+  raw paths.
 
 ## Next Gates
 
@@ -503,10 +510,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
    useful SkillKernel-owned runtime skill once replay/probe evidence supports a
    non-smoke activation target.
 3. Build the next historical-import layer on top of the new parse substrate:
-   richer datasource coverage for trajectory/session-corpus/task/plugin/media
-   and observability sources, source-item lineage beyond file/section/line
-   granularity, and full source-revocation traversal from historical source rows
-   into chunks/evidence/embeddings/memory/candidates.
+   richer datasource coverage for task/plugin/media and observability sources,
+   source-item lineage beyond file/section/line granularity, and full
+   source-revocation traversal from historical source rows into
+   chunks/evidence/embeddings/memory/candidates.
 4. Consume the new improve/decompose usage recommendations into propose-only
    topology or repair planning once sustained telemetry confirms their aggregate
    signals are stable, including successor/boundary detail for decomposition.
@@ -529,11 +536,12 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Worker health now includes persistent heartbeat records, long-running handlers renew job leases, and single-job worker runs emit content-safe progress phases through heartbeat summaries. Future lengthy semantic handlers may still add deeper domain-specific counters when their internal phases mature.
 - Evidence derivation now creates observed event evidence plus deterministic recurring evidence clusters, and `usage.aggregate` now mines retrieval/attribution co-use windows into topology evidence tables. Accepted recurring co-use clusters can now become propose-only compose topology operations; remaining work is structured improve/decompose and broker-abstain consumption plus additional contrastive evidence mining beyond evaluator replay maturity.
 - Memory quarantine/control-flow tables and operator APIs now exist, the runtime broker can record approved memory-influenced retrieval decisions without injecting memory text while blocking unapproved memory references before retrieval, and repair/writer mutation paths now gate and log approved or blocked memory influence.
-- Historical import now has durable source/chunk inventory, redacted chunk
-  storage, evidence derivation, provenance, and embedding-source discovery, but
-  source discovery/parsers/checkpoint workers are intentionally the next layer;
-  raw historical text must still be redacted before calling the chunk API and
-  cannot activate candidates without the normal gates.
+- Historical import now has durable source/chunk inventory, bounded discovery,
+  parser checkpoint workers, redacted chunk storage, evidence derivation,
+  provenance, embedding-source discovery, and transcript-corpus export parsing.
+  Remaining historical coverage is still incomplete for task/plugin/media and
+  observability sources, and historical imports cannot activate candidates
+  without the normal gates.
 - Embedding generation defaults to deterministic local hash embeddings unless an active qualified embedding profile is configured; storage now supports profile-scoped variable dimensions, with the default 1536-dimensional path retaining the indexed HNSW fast path.
 - Runtime context broker is still conservative: vector fusion is available for local deterministic hash embeddings, policy artifact replay/canary primitives exist, and stored redacted replay episodes can drive policy replay; production replay quality still depends on deployment telemetry being populated.
 - Deployment readiness is a deterministic sidecar/state preflight, not a

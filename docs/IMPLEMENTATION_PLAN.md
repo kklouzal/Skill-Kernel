@@ -161,10 +161,10 @@ Deliverables:
 - historical structured import substrate; implemented as bounded
   `historical_import.parse` control/worker flow with run/checkpoint rows,
   transient in-memory raw paths, source upsert, redacted chunk recording,
-  transcript JSONL turn parsing, Markdown memory/context/taskflow section
-  parsing, session-store metadata parsing, trajectory/diagnostic JSON summary
-  parsing, existing-skill read-only section parsing, max chunk limits, and
-  duplicate-safe reruns;
+  transcript JSONL turn parsing, transcript-corpus metadata/summary/transcript
+  parsing, Markdown memory/context/taskflow section parsing, session-store
+  metadata parsing, trajectory/diagnostic JSON summary parsing, existing-skill
+  read-only section parsing, max chunk limits, and duplicate-safe reruns;
 - imported chunk downstream readiness; implemented by existing evidence and
   embedding source discovery paths consuming observed historical chunks only
   after storage-time redaction and taint labeling.

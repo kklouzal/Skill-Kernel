@@ -16,6 +16,7 @@ from autoskill.db.workspaces import ensure_workspace
 HISTORICAL_SOURCE_KINDS = {
     "session_store",
     "transcript",
+    "transcript_corpus",
     "trajectory",
     "compaction_summary",
     "workspace_memory",

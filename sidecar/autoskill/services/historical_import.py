@@ -143,6 +143,8 @@ def _parse_item(item: HistoricalDiscoveryItem, *, remaining: int) -> list[Histor
         return []
     if item.source_kind == "transcript":
         return _parse_jsonl_transcript(item, remaining=remaining)
+    if item.source_kind == "transcript_corpus":
+        return _parse_transcript_corpus(item, remaining=remaining)
     if item.source_kind in {"workspace_memory", "workspace_context", "taskflow_record"}:
         return _parse_markdown_sections(item, remaining=remaining)
     if item.source_kind == "existing_skill":
@@ -306,6 +308,120 @@ def _parse_json_or_jsonl_summary(
             )
         )
     return chunks
+
+
+def _parse_transcript_corpus(
+    item: HistoricalDiscoveryItem,
+    *,
+    remaining: int,
+) -> list[HistoricalChunkInput]:
+    assert item.path is not None
+    name = item.path.name
+    if name == "transcript.jsonl":
+        chunks = _parse_jsonl_transcript(item, remaining=remaining)
+        return [
+            HistoricalChunkInput(
+                source_kind=chunk.source_kind,
+                source_key=chunk.source_key,
+                fingerprint=chunk.fingerprint,
+                item_key=chunk.item_key,
+                chunk_index=chunk.chunk_index,
+                redacted_text=chunk.redacted_text,
+                parser_version=chunk.parser_version,
+                redaction_policy_version=chunk.redaction_policy_version,
+                chunk_kind="transcript_corpus_turn",
+                token_estimate=chunk.token_estimate,
+                trust_level=chunk.trust_level,
+                taint={**(chunk.taint or {}), "transcript_corpus": True},
+                metadata={
+                    **(chunk.metadata or {}),
+                    "transcript_corpus_file": "transcript.jsonl",
+                    "confidence": "direct_transcript",
+                },
+            )
+            for chunk in chunks
+        ]
+    if name == "summary.md":
+        chunks = _parse_markdown_sections(item, remaining=remaining)
+        return [
+            HistoricalChunkInput(
+                source_kind=chunk.source_kind,
+                source_key=chunk.source_key,
+                fingerprint=chunk.fingerprint,
+                item_key=chunk.item_key,
+                chunk_index=chunk.chunk_index,
+                redacted_text=chunk.redacted_text,
+                parser_version=chunk.parser_version,
+                redaction_policy_version=chunk.redaction_policy_version,
+                chunk_kind="transcript_corpus_summary",
+                token_estimate=chunk.token_estimate,
+                trust_level=chunk.trust_level,
+                taint={
+                    **(chunk.taint or {}),
+                    "transcript_corpus": True,
+                    "compaction_summary": True,
+                },
+                metadata={
+                    **(chunk.metadata or {}),
+                    "transcript_corpus_file": "summary.md",
+                    "confidence": "derived_summary",
+                    "lossy": True,
+                },
+            )
+            for chunk in chunks
+        ]
+    if name == "metadata.json":
+        payload = json.loads(item.path.read_text(encoding="utf-8", errors="replace"))
+        if not isinstance(payload, dict):
+            return []
+        summary = _transcript_corpus_metadata_summary(payload)
+        if not summary:
+            return []
+        return [
+            _chunk(
+                item,
+                item_key=f"{item.metadata['relative_path_hash']}#metadata",
+                chunk_index=0,
+                text=summary,
+                chunk_kind="transcript_corpus_metadata",
+                taint_extra={"transcript_corpus": True},
+                metadata={
+                    "chunking_version": HISTORICAL_CHUNKING_VERSION,
+                    "metadata_only": True,
+                    "transcript_corpus_file": "metadata.json",
+                    "confidence": "metadata_only",
+                    "lossy": True,
+                    "safe_keys": sorted(_transcript_corpus_metadata(payload)),
+                },
+            )
+        ]
+    return []
+
+
+def _transcript_corpus_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    safe_keys = {
+        "selector",
+        "date",
+        "source",
+        "title",
+        "session_id",
+        "session_key",
+        "agent_id",
+        "start_time",
+        "stop_time",
+        "started_at",
+        "ended_at",
+        "transcript_path",
+        "summary_path",
+    }
+    return {key: value for key, value in payload.items() if key in safe_keys and value}
+
+
+def _transcript_corpus_metadata_summary(payload: dict[str, Any]) -> str:
+    metadata = _transcript_corpus_metadata(payload)
+    if not metadata:
+        return ""
+    return "Transcript corpus metadata: " + json.dumps(metadata, sort_keys=True)
 
 
 def _chunk(

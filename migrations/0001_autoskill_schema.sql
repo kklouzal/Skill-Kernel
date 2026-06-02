@@ -907,7 +907,7 @@ CREATE TABLE IF NOT EXISTS autoskill.historical_import_sources (
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
   source_kind text NOT NULL CHECK (
     source_kind IN (
-      'session_store','transcript','trajectory','compaction_summary',
+      'session_store','transcript','transcript_corpus','trajectory','compaction_summary',
       'workspace_memory','workspace_context','task_record','taskflow_record',
       'plugin_session_state','queued_injection','active_memory',
       'diagnostics_export','channel_media','transcription',
@@ -956,6 +956,20 @@ CREATE TABLE IF NOT EXISTS autoskill.historical_import_chunks (
 
 CREATE INDEX IF NOT EXISTS idx_historical_import_sources_workspace_status
   ON autoskill.historical_import_sources(workspace_id, status, updated_at DESC);
+
+ALTER TABLE autoskill.historical_import_sources
+  DROP CONSTRAINT IF EXISTS historical_import_sources_source_kind_check;
+
+ALTER TABLE autoskill.historical_import_sources
+  ADD CONSTRAINT historical_import_sources_source_kind_check CHECK (
+    source_kind IN (
+      'session_store','transcript','transcript_corpus','trajectory','compaction_summary',
+      'workspace_memory','workspace_context','task_record','taskflow_record',
+      'plugin_session_state','queued_injection','active_memory',
+      'diagnostics_export','channel_media','transcription',
+      'preprocessing_artifact','existing_skill','other'
+    )
+  );
 
 CREATE INDEX IF NOT EXISTS idx_historical_import_chunks_source
   ON autoskill.historical_import_chunks(historical_import_source_id, item_key, chunk_index);

@@ -294,29 +294,32 @@ def _discovery_item(
 def _source_kind(path: Path) -> str:
     name = path.name
     relative = path.as_posix()
+    lowered_relative = relative.lower()
     if name == "sessions.json":
         return "session_store"
+    if _is_transcript_corpus_file(path, lowered_relative):
+        return "transcript_corpus"
     if path.suffix == ".jsonl" and "/sessions/" in relative:
         return "transcript"
-    if path.suffix == ".jsonl" and "transcript" in relative.lower():
+    if path.suffix == ".jsonl" and "transcript" in lowered_relative:
         return "transcript"
-    if "trajectory" in relative.lower() and path.suffix.lower() in {".json", ".jsonl"}:
+    if "trajectory" in lowered_relative and path.suffix.lower() in {".json", ".jsonl"}:
         return "trajectory"
     if name in WORKSPACE_MEMORY_FILES or "/memory/" in relative:
         return "workspace_memory"
     if name in WORKSPACE_CONTEXT_FILES:
         return "workspace_context"
-    if name == "TASKFLOW.md" or "taskflow" in relative.lower():
+    if name == "TASKFLOW.md" or "taskflow" in lowered_relative:
         return "taskflow_record"
     if name == "SKILL.md":
         return "existing_skill"
-    if "diagnostic" in relative.lower() or "otel" in relative.lower():
+    if "diagnostic" in lowered_relative or "otel" in lowered_relative:
         return "diagnostics_export"
     return "other"
 
 
 def _risk_class(source_kind: str) -> str:
-    if source_kind in {"transcript", "trajectory", "workspace_memory"}:
+    if source_kind in {"transcript", "transcript_corpus", "trajectory", "workspace_memory"}:
         return "sensitive"
     if source_kind in {"workspace_context", "plugin_session_state", "queued_injection"}:
         return "policy_sensitive"
@@ -326,7 +329,7 @@ def _risk_class(source_kind: str) -> str:
 
 
 def _recommendation(source_kind: str) -> str:
-    if source_kind in {"transcript", "trajectory", "workspace_memory"}:
+    if source_kind in {"transcript", "transcript_corpus", "trajectory", "workspace_memory"}:
         return "parse_with_redaction_and_taint"
     if source_kind == "workspace_context":
         return "inventory_policy_context_only"
@@ -337,8 +340,10 @@ def _recommendation(source_kind: str) -> str:
 
 def _taint(source_kind: str) -> dict[str, Any]:
     taint: dict[str, Any] = {"historical": True}
-    if source_kind in {"transcript", "trajectory"}:
+    if source_kind in {"transcript", "transcript_corpus", "trajectory"}:
         taint["raw_transcript"] = True
+    if source_kind == "transcript_corpus":
+        taint["transcript_corpus"] = True
     if source_kind == "workspace_memory":
         taint["memory_poisoning_suspected"] = True
     if source_kind == "workspace_context":
@@ -347,6 +352,12 @@ def _taint(source_kind: str) -> dict[str, Any]:
     if source_kind == "existing_skill":
         taint["third_party_skill"] = True
     return taint
+
+
+def _is_transcript_corpus_file(path: Path, lowered_relative: str) -> bool:
+    if "transcript" not in lowered_relative and "corpus" not in lowered_relative:
+        return False
+    return path.name in {"summary.md", "metadata.json", "transcript.jsonl"}
 
 
 def _mtime(value: float) -> str:

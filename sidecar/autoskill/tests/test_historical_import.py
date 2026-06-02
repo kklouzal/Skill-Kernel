@@ -779,6 +779,66 @@ def test_historical_import_parses_transcripts_and_markdown_sections(tmp_path) ->
     assert memory_chunk.taint["memory_poisoning_suspected"] is True
 
 
+def test_historical_import_parses_transcript_corpus_exports(tmp_path) -> None:
+    root = tmp_path / "workspace"
+    corpus = root / "transcripts" / "2026-06-02" / "session-a"
+    corpus.mkdir(parents=True)
+    (corpus / "metadata.json").write_text(
+        (
+            '{"selector":"daily","session_id":"session-a","agent_id":"main",'
+            '"title":"pytest repair","raw_prompt":"do not persist me"}'
+        ),
+        encoding="utf-8",
+    )
+    (corpus / "summary.md").write_text(
+        "# Summary\nUser corrected a failing pytest workflow.\n",
+        encoding="utf-8",
+    )
+    (corpus / "transcript.jsonl").write_text(
+        '{"role":"user","content":"Run pytest for test@example.com"}\n'
+        '{"role":"assistant","content":"Used uv run pytest successfully"}\n',
+        encoding="utf-8",
+    )
+    store = MemoryHistoricalImportStore()
+
+    result = asyncio.run(
+        import_historical_sources(
+            store,
+            workspace_key="dev-01",
+            roots=[root],
+            max_files=10,
+            max_chunks=10,
+            idempotency_key="historical-import:transcript-corpus",
+        )
+    )
+
+    assert result.discovery.source_counts["transcript_corpus"] == 3
+    assert result.parsed_sources == 3
+    kinds = {chunk.chunk_kind for chunk in store.chunks.values()}
+    assert kinds == {
+        "transcript_corpus_metadata",
+        "transcript_corpus_summary",
+        "transcript_corpus_turn",
+    }
+    metadata_chunk = next(
+        chunk for chunk in store.chunks.values() if chunk.chunk_kind == "transcript_corpus_metadata"
+    )
+    assert "raw_prompt" not in metadata_chunk.redacted_text
+    assert metadata_chunk.metadata["metadata_only"] is True
+    assert "session_id" in metadata_chunk.metadata["safe_keys"]
+    summary_chunk = next(
+        chunk for chunk in store.chunks.values() if chunk.chunk_kind == "transcript_corpus_summary"
+    )
+    assert summary_chunk.taint["compaction_summary"] is True
+    assert summary_chunk.metadata["confidence"] == "derived_summary"
+    turn_chunks = [
+        chunk for chunk in store.chunks.values() if chunk.chunk_kind == "transcript_corpus_turn"
+    ]
+    assert len(turn_chunks) == 2
+    assert all(chunk.taint["transcript_corpus"] for chunk in turn_chunks)
+    assert all("test@example.com" not in chunk.redacted_text for chunk in turn_chunks)
+
+
 def test_historical_import_is_idempotent_for_duplicate_chunks(tmp_path) -> None:
     root = tmp_path / "workspace"
     root.mkdir()
