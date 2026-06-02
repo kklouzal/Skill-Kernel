@@ -795,6 +795,71 @@ def test_topology_proposal_endpoint_persists_create_operation() -> None:
     assert audit.records[-1].details["trial_count"] == 4
 
 
+def test_topology_metrics_endpoint_reports_operation_kinds_separately() -> None:
+    topology = NullTopologyStore()
+    app = create_app(topology_store=topology)
+    propose_route = next(
+        route for route in app.routes if route.path == "/v1/topology/propose"
+    )
+    metrics_route = next(
+        route for route in app.routes if route.path == "/v1/topology/metrics"
+    )
+
+    async def run():
+        await propose_route.endpoint(
+            request=TopologyProposalRequest(
+                workspace_id="dev-01",
+                operation_kind="create",
+                proposed=TopologySkillPayload(
+                    slug="pytest-import-repair",
+                    effects={"outputs": ["repair-python-import-error"]},
+                ),
+                evidence_ids=[str(uuid4())],
+                creation_reasons=["recurring missing workflow evidence"],
+            )
+        )
+        await propose_route.endpoint(
+            request=TopologyProposalRequest(
+                workspace_id="dev-01",
+                operation_kind="compose",
+                components=[
+                    TopologySkillPayload(
+                        skill_id=uuid4(),
+                        slug="inspect-failure",
+                        effects={"outputs": ["diagnostic"]},
+                    ),
+                    TopologySkillPayload(
+                        skill_id=uuid4(),
+                        slug="repair-failure",
+                        effects={"outputs": ["patch"]},
+                    ),
+                ],
+                composed_output=TopologySkillPayload(
+                    slug="inspect-and-repair",
+                    effects={"outputs": ["diagnostic", "patch"]},
+                ),
+                evidence_ids=[str(uuid4())],
+            )
+        )
+        return await metrics_route.endpoint(workspace_id="dev-01", limit=1)
+
+    response = asyncio.run(run())
+
+    assert set(response.operations_by_kind) >= {
+        "create",
+        "improve",
+        "compose",
+        "decompose",
+    }
+    assert response.operations_by_kind["create"]["candidate"] == 1
+    assert response.operations_by_kind["compose"]["candidate"] == 1
+    assert response.operations_by_kind["improve"]["total"] == 0
+    assert response.operations_by_kind["decompose"]["total"] == 0
+    assert response.trials_by_operation_kind["create"]["target_creation"]["planned"] == 1
+    assert response.trials_by_operation_kind["compose"]["broker_replay"]["planned"] == 1
+    assert len(response.recent_operations) == 1
+
+
 def test_topology_proposal_endpoint_records_blocked_trials() -> None:
     topology = NullTopologyStore()
     app = create_app(topology_store=topology)

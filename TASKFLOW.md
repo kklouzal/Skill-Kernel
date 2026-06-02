@@ -514,6 +514,11 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   rollback actions, target/no-skill/collision/rollback trial plans, governance
   transaction metadata, and `/v1/topology/propose` persistence through the
   existing topology operation/trial path. Focused topology/admin tests passed.
+- Topology operations now have the separate operator metrics surface required
+  by the handoff spec: `/v1/topology/metrics` reports create/improve/compose/
+  decompose operation counts independently, includes planned-trial status
+  breakdowns by operation kind and trial kind, and returns bounded recent
+  operation samples without activating or mutating topology state.
 
 ## Next Gates
 
@@ -568,6 +573,9 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - External-skill awareness now includes read-only root scanning plus inventory/retrieval/matching, scan scheduling defaults, embedding generation for external descriptions, richer collision risk scoring, explicit operator review-action recording, and operator-approved stage-only import materialization.
 - v16 trace/profile/context APIs and schema exist; event/job/retrieval/evaluator/context-broker paths now propagate trace or context artifacts, LLM calls now have content-safe invocation audit rows, direct writer apply/rollback APIs record content-safe writer spans, mutation-worker writer apply plus revocation rollback record content-safe child spans, embedding generation records content-safe `embedding_call` spans, and worker heartbeat summaries expose content-safe claimed/renewed/succeeded/failed job progress. Longer semantic jobs may still add specialized counters as their multi-phase internals mature.
 - SkillGraphIR now has planner/API/store persistence with transactions, planned trials, first-class create/improve/compose/decompose proposal operations, revocation invalidation for operation/trial state, deterministic apply state transitions after passed trials, broker replay/canary scoring gates for compose/decompose routing, stored downstream action plans, and mutation-worker lifecycle/graph/runtime invalidation execution after accepted topology operations.
+- Operator visibility for SkillGraphIR topology now includes separate
+  create/improve/compose/decompose metrics through `/v1/topology/metrics`;
+  richer UI dashboards can build on this read-only sidecar surface.
 - Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded or induced redacted intervention replay from explicit replay, attribution, canary, or broker outcome evidence.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints; mutation-worker apply exists but fails closed unless the queued job is explicitly policy-approved.
 - Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, invalidates body-index/embedding/context/retrieval/topology/evaluator/attribution/governance objects from traversal summaries, and freeze/critical-canary paths evict affected broker cache entries.

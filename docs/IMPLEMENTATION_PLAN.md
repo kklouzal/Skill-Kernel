@@ -383,6 +383,10 @@ Deliverables:
   subject-scoped `improve` or `decompose` recommendations with structured
   negative-source metadata and suggested `broker_abstain`/`tighten_description`
   context actions, while remaining recommendations only;
+- topology operation metrics; implemented as a control-authenticated
+  `/v1/topology/metrics` surface that reports create/improve/compose/decompose
+  operation counts separately, trial status breakdowns by operation and trial
+  kind, and bounded recent operation samples for operator dashboards;
 - attribution ledger and action-attribution checks; implemented for attribution events, runtime blocked-tool action checks, and revocation invalidation of derived attribution records.
 
 Acceptance:

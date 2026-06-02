@@ -673,6 +673,14 @@ class TopologyUsageProposalResponse(BaseModel):
     skipped: list[dict[str, object]]
 
 
+class TopologyMetricsResponse(BaseModel):
+    workspace_id: str | None = None
+    operations_by_kind: dict[str, dict[str, int]]
+    trials_by_kind: dict[str, dict[str, int]]
+    trials_by_operation_kind: dict[str, dict[str, dict[str, int]]]
+    recent_operations: list[dict[str, object]]
+
+
 class TopologyApplyRequest(BaseModel):
     workspace_id: str
     skill_graph_operation_id: UUID
@@ -3868,6 +3876,19 @@ def create_app(
             proposals=proposals,
             skipped=skipped,
         )
+
+    @app.get("/v1/topology/metrics", response_model=TopologyMetricsResponse)
+    async def topology_metrics(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str | None = None,
+        limit: int = 50,
+    ) -> TopologyMetricsResponse:
+        _require_control_auth(authorization)
+        metrics = await topology.metrics(
+            workspace_key=workspace_id,
+            limit=max(1, min(limit, 250)),
+        )
+        return TopologyMetricsResponse(**metrics)
 
     @app.post("/v1/topology/apply", response_model=TopologyApplyResponse)
     async def apply_topology_operation(

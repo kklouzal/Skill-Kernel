@@ -11,6 +11,25 @@ import asyncpg
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 
+TOPOLOGY_OPERATION_KINDS = ("create", "improve", "compose", "decompose")
+TOPOLOGY_OPERATION_STATUSES = (
+    "candidate",
+    "blocked",
+    "trial",
+    "accepted",
+    "rejected",
+    "applied",
+    "rolled_back",
+)
+TOPOLOGY_TRIAL_STATUSES = (
+    "planned",
+    "running",
+    "passed",
+    "failed",
+    "blocked",
+    "retired",
+)
+
 
 @dataclass(frozen=True)
 class SkillGraphOperationRecord:
@@ -256,6 +275,14 @@ class TopologyStore(Protocol):
         scored_by: str = "autoskill-worker",
     ) -> TopologyBrokerTrialScoreResult:
         """Record deterministic broker replay/canary trial pass/fail results."""
+
+    async def metrics(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Return operator-facing topology metrics by operation and trial kind."""
 
 
 class NullTopologyStore:
@@ -564,6 +591,63 @@ class NullTopologyStore:
             blockers=blockers,
             updated_trials=updated_trials,
         )
+
+    async def metrics(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        operations = [
+            operation
+            for operation in self.operations
+            if workspace_key is None or operation.workspace_key == workspace_key
+        ]
+        operation_by_id = {
+            operation.skill_graph_operation_id: operation for operation in operations
+        }
+        trials = [
+            trial
+            for trial in self.trials
+            if trial.skill_graph_operation_id in operation_by_id
+        ]
+        metrics = _empty_topology_metrics(workspace_key=workspace_key)
+        for operation in operations:
+            _increment_status(
+                metrics["operations_by_kind"],
+                operation.operation_kind,
+                operation.status,
+                statuses=TOPOLOGY_OPERATION_STATUSES,
+            )
+        for trial in trials:
+            operation = operation_by_id.get(trial.skill_graph_operation_id)
+            if operation is None:
+                continue
+            _increment_status(
+                metrics["trials_by_kind"],
+                trial.trial_kind,
+                trial.status,
+                statuses=TOPOLOGY_TRIAL_STATUSES,
+            )
+            by_operation = metrics["trials_by_operation_kind"].setdefault(
+                operation.operation_kind,
+                {},
+            )
+            _increment_status(
+                by_operation,
+                trial.trial_kind,
+                trial.status,
+                statuses=TOPOLOGY_TRIAL_STATUSES,
+            )
+        metrics["recent_operations"] = [
+            operation.to_json()
+            for operation in sorted(
+                operations,
+                key=lambda item: (item.updated_at, item.created_at),
+                reverse=True,
+            )[: max(1, min(limit, 250))]
+        ]
+        return metrics
 
 
 class AsyncpgTopologyStore(AsyncpgPoolOwner):
@@ -981,6 +1065,91 @@ class AsyncpgTopologyStore(AsyncpgPoolOwner):
                 updated_trials=rows,
             )
 
+    async def metrics(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            workspace_id = (
+                await ensure_workspace(conn, workspace_key)
+                if workspace_key is not None
+                else None
+            )
+            operation_rows = await conn.fetch(
+                """
+                SELECT operation_kind, status, count(*)::int AS count
+                FROM autoskill.skill_graph_operations
+                WHERE ($1::uuid IS NULL OR workspace_id = $1)
+                GROUP BY operation_kind, status
+                ORDER BY operation_kind, status
+                """,
+                workspace_id,
+            )
+            trial_rows = await conn.fetch(
+                """
+                SELECT
+                  o.operation_kind,
+                  t.trial_kind,
+                  t.status,
+                  count(*)::int AS count
+                FROM autoskill.planned_topology_trials t
+                JOIN autoskill.skill_graph_operations o
+                  ON o.workspace_id = t.workspace_id
+                 AND o.skill_graph_operation_id = t.skill_graph_operation_id
+                WHERE ($1::uuid IS NULL OR t.workspace_id = $1)
+                GROUP BY o.operation_kind, t.trial_kind, t.status
+                ORDER BY o.operation_kind, t.trial_kind, t.status
+                """,
+                workspace_id,
+            )
+            recent_rows = await conn.fetch(
+                """
+                SELECT o.*, w.external_key AS workspace_key
+                FROM autoskill.skill_graph_operations o
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE ($1::uuid IS NULL OR o.workspace_id = $1)
+                ORDER BY o.updated_at DESC, o.created_at DESC
+                LIMIT $2
+                """,
+                workspace_id,
+                max(1, min(limit, 250)),
+            )
+        metrics = _empty_topology_metrics(workspace_key=workspace_key)
+        for row in operation_rows:
+            _increment_status(
+                metrics["operations_by_kind"],
+                row["operation_kind"],
+                row["status"],
+                count=row["count"],
+                statuses=TOPOLOGY_OPERATION_STATUSES,
+            )
+        for row in trial_rows:
+            _increment_status(
+                metrics["trials_by_kind"],
+                row["trial_kind"],
+                row["status"],
+                count=row["count"],
+                statuses=TOPOLOGY_TRIAL_STATUSES,
+            )
+            by_operation = metrics["trials_by_operation_kind"].setdefault(
+                row["operation_kind"],
+                {},
+            )
+            _increment_status(
+                by_operation,
+                row["trial_kind"],
+                row["status"],
+                count=row["count"],
+                statuses=TOPOLOGY_TRIAL_STATUSES,
+            )
+        metrics["recent_operations"] = [
+            SkillGraphOperationRecord.from_row(row).to_json() for row in recent_rows
+        ]
+        return metrics
+
 
 def _scored_broker_trial(
     trial: PlannedTopologyTrialRecord,
@@ -1048,6 +1217,40 @@ def _json_dict(value: object) -> dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def _empty_topology_metrics(*, workspace_key: str | None) -> dict[str, Any]:
+    return {
+        "workspace_id": workspace_key,
+        "operations_by_kind": {
+            operation_kind: _empty_status_counts(TOPOLOGY_OPERATION_STATUSES)
+            for operation_kind in TOPOLOGY_OPERATION_KINDS
+        },
+        "trials_by_kind": {},
+        "trials_by_operation_kind": {
+            operation_kind: {} for operation_kind in TOPOLOGY_OPERATION_KINDS
+        },
+        "recent_operations": [],
+    }
+
+
+def _empty_status_counts(statuses: tuple[str, ...]) -> dict[str, int]:
+    return {**{status: 0 for status in statuses}, "total": 0}
+
+
+def _increment_status(
+    parent: dict[str, Any],
+    key: str,
+    status: str,
+    *,
+    count: int = 1,
+    statuses: tuple[str, ...],
+) -> None:
+    bucket = parent.setdefault(key, _empty_status_counts(statuses))
+    if status not in bucket:
+        bucket[status] = 0
+    bucket[status] += count
+    bucket["total"] += count
 
 
 def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:
