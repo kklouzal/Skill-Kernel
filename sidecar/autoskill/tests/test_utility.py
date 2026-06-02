@@ -72,3 +72,12 @@ def test_curation_plans_split_and_improvement_actions() -> None:
 
     assert [action.action for action in actions] == ["plan_split", "plan_improvement"]
     assert {action.status for action in actions} == {"planned"}
+    assert actions[0].features["repair_proposal"]["proposal_kind"] == "decompose"
+    assert "sibling" in actions[0].features["repair_proposal"]["planned_trials"]
+    assert actions[1].features["repair_proposal"]["proposal_kind"] == "improve"
+    assert actions[1].features["repair_proposal"]["acceptance_gate"] == {
+        "scanner_pass": True,
+        "regression_failures": 0,
+        "utility_delta_positive": True,
+        "requires_no_skill_control": True,
+    }

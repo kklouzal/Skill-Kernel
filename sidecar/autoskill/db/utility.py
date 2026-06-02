@@ -548,6 +548,11 @@ async def _plan_improvements_and_splits(
                     **rollup.features.to_json(),
                     "utility_score": rollup.utility_score,
                     "planner": "deterministic-curation.v1",
+                    "repair_proposal": _repair_proposal_for_rollup(
+                        rollup,
+                        action=action,
+                        reason=reason,
+                    ),
                 },
             )
         )
@@ -570,6 +575,76 @@ def _planning_action_for_rollup(rollup: SkillUtilityRollupRecord) -> tuple[str |
     if rollup.features.hurt_count >= 2:
         return "plan_improvement", "repeated harmful outcomes require guarded improvement"
     return None, ""
+
+
+def _repair_proposal_for_rollup(
+    rollup: SkillUtilityRollupRecord,
+    *,
+    action: str,
+    reason: str,
+) -> dict[str, Any]:
+    proposal_kind = {
+        "plan_split": "decompose",
+        "plan_disambiguation_repair": "improve",
+        "plan_improvement": "improve",
+    }.get(action, "review")
+    trial_kinds = ["target", "regression", "no_skill_control"]
+    if action in {"plan_split", "plan_disambiguation_repair"}:
+        trial_kinds.append("sibling")
+    if rollup.features.hurt_count:
+        trial_kinds.append("adversarial")
+    return {
+        "schema": "autoskill.curation_repair_proposal.v1",
+        "proposal_kind": proposal_kind,
+        "curation_action": action,
+        "subject_skill_id": str(rollup.skill_id),
+        "subject_slug": rollup.slug,
+        "reason": reason,
+        "signals": {
+            **rollup.features.to_json(),
+            "utility_score": rollup.utility_score,
+            "lifecycle_state": rollup.lifecycle_state,
+        },
+        "objectives": _repair_objectives(action),
+        "planned_trials": trial_kinds,
+        "acceptance_gate": {
+            "scanner_pass": True,
+            "regression_failures": 0,
+            "utility_delta_positive": True,
+            "requires_no_skill_control": True,
+        },
+        "rollback": {
+            "required": True,
+            "scope": [
+                "skill_version",
+                "body_index_document",
+                "embedding",
+                "context_artifact",
+                "retrieval_log",
+                "skill_graph_edge",
+            ],
+        },
+    }
+
+
+def _repair_objectives(action: str) -> list[str]:
+    if action == "plan_split":
+        return [
+            "separate broad behavior into narrower successor skills",
+            "preserve subject effects through successor coverage",
+            "reduce sibling shadowing under broker replay",
+        ]
+    if action == "plan_disambiguation_repair":
+        return [
+            "tighten applicability and do-not-use boundaries",
+            "reduce wrong-skill selection under sibling probes",
+        ]
+    if action == "plan_improvement":
+        return [
+            "address repeated harmful outcomes with a guarded SkillIR revision",
+            "prove positive marginal utility before activation",
+        ]
+    return ["review curation signal before mutation"]
 
 
 async def _set_lifecycle_state(
