@@ -16,6 +16,10 @@ from autoskill.api.app import (
     create_app,
 )
 from autoskill.core.audit import AuditRecord, verify_hash_chain
+from autoskill.core.config import get_settings
+from autoskill.db.broker_policy import NullBrokerPolicyStore
+from autoskill.db.jobs import NullJobStore
+from autoskill.db.profiles import ExecutorProfileRecord, ModelProfileRecord
 from autoskill.db.skills import SkillRecord
 from autoskill.db.topology import NullTopologyStore
 
@@ -102,6 +106,117 @@ class MemoryAuditStore:
         return verify_hash_chain(self.records[-limit:])
 
 
+class MemoryReadinessProfileStore:
+    def __init__(self) -> None:
+        now = datetime.now(UTC)
+        self.executor_profiles = [
+            ExecutorProfileRecord(
+                executor_profile_id=uuid4(),
+                workspace_id=uuid4(),
+                workspace_key="dev-01",
+                profile_key="codex-prod",
+                model_family="gpt",
+                agent_backend="codex",
+                sandbox="danger-full-access",
+                os_name="ubuntu",
+                available_tools=["exec"],
+                available_binaries=["git"],
+                permissions={"filesystem": "workspace"},
+                api_contracts={},
+                status="active",
+                created_at=now,
+                updated_at=now,
+            )
+        ]
+        self.model_profiles = [
+            ModelProfileRecord(
+                profile_id=uuid4(),
+                workspace_id=uuid4(),
+                workspace_key="dev-01",
+                profile_key="text-prod",
+                provider="openai-compatible",
+                model="configured-text-model",
+                route_kind="openai_compatible",
+                endpoint_ref="AUTOSKILL_LLM_API_BASE_URL",
+                timeout_seconds=30.0,
+                thinking_level="medium",
+                thinking_fallback_policy="omit",
+                status="qualified",
+                qualification={"verdict": "qualified"},
+                kind="model",
+                embedding_dim=None,
+                created_at=now,
+                updated_at=now,
+            )
+        ]
+        self.embedding_profiles = [
+            ModelProfileRecord(
+                profile_id=uuid4(),
+                workspace_id=uuid4(),
+                workspace_key="dev-01",
+                profile_key="embedding-prod",
+                provider="openai-compatible",
+                model="configured-embedding-model",
+                route_kind="openai_compatible",
+                endpoint_ref="AUTOSKILL_EMBEDDING_API_BASE_URL",
+                timeout_seconds=15.0,
+                thinking_level="off",
+                thinking_fallback_policy="omit",
+                status="active",
+                qualification={"verdict": "qualified"},
+                kind="embedding",
+                embedding_dim=768,
+                created_at=now,
+                updated_at=now,
+            )
+        ]
+
+    async def list_executor_profiles(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ExecutorProfileRecord]:
+        profiles = [
+            profile
+            for profile in self.executor_profiles
+            if profile.workspace_key == workspace_key
+            and (status is None or profile.status == status)
+        ]
+        return profiles[:limit]
+
+    async def list_model_profiles(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ModelProfileRecord]:
+        profiles = [
+            profile
+            for profile in self.model_profiles
+            if profile.workspace_key == workspace_key
+            and (status is None or profile.status == status)
+        ]
+        return profiles[:limit]
+
+    async def list_embedding_profiles(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ModelProfileRecord]:
+        profiles = [
+            profile
+            for profile in self.embedding_profiles
+            if profile.workspace_key == workspace_key
+            and (status is None or profile.status == status)
+        ]
+        return profiles[:limit]
+
+
 def test_skills_endpoint_lists_persisted_skill_metadata() -> None:
     skill_store = MemorySkillStore()
     app = create_app(skill_store=skill_store)
@@ -135,6 +250,107 @@ def test_audit_recent_endpoint_returns_records_and_chain_status() -> None:
 
     assert response.chain_valid is True
     assert [record["action"] for record in response.audit] == ["activate", "create"]
+
+
+def test_profile_list_endpoints_return_operator_profile_surfaces() -> None:
+    app = create_app(profile_store=MemoryReadinessProfileStore())
+    routes = {
+        (route.path, next(iter(route.methods - {"HEAD", "OPTIONS"}))): route
+        for route in app.routes
+        if hasattr(route, "methods")
+    }
+
+    async def run():
+        models = await routes[("/v1/profiles/models", "GET")].endpoint(
+            workspace_id="dev-01",
+            status=None,
+            limit=10,
+        )
+        embeddings = await routes[("/v1/profiles/embeddings", "GET")].endpoint(
+            workspace_id="dev-01",
+            status="active",
+            limit=10,
+        )
+        return models, embeddings
+
+    models, embeddings = asyncio.run(run())
+
+    assert models.profiles[0]["profile_key"] == "text-prod"
+    assert models.profiles[0]["status"] == "qualified"
+    assert embeddings.profiles[0]["profile_key"] == "embedding-prod"
+    assert embeddings.profiles[0]["embedding_dim"] == 768
+
+
+def test_deployment_readiness_reports_blockers_without_mutating_runtime() -> None:
+    app = create_app(job_store=NullJobStore())
+    route = next(route for route in app.routes if route.path == "/v1/deployment/readiness")
+
+    async def run():
+        return await route.endpoint(
+            workspace_id="dev-01",
+            replay_tag="production",
+        )
+
+    response = asyncio.run(run())
+
+    assert response.ready is False
+    assert "database_configured" in response.blockers
+    assert "control_auth_configured" in response.blockers
+    assert "ingest_auth_configured" in response.blockers
+    assert "runtime_context_broker_enabled" in response.blockers
+    assert "writer_roots_contained" not in response.blockers
+
+
+def test_deployment_readiness_passes_when_required_gates_are_present(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    monkeypatch.setenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", "true")
+    get_settings.cache_clear()
+
+    broker_policies = NullBrokerPolicyStore()
+
+    async def seed_broker_policy() -> None:
+        await broker_policies.upsert_policy_version(
+            workspace_key="dev-01",
+            version="prod.v1",
+            policy={"max_tokens": 800},
+            status="active",
+        )
+        await broker_policies.record_replay_episode(
+            workspace_key="dev-01",
+            episode_key="prod-episode-1",
+            redacted_user_intent="Diagnose a bounded OpenClaw failure.",
+            expected_decision="skill_hint",
+            tags=["production"],
+        )
+
+    asyncio.run(seed_broker_policy())
+
+    app = create_app(
+        job_store=NullJobStore(),
+        profile_store=MemoryReadinessProfileStore(),
+        broker_policy_store=broker_policies,
+    )
+    route = next(route for route in app.routes if route.path == "/v1/deployment/readiness")
+
+    async def run():
+        return await route.endpoint(
+            authorization="Bearer control-token",
+            workspace_id="dev-01",
+            replay_tag="production",
+        )
+
+    response = asyncio.run(run())
+
+    assert response.ready is True
+    assert response.blockers == []
+    assert response.checks["active_broker_policy"]["version"] == "prod.v1"
+    assert response.checks["active_embedding_profile"]["dimensions"] == [768]
+
+    get_settings.cache_clear()
 
 
 def test_v14_trace_diagnostics_profiles_and_context_surfaces() -> None:

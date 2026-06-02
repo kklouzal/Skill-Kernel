@@ -148,6 +148,14 @@ class StatusResponse(BaseModel):
     workers: dict[str, object]
 
 
+class DeploymentReadinessResponse(BaseModel):
+    workspace_id: str
+    ready: bool
+    blockers: list[str]
+    warnings: list[str]
+    checks: dict[str, object]
+
+
 class JobEnqueueRequest(BaseModel):
     workspace_id: str
     job_kind: str
@@ -319,6 +327,10 @@ class EmbeddingProfileUpsertRequest(ModelProfileUpsertRequest):
 
 class ModelProfileResponse(BaseModel):
     profile: dict[str, object]
+
+
+class ModelProfileListResponse(BaseModel):
+    profiles: list[dict[str, object]]
 
 
 class ProfileQualificationRunRequest(BaseModel):
@@ -1341,6 +1353,235 @@ def _writer_roots(workspace_root: Path | None = None) -> tuple[Path, Path, Path]
     return root, staging_root, archive_root
 
 
+def _readiness_check(
+    checks: dict[str, object],
+    blockers: list[str],
+    warnings: list[str],
+    name: str,
+    *,
+    passed: bool,
+    required: bool = True,
+    detail: dict[str, object] | None = None,
+) -> None:
+    status = "passed" if passed else ("blocked" if required else "warning")
+    checks[name] = {"status": status, **(detail or {})}
+    if passed:
+        return
+    if required:
+        blockers.append(name)
+    else:
+        warnings.append(name)
+
+
+async def _deployment_readiness_report(
+    *,
+    workspace_id: str,
+    jobs: JobStore,
+    profiles: ProfileStore,
+    broker_policies: BrokerPolicyStore,
+    writer_workspace_root: Path | None = None,
+    replay_tag: str = "production",
+) -> DeploymentReadinessResponse:
+    settings = get_settings()
+    checks: dict[str, object] = {}
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "database_configured",
+        passed=bool(settings.database_url),
+        detail={"configured": bool(settings.database_url)},
+    )
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "control_auth_configured",
+        passed=bool(settings.control_token),
+        detail={"configured": bool(settings.control_token)},
+    )
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "ingest_auth_configured",
+        passed=bool(settings.ingest_token),
+        detail={"configured": bool(settings.ingest_token)},
+    )
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "redaction_before_storage_and_embedding",
+        passed=settings.redact_before_store and settings.redact_before_embed,
+        detail={
+            "redact_before_store": settings.redact_before_store,
+            "redact_before_embed": settings.redact_before_embed,
+        },
+    )
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "runtime_context_broker_enabled",
+        passed=settings.runtime_context_broker_enabled,
+        detail={
+            "enabled": settings.runtime_context_broker_enabled,
+            "timeout_ms": settings.runtime_context_timeout_ms,
+            "max_tokens": settings.max_context_hint_tokens,
+        },
+    )
+
+    try:
+        _writer_roots(writer_workspace_root)
+        _readiness_check(
+            checks,
+            blockers,
+            warnings,
+            "writer_roots_contained",
+            passed=True,
+            detail={
+                "active_root": str(settings.active_root),
+                "staging_root": str(settings.staging_root),
+                "archive_root": str(settings.archive_root),
+            },
+        )
+    except HTTPException as error:
+        _readiness_check(
+            checks,
+            blockers,
+            warnings,
+            "writer_roots_contained",
+            passed=False,
+            detail={"error": str(error.detail)},
+        )
+
+    executor_profiles = await profiles.list_executor_profiles(
+        workspace_key=workspace_id,
+        status="active",
+        limit=500,
+    )
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "active_executor_profile",
+        passed=bool(executor_profiles),
+        detail={"count": len(executor_profiles)},
+    )
+
+    model_profiles = await profiles.list_model_profiles(
+        workspace_key=workspace_id,
+        limit=500,
+    )
+    qualified_model_profiles = [
+        profile
+        for profile in model_profiles
+        if profile.status in {"active", "qualified", "qualified_autonomous"}
+    ]
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "qualified_text_model_profile",
+        passed=bool(qualified_model_profiles),
+        detail={
+            "count": len(qualified_model_profiles),
+            "profile_keys": [profile.profile_key for profile in qualified_model_profiles],
+        },
+    )
+
+    embedding_profiles = await profiles.list_embedding_profiles(
+        workspace_key=workspace_id,
+        limit=500,
+    )
+    active_embedding_profiles = [
+        profile for profile in embedding_profiles if profile.status == "active"
+    ]
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "active_embedding_profile",
+        passed=bool(active_embedding_profiles),
+        detail={
+            "count": len(active_embedding_profiles),
+            "profile_keys": [profile.profile_key for profile in active_embedding_profiles],
+            "dimensions": [
+                profile.embedding_dim for profile in active_embedding_profiles
+            ],
+        },
+    )
+
+    active_policy = await broker_policies.get_active_policy(workspace_key=workspace_id)
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "active_broker_policy",
+        passed=active_policy is not None,
+        detail={
+            "version": active_policy.version if active_policy else None,
+            "broker_policy_version_id": (
+                str(active_policy.broker_policy_version_id) if active_policy else None
+            ),
+        },
+    )
+
+    replay_tags = [replay_tag] if replay_tag else []
+    replay_episodes = await broker_policies.list_replay_episodes(
+        workspace_key=workspace_id,
+        tags=replay_tags,
+        limit=1,
+    )
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "broker_replay_corpus",
+        passed=bool(replay_episodes),
+        detail={"tag": replay_tag, "sampled": len(replay_episodes)},
+    )
+
+    job_summary = await jobs.summary()
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "job_queue_has_no_failed_jobs",
+        passed=job_summary.counts.get("failed", 0) == 0,
+        required=False,
+        detail={"counts": job_summary.counts, "by_kind": job_summary.by_kind},
+    )
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "worker_concurrency_configured",
+        passed=(
+            settings.worker_scheduler_concurrency > 0
+            and settings.worker_maintenance_concurrency > 0
+            and settings.worker_mutation_concurrency > 0
+        ),
+        detail={
+            "scheduler": settings.worker_scheduler_concurrency,
+            "maintenance": settings.worker_maintenance_concurrency,
+            "mutation": settings.worker_mutation_concurrency,
+        },
+    )
+
+    return DeploymentReadinessResponse(
+        workspace_id=workspace_id,
+        ready=not blockers,
+        blockers=blockers,
+        warnings=warnings,
+        checks=checks,
+    )
+
+
 def _embedder_from_profile(profile: object, settings: object):
     try:
         return build_text_embedder_from_profile(
@@ -1744,6 +1985,22 @@ def create_app(
             },
             jobs=job_summary.counts,
             workers=worker_health.to_json(),
+        )
+
+    @app.get("/v1/deployment/readiness", response_model=DeploymentReadinessResponse)
+    async def deployment_readiness(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str = "default",
+        replay_tag: str = "production",
+    ) -> DeploymentReadinessResponse:
+        _require_control_auth(authorization)
+        return await _deployment_readiness_report(
+            workspace_id=workspace_id,
+            jobs=jobs,
+            profiles=profiles,
+            broker_policies=broker_policies,
+            writer_workspace_root=writer_workspace_root,
+            replay_tag=replay_tag,
         )
 
     @app.post("/v1/ingest/events", response_model=IngestResult)
@@ -2393,6 +2650,21 @@ def create_app(
         )
         return ModelProfileResponse(profile=profile.to_json())
 
+    @app.get("/v1/profiles/models", response_model=ModelProfileListResponse)
+    async def list_model_profiles(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str = "default",
+        status: str | None = None,
+        limit: int = 100,
+    ) -> ModelProfileListResponse:
+        _require_control_auth(authorization)
+        listed = await profiles.list_model_profiles(
+            workspace_key=workspace_id,
+            status=status,
+            limit=max(1, min(limit, 500)),
+        )
+        return ModelProfileListResponse(profiles=[profile.to_json() for profile in listed])
+
     @app.post("/v1/profiles/embeddings", response_model=ModelProfileResponse)
     async def upsert_embedding_profile(
         request: EmbeddingProfileUpsertRequest,
@@ -2412,6 +2684,21 @@ def create_app(
             qualification=request.qualification,
         )
         return ModelProfileResponse(profile=profile.to_json())
+
+    @app.get("/v1/profiles/embeddings", response_model=ModelProfileListResponse)
+    async def list_embedding_profiles(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str = "default",
+        status: str | None = None,
+        limit: int = 100,
+    ) -> ModelProfileListResponse:
+        _require_control_auth(authorization)
+        listed = await profiles.list_embedding_profiles(
+            workspace_key=workspace_id,
+            status=status,
+            limit=max(1, min(limit, 500)),
+        )
+        return ModelProfileListResponse(profiles=[profile.to_json() for profile in listed])
 
     @app.post(
         "/v1/profiles/models/qualify",

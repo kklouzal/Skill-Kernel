@@ -208,6 +208,15 @@ class ProfileStore(Protocol):
     ) -> ModelProfileRecord | None:
         """Fetch one text model profile for provider-qualified runtime use."""
 
+    async def list_model_profiles(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ModelProfileRecord]:
+        """List text model profiles for operator readiness checks."""
+
     async def upsert_embedding_profile(
         self,
         *,
@@ -231,6 +240,15 @@ class ProfileStore(Protocol):
         profile_key: str,
     ) -> ModelProfileRecord | None:
         """Fetch one embedding profile for provider-qualified runtime use."""
+
+    async def list_embedding_profiles(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ModelProfileRecord]:
+        """List embedding profiles for operator readiness checks."""
 
     async def get_active_embedding_profile(
         self,
@@ -332,6 +350,15 @@ class NullProfileStore:
     ) -> ModelProfileRecord | None:
         return None
 
+    async def list_model_profiles(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ModelProfileRecord]:
+        return []
+
     async def upsert_embedding_profile(
         self,
         *,
@@ -376,6 +403,15 @@ class NullProfileStore:
         profile_key: str,
     ) -> ModelProfileRecord | None:
         return None
+
+    async def list_embedding_profiles(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ModelProfileRecord]:
+        return []
 
     async def get_active_embedding_profile(
         self,
@@ -564,6 +600,32 @@ class AsyncpgProfileStore(AsyncpgPoolOwner):
             )
         return ModelProfileRecord.from_model_row(row) if row else None
 
+    async def list_model_profiles(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ModelProfileRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            rows = await conn.fetch(
+                """
+                SELECT *, $3::text AS workspace_key
+                FROM autoskill.model_profiles
+                WHERE workspace_id = $1
+                  AND ($2::text IS NULL OR status = $2)
+                ORDER BY updated_at DESC
+                LIMIT $4
+                """,
+                workspace_id,
+                status,
+                workspace_key,
+                max(1, min(limit, 1000)),
+            )
+        return [ModelProfileRecord.from_model_row(row) for row in rows]
+
     async def upsert_embedding_profile(
         self,
         *,
@@ -655,6 +717,32 @@ class AsyncpgProfileStore(AsyncpgPoolOwner):
                 workspace_key,
             )
         return ModelProfileRecord.from_embedding_row(row) if row else None
+
+    async def list_embedding_profiles(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ModelProfileRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            rows = await conn.fetch(
+                """
+                SELECT *, $3::text AS workspace_key
+                FROM autoskill.embedding_profiles
+                WHERE workspace_id = $1
+                  AND ($2::text IS NULL OR status = $2)
+                ORDER BY updated_at DESC
+                LIMIT $4
+                """,
+                workspace_id,
+                status,
+                workspace_key,
+                max(1, min(limit, 1000)),
+            )
+        return [ModelProfileRecord.from_embedding_row(row) for row in rows]
 
     async def get_active_embedding_profile(
         self,

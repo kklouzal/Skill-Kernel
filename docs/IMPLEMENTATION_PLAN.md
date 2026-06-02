@@ -285,3 +285,29 @@ Acceptance:
 - drift violations trigger targeted repair; implemented as drift-event repair-candidate metadata with localized repair plans and active drift probes that retire when contracts return valid or when an operator marks a known-noisy contract false-positive; conservative repair execution now queues drift rechecks or policy-approved staged writer applies rather than inventing broad autonomous mutations from incomplete source data;
 - curation logs features/actions/outcomes;
 - audit integrity verifies.
+
+## Phase 10 - Production Hardening and Operator Readiness
+
+Deliverables:
+
+- operator profile inventory surfaces; implemented as control-authenticated
+  bounded `GET /v1/profiles/models` and `GET /v1/profiles/embeddings` routes;
+- deterministic deployment readiness reporting; implemented as
+  `GET /v1/deployment/readiness`, which reports pass/block/warn state for
+  database configuration, ingest/control auth, redaction, runtime broker
+  enablement, writer-root containment, executor/text/embedding profile readiness,
+  active broker policy, production-tagged replay corpus presence, job failures,
+  and worker concurrency;
+- production preflight remains sidecar-state-only and does not install the
+  plugin, write runtime skills, activate autonomous apply, or mutate live
+  OpenClaw configuration.
+
+Acceptance:
+
+- missing production safety/configuration gates produce explicit blockers instead
+  of a permissive status;
+- persisted executor, qualified text model, active embedding profile, active
+  broker policy, and production replay records can make the readiness report pass
+  through the real asyncpg stores after compose migrations;
+- readiness reporting is an operator preflight before live gateway
+  capture/spool/replay smoke, not a substitute for that live validation.
