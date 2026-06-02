@@ -1,14 +1,17 @@
 import asyncio
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from autoskill.api.app import (
     ContextArtifactRecordRequest,
     ContextTokenLedgerOutcomeRequest,
     ContextTokenLedgerRequest,
+    ControlFlowEventRequest,
     DiagnosticSignalRequest,
     EmbeddingProfileUpsertRequest,
     ExecutorProfileUpsertRequest,
+    MemoryQuarantineDecisionRequest,
+    MemoryQuarantineRequest,
     ModelProfileUpsertRequest,
     TopologyProposalRequest,
     TopologySkillPayload,
@@ -351,6 +354,77 @@ def test_deployment_readiness_passes_when_required_gates_are_present(
     assert response.checks["active_embedding_profile"]["dimensions"] == [768]
 
     get_settings.cache_clear()
+
+
+def test_memory_quarantine_and_control_flow_surfaces_are_governed() -> None:
+    app = create_app()
+    routes = {
+        (route.path, next(iter(route.methods - {"HEAD", "OPTIONS"}))): route
+        for route in app.routes
+        if hasattr(route, "methods")
+    }
+    source_id = uuid4()
+
+    async def run():
+        quarantined = await routes[("/v1/memory/quarantine", "POST")].endpoint(
+            request=MemoryQuarantineRequest(
+                workspace_id="dev-01",
+                source_object_type="evidence",
+                source_object_id=source_id,
+                proposed_memory={
+                    "memory_kind": "procedural_lesson",
+                    "summary": "Use the retry gate only after redacted evidence recurs.",
+                },
+                taint={"source": "derived", "external_instruction": False},
+                scanner_findings={"imperative_language": False},
+            )
+        )
+        listed_pending = await routes[("/v1/memory/quarantine", "GET")].endpoint(
+            workspace_id="dev-01",
+            status="pending",
+            limit=10,
+        )
+        decided = await routes[
+            ("/v1/memory/quarantine/{quarantine_id}/decision", "POST")
+        ].endpoint(
+            quarantine_id=UUID(quarantined.memory["quarantine_id"]),
+            request=MemoryQuarantineDecisionRequest(
+                workspace_id="dev-01",
+                status="approved",
+                operator_id="operator-1",
+                rationale="Scanner and provenance gates passed.",
+            ),
+        )
+        event = await routes[("/v1/control-flow/events", "POST")].endpoint(
+            request=ControlFlowEventRequest(
+                workspace_id="dev-01",
+                source_kind="memory",
+                source_id=quarantined.memory["quarantine_id"],
+                influence_kind="retrieval",
+                run_id="run-1",
+                decision={
+                    "decision": "eligible_after_quarantine_approval",
+                    "memory_status": decided.memory["status"],
+                },
+            )
+        )
+        listed_events = await routes[("/v1/control-flow/events", "GET")].endpoint(
+            workspace_id="dev-01",
+            source_kind="memory",
+            influence_kind="retrieval",
+            limit=10,
+        )
+        return quarantined, listed_pending, decided, event, listed_events
+
+    quarantined, listed_pending, decided, event, listed_events = asyncio.run(run())
+
+    assert quarantined.memory["status"] == "pending"
+    assert listed_pending.memories[0]["quarantine_id"] == quarantined.memory["quarantine_id"]
+    assert decided.memory["status"] == "approved"
+    assert decided.memory["decided_at"] is not None
+    assert event.event["source_kind"] == "memory"
+    assert event.event["influence_kind"] == "retrieval"
+    assert listed_events.events[0]["decision"]["memory_status"] == "approved"
 
 
 def test_v14_trace_diagnostics_profiles_and_context_surfaces() -> None:

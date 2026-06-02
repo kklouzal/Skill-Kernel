@@ -61,6 +61,11 @@ from autoskill.db.llm_invocations import (
     LLMInvocationStore,
     NullLLMInvocationStore,
 )
+from autoskill.db.memory import (
+    AsyncpgMemoryGovernanceStore,
+    MemoryGovernanceStore,
+    NullMemoryGovernanceStore,
+)
 from autoskill.db.observability import (
     AsyncpgObservabilityStore,
     NullObservabilityStore,
@@ -820,6 +825,47 @@ class ActionAttributionCheckResponse(BaseModel):
     check: dict[str, object]
 
 
+class MemoryQuarantineRequest(BaseModel):
+    workspace_id: str
+    source_object_type: str
+    source_object_id: UUID
+    proposed_memory: dict[str, object]
+    taint: dict[str, object] = Field(default_factory=dict)
+    scanner_findings: dict[str, object] = Field(default_factory=dict)
+
+
+class MemoryQuarantineDecisionRequest(BaseModel):
+    workspace_id: str
+    status: str
+    operator_id: str | None = None
+    rationale: str | None = None
+
+
+class MemoryQuarantineResponse(BaseModel):
+    memory: dict[str, object] | None
+
+
+class MemoryQuarantineListResponse(BaseModel):
+    memories: list[dict[str, object]]
+
+
+class ControlFlowEventRequest(BaseModel):
+    workspace_id: str
+    source_kind: str
+    influence_kind: str
+    decision: dict[str, object]
+    run_id: str | None = None
+    source_id: UUID | None = None
+
+
+class ControlFlowEventResponse(BaseModel):
+    event: dict[str, object]
+
+
+class ControlFlowEventListResponse(BaseModel):
+    events: list[dict[str, object]]
+
+
 class CanaryResultRequest(BaseModel):
     workspace_id: str
     skill_id: UUID
@@ -1226,6 +1272,16 @@ def _build_llm_invocation_store() -> LLMInvocationStore:
             statement_timeout_ms=settings.statement_timeout_ms,
         )
     return NullLLMInvocationStore()
+
+
+def _build_memory_governance_store() -> MemoryGovernanceStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgMemoryGovernanceStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullMemoryGovernanceStore()
 
 
 def _build_profile_qualification_store() -> ProfileQualificationStore:
@@ -1868,6 +1924,7 @@ def create_app(
     diagnostic_store: DiagnosticMomentumStore | None = None,
     profile_store: ProfileStore | None = None,
     llm_invocation_store: LLMInvocationStore | None = None,
+    memory_governance_store: MemoryGovernanceStore | None = None,
     profile_qualification_store: ProfileQualificationStore | None = None,
     llm_client: LLMClient | None = None,
     compatibility_store: CompatibilityStore | None = None,
@@ -1898,6 +1955,7 @@ def create_app(
     diagnostics = diagnostic_store or _build_diagnostic_store()
     profiles = profile_store or _build_profile_store()
     llm_invocations = llm_invocation_store or _build_llm_invocation_store()
+    memory_governance = memory_governance_store or _build_memory_governance_store()
     profile_qualifications = (
         profile_qualification_store or _build_profile_qualification_store()
     )
@@ -1940,6 +1998,7 @@ def create_app(
                 diagnostics,
                 profiles,
                 llm_invocations,
+                memory_governance,
                 profile_qualifications,
                 compatibility,
                 context_governance,
@@ -2043,6 +2102,122 @@ def create_app(
             counterfactual_kind=request.counterfactual_kind,
         )
         return ActionAttributionCheckResponse(check=record.to_json())
+
+    @app.post("/v1/memory/quarantine", response_model=MemoryQuarantineResponse)
+    async def quarantine_memory_candidate(
+        request: MemoryQuarantineRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> MemoryQuarantineResponse:
+        _require_control_auth(authorization)
+        record = await memory_governance.quarantine_memory(
+            workspace_key=request.workspace_id,
+            source_object_type=request.source_object_type,
+            source_object_id=request.source_object_id,
+            proposed_memory=request.proposed_memory,
+            taint=request.taint,
+            scanner_findings=request.scanner_findings,
+        )
+        return MemoryQuarantineResponse(memory=record.to_json())
+
+    @app.get("/v1/memory/quarantine", response_model=MemoryQuarantineListResponse)
+    async def list_memory_quarantine(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str = "default",
+        status: str | None = None,
+        limit: int = 100,
+    ) -> MemoryQuarantineListResponse:
+        _require_control_auth(authorization)
+        try:
+            records = await memory_governance.list_memory_quarantine(
+                workspace_key=workspace_id,
+                status=status,
+                limit=max(1, min(limit, 500)),
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return MemoryQuarantineListResponse(
+            memories=[record.to_json() for record in records],
+        )
+
+    @app.post(
+        "/v1/memory/quarantine/{quarantine_id}/decision",
+        response_model=MemoryQuarantineResponse,
+    )
+    async def decide_memory_quarantine(
+        quarantine_id: UUID,
+        request: MemoryQuarantineDecisionRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> MemoryQuarantineResponse:
+        _require_control_auth(authorization)
+        try:
+            record = await memory_governance.decide_memory_quarantine(
+                workspace_key=request.workspace_id,
+                quarantine_id=quarantine_id,
+                status=request.status,
+                operator_id=request.operator_id,
+                rationale=request.rationale,
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        if record is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="memory quarantine record not found",
+            )
+        return MemoryQuarantineResponse(memory=record.to_json())
+
+    @app.post("/v1/control-flow/events", response_model=ControlFlowEventResponse)
+    async def record_control_flow_event(
+        request: ControlFlowEventRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ControlFlowEventResponse:
+        _require_control_auth(authorization)
+        try:
+            event = await memory_governance.record_control_flow_event(
+                workspace_key=request.workspace_id,
+                source_kind=request.source_kind,
+                influence_kind=request.influence_kind,
+                decision=request.decision,
+                run_id=request.run_id,
+                source_id=request.source_id,
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return ControlFlowEventResponse(event=event.to_json())
+
+    @app.get("/v1/control-flow/events", response_model=ControlFlowEventListResponse)
+    async def list_control_flow_events(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str = "default",
+        source_kind: str | None = None,
+        influence_kind: str | None = None,
+        limit: int = 100,
+    ) -> ControlFlowEventListResponse:
+        _require_control_auth(authorization)
+        try:
+            events = await memory_governance.list_control_flow_events(
+                workspace_key=workspace_id,
+                source_kind=source_kind,
+                influence_kind=influence_kind,
+                limit=max(1, min(limit, 500)),
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return ControlFlowEventListResponse(
+            events=[event.to_json() for event in events],
+        )
 
     @app.post("/v1/runtime/context-hint", response_model=ContextHintResponse)
     async def context_hint(request: ContextHintRequest) -> ContextHintResponse:

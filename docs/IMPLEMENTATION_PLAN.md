@@ -286,6 +286,29 @@ Acceptance:
 - curation logs features/actions/outcomes;
 - audit integrity verifies.
 
+## Phase 9.5 - Memory Quarantine and Control-Flow Integrity
+
+Deliverables:
+
+- DB-side governed memory quarantine; implemented as inactive pending
+  `memory_quarantine` rows with proposed memory, taint, scanner findings, and
+  explicit approve/reject/expire decisions;
+- control-flow integrity logging; implemented as append-only
+  `control_flow_events` rows for memory, skill, broker, tool, user, system, and
+  external-skill-inventory influence over retrieval, routing, mutation, archive,
+  promotion, and rollback decisions;
+- control-authenticated operator APIs for recording/listing memory quarantine,
+  deciding quarantined memory, and recording/listing control-flow events.
+
+Acceptance:
+
+- quarantined memories do not become runtime-loaded, embedded, or mutation
+  inputs merely by being recorded;
+- invalid quarantine decisions and invalid control-flow source/influence kinds
+  fail before persistence;
+- focused admin tests prove pending quarantine, explicit approval, and
+  memory-influenced retrieval event recording through the API surface.
+
 ## Phase 10 - Production Hardening and Operator Readiness
 
 Deliverables:

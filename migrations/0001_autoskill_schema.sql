@@ -822,11 +822,33 @@ CREATE TABLE IF NOT EXISTS autoskill.attribution_events (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.memory_quarantine (
+  quarantine_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  source_object_type text NOT NULL,
+  source_object_id uuid NOT NULL,
+  proposed_memory jsonb NOT NULL,
+  taint jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status text NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending','approved','rejected','expired')),
+  scanner_findings jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  decided_at timestamptz
+);
+
 CREATE TABLE IF NOT EXISTS autoskill.control_flow_events (
   control_flow_event_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  run_id text,
+  source_kind text CHECK (
+    source_kind IN (
+      'memory','skill','broker','tool','user','system','external_skill_inventory'
+    )
+  ),
+  source_id uuid,
+  decision jsonb NOT NULL DEFAULT '{}'::jsonb,
   influence_kind text NOT NULL,
-  influenced_object_type text NOT NULL,
+  influenced_object_type text,
   influenced_object_id uuid,
   source_object_type text,
   source_object_id uuid,
@@ -834,6 +856,21 @@ CREATE TABLE IF NOT EXISTS autoskill.control_flow_events (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE autoskill.control_flow_events
+  ADD COLUMN IF NOT EXISTS run_id text;
+
+ALTER TABLE autoskill.control_flow_events
+  ADD COLUMN IF NOT EXISTS source_kind text;
+
+ALTER TABLE autoskill.control_flow_events
+  ADD COLUMN IF NOT EXISTS source_id uuid;
+
+ALTER TABLE autoskill.control_flow_events
+  ADD COLUMN IF NOT EXISTS decision jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE autoskill.control_flow_events
+  ALTER COLUMN influenced_object_type DROP NOT NULL;
 
 CREATE TABLE IF NOT EXISTS autoskill.revocation_requests (
   revocation_request_id uuid PRIMARY KEY,
@@ -1108,6 +1145,15 @@ CREATE INDEX IF NOT EXISTS planned_topology_trials_operation_idx
 
 CREATE INDEX IF NOT EXISTS skill_usage_windows_workspace_time_idx
   ON autoskill.skill_usage_windows(workspace_id, observed_at DESC);
+
+CREATE INDEX IF NOT EXISTS memory_quarantine_workspace_status_idx
+  ON autoskill.memory_quarantine(workspace_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS control_flow_events_workspace_time_idx
+  ON autoskill.control_flow_events(workspace_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS control_flow_events_source_idx
+  ON autoskill.control_flow_events(workspace_id, source_kind, influence_kind, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS raw_events_workspace_time_idx
   ON autoskill.raw_events(workspace_id, occurred_at DESC);
