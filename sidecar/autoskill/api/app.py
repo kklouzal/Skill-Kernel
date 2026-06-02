@@ -133,11 +133,13 @@ from autoskill.services.profile_qualification import (
 from autoskill.services.shadowing import detect_shadowing_events
 from autoskill.services.topology import (
     ComposeTopologyRequest,
+    CreateTopologyRequest,
     DecomposeTopologyRequest,
     ImproveTopologyRequest,
     TopologySkill,
     persist_topology_proposal,
     propose_composition,
+    propose_creation,
     propose_decomposition,
     propose_improvement,
 )
@@ -487,6 +489,9 @@ class HistoricalImportSourceRevokeResponse(BaseModel):
     source: dict[str, object] | None
     sources_revoked: int
     chunks_revoked: int
+    traversal: dict[str, object] | None = None
+    revocation: dict[str, object] | None = None
+    job: dict[str, object] | None = None
 
 
 class ContextArtifactRecordRequest(BaseModel):
@@ -639,6 +644,7 @@ class TopologyProposalRequest(BaseModel):
     composed_output: TopologySkillPayload | None = None
     successors: list[TopologySkillPayload] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
+    creation_reasons: list[str] = Field(default_factory=list)
     improvement_reasons: list[str] = Field(default_factory=list)
     required_effects_by_component: dict[str, list[str]] | None = None
     coverage_requirements: list[str] | None = None
@@ -1968,6 +1974,19 @@ def _topology_skill(payload: TopologySkillPayload) -> TopologySkill:
 
 
 def _build_topology_proposal(request: TopologyProposalRequest):
+    if request.operation_kind == "create":
+        if request.proposed is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="create requires proposed skill",
+            )
+        return propose_creation(
+            CreateTopologyRequest(
+                proposed=_topology_skill(request.proposed),
+                evidence_ids=request.evidence_ids,
+                creation_reasons=request.creation_reasons or request.improvement_reasons,
+            )
+        )
     if request.operation_kind == "improve":
         if request.subject is None or request.proposed is None:
             raise HTTPException(
@@ -2012,7 +2031,7 @@ def _build_topology_proposal(request: TopologyProposalRequest):
         )
     raise HTTPException(
         status_code=http_status.HTTP_400_BAD_REQUEST,
-        detail="operation_kind must be improve, compose, or decompose",
+        detail="operation_kind must be create, improve, compose, or decompose",
     )
 
 
@@ -3005,7 +3024,50 @@ def create_app(
             workspace_key=request.workspace_id,
             historical_import_source_id=request.historical_import_source_id,
         )
-        return HistoricalImportSourceRevokeResponse(**result.to_json())
+        payload = result.to_json()
+        if result.source is not None:
+            traversal = await governance.preview_revocation_traversal(
+                workspace_key=request.workspace_id,
+                root_object_type="historical_import_source",
+                root_object_id=request.historical_import_source_id,
+                max_depth=8,
+                max_nodes=500,
+            )
+            traversal_json = traversal.to_json()
+            revocation = await governance.request_revocation(
+                workspace_key=request.workspace_id,
+                request_kind="operator_revoke",
+                root_object_type="historical_import_source",
+                root_object_id=request.historical_import_source_id,
+                traversal_summary={
+                    **traversal_json,
+                    "source": "historical_import_source_revoke",
+                    "source_status": "revoked",
+                    "chunks_revoked": result.chunks_revoked,
+                },
+            )
+            queued = await jobs.enqueue_job(
+                workspace_key=request.workspace_id,
+                job_kind="revocations.invalidate",
+                idempotency_key=(
+                    "revocations.invalidate:historical_import_source:"
+                    f"{request.historical_import_source_id}"
+                ),
+                payload={
+                    "workspace_id": request.workspace_id,
+                    "request_kind": "operator_revoke",
+                    "limit": 10,
+                },
+                priority=20,
+                max_attempts=3,
+            )
+            payload["traversal"] = traversal_json
+            payload["revocation"] = revocation.to_json()
+            payload["job"] = {
+                "created": queued.created,
+                "job": queued.job.to_json(),
+            }
+        return HistoricalImportSourceRevokeResponse(**payload)
 
     @app.post(
         "/v1/historical-import/chunks",

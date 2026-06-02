@@ -1658,6 +1658,75 @@ async def _run_revocations_rollback(stores: WorkerStores, job: JobRecord) -> dic
     return output
 
 
+async def _run_revocations_invalidate(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
+    if stores.governance is None:
+        raise ValueError("governance store is required for revocation invalidation")
+
+    limit = _payload_int(job.payload, "limit", default=10, minimum=1, maximum=25)
+    workspace = _payload_workspace(job)
+    request_kind = _payload_str(job.payload, "request_kind") or "operator_revoke"
+    if request_kind == "rollback":
+        raise ValueError("rollback revocations must use revocations.rollback")
+
+    processed: list[dict[str, Any]] = []
+    completed = 0
+    failed = 0
+    for _index in range(limit):
+        request = await stores.governance.claim_next_revocation_request(
+            workspace_key=workspace,
+            request_kind=request_kind,
+            worker_id=job.lease_owner,
+        )
+        if request is None:
+            break
+        try:
+            invalidation = await _invalidate_revoked_objects(stores, request)
+            summary = request.traversal_summary | {
+                "status": "completed",
+                "invalidation": invalidation,
+            }
+            await stores.governance.complete_revocation_request(
+                revocation_request_id=request.revocation_request_id,
+                status="completed",
+                traversal_summary=summary,
+            )
+            completed += 1
+            processed.append(
+                {
+                    "revocation_request_id": str(request.revocation_request_id),
+                    "status": "completed",
+                    "root_object_type": request.root_object_type,
+                    "root_object_id": str(request.root_object_id),
+                    "invalidation": invalidation,
+                }
+            )
+        except Exception as error:
+            failed += 1
+            summary = request.traversal_summary | {
+                "status": "failed",
+                "error": f"{type(error).__name__}: {error}",
+            }
+            await stores.governance.complete_revocation_request(
+                revocation_request_id=request.revocation_request_id,
+                status="failed",
+                traversal_summary=summary,
+            )
+            processed.append(
+                {
+                    "revocation_request_id": str(request.revocation_request_id),
+                    "status": "failed",
+                    "error": summary["error"],
+                }
+            )
+    return {
+        "scanned": len(processed),
+        "completed": completed,
+        "failed": failed,
+        "request_kind": request_kind,
+        "revocations": processed,
+    }
+
+
 async def _run_writer_apply(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
     observability = stores.observability or NullObservabilityStore()
     workspace = _payload_workspace(job) or job.workspace_key or "unknown"
@@ -2333,6 +2402,11 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "revocations.rollback",
         "mutation",
         _run_revocations_rollback,
+    ),
+    "revocations.invalidate": JobDefinition(
+        "revocations.invalidate",
+        "mutation",
+        _run_revocations_invalidate,
     ),
     "writer.apply": JobDefinition(
         "writer.apply",

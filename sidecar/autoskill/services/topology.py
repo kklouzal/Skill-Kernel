@@ -10,7 +10,7 @@ from autoskill.core.skillir import EffectSignature
 from autoskill.db.governance import GovernanceStore
 from autoskill.db.topology import TopologyPersistenceRecord, TopologyStore
 
-TopologyOperationKind = Literal["improve", "compose", "decompose"]
+TopologyOperationKind = Literal["create", "improve", "compose", "decompose"]
 
 MAX_COMPONENTS = 8
 MAX_SUCCESSORS = 8
@@ -47,6 +47,13 @@ class ImproveTopologyRequest:
     proposed: TopologySkill
     evidence_ids: list[str]
     improvement_reasons: list[str]
+
+
+@dataclass(frozen=True)
+class CreateTopologyRequest:
+    proposed: TopologySkill
+    evidence_ids: list[str]
+    creation_reasons: list[str]
 
 
 @dataclass(frozen=True)
@@ -256,6 +263,69 @@ async def persist_topology_proposal(
         },
     )
     return TopologyPersistenceRecord(operation=operation, trials=trials)
+
+
+def propose_creation(request: CreateTopologyRequest) -> TopologyProposalResult:
+    proposed_terms = _effect_terms(request.proposed.effects)
+    blockers: list[str] = []
+    if not proposed_terms:
+        blockers.append("create proposal requires at least one declared effect")
+    if not request.evidence_ids:
+        blockers.append("create proposal requires cited evidence")
+    if not request.creation_reasons:
+        blockers.append("create proposal requires at least one deterministic reason")
+
+    graph: SkillGraphIR | None = None
+    if not blockers:
+        graph = SkillGraphIR(
+            operation_kind="create",
+            nodes=[request.proposed.node("successor")],
+            edges=[],
+            effect_coverage={term: [request.proposed.slug] for term in sorted(proposed_terms)},
+            rollback_blockers=[],
+        )
+
+    payload = {
+        "operation_kind": "create",
+        "proposed": request.proposed.to_json(),
+        "evidence_ids": sorted(request.evidence_ids),
+        "creation_reasons": sorted(request.creation_reasons),
+        "blockers": blockers,
+        "graph": _graph_json(graph),
+    }
+    return _result(
+        operation_kind="create",
+        payload=payload,
+        blockers=blockers,
+        evidence_ids=request.evidence_ids,
+        graph=graph,
+        trial_plan=[
+            TopologyTrialPlan(
+                kind="target_creation",
+                objective="Confirm the proposed skill addresses the cited missing workflow.",
+                expected={
+                    "positive_marginal_value": True,
+                    "reasons": list(request.creation_reasons),
+                },
+            ),
+            TopologyTrialPlan(
+                kind="no_skill_control",
+                objective="Accept only if the new skill beats the no-skill baseline.",
+                expected={"beats_no_skill": True},
+            ),
+            TopologyTrialPlan(
+                kind="nearest_active_collision",
+                objective="Reject if an existing active skill already covers the target effects.",
+                expected={"no_active_duplicate": True},
+            ),
+            TopologyTrialPlan(
+                kind="rollback_readiness",
+                objective="Keep first activation reversible until canaries pass.",
+                expected={"rollback_actions_planned": True},
+            ),
+        ],
+        rollback_actions=_create_rollback_actions(request),
+    )
 
 
 def propose_improvement(request: ImproveTopologyRequest) -> TopologyProposalResult:
@@ -679,6 +749,18 @@ def _improve_rollback_actions(request: ImproveTopologyRequest) -> list[dict[str,
             "subject_slug": request.subject.slug,
             "subject_skill_id": str(request.subject.skill_id) if request.subject.skill_id else None,
             "remove_successor_slug": request.proposed.slug,
+        }
+    ]
+
+
+def _create_rollback_actions(request: CreateTopologyRequest) -> list[dict[str, Any]]:
+    return [
+        {
+            "operation": "remove_created_skill",
+            "created_slug": request.proposed.slug,
+            "created_skill_id": (
+                str(request.proposed.skill_id) if request.proposed.skill_id else None
+            ),
         }
     ]
 

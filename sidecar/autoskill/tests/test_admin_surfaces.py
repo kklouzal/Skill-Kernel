@@ -757,6 +757,39 @@ def test_topology_proposal_endpoint_persists_propose_only_operation() -> None:
     assert topology.operations[0].evolution_transaction_id is not None
 
 
+def test_topology_proposal_endpoint_persists_create_operation() -> None:
+    topology = NullTopologyStore()
+    app = create_app(topology_store=topology)
+    route = next(route for route in app.routes if route.path == "/v1/topology/propose")
+
+    async def run():
+        return await route.endpoint(
+            request=TopologyProposalRequest(
+                workspace_id="dev-01",
+                operation_kind="create",
+                proposed=TopologySkillPayload(
+                    slug="pytest-import-repair",
+                    effects={"outputs": ["repair-python-import-error"]},
+                ),
+                evidence_ids=[str(uuid4())],
+                creation_reasons=["recurring missing workflow evidence"],
+            )
+        )
+
+    response = asyncio.run(run())
+
+    assert response.proposal["status"] == "candidate"
+    assert response.persistence is not None
+    assert response.persistence["operation"]["operation_kind"] == "create"
+    assert {trial["trial_kind"] for trial in response.persistence["trials"]} == {
+        "target_creation",
+        "no_skill_control",
+        "nearest_active_collision",
+        "rollback_readiness",
+    }
+    assert topology.operations[0].evolution_transaction_id is not None
+
+
 def test_topology_proposal_endpoint_records_blocked_trials() -> None:
     topology = NullTopologyStore()
     app = create_app(topology_store=topology)

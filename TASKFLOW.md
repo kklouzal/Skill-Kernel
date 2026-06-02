@@ -500,6 +500,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   only safe keys, summary chunks are marked lossy/derived, and transcript turns
   preserve direct-turn evidence while redacting storage text and never storing
   raw paths.
+- Historical source revocation now propagates into the provenance-backed
+  revocation system instead of only tombstoning import rows: chunk recording
+  writes `historical_import_source` -> `historical_import_chunk` provenance
+  edges, the revoke API previews traversal, queues an `operator_revoke`
+  revocation request plus `revocations.invalidate` mutation job, and the generic
+  invalidation worker completes non-rollback revocations without requiring
+  writer archive roots. Focused tests and a real Postgres smoke passed with a
+  source -> chunk -> evidence traversal of 3 impacted objects and one completed
+  invalidation request.
+- `create` is now a first-class propose-only topology operation alongside
+  improve/compose/decompose: `CreateTopologyRequest` produces SkillGraphIR,
+  rollback actions, target/no-skill/collision/rollback trial plans, governance
+  transaction metadata, and `/v1/topology/propose` persistence through the
+  existing topology operation/trial path. Focused topology/admin tests passed.
 
 ## Next Gates
 
@@ -511,9 +525,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
    non-smoke activation target.
 3. Build the next historical-import layer on top of the new parse substrate:
    richer datasource coverage for task/plugin/media and observability sources,
-   source-item lineage beyond file/section/line granularity, and full
-   source-revocation traversal from historical source rows into
-   chunks/evidence/embeddings/memory/candidates.
+   and source-item lineage beyond file/section/line granularity.
 4. Consume the new improve/decompose usage recommendations into propose-only
    topology or repair planning once sustained telemetry confirms their aggregate
    signals are stable, including successor/boundary detail for decomposition.
@@ -538,10 +550,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Memory quarantine/control-flow tables and operator APIs now exist, the runtime broker can record approved memory-influenced retrieval decisions without injecting memory text while blocking unapproved memory references before retrieval, and repair/writer mutation paths now gate and log approved or blocked memory influence.
 - Historical import now has durable source/chunk inventory, bounded discovery,
   parser checkpoint workers, redacted chunk storage, evidence derivation,
-  provenance, embedding-source discovery, and transcript-corpus export parsing.
-  Remaining historical coverage is still incomplete for task/plugin/media and
-  observability sources, and historical imports cannot activate candidates
-  without the normal gates.
+  provenance, embedding-source discovery, transcript-corpus export parsing, and
+  source-rooted revocation traversal/invalidation. Remaining historical coverage
+  is still incomplete for task/plugin/media and observability sources, and
+  historical imports cannot activate candidates without the normal gates.
 - Embedding generation defaults to deterministic local hash embeddings unless an active qualified embedding profile is configured; storage now supports profile-scoped variable dimensions, with the default 1536-dimensional path retaining the indexed HNSW fast path.
 - Runtime context broker is still conservative: vector fusion is available for local deterministic hash embeddings, policy artifact replay/canary primitives exist, and stored redacted replay episodes can drive policy replay; production replay quality still depends on deployment telemetry being populated.
 - Deployment readiness is a deterministic sidecar/state preflight, not a
@@ -555,7 +567,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Repair execution remains guarded and fail-closed: explicit staged manifests still pass through activation-gated `writer.apply`, and policy-approved repair materialization can generate staged manifests from bounded repair proposals only when a skill-version anchor exists and deterministic context-governance proof with routing-equivalence and regression evidence can be recorded for the staged runtime artifact.
 - External-skill awareness now includes read-only root scanning plus inventory/retrieval/matching, scan scheduling defaults, embedding generation for external descriptions, richer collision risk scoring, explicit operator review-action recording, and operator-approved stage-only import materialization.
 - v16 trace/profile/context APIs and schema exist; event/job/retrieval/evaluator/context-broker paths now propagate trace or context artifacts, LLM calls now have content-safe invocation audit rows, direct writer apply/rollback APIs record content-safe writer spans, mutation-worker writer apply plus revocation rollback record content-safe child spans, embedding generation records content-safe `embedding_call` spans, and worker heartbeat summaries expose content-safe claimed/renewed/succeeded/failed job progress. Longer semantic jobs may still add specialized counters as their multi-phase internals mature.
-- SkillGraphIR now has planner/API/store persistence with transactions, planned trials, revocation invalidation for operation/trial state, deterministic apply state transitions after passed trials, broker replay/canary scoring gates for compose/decompose routing, stored downstream action plans, and mutation-worker lifecycle/graph/runtime invalidation execution after accepted topology operations.
+- SkillGraphIR now has planner/API/store persistence with transactions, planned trials, first-class create/improve/compose/decompose proposal operations, revocation invalidation for operation/trial state, deterministic apply state transitions after passed trials, broker replay/canary scoring gates for compose/decompose routing, stored downstream action plans, and mutation-worker lifecycle/graph/runtime invalidation execution after accepted topology operations.
 - Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded or induced redacted intervention replay from explicit replay, attribution, canary, or broker outcome evidence.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints; mutation-worker apply exists but fails closed unless the queued job is explicitly policy-approved.
 - Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, invalidates body-index/embedding/context/retrieval/topology/evaluator/attribution/governance objects from traversal summaries, and freeze/critical-canary paths evict affected broker cache entries.

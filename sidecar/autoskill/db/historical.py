@@ -646,6 +646,39 @@ class AsyncpgHistoricalImportStore(AsyncpgPoolOwner):
                 if row is None:
                     skipped += 1
                     continue
+                await conn.execute(
+                    """
+                    INSERT INTO autoskill.provenance_edges (
+                      provenance_edge_id,
+                      workspace_id,
+                      source_kind,
+                      source_id,
+                      derived_kind,
+                      derived_id,
+                      relation
+                    )
+                    VALUES (
+                      gen_random_uuid(),
+                      $1,
+                      'historical_import_source',
+                      $2,
+                      'historical_import_chunk',
+                      $3,
+                      'historical_source_contains_chunk'
+                    )
+                    ON CONFLICT (
+                      workspace_id,
+                      source_kind,
+                      source_id,
+                      derived_kind,
+                      derived_id,
+                      relation
+                    ) DO NOTHING
+                    """,
+                    workspace_id,
+                    source["historical_import_source_id"],
+                    row["historical_import_chunk_id"],
+                )
                 created += 1
                 records.append(HistoricalChunkRecord.from_row(row))
             return HistoricalChunkRecordResult(

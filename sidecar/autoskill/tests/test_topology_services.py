@@ -10,11 +10,13 @@ from autoskill.db.topology import NullTopologyStore
 from autoskill.db.usage import UsageTopologyRecommendation
 from autoskill.services.topology import (
     ComposeTopologyRequest,
+    CreateTopologyRequest,
     DecomposeTopologyRequest,
     ImproveTopologyRequest,
     TopologySkill,
     persist_topology_proposal,
     propose_composition,
+    propose_creation,
     propose_decomposition,
     propose_improvement,
 )
@@ -89,6 +91,37 @@ class MemoryTopologyActivationGate:
             context_budget_status="passed" if self.allowed else "over_budget",
             blockers=[] if self.allowed else ["not ready"],
         )
+
+
+def test_create_topology_proposal_is_first_class_operation() -> None:
+    proposal = propose_creation(
+        CreateTopologyRequest(
+            proposed=TopologySkill(
+                slug="pytest-import-repair",
+                skill_id=uuid4(),
+                effects=EffectSignature(
+                    outputs=["repair-python-import-error"],
+                    effects=["inspect-traceback"],
+                ),
+            ),
+            evidence_ids=[str(uuid4())],
+            creation_reasons=["recurring missing workflow evidence"],
+        )
+    )
+
+    assert proposal.status == "candidate"
+    assert proposal.operation_kind == "create"
+    assert proposal.skill_graph_ir is not None
+    assert proposal.skill_graph_ir.operation_kind == "create"
+    assert proposal.skill_graph_ir.nodes[0].operation_role == "successor"
+    assert {trial.kind for trial in proposal.trial_plan} == {
+        "target_creation",
+        "no_skill_control",
+        "nearest_active_collision",
+        "rollback_readiness",
+    }
+    assert proposal.transaction.transaction_kind == "topology_create"
+    assert proposal.transaction.rollback_actions[0]["operation"] == "remove_created_skill"
 
 
 def test_improvement_proposal_preserves_effects_and_plans_rollback() -> None:

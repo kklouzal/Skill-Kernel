@@ -31,6 +31,7 @@ from autoskill.services.historical_discovery import (
 )
 from autoskill.services.historical_import import import_historical_sources
 from autoskill.services.worker import WorkerStores, run_worker_once
+from autoskill.tests.test_governance import MemoryGovernanceStore
 from autoskill.tests.test_jobs_api import MemoryJobStore
 
 
@@ -503,7 +504,13 @@ def test_historical_import_source_revocation_tombstones_chunks() -> None:
 
 def test_historical_import_source_revocation_api_route() -> None:
     store = MemoryHistoricalImportStore()
-    app = create_app(historical_import_store=store)
+    governance = MemoryGovernanceStore()
+    jobs = MemoryJobStore()
+    app = create_app(
+        historical_import_store=store,
+        governance_store=governance,
+        job_store=jobs,
+    )
     routes = {(route.path, next(iter(route.methods))): route for route in app.routes}
 
     async def run():
@@ -545,6 +552,60 @@ def test_historical_import_source_revocation_api_route() -> None:
     assert revoked.sources_revoked == 1
     assert revoked.chunks_revoked == 1
     assert revoked.source["status"] == "revoked"
+    assert revoked.revocation["request_kind"] == "operator_revoke"
+    assert revoked.revocation["root_object_type"] == "historical_import_source"
+    assert revoked.job["created"] is True
+    assert revoked.job["job"]["job_kind"] == "revocations.invalidate"
+
+
+def test_historical_revocation_invalidation_worker_completes_operator_revoke() -> None:
+    governance = MemoryGovernanceStore()
+    jobs = MemoryJobStore()
+
+    async def run():
+        revocation = await governance.request_revocation(
+            workspace_key="dev-01",
+            request_kind="operator_revoke",
+            root_object_type="historical_import_source",
+            root_object_id=uuid4(),
+            traversal_summary={
+                "impacted_objects": [
+                    {"object_type": "historical_import_source", "object_id": str(uuid4())},
+                    {"object_type": "historical_import_chunk", "object_id": str(uuid4())},
+                    {"object_type": "evidence_item", "object_id": str(uuid4())},
+                ]
+            },
+        )
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="revocations.invalidate",
+            idempotency_key="revocations.invalidate:test",
+            payload={"workspace_id": "dev-01", "request_kind": "operator_revoke"},
+        )
+        result = await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=None,
+                evidence=None,
+                embeddings=None,
+                governance=governance,
+            ),
+            worker_id="mutation-test",
+            pool="mutation",
+        )
+        return revocation, result
+
+    revocation, result = asyncio.run(run())
+    assert result.status == "succeeded"
+    assert result.output["completed"] == 1
+    completed = next(
+        item
+        for item in governance.revocations
+        if item.revocation_request_id == revocation.revocation_request_id
+    )
+    assert completed.status == "completed"
+    assert completed.traversal_summary["status"] == "completed"
+    assert completed.traversal_summary["invalidation"]["objects"] == 3
 
 
 def test_historical_discovery_dry_run_classifies_sources_without_raw_paths(tmp_path) -> None:
