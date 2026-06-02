@@ -397,13 +397,38 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `operator_smoke` event, the runtime context-hint smoke returned `no_skill`
   fail-closed for an empty candidate set, the local spool was empty, and backup
   plus restore dry-run verified `autoskill-backup-20260602T195700Z`.
+- Dev-01 writer deployment remediation and first runtime activation proof passed:
+  the sidecar service now mounts `/home/kklouzal/.openclaw/workspace` at
+  `/workspace` and runs with `working_dir: /workspace`, matching the worker root
+  and preventing writer apply from targeting the container image filesystem. The
+  first SkillKernel-owned runtime smoke skill,
+  `autoskill-first-runtime-smoke`, was compiled through
+  `/v1/context/compile-skillir`, staged with context-governance proof, applied
+  as v1, applied as v2 to force an archive snapshot, and rolled back to v1 from
+  `.autoskill/archive`; the active file is now
+  `skills/autoskill/autoskill-first-runtime-smoke/SKILL.md`, and `openclaw
+  skills list --json` reports it eligible/model-visible from the
+  `openclaw-workspace` source. A fresh backup with active/archive/staging roots
+  present was verified by restore dry-run as
+  `autoskill-backup-20260602T201150Z`. Post-remediation validation passed with
+  `uv run ruff check sidecar scripts`, `uv run pytest -q` (227 tests), `uv run
+  python -m compileall -q sidecar scripts`, `npm test --prefix plugin/autoskill`
+  (18 tests), `npm run check --prefix plugin/autoskill`, `docker compose config
+  --quiet`, and `git diff --check`. Live checks after the mount fix showed
+  readiness `ready=true`, plugin `typedHookCount=11` with no diagnostics, empty
+  spool, no recent sidecar errors, stored broker replay matched 9/9 with no
+  degradation, red-team scanning passed 9/9, and
+  `llama-cpp-embeddings-nomic` remained qualified while generating one
+  embedding.
 
 ## Next Gates
 
 1. Continue collecting sustained Dev-01 telemetry and add only distinct,
    operator-reviewed replay episodes from real usage, then run replay/canary
    tuning on the enlarged corpus.
-2. Run `scripts/autoskill_backup.py` to an operator-approved backup location after the production roots contain activated SkillKernel-owned skills, then verify with `scripts/autoskill_restore.py --dry-run`.
+2. Promote or replace the operator smoke runtime skill with the first genuinely
+   useful SkillKernel-owned runtime skill once replay/probe evidence supports a
+   non-smoke activation target.
 3. Extend usage/topology recommendation payloads with enough structured subject,
    successor, and negative-signal detail for improve/decompose planning and
    broker-abstain decisions after sustained telemetry confirms the aggregate
@@ -432,13 +457,11 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Deployment readiness is a deterministic sidecar/state preflight, not a
   substitute for sustained telemetry review; the one-shot live gateway
   capture/hint smoke has passed for the current Dev-01 deployment.
-- Dev-01 readiness is green for the current canary, but the active/archive/staging
-  runtime roots were absent during backup smoke because no SkillKernel-owned
-  runtime skill has been activated into those roots yet. The backup bundle still
-  contains the database dump and records missing roots explicitly; rerun the
-  backup after the first live activation to prove filesystem restore coverage.
-  The latest verified bundle with this limitation is
-  `autoskill-backup-20260602T195700Z`.
+- The first active SkillKernel-owned runtime skill is an operator-controlled
+  smoke artifact with narrow applicability and no declared mutation capability;
+  it proves writer apply/archive/rollback and backup coverage, but it should be
+  replaced by a real utility-bearing skill after replay/probe evidence supports
+  promotion.
 - Repair execution remains guarded and fail-closed: explicit staged manifests still pass through activation-gated `writer.apply`, and policy-approved repair materialization can generate staged manifests from bounded repair proposals only when a skill-version anchor exists and deterministic context-governance proof with routing-equivalence and regression evidence can be recorded for the staged runtime artifact.
 - External-skill awareness now includes read-only root scanning plus inventory/retrieval/matching, scan scheduling defaults, embedding generation for external descriptions, richer collision risk scoring, explicit operator review-action recording, and operator-approved stage-only import materialization.
 - v16 trace/profile/context APIs and schema exist; event/job/retrieval/evaluator/context-broker paths now propagate trace or context artifacts, LLM calls now have content-safe invocation audit rows, direct writer apply/rollback APIs record content-safe writer spans, mutation-worker writer apply plus revocation rollback record content-safe child spans, embedding generation records content-safe `embedding_call` spans, and worker heartbeat summaries expose content-safe claimed/renewed/succeeded/failed job progress. Longer semantic jobs may still add specialized counters as their multi-phase internals mature.

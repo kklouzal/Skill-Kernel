@@ -62,6 +62,9 @@ services:
       - 127.0.0.1
       - --port
       - "8765"
+    working_dir: /workspace
+    volumes:
+      - /home/kklouzal/.openclaw/workspace:/workspace
     network_mode: host
     depends_on:
       migrate:
