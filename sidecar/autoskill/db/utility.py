@@ -815,10 +815,11 @@ async def _plan_improvements_and_splits(
     return actions
 
 
-def _planning_priority(rollup: SkillUtilityRollupRecord) -> tuple[int, int, float]:
+def _planning_priority(rollup: SkillUtilityRollupRecord) -> tuple[int, int, int, float]:
     return (
         rollup.features.shadow_count,
         rollup.features.hurt_count,
+        rollup.features.ignored_load_count + rollup.features.false_positive_load_count,
         -rollup.utility_score,
     )
 
@@ -830,6 +831,15 @@ def _planning_action_for_rollup(rollup: SkillUtilityRollupRecord) -> tuple[str |
         return "plan_disambiguation_repair", "repeated shadowing requires boundary repair"
     if rollup.features.hurt_count >= 2:
         return "plan_improvement", "repeated harmful outcomes require guarded improvement"
+    if (
+        rollup.features.context_value_per_token < 0
+        or rollup.features.ignored_load_count >= 2
+        or rollup.features.false_positive_load_count >= 1
+    ):
+        return (
+            "plan_improvement",
+            "context token outcomes show low or wasteful marginal value",
+        )
     return None, ""
 
 
@@ -849,6 +859,12 @@ def _repair_proposal_for_rollup(
         trial_kinds.append("sibling")
     if rollup.features.hurt_count:
         trial_kinds.append("adversarial")
+    if (
+        rollup.features.context_value_per_token < 0
+        or rollup.features.ignored_load_count
+        or rollup.features.false_positive_load_count
+    ):
+        trial_kinds.append("context_value")
     return {
         "schema": "autoskill.curation_repair_proposal.v1",
         "proposal_kind": proposal_kind,
@@ -867,6 +883,7 @@ def _repair_proposal_for_rollup(
             "scanner_pass": True,
             "regression_failures": 0,
             "utility_delta_positive": True,
+            "context_value_per_token_non_negative": True,
             "requires_no_skill_control": True,
         },
         "rollback": {
@@ -898,7 +915,7 @@ def _repair_objectives(action: str) -> list[str]:
     if action == "plan_improvement":
         return [
             "address repeated harmful outcomes with a guarded SkillIR revision",
-            "prove positive marginal utility before activation",
+            "prove positive marginal utility and context value before activation",
         ]
     return ["review curation signal before mutation"]
 
@@ -957,7 +974,18 @@ async def _load_skill_feature_rows(
           COALESCE(hurt.count, 0)::int AS hurt_count,
           COALESCE(shadow.count, 0)::int AS shadow_count,
           COALESCE(retrieved.count, 0)::int AS retrieval_count,
-          COALESCE(canary_failed.count, 0)::int AS canary_failure_count
+          COALESCE(canary_failed.count, 0)::int AS canary_failure_count,
+          COALESCE(context_value.marginal_value, 0.0)::double precision AS marginal_value,
+          COALESCE(
+            context_value.context_value_per_token,
+            0.0
+          )::double precision AS context_value_per_token,
+          COALESCE(context_value.ignored_load_count, 0)::int AS ignored_load_count,
+          COALESCE(
+            context_value.false_positive_load_count,
+            0
+          )::int AS false_positive_load_count,
+          COALESCE(context_value.token_waste, 0)::int AS token_waste
         FROM autoskill.skills s
         LEFT JOIN LATERAL (
           SELECT count(*)::int AS count
@@ -993,6 +1021,59 @@ async def _load_skill_feature_rows(
             AND cr.skill_id = s.skill_id
             AND (cr.critical OR cr.status IN ('failed', 'critical'))
         ) canary_failed ON true
+        LEFT JOIN LATERAL (
+          SELECT
+            COALESCE(
+              sum(
+                (
+                  ctl.metadata #>> '{marginal_value,marginal_value}'
+                )::double precision
+              ),
+              0.0
+            ) AS marginal_value,
+            COALESCE(
+              avg(
+                (
+                  ctl.metadata #>> '{marginal_value,context_value_per_token}'
+                )::double precision
+              ) FILTER (
+                WHERE ctl.metadata #>> '{marginal_value,context_value_per_token}'
+                  IS NOT NULL
+              ),
+              0.0
+            ) AS context_value_per_token,
+            count(*) FILTER (
+              WHERE ctl.outcome IN ('ignored', 'ignored_load', 'unused')
+            )::int AS ignored_load_count,
+            count(*) FILTER (
+              WHERE ctl.outcome IN ('false_positive', 'false_positive_load')
+            )::int AS false_positive_load_count,
+            COALESCE(
+              sum(ctl.token_count) FILTER (
+                WHERE ctl.outcome IN (
+                  'ignored',
+                  'ignored_load',
+                  'unused',
+                  'false_positive',
+                  'false_positive_load'
+                )
+                OR (
+                  ctl.metadata #>> '{marginal_value,context_value_per_token}'
+                )::double precision < 0
+              ),
+              0
+            )::int AS token_waste
+          FROM autoskill.context_token_ledgers ctl
+          LEFT JOIN autoskill.context_artifacts ca
+            ON ca.context_artifact_id = ctl.context_artifact_id
+           AND ca.workspace_id = ctl.workspace_id
+          WHERE ctl.workspace_id = s.workspace_id
+            AND COALESCE(ctl.metadata->>'revoked', 'false') != 'true'
+            AND (
+              ctl.skill_id = s.skill_id
+              OR ca.skill_id = s.skill_id
+            )
+        ) context_value ON true
         WHERE s.workspace_id = $1
         ORDER BY s.updated_at DESC, s.slug ASC
         LIMIT $2

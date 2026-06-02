@@ -3,14 +3,19 @@ from __future__ import annotations
 import json
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import ceil
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 from autoskill.core.hashing import sha256_bytes, sha256_json, sha256_text
-from autoskill.services.scanner import ScannerFinding, has_blocking_findings, scan_text
+from autoskill.services.scanner import (
+    ScannerFinding,
+    has_blocking_findings,
+    scan_text,
+    scan_text_bundle,
+)
 
 
 class PathContainmentError(ValueError):
@@ -34,15 +39,29 @@ class StagedFile:
     target_relative_path: str
     sha256: str
     bytes: int
+    metadata: dict[str, object] = field(default_factory=dict)
 
     def to_manifest(self) -> dict[str, object]:
-        return {
+        entry: dict[str, object] = {
             "role": self.role,
             "relative_path": self.relative_path,
             "target_relative_path": self.target_relative_path,
             "sha256": self.sha256,
             "bytes": self.bytes,
         }
+        if self.metadata:
+            entry["metadata"] = self.metadata
+        return entry
+
+
+@dataclass(frozen=True)
+class SupportArtifactContent:
+    relative_path: str
+    content: str | bytes
+    kind: str
+    load_policy: str = "never_loaded"
+    sha256: str | None = None
+    max_tokens: int = 400
 
 
 @dataclass(frozen=True)
@@ -173,6 +192,7 @@ def stage_compiled_skill(
     context_compile_run_id: UUID | None = None,
     context_artifact_id: UUID | None = None,
     context_output_manifest_hash: str | None = None,
+    support_artifacts: list[SupportArtifactContent] | None = None,
     overwrite: bool = False,
 ) -> StagedSkillArtifact:
     """Stage a scanned runtime SKILL.md and manifest without activating it."""
@@ -192,6 +212,14 @@ def stage_compiled_skill(
     )
     if context_gate["budget_status"] != "passed":
         raise WriterPolicyError("compiled skill exceeds context token budget")
+    staged_support_files = _stage_support_artifacts(
+        root,
+        staging_id=staging_id,
+        slug=slug,
+        compiled_skill_md=compiled_skill_md,
+        artifacts=support_artifacts or [],
+        overwrite=overwrite,
+    )
 
     skill_relative_path = f"{staging_id}/{slug}/SKILL.md"
     target_relative_path = f"skills/autoskill/{slug}/SKILL.md"
@@ -202,12 +230,17 @@ def stage_compiled_skill(
         target_relative_path=target_relative_path,
         sha256=sha256_text(compiled_skill_md),
         bytes=len(compiled_skill_md.encode("utf-8")),
+        metadata={
+            "loadability_class": "runtime_skill_body",
+            "artifact_kind": "skill_md",
+        },
     )
+    files = [staged_file, *staged_support_files]
     manifest = _writer_manifest(
         staging_id=staging_id,
         skill_version_id=skill_version_id,
         slug=slug,
-        files=[staged_file],
+        files=files,
         scanner_findings=scanner_findings,
         context_gate=context_gate,
     )
@@ -221,7 +254,7 @@ def stage_compiled_skill(
         root=root,
         manifest_relative_path=manifest_relative_path,
         manifest_sha256=sha256_json(manifest),
-        files=[staged_file],
+        files=files,
         scanner_findings=scanner_findings,
         context_gate=context_gate,
     )
@@ -233,7 +266,7 @@ def verify_staged_manifest(root: Path, manifest_relative_path: str) -> dict[str,
     for entry in manifest.get("files", []):
         relative_path = entry["relative_path"]
         path = resolve_contained(root, relative_path)
-        digest = sha256_text(path.read_text(encoding="utf-8"))
+        digest = sha256_bytes(path.read_bytes())
         if digest != entry["sha256"]:
             raise WriterPolicyError(f"staged file hash mismatch: {relative_path}")
     return manifest
@@ -272,6 +305,7 @@ def apply_staged_manifest(
             target_relative_path=str(entry["target_relative_path"]),
             sha256=str(entry["sha256"]),
             bytes=int(entry["bytes"]),
+            metadata=dict(entry.get("metadata") or {}),
         )
         for entry in manifest["files"]
     ]
@@ -360,6 +394,7 @@ def archive_active_skill(
                 target_relative_path=f"skills/autoskill/{slug}/{relative_inside_skill}",
                 sha256=sha256_bytes(content),
                 bytes=len(content),
+                metadata=_archive_file_metadata(relative_inside_skill),
             )
         )
 
@@ -405,6 +440,7 @@ def rollback_active_skill(
             target_relative_path=str(entry["target_relative_path"]),
             sha256=str(entry["sha256"]),
             bytes=int(entry["bytes"]),
+            metadata=dict(entry.get("metadata") or {}),
         )
         for entry in manifest["files"]
     ]
@@ -541,11 +577,33 @@ async def rollback_active_skill_with_governance(
             "reason": "rollback transaction restored this archive snapshot",
         },
     )
+    support_items = []
+    for file in rolled_back.files:
+        relative_inside_skill = _target_path_inside_skill(
+            rolled_back.slug,
+            file.target_relative_path,
+        )
+        if relative_inside_skill == "SKILL.md":
+            continue
+        support_items.append(
+            await governance.record_transaction_item(
+                evolution_transaction_id=evolution_transaction_id,
+                item_kind="support_artifact",
+                activation_state="rolled_back",
+                relative_path=file.target_relative_path,
+                before_hash=None,
+                after_hash=file.sha256,
+                rollback_action={
+                    "operation": "operator_review",
+                    "reason": "rollback transaction restored this support artifact",
+                },
+            )
+        )
     await _record_writer_item_provenance(
         governance,
         workspace_key=workspace_key,
         evolution_transaction_id=evolution_transaction_id,
-        items=[item],
+        items=[item, *support_items],
         relation="rolled_back_by",
     )
     await governance.update_transaction_status(
@@ -631,6 +689,140 @@ def validate_active_skill_relative_path(relative_path: str) -> str:
     return validate_support_artifact_path(relative_path)
 
 
+def _stage_support_artifacts(
+    root: Path,
+    *,
+    staging_id: UUID,
+    slug: str,
+    compiled_skill_md: str,
+    artifacts: list[SupportArtifactContent],
+    overwrite: bool,
+) -> list[StagedFile]:
+    if not artifacts:
+        return []
+    co_loadable_texts = [compiled_skill_md]
+    staged_files: list[StagedFile] = []
+    seen_paths: set[str] = set()
+    for artifact in artifacts:
+        relative_inside_skill = validate_support_artifact_path(artifact.relative_path)
+        if relative_inside_skill in seen_paths:
+            raise WriterPolicyError("duplicate support artifact path")
+        seen_paths.add(relative_inside_skill)
+        content_bytes, text = _support_artifact_bytes_and_text(artifact.content)
+        digest = sha256_bytes(content_bytes)
+        if artifact.sha256 is not None and artifact.sha256 != digest:
+            raise WriterPolicyError("support artifact hash mismatch")
+        metadata = _support_artifact_metadata(
+            relative_inside_skill=relative_inside_skill,
+            artifact=artifact,
+            content_bytes=content_bytes,
+            text=text,
+        )
+        if metadata["safety_status"] != "passed":
+            raise WriterPolicyError("support artifact has blocking scanner findings")
+        if metadata["budget_status"] != "passed":
+            raise WriterPolicyError("support artifact exceeds context token budget")
+        if artifact.load_policy in {"agent_may_read", "broker_excerpt_only"} and text:
+            co_loadable_texts.append(text)
+
+        staged_relative_path = f"{staging_id}/{slug}/{relative_inside_skill}"
+        target_relative_path = f"skills/autoskill/{slug}/{relative_inside_skill}"
+        _stage_bytes(root, staged_relative_path, content_bytes, overwrite=overwrite)
+        staged_files.append(
+            StagedFile(
+                role="support_artifact",
+                relative_path=staged_relative_path,
+                target_relative_path=target_relative_path,
+                sha256=digest,
+                bytes=len(content_bytes),
+                metadata=metadata,
+            )
+        )
+
+    bundle_findings = scan_text_bundle(co_loadable_texts)
+    if has_blocking_findings(bundle_findings):
+        raise WriterPolicyError("support artifact bundle has blocking scanner findings")
+    return staged_files
+
+
+def _stage_bytes(
+    root: Path,
+    relative_path: str,
+    content: bytes,
+    *,
+    overwrite: bool = False,
+) -> Path:
+    reject_symlink_path(root, relative_path)
+    target = resolve_contained(root, relative_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() and not overwrite:
+        raise FileExistsError(target)
+    tmp = target.with_name(f".{target.name}.tmp")
+    tmp.write_bytes(content)
+    tmp.replace(target)
+    return target
+
+
+def _support_artifact_bytes_and_text(content: str | bytes) -> tuple[bytes, str | None]:
+    if isinstance(content, str):
+        return content.encode("utf-8"), content
+    try:
+        return content, content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content, None
+
+
+def _support_artifact_metadata(
+    *,
+    relative_inside_skill: str,
+    artifact: SupportArtifactContent,
+    content_bytes: bytes,
+    text: str | None,
+) -> dict[str, object]:
+    if artifact.load_policy not in {
+        "never_loaded",
+        "agent_may_read",
+        "broker_excerpt_only",
+        "script_only",
+        "probe_only",
+        "operator_only",
+    }:
+        raise WriterPolicyError("unsupported support artifact load policy")
+    if artifact.kind not in {"script", "template", "fixture", "manifest", "asset"}:
+        raise WriterPolicyError("unsupported support artifact kind")
+    token_count = _estimate_tokens(text or "") if text else 0
+    findings = scan_text(text or "") if text is not None else []
+    safety_status = "blocked" if has_blocking_findings(findings) else "passed"
+    max_tokens = max(0, artifact.max_tokens)
+    budget_status = "passed" if token_count <= max_tokens else "over_budget"
+    return {
+        "artifact_kind": "support_artifact",
+        "support_kind": artifact.kind,
+        "loadability_class": f"support_artifact:{artifact.load_policy}",
+        "load_policy": artifact.load_policy,
+        "relative_path": relative_inside_skill,
+        "content_hash": sha256_bytes(content_bytes),
+        "token_count": token_count,
+        "max_tokens": max_tokens,
+        "safety_status": safety_status,
+        "budget_status": budget_status,
+        "scanner_codes": [finding.code for finding in findings],
+    }
+
+
+def _archive_file_metadata(relative_inside_skill: str) -> dict[str, object]:
+    if relative_inside_skill == "SKILL.md":
+        return {
+            "artifact_kind": "skill_md",
+            "loadability_class": "runtime_skill_body",
+        }
+    return {
+        "artifact_kind": "support_artifact",
+        "loadability_class": "support_artifact:archived",
+        "relative_path": relative_inside_skill,
+    }
+
+
 def _writer_manifest(
     *,
     staging_id: UUID,
@@ -683,7 +875,19 @@ def _validate_manifest_for_apply(manifest: dict[str, object]) -> None:
         raise WriterPolicyError("writer manifest must contain files")
     for entry in files:
         target_relative_path = str(entry["target_relative_path"])
-        _target_path_inside_skill(slug, target_relative_path)
+        relative_inside_skill = _target_path_inside_skill(slug, target_relative_path)
+        role = str(entry.get("role") or "")
+        metadata = entry.get("metadata") or {}
+        if role == "runtime_skill":
+            if relative_inside_skill != "SKILL.md":
+                raise WriterPolicyError("runtime skill file must target SKILL.md")
+        elif role == "support_artifact":
+            _validate_support_artifact_manifest_metadata(
+                relative_inside_skill,
+                metadata if isinstance(metadata, dict) else {},
+            )
+        elif role != "archive_snapshot":
+            raise WriterPolicyError("unsupported writer manifest file role")
 
 
 def _context_gate(
@@ -737,6 +941,25 @@ def _validate_context_gate(manifest: dict[str, object]) -> None:
         raise WriterPolicyError("compiled skill context token budget failed")
 
 
+def _validate_support_artifact_manifest_metadata(
+    relative_inside_skill: str,
+    metadata: dict[str, object],
+) -> None:
+    if metadata.get("artifact_kind") != "support_artifact":
+        raise WriterPolicyError("support artifact manifest lacks artifact kind")
+    if not str(metadata.get("loadability_class") or "").startswith("support_artifact:"):
+        raise WriterPolicyError("support artifact manifest lacks loadability class")
+    if metadata.get("relative_path") != relative_inside_skill:
+        raise WriterPolicyError("support artifact metadata path mismatch")
+    if metadata.get("safety_status") != "passed":
+        raise WriterPolicyError("support artifact safety gate failed")
+    if metadata.get("budget_status") != "passed":
+        raise WriterPolicyError("support artifact budget gate failed")
+    for key in ("content_hash", "token_count", "max_tokens"):
+        if key not in metadata:
+            raise WriterPolicyError(f"support artifact metadata missing {key}")
+
+
 def _estimate_tokens(text: str) -> int:
     return max(1, ceil(len(text) / 4))
 
@@ -784,6 +1007,20 @@ async def _record_apply_transaction_items(
         rollback_action=_apply_rollback_action(applied),
     )
     items.append(active_item)
+    for file in applied.files:
+        relative_inside_skill = _target_path_inside_skill(applied.slug, file.target_relative_path)
+        if relative_inside_skill == "SKILL.md":
+            continue
+        support_item = await governance.record_transaction_item(
+            evolution_transaction_id=evolution_transaction_id,
+            item_kind="support_artifact",
+            activation_state="active",
+            relative_path=file.target_relative_path,
+            before_hash=None,
+            after_hash=file.sha256,
+            rollback_action=_apply_rollback_action(applied),
+        )
+        items.append(support_item)
     if applied.previous_snapshot is not None:
         archive_item = await governance.record_transaction_item(
             evolution_transaction_id=evolution_transaction_id,

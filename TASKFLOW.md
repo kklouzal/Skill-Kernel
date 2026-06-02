@@ -147,6 +147,16 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Broker policy artifact primitives are implemented: active `broker_policy_versions` can override bootstrap broker limits/graph policy/max rendered skills, context hint cache keys include the active policy, retrieval/context governance telemetry records `broker_policy_version_id`, and control APIs can upsert, activate, replay, and record canary feedback for policy versions.
 - Writer activation gates are now explicit on both queued mutation jobs and the direct writer apply API: when `activation_gate_required=true`, the staged manifest's `skill_version_id` must resolve to a scanner-passed, evaluator-passed, proposal-gate-passed skill version, and any supplied executor profile must be `compatible` before active-root files are exposed.
 - Runtime context-loadability gates are now attached to compiled skill artifacts: staged writer manifests include `runtime_skill_body` loadability metadata, scanner/equivalence/token-budget statuses, token counts, and text hashes; writer apply rejects manifests without passed context gates, and candidate persistence records matching `skill_md` context artifacts for inactive candidate versions.
+- First-class support artifact writer coverage is implemented for staged runtime
+  manifests: declared support files are path-allowlisted, hash-checked, scanned,
+  token-budgeted, co-load bundle-scanned, stamped with loadability class and
+  content hash metadata, applied/archived/restored with the active skill
+  directory, and recorded as `support_artifact` governance/provenance items.
+- Context-value curation signals now feed utility rollups and improvement
+  planning: `context_token_ledgers` marginal value, average context value per
+  token, ignored/false-positive load counts, and token waste are folded into
+  `SkillUtilityFeatures`, utility scoring, curation action features, and
+  deterministic improvement planning with a context-value acceptance gate.
 - External-skill scanner job wiring is implemented: read-only skill roots can be passed to the worker entrypoint, `external_skills.scan` inventories `*/SKILL.md` files without storing raw root paths, hashes roots/files, parses public name/description frontmatter, and quarantines scanner-blocked external skills.
 - Scanner classification now blocks deterministic first-pass harmful capability and
   policy-override patterns: credential exfiltration, destructive host commands,
@@ -336,13 +346,8 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 1. Continue collecting sustained Dev-01 telemetry and add only distinct,
    operator-reviewed replay episodes from real usage, then run replay/canary
    tuning on the enlarged corpus.
-2. Implement first-class support artifact staging/persistence so support files
-   are manifest-bound runtime artifacts with loadability class, scanner result,
-   token/hash records, rollback, and provenance coverage.
-3. Feed context-value-per-token, ignored-load, false-positive-load, and token
-   waste metrics into utility rollups and curation/topology decisions.
-4. Run `scripts/autoskill_backup.py` to an operator-approved backup location after the production roots contain activated SkillKernel-owned skills, then verify with `scripts/autoskill_restore.py --dry-run`.
-5. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
+2. Run `scripts/autoskill_backup.py` to an operator-approved backup location after the production roots contain activated SkillKernel-owned skills, then verify with `scripts/autoskill_restore.py --dry-run`.
+3. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
 
 ## Known Risks
 

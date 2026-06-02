@@ -285,6 +285,11 @@ Acceptance:
 - valid skill appears under active root;
 - invalid paths are rejected;
 - rollback restores the previous effective state;
+- first-class support artifacts are staged as manifest-bound runtime artifacts:
+  writer manifests carry per-file loadability class, load policy, scanner status,
+  token budget, content hash metadata, and apply/rollback governance records
+  each support file as `support_artifact` provenance instead of hiding it under
+  the directory-level compiled skill item;
 - canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed mutation-worker rollback execution, initial-create active-path deletion rollback, body-index/embedding/retrieval/context/topology/evaluator/attribution/governance invalidation, active broker-cache invalidation, and fail-closed policy-approved mutation-worker writer apply orchestration are implemented.
 - long-running job leases renew while handlers are still running; implemented in the job store, worker execution wrapper, and control API with focused tests.
 - mutation-worker `writer.apply` and `revocations.rollback` handlers record content-safe child trace spans under their claimed job spans, including bounded success/error metadata and object refs without compiled skill text.
@@ -303,6 +308,10 @@ Deliverables:
 - archive/promote/merge/split; archive, evaluator-gated archived promotion, evaluator-gated explicit duplicate merge/archive, active-bank budget overflow, and planned split/improvement/disambiguation curation actions are implemented as deterministic lifecycle-state or planning actions with structured repair proposal payloads;
 - external-skill review actions and import materialization; implemented as a control-authenticated operator decision ledger for reuse/import/ignore/quarantine plus operator-approved stage-only import candidates, with no autonomous mutation of external-owned files;
 - utility rollups; implemented as deterministic v1 rollups from attribution events, rendered retrieval counts, shadowing/hurt outcomes, and canary failures;
+- context-value utility signals; implemented by folding token-ledger marginal
+  value, context-value-per-token, ignored/false-positive load counts, and token
+  waste into utility rollups, score computation, and guarded improvement
+  planning with an explicit context-value acceptance gate;
 - attribution ledger and action-attribution checks; implemented for attribution events, runtime blocked-tool action checks, and revocation invalidation of derived attribution records.
 
 Acceptance:
