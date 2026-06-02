@@ -325,6 +325,11 @@ Deliverables:
   returns ranked content-safe topology recommendations from observed clusters,
   including support, success/failure, sequence, operation-score, and blocker
   metadata before any propose-only or activation path consumes them;
+- usage/topology negative-signal scoring; implemented so single-skill harmful
+  attribution and false-positive/ignored context-token outcomes create
+  subject-scoped `improve` or `decompose` recommendations with structured
+  negative-source metadata and suggested `broker_abstain`/`tighten_description`
+  context actions, while remaining recommendations only;
 - attribution ledger and action-attribution checks; implemented for attribution events, runtime blocked-tool action checks, and revocation invalidation of derived attribution records.
 
 Acceptance:
@@ -347,6 +352,12 @@ Acceptance:
 - validation evidence for recommendation scoring: focused usage/worker tests
   passed, then `uv run ruff check sidecar`, `uv run pytest` with 222 tests, `uv
   run python -m compileall -q sidecar`, and `git diff --check` passed.
+- validation evidence for improve/decompose negative-signal recommendations:
+  focused usage tests passed, `uv run ruff check sidecar`, `uv run pytest` with
+  230 tests, `uv run python -m compileall -q sidecar`, and `git diff --check`
+  passed; a real Compose Postgres smoke seeded harmful attribution plus
+  false-positive context-token outcomes and produced accepted `improve` and
+  `decompose` recommendations without writing runtime skills.
 - external collisions pause candidate creation for review; real external-root scanning,
   import recommendation, operator review actions, and stage-only import
   materialization are implemented without mutating external-owned roots.

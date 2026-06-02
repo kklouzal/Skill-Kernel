@@ -374,6 +374,17 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   until their upstream recommendations carry enough subject/successor structure.
   Validation passed with focused topology/usage tests, full sidecar tests,
   ruff, compileall, plugin check/tests, compose config, and diff hygiene.
+- Usage/topology recommendations now carry deterministic improve/decompose
+  signals from single-skill negative evidence and context-waste outcomes:
+  `usage.aggregate` ingests `context_token_ledgers` as content-safe usage
+  windows, emits subject-scoped `improve` clusters for repeated harmful
+  outcomes, emits subject-scoped `decompose` clusters for false-positive or
+  ignored context loads, and records `broker_abstain`/`tighten_description` as
+  suggested context actions without adding any autonomous mutation path.
+  Validation passed with focused usage tests, `uv run ruff check sidecar`,
+  `uv run pytest` (230 tests), `uv run python -m compileall -q sidecar`,
+  `git diff --check`, and a real Compose Postgres smoke that created 6 windows,
+  2 clusters, and accepted `improve` plus `decompose` recommendations.
 - Runtime guard-template SkillIR support is implemented as declarative,
   preapproved controls only: generated skills can declare fixed guard templates
   such as capability warnings, verify-only checks, sibling-disambiguation hints,
@@ -429,10 +440,9 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 2. Promote or replace the operator smoke runtime skill with the first genuinely
    useful SkillKernel-owned runtime skill once replay/probe evidence supports a
    non-smoke activation target.
-3. Extend usage/topology recommendation payloads with enough structured subject,
-   successor, and negative-signal detail for improve/decompose planning and
-   broker-abstain decisions after sustained telemetry confirms the aggregate
-   signals are stable.
+3. Consume the new improve/decompose usage recommendations into propose-only
+   topology or repair planning once sustained telemetry confirms their aggregate
+   signals are stable, including successor/boundary detail for decomposition.
 4. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
 
 ## Known Risks

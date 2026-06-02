@@ -13,6 +13,13 @@ from autoskill.db.workspaces import ensure_workspace
 
 SUCCESS_OUTCOMES = {"skill_helped", "helped", "success", "useful", "passed"}
 FAILURE_OUTCOMES = {"skill_hurt", "hurt", "failed", "failure", "wrong_skill"}
+CONTEXT_WASTE_OUTCOMES = {
+    "false_positive",
+    "false_positive_load",
+    "ignored",
+    "ignored_load",
+    "unused",
+}
 
 
 @dataclass(frozen=True)
@@ -158,6 +165,11 @@ class AsyncpgUsageStore(AsyncpgPoolOwner):
                 workspace_id,
                 min_support=max(1, min_support),
             )
+            clusters_upserted += await _upsert_single_skill_usage_clusters(
+                conn,
+                workspace_id,
+                min_support=max(1, min_support),
+            )
         return UsageAggregationResult(
             windows_scanned=len(rows),
             windows_created=windows_created,
@@ -253,6 +265,25 @@ async def _load_usage_source_rows(
           FROM autoskill.attribution_events
           WHERE workspace_id = $1
             AND array_length(skill_ids, 1) IS NOT NULL
+        )
+        UNION ALL
+        (
+          SELECT
+            'context_token_ledger' AS source_kind,
+            context_token_ledger_id AS source_id,
+            session_id,
+            turn_id,
+            ARRAY[skill_id] AS skill_ids,
+            outcome,
+            metadata || jsonb_build_object(
+              'visibility_state', visibility_state,
+              'token_count', token_count
+            ) AS metadata,
+            created_at AS observed_at
+          FROM autoskill.context_token_ledgers
+          WHERE workspace_id = $1
+            AND skill_id IS NOT NULL
+            AND outcome IS NOT NULL
         )
         ORDER BY observed_at DESC
         LIMIT $2
@@ -458,6 +489,116 @@ async def _upsert_usage_clusters(
     return upserted
 
 
+async def _upsert_single_skill_usage_clusters(
+    conn: asyncpg.Connection,
+    workspace_id: UUID,
+    *,
+    min_support: int,
+) -> int:
+    rows = await conn.fetch(
+        """
+        SELECT
+          skill_ids[1] AS skill_id,
+          count(*)::int AS support_count,
+          count(*) FILTER (WHERE outcome = ANY($3::text[]))::int AS success_count,
+          count(*) FILTER (WHERE outcome = ANY($4::text[]))::int AS failure_count,
+          count(*) FILTER (WHERE outcome = ANY($5::text[]))::int AS context_signal_count,
+          array_agg(
+            jsonb_build_object(
+              'source_kind', metadata #>> '{source_kind}',
+              'source_id', metadata #>> '{source_id}',
+              'outcome', outcome
+            )
+            ORDER BY observed_at DESC
+          ) FILTER (
+            WHERE outcome = ANY($4::text[]) OR outcome = ANY($5::text[])
+          ) AS negative_sources
+        FROM autoskill.skill_usage_windows
+        WHERE workspace_id = $1
+          AND cardinality(skill_ids) = 1
+        GROUP BY skill_ids[1]
+        HAVING count(*) >= $2
+           AND (
+             count(*) FILTER (WHERE outcome = ANY($4::text[])) > 0
+             OR count(*) FILTER (WHERE outcome = ANY($5::text[])) > 0
+           )
+        ORDER BY count(*) DESC, skill_ids[1]
+        LIMIT 100
+        """,
+        workspace_id,
+        min_support,
+        list(SUCCESS_OUTCOMES),
+        list(FAILURE_OUTCOMES),
+        list(CONTEXT_WASTE_OUTCOMES),
+    )
+    upserted = 0
+    for row in rows:
+        skill_id = row["skill_id"]
+        failure_count = int(row["failure_count"] or 0)
+        context_signal_count = int(row["context_signal_count"] or 0)
+        operation = "decompose" if context_signal_count >= max(1, failure_count) else "improve"
+        cluster_key = f"{operation}:{skill_id}"
+        context_actions = []
+        if context_signal_count:
+            context_actions.append("broker_abstain")
+            context_actions.append("tighten_description")
+        await conn.execute(
+            """
+            INSERT INTO autoskill.skill_usage_clusters (
+              skill_usage_cluster_id,
+              workspace_id,
+              cluster_key,
+              skill_ids,
+              support_count,
+              recommended_operation,
+              status,
+              metadata
+            )
+            VALUES (
+              gen_random_uuid(),
+              $1,
+              $2,
+              ARRAY[$3]::uuid[],
+              $4,
+              $5,
+              'observed',
+              $6::jsonb
+            )
+            ON CONFLICT (workspace_id, cluster_key)
+            DO UPDATE SET
+              skill_ids = EXCLUDED.skill_ids,
+              support_count = EXCLUDED.support_count,
+              recommended_operation = EXCLUDED.recommended_operation,
+              metadata = EXCLUDED.metadata,
+              updated_at = now()
+            """,
+            workspace_id,
+            cluster_key,
+            skill_id,
+            row["support_count"],
+            operation,
+            _json(
+                {
+                    "source": "usage.aggregate",
+                    "success_count": row["success_count"],
+                    "failure_count": failure_count,
+                    "sequence_count": 0,
+                    "context_signal_count": context_signal_count,
+                    "topology_signal": (
+                        "context_waste_or_false_positive"
+                        if operation == "decompose"
+                        else "repeated_negative_outcome"
+                    ),
+                    "subject_skill_ids": [str(skill_id)],
+                    "suggested_context_actions": context_actions,
+                    "negative_sources": _json_object_list(row["negative_sources"])[:10],
+                }
+            ),
+        )
+        upserted += 1
+    return upserted
+
+
 def _topology_recommendation_from_row(
     row: asyncpg.Record | dict[str, Any],
     *,
@@ -473,14 +614,23 @@ def _topology_recommendation_from_row(
     success_count = int(metadata.get("success_count") or 0)
     failure_count = int(metadata.get("failure_count") or 0)
     sequence_count = int(metadata.get("sequence_count") or 0)
+    context_signal_count = int(metadata.get("context_signal_count") or 0)
     failure_ratio = failure_count / support_count if support_count else 0.0
-    operation_score = float(
-        support_count
-        + (success_count * 2)
-        + sequence_count
-        - (failure_count * 3)
-    )
     operation = str(row["recommended_operation"] or "")
+    if operation in {"improve", "decompose"}:
+        operation_score = float(
+            support_count
+            + (failure_count * 2)
+            + (context_signal_count * 2)
+            + success_count
+        )
+    else:
+        operation_score = float(
+            support_count
+            + (success_count * 2)
+            + sequence_count
+            - (failure_count * 3)
+        )
     blockers: list[str] = []
     if support_count < min_support:
         blockers.append("usage cluster support below threshold")
@@ -488,12 +638,17 @@ def _topology_recommendation_from_row(
         blockers.append("usage cluster operation is not topology-primary")
     if operation == "compose" and len(skill_ids) < 2:
         blockers.append("compose recommendation requires at least two skills")
-    if success_count < min_success_count:
-        blockers.append("usage cluster lacks successful outcome evidence")
-    if failure_ratio > max_failure_ratio:
-        blockers.append("usage cluster failure ratio above threshold")
-    if sequence_count < min_sequence_count:
-        blockers.append("usage cluster lacks stable sequence evidence")
+    if operation == "compose":
+        if success_count < min_success_count:
+            blockers.append("usage cluster lacks successful outcome evidence")
+        if failure_ratio > max_failure_ratio:
+            blockers.append("usage cluster failure ratio above threshold")
+        if sequence_count < min_sequence_count:
+            blockers.append("usage cluster lacks stable sequence evidence")
+    if operation == "improve" and failure_count + context_signal_count <= 0:
+        blockers.append("improve recommendation lacks negative outcome evidence")
+    if operation == "decompose" and context_signal_count <= 0:
+        blockers.append("decompose recommendation lacks context-waste evidence")
 
     return UsageTopologyRecommendation(
         skill_usage_cluster_id=_row_get(row, "skill_usage_cluster_id"),
@@ -511,6 +666,10 @@ def _topology_recommendation_from_row(
             "source": metadata.get("source", "skill_usage_clusters"),
             "topology_signal": metadata.get("topology_signal"),
             "failure_ratio": failure_ratio,
+            "context_signal_count": context_signal_count,
+            "subject_skill_ids": metadata.get("subject_skill_ids", []),
+            "suggested_context_actions": metadata.get("suggested_context_actions", []),
+            "negative_sources": metadata.get("negative_sources", []),
             "thresholds": {
                 "min_support": min_support,
                 "min_success_count": min_success_count,
@@ -553,6 +712,24 @@ def _metadata_dict(value: object) -> dict[str, Any]:
         if isinstance(decoded, dict):
             return decoded
     return {}
+
+
+def _json_object_list(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    objects: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            objects.append(item)
+            continue
+        if isinstance(item, str):
+            try:
+                decoded = json.loads(item)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(decoded, dict):
+                objects.append(decoded)
+    return objects
 
 
 def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:
