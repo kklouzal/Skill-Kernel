@@ -252,7 +252,7 @@ Deliverables:
 
 - contract extraction; implemented for SkillIR `environment_contracts` into DB-backed environment contract rows;
 - drift checks; implemented as a deterministic first pass for static path-existence, bare-command availability, and required-env probes with drift event creation;
-- package/schema/service drift checks; implemented as deterministic Python package, JSON schema, and bounded TCP reachability probes without arbitrary shell execution;
+- package/schema/service/API drift checks; implemented as deterministic Python package, JSON schema, bounded TCP reachability, and bounded HTTP status probes without arbitrary shell execution or request bodies;
 - localized repair;
 - skill graph maintenance;
 - repeated shadowing events materialize deterministic `shadow` skill graph edges plus active contrastive shadowing probes;

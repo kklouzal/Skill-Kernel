@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Protocol
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 from uuid import UUID
 
 import asyncpg
@@ -601,6 +604,23 @@ def _check_contract(row: asyncpg.Record) -> tuple[str, str]:
                 return "valid", f"tcp service reachable: {host}:{port}"
         except OSError:
             return "violated", f"tcp service unreachable: {host}:{port}"
+    if probe.startswith("static:http-status:"):
+        expected_status, url = _parse_http_status_probe(
+            probe.removeprefix("static:http-status:").strip()
+        )
+        if expected_status is None or url is None:
+            return "unknown", "http status probe must be expected_status:http(s)://host/path"
+        try:
+            request = urllib_request.Request(url, method="HEAD")
+            with urllib_request.urlopen(request, timeout=0.75) as response:
+                actual_status = int(response.status)
+        except urllib_error.HTTPError as response_error:
+            actual_status = int(response_error.code)
+        except (OSError, ValueError) as error:
+            return "violated", f"http status probe failed: {type(error).__name__}"
+        if actual_status == expected_status:
+            return "valid", f"http status matched: {actual_status} {url}"
+        return "violated", f"http status {actual_status} != {expected_status}: {url}"
     return "unknown", "no deterministic validation probe configured"
 
 
@@ -617,6 +637,8 @@ def _validation_method_for_probe(probe: str) -> str:
         return "static_json_schema_loadable"
     if probe.startswith("static:tcp:"):
         return "static_tcp_reachable"
+    if probe.startswith("static:http-status:"):
+        return "static_http_status"
     return "manual"
 
 
@@ -638,6 +660,22 @@ def _parse_host_port(target: str) -> tuple[str | None, int | None]:
     if not host or port < 1 or port > 65535:
         return None, None
     return host, port
+
+
+def _parse_http_status_probe(target: str) -> tuple[int | None, str | None]:
+    if ":" not in target:
+        return None, None
+    status_text, url = target.split(":", 1)
+    try:
+        expected_status = int(status_text)
+    except ValueError:
+        return None, None
+    if expected_status < 100 or expected_status > 599:
+        return None, None
+    parsed = urllib_parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None, None
+    return expected_status, url
 
 
 def _json_dict(value: object) -> dict[str, Any]:

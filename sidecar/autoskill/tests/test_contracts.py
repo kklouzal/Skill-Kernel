@@ -51,6 +51,12 @@ def test_contract_extraction_classifies_static_probe_methods() -> None:
                     "expectation": "service port is reachable",
                     "probe": "static:tcp:127.0.0.1:9",
                 },
+                {
+                    "kind": "api",
+                    "name": "health endpoint",
+                    "expectation": "health returns ok",
+                    "probe": "static:http-status:200:https://example.test/health",
+                },
             ]
         }
     )
@@ -62,6 +68,7 @@ def test_contract_extraction_classifies_static_probe_methods() -> None:
         "static_python_package_present",
         "static_json_schema_loadable",
         "static_tcp_reachable",
+        "static_http_status",
     ]
 
 
@@ -121,6 +128,36 @@ def test_drift_check_handles_schema_and_service_probes(tmp_path, monkeypatch) ->
     assert _check_contract({"metadata": {"probe": "static:tcp:not-a-service"}}) == (
         "unknown",
         "tcp service probe must be host:port",
+    )
+
+
+def test_drift_check_handles_http_status_probe(monkeypatch) -> None:
+    class FakeResponse:
+        status = 204
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def fake_urlopen(request, timeout):
+        assert request.full_url == "https://example.test/health"
+        assert request.get_method() == "HEAD"
+        assert timeout == 0.75
+        return FakeResponse()
+
+    monkeypatch.setattr("autoskill.db.contracts.urllib_request.urlopen", fake_urlopen)
+
+    assert _check_contract(
+        {"metadata": {"probe": "static:http-status:204:https://example.test/health"}}
+    ) == ("valid", "http status matched: 204 https://example.test/health")
+    assert _check_contract(
+        {"metadata": {"probe": "static:http-status:200:https://example.test/health"}}
+    ) == ("violated", "http status 204 != 200: https://example.test/health")
+    assert _check_contract({"metadata": {"probe": "static:http-status:ok:not-a-url"}}) == (
+        "unknown",
+        "http status probe must be expected_status:http(s)://host/path",
     )
 
 
