@@ -87,7 +87,7 @@ def test_curation_plans_split_and_improvement_actions() -> None:
     }
 
 
-def test_duplicate_merge_probe_plan_requires_equivalence_and_rollback() -> None:
+def test_duplicate_merge_probe_plan_has_deterministic_trials() -> None:
     left = uuid4()
     right = uuid4()
 
@@ -97,15 +97,37 @@ def test_duplicate_merge_probe_plan_requires_equivalence_and_rollback() -> None:
         from_slug="left-skill",
         to_slug="right-skill",
     )
+    repeat = _merge_probe_plan(
+        from_skill_id=left,
+        to_skill_id=right,
+        from_slug="left-skill",
+        to_slug="right-skill",
+    )
 
-    assert plan["candidate_skill_ids"] == [str(left), str(right)]
-    assert plan["required_probe_kinds"] == [
-        "equivalence",
-        "regression",
-        "sibling_shadowing",
+    assert plan == repeat
+    assert plan["schema"] == "autoskill.merge_probe_plan.v1"
+    assert plan["candidate_pair"] == {
+        "from_skill_id": str(left),
+        "to_skill_id": str(right),
+        "from_slug": "left-skill",
+        "to_slug": "right-skill",
+    }
+    assert [trial["kind"] for trial in plan["planned_trials"]] == [
+        "target",
         "no_skill_control",
+        "regression",
+        "collision",
     ]
-    assert plan["acceptance_gate"]["regression_failures"] == 0
+    assert all(trial["probe_hash"] for trial in plan["planned_trials"])
+    assert all(trial["maturity"] == "planned" for trial in plan["planned_trials"])
+    assert plan["acceptance_gate"] == {
+        "latest_evaluator_passed_for_both": True,
+        "target_pass": True,
+        "no_skill_control_improves": True,
+        "regression_failures": 0,
+        "collision_failures": 0,
+        "rollback_plan_present": True,
+    }
     assert plan["rollback"] == {
         "required": True,
         "restore_archived_duplicate": True,

@@ -8,6 +8,7 @@ from uuid import UUID
 
 import asyncpg
 
+from autoskill.core.hashing import sha256_json
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 from autoskill.services.utility import SkillUtilityFeatures, compute_utility_score
@@ -481,28 +482,121 @@ def _merge_probe_plan(
     from_slug: str,
     to_slug: str,
 ) -> dict[str, Any]:
+    pair = {
+        "from_skill_id": str(from_skill_id),
+        "to_skill_id": str(to_skill_id),
+        "from_slug": from_slug,
+        "to_slug": to_slug,
+    }
+    trials = [
+        _merge_probe_trial(
+            kind="target",
+            pair=pair,
+            objective="Prove one kept duplicate covers the verified task evidence for both skills.",
+            checks=[
+                "representative tasks from both duplicate skills pass with the kept skill visible",
+                "the archived skill adds no distinct required output, effect, or safety boundary",
+                "the kept skill preserves the better historical outcome",
+            ],
+            expected={
+                "status": "pass",
+                "both_latest_versions_passed": True,
+                "kept_skill_covers_archived_skill": True,
+            },
+        ),
+        _merge_probe_trial(
+            kind="no_skill_control",
+            pair=pair,
+            objective="Reject merge if hiding both duplicates performs as well as keeping one.",
+            checks=[
+                "baseline without either duplicate cannot match verified task outcomes",
+                "kept skill provides positive marginal value over no injected duplicate",
+            ],
+            expected={
+                "status": "compare",
+                "kept_skill_must_outperform_no_skill": True,
+            },
+        ),
+        _merge_probe_trial(
+            kind="regression",
+            pair=pair,
+            objective=(
+                "Reject merge if the archived duplicate carried unique boundaries "
+                "or failure handling."
+            ),
+            checks=[
+                "do-not-use boundaries from both duplicates remain enforceable",
+                "unsafe-when and failure modes are not weakened",
+                "support artifacts and environment contracts remain covered",
+            ],
+            expected={
+                "status": "pass",
+                "no_lost_boundaries": True,
+                "no_new_shadowing_regression": True,
+            },
+        ),
+        _merge_probe_trial(
+            kind="collision",
+            pair=pair,
+            objective=(
+                "Reject merge if the duplicate pair should be decomposed "
+                "or disambiguated instead."
+            ),
+            checks=[
+                "retrieval examples select one kept skill for the shared intent",
+                "sibling skills are not newly shadowed by the kept skill",
+                "the pair does not represent two distinct task clusters",
+            ],
+            expected={
+                "status": "pass",
+                "no_decompose_signal": True,
+                "no_sibling_collision": True,
+            },
+        ),
+    ]
     return {
         "schema": "autoskill.merge_probe_plan.v1",
         "kind": "duplicate_merge",
-        "candidate_skill_ids": [str(from_skill_id), str(to_skill_id)],
-        "candidate_slugs": [from_slug, to_slug],
-        "required_probe_kinds": [
-            "equivalence",
-            "regression",
-            "sibling_shadowing",
-            "no_skill_control",
-        ],
+        "candidate_pair": pair,
+        "planned_trials": trials,
         "acceptance_gate": {
-            "both_latest_versions_passed": True,
+            "latest_evaluator_passed_for_both": True,
+            "target_pass": True,
+            "no_skill_control_improves": True,
             "regression_failures": 0,
-            "shadowing_delta_allowed": 0,
-            "utility_delta_positive": True,
+            "collision_failures": 0,
+            "rollback_plan_present": True,
         },
         "rollback": {
             "required": True,
             "restore_archived_duplicate": True,
             "revoke_duplicate_edge_changes": True,
         },
+    }
+
+
+def _merge_probe_trial(
+    *,
+    kind: str,
+    pair: dict[str, str],
+    objective: str,
+    checks: list[str],
+    expected: dict[str, Any],
+) -> dict[str, Any]:
+    spec = {
+        "schema": "autoskill.merge_probe.v1",
+        "mode": "duplicate_merge",
+        "candidate_pair": pair,
+        "objective": objective,
+        "checks": checks,
+    }
+    payload = {"kind": kind, "spec": spec, "expected": expected}
+    return {
+        "probe_hash": sha256_json(payload),
+        "kind": kind,
+        "maturity": "planned",
+        "spec": spec,
+        "expected": expected,
     }
 
 
