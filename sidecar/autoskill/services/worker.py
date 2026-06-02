@@ -27,6 +27,7 @@ from autoskill.db.profiles import ProfileStore
 from autoskill.db.retrieval import RetrievalStore
 from autoskill.db.scheduler import SchedulerStore
 from autoskill.db.topology import TopologyStore
+from autoskill.db.usage import UsageStore
 from autoskill.db.utility import UtilityStore
 from autoskill.services.compiler import (
     CONTEXT_COMPILER_VERSION,
@@ -146,6 +147,7 @@ class WorkerStores:
     contracts: ContractStore | None = None
     context_governance: ContextGovernanceStore | None = None
     topology: TopologyStore | None = None
+    usage: UsageStore | None = None
     observability: ObservabilityStore | None = None
     attribution: AttributionStore | None = None
     activation_gate: ActivationGateStore | None = None
@@ -791,6 +793,26 @@ async def _run_curation(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
             else _payload_int(job.payload, "active_budget", default=100, minimum=1, maximum=1000)
         ),
         max_merge=_payload_int(job.payload, "max_merge", default=5, minimum=0, maximum=100),
+    )
+    return result.to_json()
+
+
+async def _run_usage_aggregate(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
+    if stores.usage is None:
+        raise ValueError("usage store is required for usage aggregation")
+    workspace = _payload_workspace(job) or job.workspace_key
+    if workspace is None:
+        raise ValueError("usage aggregation requires workspace_id")
+    result = await stores.usage.aggregate_usage(
+        workspace_key=workspace,
+        limit=_payload_int(job.payload, "limit", default=500, minimum=1, maximum=5000),
+        min_support=_payload_int(
+            job.payload,
+            "min_support",
+            default=2,
+            minimum=1,
+            maximum=50,
+        ),
     )
     return result.to_json()
 
@@ -2131,6 +2153,11 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "curation.run",
         "maintenance",
         _run_curation,
+    ),
+    "usage.aggregate": JobDefinition(
+        "usage.aggregate",
+        "maintenance",
+        _run_usage_aggregate,
     ),
     "contracts.extract": JobDefinition(
         "contracts.extract",

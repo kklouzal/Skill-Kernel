@@ -157,6 +157,17 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   token, ignored/false-positive load counts, and token waste are folded into
   `SkillUtilityFeatures`, utility scoring, curation action features, and
   deterministic improvement planning with a context-value acceptance gate.
+- Support artifact context-governance registration is implemented: the
+  activation-grade compiler records deterministic declaration-only
+  `support_excerpt` context artifacts for each SkillIR support artifact,
+  scanner-gates those excerpts, stamps loadability/retrieval-boundary metadata,
+  and includes support hashes in the compile manifest/run metadata without
+  rendering support-file contents into runtime context by default.
+- Usage/topology evidence aggregation is implemented as a maintenance job:
+  `usage.aggregate` consumes content-safe retrieval and attribution rows into
+  idempotent `skill_usage_windows`, pair/sequence `skill_co_usage_edges`, and
+  observed `skill_usage_clusters` with first-pass `compose` recommendations for
+  topology consumers.
 - External-skill scanner job wiring is implemented: read-only skill roots can be passed to the worker entrypoint, `external_skills.scan` inventories `*/SKILL.md` files without storing raw root paths, hashes roots/files, parses public name/description frontmatter, and quarantines scanner-blocked external skills.
 - Scanner classification now blocks deterministic first-pass harmful capability and
   policy-override patterns: credential exfiltration, destructive host commands,
@@ -347,7 +358,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
    operator-reviewed replay episodes from real usage, then run replay/canary
    tuning on the enlarged corpus.
 2. Run `scripts/autoskill_backup.py` to an operator-approved backup location after the production roots contain activated SkillKernel-owned skills, then verify with `scripts/autoskill_restore.py --dry-run`.
-3. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
+3. Wire the new usage/topology clusters into compose/decompose/improve proposal
+   ranking and broker-abstain decisions only after sustained telemetry confirms
+   the aggregate signals are stable.
+4. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
 
 ## Known Risks
 
@@ -364,7 +378,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   testing.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
 - Worker health now includes persistent heartbeat records, long-running handlers renew job leases, and single-job worker runs emit content-safe progress phases through heartbeat summaries. Future lengthy semantic handlers may still add deeper domain-specific counters when their internal phases mature.
-- Evidence derivation now creates observed event evidence plus deterministic recurring evidence clusters; richer cross-session semantic aggregation and additional contrastive evidence mining beyond evaluator replay maturity remain pending.
+- Evidence derivation now creates observed event evidence plus deterministic recurring evidence clusters, and `usage.aggregate` now mines retrieval/attribution co-use windows into topology evidence tables. Remaining work is consumer-side ranking/threshold tuning for compose, decompose, improve, and broker-abstain decisions plus additional contrastive evidence mining beyond evaluator replay maturity.
 - Memory quarantine/control-flow tables and operator APIs now exist, the runtime broker can record approved memory-influenced retrieval decisions without injecting memory text while blocking unapproved memory references before retrieval, and repair/writer mutation paths now gate and log approved or blocked memory influence.
 - Embedding generation defaults to deterministic local hash embeddings unless an active qualified embedding profile is configured; storage now supports profile-scoped variable dimensions, with the default 1536-dimensional path retaining the indexed HNSW fast path.
 - Runtime context broker is still conservative: vector fusion is available for local deterministic hash embeddings, policy artifact replay/canary primitives exist, and stored redacted replay episodes can drive policy replay; production replay quality still depends on deployment telemetry being populated.
@@ -383,11 +397,13 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded or induced redacted intervention replay from explicit replay, attribution, canary, or broker outcome evidence.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints; mutation-worker apply exists but fails closed unless the queued job is explicitly policy-approved.
 - Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, invalidates body-index/embedding/context/retrieval/topology/evaluator/attribution/governance objects from traversal summaries, and freeze/critical-canary paths evict affected broker cache entries.
-- Utility rollups are deterministic v1 scoring, not full marginal-value/intervention scoring yet; curation now handles archived promotion, explicit duplicate merge/archive, low-utility archive, active-bank budget overflow, evaluator blocking, duplicate merge probe planning, and planned split/improvement/disambiguation actions with structured repair proposals. Conservative repair execution now claims planned repairs, records governance/provenance, queues evaluator or policy-approved writer work, and can generate guarded staged repair manifests from policy-approved bounded proposals.
-- Context-value/token ledgers exist and activation-grade compiler proof can now
-  require routing/regression evidence, but utility rollups still need to consume
-  context-value-per-token and token-waste outcomes before they fully drive
-  archive, compose, decompose, tighten-description, or broker-abstain actions.
-- Support artifacts remain represented in SkillIR and schema but are not yet
-  full writer-manifest artifacts with independent scan/token/provenance records.
+- Utility rollups are deterministic v1 scoring, not full intervention scoring yet; curation now handles archived promotion, explicit duplicate merge/archive, low-utility archive, active-bank budget overflow, context-value/token-waste features, evaluator blocking, duplicate merge probe planning, and planned split/improvement/disambiguation actions with structured repair proposals. Conservative repair execution now claims planned repairs, records governance/provenance, queues evaluator or policy-approved writer work, and can generate guarded staged repair manifests from policy-approved bounded proposals.
+- Context-value/token ledgers feed utility rollups and repair planning, but
+  usage-cluster consumers still need to use context-value-per-token and token
+  waste outcomes before they fully drive compose, decompose,
+  tighten-description, or broker-abstain actions.
+- Support artifacts now have SkillIR/schema representation, writer-manifest
+  scan/token/provenance coverage, apply/archive/rollback handling, and
+  declaration-only context-governance excerpt registration. Remaining support
+  work is sustained operational validation of retrieval policy boundaries.
 - Contract/drift checks are deterministic v1 path/command/env/package/schema/TCP/HTTP-status probes only; drift probe creation/retirement, localized repair metadata, live API status probes, operator false-positive suppression, and conservative repair execution/recheck queueing are implemented.

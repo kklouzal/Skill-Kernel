@@ -16,6 +16,7 @@ from autoskill.db.memory import NullMemoryGovernanceStore
 from autoskill.db.observability import TraceSpanRecord
 from autoskill.db.scheduler import SchedulerTickResult
 from autoskill.db.topology import NullTopologyStore
+from autoskill.db.usage import UsageAggregationResult
 from autoskill.db.utility import CurationActionRecord, CurationRunResult, UtilityRollupResult
 from autoskill.services.worker import (
     WorkerLoopConfig,
@@ -346,6 +347,32 @@ class MemoryUtilityWorkerStore:
             }
         )
         return None
+
+
+class MemoryUsageWorkerStore:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def aggregate_usage(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 500,
+        min_support: int = 2,
+    ) -> UsageAggregationResult:
+        self.calls.append(
+            {
+                "workspace_key": workspace_key,
+                "limit": limit,
+                "min_support": min_support,
+            }
+        )
+        return UsageAggregationResult(
+            windows_scanned=4,
+            windows_created=3,
+            edges_updated=2,
+            clusters_upserted=1,
+        )
 
 
 class MemoryContractWorkerStore:
@@ -1855,6 +1882,40 @@ def test_worker_dispatches_utility_and_curation_jobs() -> None:
             "active_budget": 12,
             "max_merge": 1,
         }
+    ]
+
+
+def test_worker_dispatches_usage_aggregation_job() -> None:
+    jobs = MemoryJobStore()
+    usage = MemoryUsageWorkerStore()
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="usage.aggregate",
+            idempotency_key="usage:one",
+            payload={"workspace_id": "dev-01", "limit": 31, "min_support": 3},
+        )
+        stores = WorkerStores(
+            jobs=jobs,
+            scheduler=MemorySchedulerWorkerStore(),
+            evidence=MemoryEvidenceWorkerStore(),
+            embeddings=MemoryPendingEmbeddingStore(),
+            usage=usage,
+        )
+        return await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output == {
+        "windows_scanned": 4,
+        "windows_created": 3,
+        "edges_updated": 2,
+        "clusters_upserted": 1,
+    }
+    assert usage.calls == [
+        {"workspace_key": "dev-01", "limit": 31, "min_support": 3}
     ]
 
 

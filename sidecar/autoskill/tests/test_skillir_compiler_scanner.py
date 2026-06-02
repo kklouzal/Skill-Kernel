@@ -1,7 +1,7 @@
 import asyncio
 
 import pytest
-from autoskill.core.skillir import SkillIR
+from autoskill.core.skillir import SkillIR, SupportArtifact
 from autoskill.db.context import NullContextGovernanceStore
 from autoskill.services.compiler import compile_skill, compile_skill_with_context_governance
 from autoskill.services.scanner import has_blocking_findings, scan_text, scan_text_bundle
@@ -78,6 +78,54 @@ def test_context_compiler_records_governance_gate_pass() -> None:
     assert result.semantic_compression_trial["status"] == "passed"
     assert result.lost_requirements == 0
     assert result.semantic_equivalence_score == 1.0
+
+
+def test_context_compiler_registers_support_artifact_excerpts() -> None:
+    skill = valid_skill().model_copy(
+        update={
+            "support_artifacts": [
+                SupportArtifact(
+                    path="references/procedure.md",
+                    kind="template",
+                    sha256="abc123",
+                    capabilities=["read_project_docs", "summarize"],
+                    load_policy="broker_excerpt_only",
+                ),
+                SupportArtifact(
+                    path="scripts/check.py",
+                    kind="script",
+                    capabilities=["local_validation"],
+                    load_policy="script_only",
+                ),
+            ]
+        }
+    )
+
+    result = asyncio.run(
+        compile_skill_with_context_governance(
+            skill,
+            NullContextGovernanceStore(),
+            workspace_key="dev-01",
+        )
+    )
+
+    assert result.status == "passed"
+    assert len(result.support_context_artifacts) == 2
+    support = result.support_context_artifacts[0]
+    assert support["artifact_kind"] == "support_excerpt"
+    assert support["source_object_type"] == "skill_version_support_artifact"
+    assert support["metadata"]["loadability_class"] == (
+        "support_artifact:broker_excerpt_only"
+    )
+    assert support["metadata"]["support_path"] == "references/procedure.md"
+    assert support["metadata"]["declared_capabilities"] == [
+        "read_project_docs",
+        "summarize",
+    ]
+    assert support["metadata"]["retrieval_boundary"] == "broker_summary_only"
+    assert result.compile_run["metadata"]["support_artifact_count"] == 2
+    assert result.compile_run["metadata"]["support_artifact_hashes"]
+    assert result.compile_run["output_manifest_hash"]
 
 
 def test_context_compiler_requires_probe_evidence_when_activation_grade() -> None:

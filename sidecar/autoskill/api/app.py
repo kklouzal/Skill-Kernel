@@ -81,6 +81,7 @@ from autoskill.db.retrieval import AsyncpgRetrievalStore, NullRetrievalStore, Re
 from autoskill.db.scheduler import AsyncpgSchedulerStore, NullSchedulerStore, SchedulerStore
 from autoskill.db.skills import AsyncpgSkillStore, NullSkillStore, SkillStore
 from autoskill.db.topology import AsyncpgTopologyStore, NullTopologyStore, TopologyStore
+from autoskill.db.usage import AsyncpgUsageStore, NullUsageStore, UsageStore
 from autoskill.db.utility import AsyncpgUtilityStore, NullUtilityStore, UtilityStore
 from autoskill.services.broker import (
     BrokerCanaryFeedback,
@@ -1306,6 +1307,16 @@ def _build_utility_store() -> UtilityStore:
     return NullUtilityStore()
 
 
+def _build_usage_store() -> UsageStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgUsageStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullUsageStore()
+
+
 def _build_contract_store() -> ContractStore:
     settings = get_settings()
     if settings.database_url:
@@ -1755,6 +1766,7 @@ def _worker_stores(
     evaluations: EvaluationStore,
     governance: GovernanceStore,
     utility: UtilityStore,
+    usage: UsageStore,
     contracts: ContractStore,
     attribution: AttributionStore,
     observability: ObservabilityStore,
@@ -1778,6 +1790,7 @@ def _worker_stores(
         evaluations=evaluations,
         governance=governance,
         utility=utility,
+        usage=usage,
         contracts=contracts,
         attribution=attribution,
         context_governance=context_governance,
@@ -2046,6 +2059,7 @@ def create_app(
     candidate_store: CandidateStore | None = None,
     evaluation_store: EvaluationStore | None = None,
     utility_store: UtilityStore | None = None,
+    usage_store: UsageStore | None = None,
     contract_store: ContractStore | None = None,
     governance_store: GovernanceStore | None = None,
     lifecycle_store: LifecycleStore | None = None,
@@ -2077,6 +2091,7 @@ def create_app(
     candidates = candidate_store or _build_candidate_store()
     evaluations = evaluation_store or _build_evaluation_store()
     utility = utility_store or _build_utility_store()
+    usage = usage_store or _build_usage_store()
     contracts = contract_store or _build_contract_store()
     governance = governance_store or _build_governance_store()
     lifecycle = lifecycle_store or _build_lifecycle_store(governance)
@@ -2120,6 +2135,7 @@ def create_app(
                 candidates,
                 evaluations,
                 utility,
+                usage,
                 contracts,
                 governance,
                 lifecycle,
@@ -2782,6 +2798,7 @@ def create_app(
                 evaluations=evaluations,
                 governance=governance,
                 utility=utility,
+                usage=usage,
                 contracts=contracts,
                 attribution=attribution,
                 observability=observability,

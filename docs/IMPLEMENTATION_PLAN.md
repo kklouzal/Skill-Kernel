@@ -290,6 +290,11 @@ Acceptance:
   token budget, content hash metadata, and apply/rollback governance records
   each support file as `support_artifact` provenance instead of hiding it under
   the directory-level compiled skill item;
+- support artifact context governance is declaration-only by default:
+  activation-grade compilation records scanner-gated `support_excerpt` context
+  artifacts for each declared support file, stamps load policy/retrieval
+  boundary/capability/hash metadata, and includes support hashes in compile
+  manifests without injecting support-file contents into broker/runtime context;
 - canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed mutation-worker rollback execution, initial-create active-path deletion rollback, body-index/embedding/retrieval/context/topology/evaluator/attribution/governance invalidation, active broker-cache invalidation, and fail-closed policy-approved mutation-worker writer apply orchestration are implemented.
 - long-running job leases renew while handlers are still running; implemented in the job store, worker execution wrapper, and control API with focused tests.
 - mutation-worker `writer.apply` and `revocations.rollback` handlers record content-safe child trace spans under their claimed job spans, including bounded success/error metadata and object refs without compiled skill text.
@@ -312,6 +317,10 @@ Deliverables:
   value, context-value-per-token, ignored/false-positive load counts, and token
   waste into utility rollups, score computation, and guarded improvement
   planning with an explicit context-value acceptance gate;
+- usage/topology evidence aggregation; implemented as the `usage.aggregate`
+  maintenance job, which mines content-safe retrieval and attribution rows into
+  idempotent usage windows, co-use/sequence edges, and observed usage clusters
+  with first-pass compose recommendations for later topology consumers;
 - attribution ledger and action-attribution checks; implemented for attribution events, runtime blocked-tool action checks, and revocation invalidation of derived attribution records.
 
 Acceptance:
@@ -320,6 +329,9 @@ Acceptance:
 - archived skills promote when demand recurs; implemented for archived skills with repeated retrieval demand, no harm/canary failures, and latest evaluator pass;
 - duplicates merge only after probes pass; implemented for explicit duplicate graph edges as lower-utility duplicate archiving only when both latest skill versions have evaluator pass, with dedicated target/no-skill/regression/collision merge probe plans plus repair/split structured trial/gate proposals now logged for duplicate, harmful, or shadowing patterns;
 - active bank budget is enforced; implemented by archiving lowest-utility overflow active skills.
+- usage aggregation is deterministic and idempotent across repeated maintenance
+  passes; implemented with focused tests and a real Postgres smoke proving
+  windows, co-use edge counters, sequence/success counts, and usage clusters.
 - external collisions pause candidate creation for review; real external-root scanning,
   import recommendation, operator review actions, and stage-only import
   materialization are implemented without mutating external-owned roots.

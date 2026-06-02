@@ -6,7 +6,7 @@ from math import ceil
 from uuid import UUID
 
 from autoskill.core.hashing import sha256_json, sha256_text
-from autoskill.core.skillir import SkillIR
+from autoskill.core.skillir import SkillIR, SupportArtifact
 from autoskill.db.context import ContextGovernanceStore
 from autoskill.services.scanner import ScannerFinding, has_blocking_findings, scan_text
 
@@ -39,6 +39,7 @@ class CompiledSkill:
 class ContextCompilationResult:
     compiled: CompiledSkill
     context_artifact: dict[str, object]
+    support_context_artifacts: list[dict[str, object]]
     compile_run: dict[str, object]
     budget_event: dict[str, object]
     semantic_compression_trial: dict[str, object]
@@ -71,6 +72,7 @@ class ContextCompilationResult:
             "added_unsupported_requirements": self.added_unsupported_requirements,
             "semantic_equivalence_score": self.semantic_equivalence_score,
             "context_artifact": self.context_artifact,
+            "support_context_artifacts": self.support_context_artifacts,
             "compile_run": self.compile_run,
             "budget_event": self.budget_event,
             "semantic_compression_trial": self.semantic_compression_trial,
@@ -258,12 +260,26 @@ async def compile_skill_with_context_governance(
             "regression_evidence": _safe_gate_evidence(regression_evidence),
         },
     )
+    support_artifacts = await _record_support_context_artifacts(
+        skill,
+        store,
+        workspace_key=workspace_key,
+        source_object_type=source_object_type,
+        source_object_id=source_object_id,
+        skill_id=skill_id,
+        skill_version_id=skill_version_id,
+        compiler_version=compiler_version,
+    )
 
     manifest = {
         "schema": "autoskill.context-compile-manifest.v1",
         "compiler_version": compiler_version,
         "skill_slug": skill.slug,
         "compiled_sha256": compiled.sha256,
+        "support_artifact_count": len(support_artifacts),
+        "support_artifact_hashes": [
+            artifact["text_hash"] for artifact in support_artifacts
+        ],
         "loadability_class": "runtime_on_skill_load",
         "token_count": compiled.estimated_tokens,
         "max_tokens": max_context_tokens,
@@ -298,6 +314,10 @@ async def compile_skill_with_context_governance(
             "model_assist_used": False,
             "probe_evidence_required": require_probe_evidence,
             "probe_reject_reason": probe_reject_reason,
+            "support_artifact_count": len(support_artifacts),
+            "support_artifact_hashes": [
+                artifact["text_hash"] for artifact in support_artifacts
+            ],
         },
     )
     budget_event = await store.record_budget_event(
@@ -345,6 +365,7 @@ async def compile_skill_with_context_governance(
     return ContextCompilationResult(
         compiled=compiled,
         context_artifact=artifact.to_json(),
+        support_context_artifacts=support_artifacts,
         compile_run=compile_run.to_json(),
         budget_event=budget_event.to_json(),
         semantic_compression_trial=compression_trial.to_json(),
@@ -356,6 +377,74 @@ async def compile_skill_with_context_governance(
         added_unsupported_requirements=added_unsupported_requirements,
         semantic_equivalence_score=semantic_equivalence_score,
     )
+
+
+async def _record_support_context_artifacts(
+    skill: SkillIR,
+    store: ContextGovernanceStore,
+    *,
+    workspace_key: str,
+    source_object_type: str,
+    source_object_id: UUID | None,
+    skill_id: UUID | None,
+    skill_version_id: UUID | None,
+    compiler_version: str,
+) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for artifact in skill.support_artifacts:
+        excerpt = _support_artifact_context_excerpt(artifact)
+        findings = scan_text(excerpt)
+        safety_status = "blocked" if has_blocking_findings(findings) else "passed"
+        record = await store.record_artifact(
+            workspace_key=workspace_key,
+            artifact_kind="support_excerpt",
+            source_object_type=f"{source_object_type}_support_artifact",
+            source_object_id=source_object_id,
+            skill_id=skill_id,
+            skill_version_id=skill_version_id,
+            text=excerpt,
+            max_tokens=120,
+            safety_status=safety_status,
+            equivalence_status="passed",
+            shadowing_status="pending",
+            metadata={
+                "loadability_class": f"support_artifact:{artifact.load_policy}",
+                "compiler": compiler_version,
+                "skill_slug": skill.slug,
+                "support_path": artifact.path,
+                "support_kind": artifact.kind,
+                "support_load_policy": artifact.load_policy,
+                "declared_sha256": artifact.sha256,
+                "declared_capabilities": list(artifact.capabilities),
+                "retrieval_boundary": _support_retrieval_boundary(artifact.load_policy),
+                "scanner_codes": [finding.code for finding in findings],
+                "source": "skillir_support_artifact_declaration",
+            },
+        )
+        records.append(record.to_json())
+    return records
+
+
+def _support_artifact_context_excerpt(artifact: SupportArtifact) -> str:
+    capabilities = ", ".join(sorted(artifact.capabilities)) or "none"
+    declared_hash = artifact.sha256 or "not-declared"
+    return "\n".join(
+        [
+            f"path: {artifact.path}",
+            f"kind: {artifact.kind}",
+            f"load_policy: {artifact.load_policy}",
+            f"declared_capabilities: {capabilities}",
+            f"declared_sha256: {declared_hash}",
+        ]
+    )
+
+
+def _support_retrieval_boundary(load_policy: str) -> str:
+    if load_policy == "agent_may_read":
+        return "may_render_after_budget_and_scanner_gates"
+    if load_policy == "broker_excerpt_only":
+        return "broker_summary_only"
+    return "not_runtime_context_loadable"
 
 
 def _estimate_tokens(text: str) -> int:
