@@ -5,7 +5,6 @@ SkillKernel is the project home for **OpenClaw AutoSkill Manager**, internal cod
 The closed-design handoff is the controlling source for architecture and implementation priorities:
 
 - `skillkernel-openclaw-autoskill-ultimate-v16-coherence-closed-implementation-handoff.md`
-- `openclaw-autoskill-ultimate-v9-closed-design-handoff.md` is retained as an earlier baseline.
 
 The v1 implementation follows the handoff's fixed architecture:
 
