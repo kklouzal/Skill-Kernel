@@ -152,6 +152,40 @@ class AsyncpgEvidenceStore(AsyncpgPoolOwner):
                     duplicate += 1
                     continue
                 evidence.append(inserted)
+            chunks = await conn.fetch(
+                """
+                SELECT
+                  c.*,
+                  s.source_kind,
+                  s.source_key,
+                  s.fingerprint,
+                  w.external_key AS workspace_key
+                FROM autoskill.historical_import_chunks c
+                JOIN autoskill.historical_import_sources s
+                  USING (historical_import_source_id)
+                JOIN autoskill.workspaces w ON w.workspace_id = c.workspace_id
+                LEFT JOIN autoskill.provenance_edges p
+                  ON p.workspace_id = c.workspace_id
+                 AND p.source_kind = 'historical_import_chunk'
+                 AND p.source_id = c.historical_import_chunk_id
+                 AND p.derived_kind = 'evidence_item'
+                 AND p.relation = 'derived_from'
+                WHERE c.status = 'observed'
+                  AND p.provenance_edge_id IS NULL
+                  AND ($1::text IS NULL OR w.external_key = $1)
+                ORDER BY c.created_at ASC
+                LIMIT $2
+                FOR UPDATE OF c SKIP LOCKED
+                """,
+                workspace_key,
+                limit,
+            )
+            for chunk in chunks:
+                inserted = await _insert_historical_chunk_evidence(conn, chunk)
+                if inserted is None:
+                    duplicate += 1
+                    continue
+                evidence.append(inserted)
             recurring = await _insert_recurring_evidence_clusters(
                 conn,
                 workspace_key=workspace_key,
@@ -159,7 +193,7 @@ class AsyncpgEvidenceStore(AsyncpgPoolOwner):
             evidence.extend(recurring)
 
         return EvidenceDeriveResult(
-            scanned=len(events),
+            scanned=len(events) + len(chunks),
             created=len(evidence),
             duplicate=duplicate,
             evidence=evidence,
@@ -255,6 +289,87 @@ async def _insert_event_evidence(
     return EvidenceRecord.from_row({**dict(row), "workspace_key": event["workspace_key"]})
 
 
+async def _insert_historical_chunk_evidence(
+    conn: asyncpg.Connection,
+    chunk: asyncpg.Record,
+) -> EvidenceRecord | None:
+    payload = _historical_chunk_payload(chunk)
+    evidence_hash = sha256_json(
+        {
+            "kind": "historical_chunk_observation",
+            "workspace_id": str(chunk["workspace_id"]),
+            "historical_import_chunk_id": str(chunk["historical_import_chunk_id"]),
+            "content_hash": chunk["content_hash"],
+        }
+    )
+    taint = _historical_chunk_taint(chunk)
+    row = await conn.fetchrow(
+        """
+        INSERT INTO autoskill.evidence_items (
+          evidence_id,
+          workspace_id,
+          evidence_hash,
+          kind,
+          maturity,
+          trust,
+          taint,
+          summary,
+          payload
+        )
+        VALUES (
+          gen_random_uuid(),
+          $1,
+          $2,
+          'historical_chunk_observation',
+          $3,
+          $4,
+          $5,
+          $6,
+          $7::jsonb
+        )
+        ON CONFLICT (workspace_id, evidence_hash) DO NOTHING
+        RETURNING *
+        """,
+        chunk["workspace_id"],
+        evidence_hash,
+        str(EvidenceMaturity.OBSERVED),
+        chunk["trust_level"],
+        taint,
+        _historical_chunk_summary(chunk),
+        _json(payload),
+    )
+    if row is None:
+        return None
+
+    await conn.execute(
+        """
+        INSERT INTO autoskill.provenance_edges (
+          provenance_edge_id,
+          workspace_id,
+          source_kind,
+          source_id,
+          derived_kind,
+          derived_id,
+          relation
+        )
+        VALUES (
+          gen_random_uuid(),
+          $1,
+          'historical_import_chunk',
+          $2,
+          'evidence_item',
+          $3,
+          'derived_from'
+        )
+        ON CONFLICT DO NOTHING
+        """,
+        chunk["workspace_id"],
+        chunk["historical_import_chunk_id"],
+        row["evidence_id"],
+    )
+    return EvidenceRecord.from_row({**dict(row), "workspace_key": chunk["workspace_key"]})
+
+
 async def _insert_recurring_evidence_clusters(
     conn: asyncpg.Connection,
     *,
@@ -266,7 +381,7 @@ async def _insert_recurring_evidence_clusters(
         FROM autoskill.evidence_items i
         JOIN autoskill.workspaces w USING (workspace_id)
         WHERE i.revoked_at IS NULL
-          AND i.kind = 'event_observation'
+          AND i.kind IN ('event_observation', 'historical_chunk_observation')
           AND i.maturity = 'observed'
           AND ($1::text IS NULL OR w.external_key = $1)
         ORDER BY i.created_at ASC
@@ -491,6 +606,68 @@ def _evidence_payload(event: asyncpg.Record) -> dict[str, Any]:
         },
         "redacted_payload": event_payload,
     }
+
+
+def _historical_chunk_payload(chunk: asyncpg.Record) -> dict[str, Any]:
+    metadata = chunk["metadata"]
+    if isinstance(metadata, str):
+        metadata = json.loads(metadata)
+    taint = chunk["taint"]
+    if isinstance(taint, str):
+        taint = json.loads(taint)
+    return {
+        "schema_version": 1,
+        "source_event": {
+            "event_type": "historical_import_chunk",
+            "source": "historical_import",
+            "historical_import_source_id": str(chunk["historical_import_source_id"]),
+            "historical_import_chunk_id": str(chunk["historical_import_chunk_id"]),
+            "source_kind": chunk["source_kind"],
+            "source_key_hash": sha256_json(
+                {
+                    "source_kind": chunk["source_kind"],
+                    "source_key": chunk["source_key"],
+                    "fingerprint": chunk["fingerprint"],
+                }
+            ),
+            "fingerprint": chunk["fingerprint"],
+            "item_key_hash": sha256_json(
+                {
+                    "source_kind": chunk["source_kind"],
+                    "source_key": chunk["source_key"],
+                    "item_key": chunk["item_key"],
+                    "chunk_index": chunk["chunk_index"],
+                }
+            ),
+            "chunk_index": chunk["chunk_index"],
+            "chunk_kind": chunk["chunk_kind"],
+            "content_hash": chunk["content_hash"],
+            "parser_version": chunk["parser_version"],
+            "redaction_policy_version": chunk["redaction_policy_version"],
+        },
+        "redacted_payload": {
+            "content": chunk["redacted_text"],
+            "token_estimate": chunk["token_estimate"],
+            "metadata": metadata,
+            "taint": taint,
+        },
+    }
+
+
+def _historical_chunk_summary(chunk: asyncpg.Record) -> str:
+    return (
+        "Observed redacted historical "
+        f"{chunk['source_kind']} chunk {chunk['chunk_index']} "
+        f"from fingerprint {chunk['fingerprint']}."
+    )
+
+
+def _historical_chunk_taint(chunk: asyncpg.Record) -> list[str]:
+    raw = chunk["taint"]
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    keys = [f"historical:{key}" for key, value in sorted(raw.items()) if value]
+    return sorted({"historical", "redacted", *keys})
 
 
 def _json(payload: dict[str, Any]) -> str:

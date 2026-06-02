@@ -8,6 +8,8 @@ from autoskill.db.evidence import (
     RECURRING_EVIDENCE_MIN_SUPPORT,
     EvidenceDeriveResult,
     EvidenceRecord,
+    _historical_chunk_payload,
+    _historical_chunk_taint,
     _recurring_payload,
     _recurring_signature,
 )
@@ -163,3 +165,33 @@ def test_recurring_payload_is_runtime_safe_and_cites_support() -> None:
     assert payload["support_count"] == RECURRING_EVIDENCE_MIN_SUPPORT
     assert len(payload["support_evidence_ids"]) == RECURRING_EVIDENCE_MIN_SUPPORT
     assert payload["redacted_payload"]["content"] == "tool-call-end pytest missing package"
+
+
+def test_historical_chunk_evidence_payload_hashes_source_keys() -> None:
+    chunk = {
+        "historical_import_source_id": UUID("00000000-0000-0000-0000-000000000041"),
+        "historical_import_chunk_id": UUID("00000000-0000-0000-0000-000000000042"),
+        "source_kind": "taskflow_record",
+        "source_key": "skillkernel-autoskill-v1",
+        "fingerprint": "sha256:taskflow",
+        "item_key": "taskflow#0",
+        "chunk_index": 0,
+        "chunk_kind": "redacted_text",
+        "content_hash": "hash-redacted",
+        "parser_version": "historical-import.v1",
+        "redaction_policy_version": "redaction.v1",
+        "redacted_text": "redacted historical checkpoint",
+        "token_estimate": 4,
+        "metadata": {"source": "test"},
+        "taint": {"raw_text_stripped": True},
+    }
+
+    payload = _historical_chunk_payload(chunk)
+    taint = _historical_chunk_taint(chunk)
+
+    assert payload["source_event"]["event_type"] == "historical_import_chunk"
+    assert payload["source_event"]["source_key_hash"]
+    assert payload["source_event"]["item_key_hash"]
+    assert "skillkernel-autoskill-v1" not in str(payload["source_event"])
+    assert payload["redacted_payload"]["content"] == "redacted historical checkpoint"
+    assert taint == ["historical", "historical:raw_text_stripped", "redacted"]

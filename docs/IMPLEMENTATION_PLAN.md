@@ -138,6 +138,40 @@ Acceptance:
   endpoint semantics, and invocation audit records the chosen endpoint route
   without storing prompts, responses, or API keys.
 
+## Phase 4.75 - Historical Ingestion and Deployment Bootstrap
+
+Deliverables:
+
+- historical source inventory substrate; implemented as first-class
+  `historical_import_sources` rows with workspace, source kind/key,
+  fingerprint, parser version, redaction policy version, trust, taint,
+  metadata, status, and idempotent uniqueness;
+- redacted historical chunk substrate; implemented as
+  `historical_import_chunks` rows with source lineage, item key, chunk index,
+  content hash, token estimate, parser/redaction versions, trust, taint, and
+  duplicate skip semantics;
+- control-authenticated historical import APIs; implemented for source
+  list/upsert and chunk recording without writing runtime skills or mutating
+  imported OpenClaw roots;
+- imported chunk downstream readiness; implemented by existing evidence and
+  embedding source discovery paths consuming observed historical chunks only
+  after storage-time redaction and taint labeling.
+
+Acceptance:
+
+- every imported source/chunk row records source lineage, fingerprint,
+  parser/redaction versions, trust, taint, and hash identity for the substrate
+  level;
+- repeated source upserts and duplicate chunk records are idempotent;
+- chunk storage performs deterministic secret/email redaction at the DB-store
+  boundary even when an importer caller mislabels raw text as redacted;
+- historical chunks can become observed evidence and embedding sources, but
+  cannot directly activate skills, broker runtime context, or trusted memory;
+- remaining historical ingestion work is datasource discovery, structure-aware
+  parsers, import run/checkpoint records, source-item granularity, revocation
+  traversal into derived evidence/embeddings/candidates, and bounded bootstrap
+  consolidation.
+
 ## Phase 5 - Runtime Context Broker
 
 Deliverables:

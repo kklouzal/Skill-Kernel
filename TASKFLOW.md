@@ -431,6 +431,36 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   degradation, red-team scanning passed 9/9, and
   `llama-cpp-embeddings-nomic` remained qualified while generating one
   embedding.
+- Historical import/bootstrap substrate is implemented for the requested
+  `Implementation-Handoff-Specification.md` Phase 5 gap: the schema now has
+  first-class `historical_import_sources` and `historical_import_chunks` rows
+  with source kind, source key, fingerprint, parser version, redaction policy,
+  trust/taint, status, content hash, token estimate, and idempotent uniqueness;
+  the sidecar exposes control-authenticated
+  `/v1/historical-import/sources` list/upsert and
+  `/v1/historical-import/chunks` record endpoints; and the asyncpg store
+  supports source inventory, idempotent update, storage-time text redaction,
+  content-hash verification, redacted chunk recording, and duplicate skip
+  semantics. Validation passed with focused tests, full `uv run ruff check
+  sidecar scripts`, `uv run pytest` (235 tests), `uv run python -m compileall
+  -q sidecar scripts`, `npm test --prefix plugin/autoskill` (18 tests), `npm
+  run check --prefix plugin/autoskill`, `docker compose config --quiet`, `git
+  diff --check`, idempotent compose Postgres migration, and a DB-backed smoke
+  proving source create/update, storage-time secret/email redaction plus hash
+  identity, chunk create, duplicate skip, and imported-source listing.
+- Historical chunks now feed the governed evidence/retrieval substrate instead
+  of remaining inert inventory: `evidence.derive` derives tainted
+  `historical_chunk_observation` evidence from observed historical chunks,
+  records provenance from `historical_import_chunk` to `evidence_item`, includes
+  historical observations in recurring-evidence clustering, and embedding source
+  discovery exposes observed historical chunks as `historical_import_chunk`
+  sources under the normal profile-scoped embedding path. Validation passed with
+  focused evidence/embedding tests, full `uv run ruff check sidecar scripts`,
+  `uv run pytest -q` (235 tests), `uv run python -m compileall -q sidecar
+  scripts`, `npm test --prefix plugin/autoskill` (18 tests), `npm run check
+  --prefix plugin/autoskill`, `docker compose config --quiet`, `git diff
+  --check`, and a compose Postgres smoke proving historical chunk evidence
+  derivation plus pending historical embedding-source discovery.
 
 ## Next Gates
 
@@ -440,10 +470,15 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 2. Promote or replace the operator smoke runtime skill with the first genuinely
    useful SkillKernel-owned runtime skill once replay/probe evidence supports a
    non-smoke activation target.
-3. Consume the new improve/decompose usage recommendations into propose-only
+3. Build the next historical-import layer on top of the new substrate: bounded
+   datasource discovery for configured agent/session/workspace roots,
+   structure-preserving parsers for the highest-value local sources, importer
+   checkpoints, and revocation traversal from historical source rows into
+   chunks/evidence/memory/candidates.
+4. Consume the new improve/decompose usage recommendations into propose-only
    topology or repair planning once sustained telemetry confirms their aggregate
    signals are stable, including successor/boundary detail for decomposition.
-4. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
+5. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
 
 ## Known Risks
 
@@ -462,6 +497,11 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Worker health now includes persistent heartbeat records, long-running handlers renew job leases, and single-job worker runs emit content-safe progress phases through heartbeat summaries. Future lengthy semantic handlers may still add deeper domain-specific counters when their internal phases mature.
 - Evidence derivation now creates observed event evidence plus deterministic recurring evidence clusters, and `usage.aggregate` now mines retrieval/attribution co-use windows into topology evidence tables. Accepted recurring co-use clusters can now become propose-only compose topology operations; remaining work is structured improve/decompose and broker-abstain consumption plus additional contrastive evidence mining beyond evaluator replay maturity.
 - Memory quarantine/control-flow tables and operator APIs now exist, the runtime broker can record approved memory-influenced retrieval decisions without injecting memory text while blocking unapproved memory references before retrieval, and repair/writer mutation paths now gate and log approved or blocked memory influence.
+- Historical import now has durable source/chunk inventory, redacted chunk
+  storage, evidence derivation, provenance, and embedding-source discovery, but
+  source discovery/parsers/checkpoint workers are intentionally the next layer;
+  raw historical text must still be redacted before calling the chunk API and
+  cannot activate candidates without the normal gates.
 - Embedding generation defaults to deterministic local hash embeddings unless an active qualified embedding profile is configured; storage now supports profile-scoped variable dimensions, with the default 1536-dimensional path retaining the indexed HNSW fast path.
 - Runtime context broker is still conservative: vector fusion is available for local deterministic hash embeddings, policy artifact replay/canary primitives exist, and stored redacted replay episodes can drive policy replay; production replay quality still depends on deployment telemetry being populated.
 - Deployment readiness is a deterministic sidecar/state preflight, not a

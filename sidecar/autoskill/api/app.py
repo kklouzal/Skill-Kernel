@@ -54,6 +54,13 @@ from autoskill.db.external_skills import (
     NullExternalSkillStore,
 )
 from autoskill.db.governance import AsyncpgGovernanceStore, GovernanceStore, NullGovernanceStore
+from autoskill.db.historical import (
+    AsyncpgHistoricalImportStore,
+    HistoricalChunkInput,
+    HistoricalImportStore,
+    HistoricalSourceInput,
+    NullHistoricalImportStore,
+)
 from autoskill.db.jobs import AsyncpgJobStore, JobStore, NullJobStore
 from autoskill.db.lifecycle import AsyncpgLifecycleStore, LifecycleStore, NullLifecycleStore
 from autoskill.db.llm_invocations import (
@@ -370,6 +377,60 @@ class SkillProfileCompatibilityUpsertRequest(BaseModel):
 
 class SkillProfileCompatibilityResponse(BaseModel):
     compatibility: dict[str, object]
+
+
+class HistoricalImportSourceItem(BaseModel):
+    source_kind: str
+    source_key: str
+    fingerprint: str
+    parser_version: str
+    redaction_policy_version: str
+    trust_level: str = "tainted"
+    taint: dict[str, object] = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)
+    status: str = "discovered"
+
+
+class HistoricalImportSourceUpsertRequest(BaseModel):
+    workspace_id: str
+    sources: list[HistoricalImportSourceItem]
+
+
+class HistoricalImportSourceUpsertResponse(BaseModel):
+    created: int
+    updated: int
+    sources: list[dict[str, object]]
+
+
+class HistoricalImportSourceListResponse(BaseModel):
+    sources: list[dict[str, object]]
+
+
+class HistoricalImportChunkItem(BaseModel):
+    source_kind: str
+    source_key: str
+    fingerprint: str
+    item_key: str
+    chunk_index: int
+    redacted_text: str
+    parser_version: str
+    redaction_policy_version: str
+    chunk_kind: str = "redacted_text"
+    token_estimate: int = 0
+    trust_level: str = "tainted"
+    taint: dict[str, object] = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class HistoricalImportChunkRecordRequest(BaseModel):
+    workspace_id: str
+    chunks: list[HistoricalImportChunkItem]
+
+
+class HistoricalImportChunkRecordResponse(BaseModel):
+    created: int
+    skipped: int
+    chunks: list[dict[str, object]]
 
 
 class ContextArtifactRecordRequest(BaseModel):
@@ -1246,6 +1307,16 @@ def _build_external_skill_store() -> ExternalSkillStore:
             statement_timeout_ms=settings.statement_timeout_ms,
         )
     return NullExternalSkillStore()
+
+
+def _build_historical_import_store() -> HistoricalImportStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgHistoricalImportStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullHistoricalImportStore()
 
 
 def _build_retrieval_store() -> RetrievalStore:
@@ -2145,6 +2216,7 @@ def create_app(
     scheduler_store: SchedulerStore | None = None,
     evidence_store: EvidenceStore | None = None,
     external_skill_store: ExternalSkillStore | None = None,
+    historical_import_store: HistoricalImportStore | None = None,
     retrieval_store: RetrievalStore | None = None,
     skill_store: SkillStore | None = None,
     embedding_store: EmbeddingStore | None = None,
@@ -2177,6 +2249,7 @@ def create_app(
     scheduler = scheduler_store or _build_scheduler_store()
     evidence = evidence_store or _build_evidence_store()
     external_skills = external_skill_store or _build_external_skill_store()
+    historical_import = historical_import_store or _build_historical_import_store()
     retrieval = retrieval_store or _build_retrieval_store()
     skills = skill_store or _build_skill_store()
     embeddings = embedding_store or _build_embedding_store()
@@ -2221,6 +2294,7 @@ def create_app(
                 scheduler,
                 evidence,
                 external_skills,
+                historical_import,
                 retrieval,
                 skills,
                 embeddings,
@@ -2725,6 +2799,104 @@ def create_app(
                 detail=str(error),
             ) from error
         return ExternalSkillInventoryUpsertResponse(**result.to_json())
+
+    @app.get(
+        "/v1/historical-import/sources",
+        response_model=HistoricalImportSourceListResponse,
+    )
+    async def list_historical_import_sources(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> HistoricalImportSourceListResponse:
+        _require_control_auth(authorization)
+        try:
+            listed = await historical_import.list_sources(
+                workspace_key=workspace_id,
+                status=status,
+                limit=max(1, min(limit, 500)),
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return HistoricalImportSourceListResponse(
+            sources=[source.to_json() for source in listed]
+        )
+
+    @app.post(
+        "/v1/historical-import/sources",
+        response_model=HistoricalImportSourceUpsertResponse,
+    )
+    async def upsert_historical_import_sources(
+        request: HistoricalImportSourceUpsertRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> HistoricalImportSourceUpsertResponse:
+        _require_control_auth(authorization)
+        try:
+            result = await historical_import.upsert_sources(
+                workspace_key=request.workspace_id,
+                sources=[
+                    HistoricalSourceInput(
+                        source_kind=item.source_kind,
+                        source_key=item.source_key,
+                        fingerprint=item.fingerprint,
+                        parser_version=item.parser_version,
+                        redaction_policy_version=item.redaction_policy_version,
+                        trust_level=item.trust_level,
+                        taint=item.taint,
+                        metadata=item.metadata,
+                        status=item.status,
+                    )
+                    for item in request.sources
+                ],
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return HistoricalImportSourceUpsertResponse(**result.to_json())
+
+    @app.post(
+        "/v1/historical-import/chunks",
+        response_model=HistoricalImportChunkRecordResponse,
+    )
+    async def record_historical_import_chunks(
+        request: HistoricalImportChunkRecordRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> HistoricalImportChunkRecordResponse:
+        _require_control_auth(authorization)
+        try:
+            result = await historical_import.record_chunks(
+                workspace_key=request.workspace_id,
+                chunks=[
+                    HistoricalChunkInput(
+                        source_kind=item.source_kind,
+                        source_key=item.source_key,
+                        fingerprint=item.fingerprint,
+                        item_key=item.item_key,
+                        chunk_index=item.chunk_index,
+                        redacted_text=item.redacted_text,
+                        parser_version=item.parser_version,
+                        redaction_policy_version=item.redaction_policy_version,
+                        chunk_kind=item.chunk_kind,
+                        token_estimate=item.token_estimate,
+                        trust_level=item.trust_level,
+                        taint=item.taint,
+                        metadata=item.metadata,
+                    )
+                    for item in request.chunks
+                ],
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        return HistoricalImportChunkRecordResponse(**result.to_json())
 
     @app.post(
         "/v1/external-skills/review-actions",

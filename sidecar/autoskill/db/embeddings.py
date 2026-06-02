@@ -337,6 +337,20 @@ class AsyncpgEmbeddingStore(AsyncpgPoolOwner):
                   WHERE e.status IN ('visible', 'changed')
                     AND source_text.text <> ''
                     AND ($1::text IS NULL OR w.external_key = $1)
+                  UNION ALL
+                  SELECT
+                    'historical_import_chunk'::text AS object_type,
+                    c.historical_import_chunk_id AS object_id,
+                    w.external_key AS workspace_key,
+                    NULL::uuid AS skill_id,
+                    c.redacted_text AS text,
+                    c.content_hash AS text_hash,
+                    c.created_at
+                  FROM autoskill.historical_import_chunks c
+                  JOIN autoskill.workspaces w USING (workspace_id)
+                  WHERE c.status = 'observed'
+                    AND trim(c.redacted_text) <> ''
+                    AND ($1::text IS NULL OR w.external_key = $1)
                 )
                 SELECT s.*
                 FROM sources s

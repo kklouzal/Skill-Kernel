@@ -902,6 +902,64 @@ CREATE TABLE IF NOT EXISTS autoskill.attribution_events (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.historical_import_sources (
+  historical_import_source_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  source_kind text NOT NULL CHECK (
+    source_kind IN (
+      'session_store','transcript','trajectory','compaction_summary',
+      'workspace_memory','workspace_context','task_record','taskflow_record',
+      'plugin_session_state','queued_injection','active_memory',
+      'diagnostics_export','channel_media','transcription',
+      'preprocessing_artifact','existing_skill','other'
+    )
+  ),
+  source_key text NOT NULL,
+  fingerprint text NOT NULL,
+  parser_version text NOT NULL,
+  redaction_policy_version text NOT NULL,
+  trust_level text NOT NULL DEFAULT 'tainted'
+    CHECK (trust_level IN ('trusted','tainted','untrusted')),
+  taint jsonb NOT NULL DEFAULT '{}'::jsonb,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status text NOT NULL DEFAULT 'discovered'
+    CHECK (status IN ('discovered','inventory_only','imported','revoked')),
+  last_seen_at timestamptz NOT NULL DEFAULT now(),
+  imported_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, source_kind, source_key, fingerprint)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.historical_import_chunks (
+  historical_import_chunk_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  historical_import_source_id uuid NOT NULL
+    REFERENCES autoskill.historical_import_sources(historical_import_source_id),
+  item_key text NOT NULL,
+  chunk_index integer NOT NULL CHECK (chunk_index >= 0),
+  chunk_kind text NOT NULL DEFAULT 'redacted_text',
+  content_hash text NOT NULL,
+  redacted_text text NOT NULL,
+  token_estimate integer NOT NULL DEFAULT 0 CHECK (token_estimate >= 0),
+  parser_version text NOT NULL,
+  redaction_policy_version text NOT NULL,
+  trust_level text NOT NULL DEFAULT 'tainted'
+    CHECK (trust_level IN ('trusted','tainted','untrusted')),
+  taint jsonb NOT NULL DEFAULT '{}'::jsonb,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status text NOT NULL DEFAULT 'observed'
+    CHECK (status IN ('observed','revoked')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, historical_import_source_id, item_key, chunk_index, content_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_historical_import_sources_workspace_status
+  ON autoskill.historical_import_sources(workspace_id, status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_historical_import_chunks_source
+  ON autoskill.historical_import_chunks(historical_import_source_id, item_key, chunk_index);
+
 CREATE TABLE IF NOT EXISTS autoskill.memory_quarantine (
   quarantine_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
