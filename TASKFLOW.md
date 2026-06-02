@@ -380,6 +380,23 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   and drift blocks; the compiler renders them into runtime skill text and records
   guard metadata in context-governance artifacts without accepting arbitrary
   executable guard code.
+- Dev-01 deployment was refreshed at commit `219ffad`: `docker compose up
+  --build -d` rebuilt/recreated the sidecar and worker stack while preserving the
+  compose Postgres volume, the OpenClaw gateway was restarted, live plugin
+  inspection with `--runtime` reported `status=loaded`, `imported=true`,
+  `hookCount=11`, and no diagnostics, and sidecar logs showed fresh
+  `/v1/ingest/events` plus `/v1/runtime/context-hint` 200s after restart.
+  Operational validation passed with `uv run ruff check sidecar scripts`,
+  `uv run pytest -q` (227 tests), `uv run python -m compileall -q sidecar
+  scripts`, `npm test --prefix plugin/autoskill` (18 tests), `npm run check
+  --prefix plugin/autoskill`, `docker compose config --quiet`, and `git diff
+  --check`. Live Dev-01 readiness returned `ready=true`, stored broker replay
+  matched 6/6 under `dev-01-canary.v1`, production embedding validation qualified
+  `llama-cpp-embeddings-nomic` and generated one embedding, red-team scanning
+  passed 9/9, a corrected UUID/trust-shaped ingest smoke accepted one
+  `operator_smoke` event, the runtime context-hint smoke returned `no_skill`
+  fail-closed for an empty candidate set, the local spool was empty, and backup
+  plus restore dry-run verified `autoskill-backup-20260602T195700Z`.
 
 ## Next Gates
 
@@ -420,6 +437,8 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   runtime skill has been activated into those roots yet. The backup bundle still
   contains the database dump and records missing roots explicitly; rerun the
   backup after the first live activation to prove filesystem restore coverage.
+  The latest verified bundle with this limitation is
+  `autoskill-backup-20260602T195700Z`.
 - Repair execution remains guarded and fail-closed: explicit staged manifests still pass through activation-gated `writer.apply`, and policy-approved repair materialization can generate staged manifests from bounded repair proposals only when a skill-version anchor exists and deterministic context-governance proof with routing-equivalence and regression evidence can be recorded for the staged runtime artifact.
 - External-skill awareness now includes read-only root scanning plus inventory/retrieval/matching, scan scheduling defaults, embedding generation for external descriptions, richer collision risk scoring, explicit operator review-action recording, and operator-approved stage-only import materialization.
 - v16 trace/profile/context APIs and schema exist; event/job/retrieval/evaluator/context-broker paths now propagate trace or context artifacts, LLM calls now have content-safe invocation audit rows, direct writer apply/rollback APIs record content-safe writer spans, mutation-worker writer apply plus revocation rollback record content-safe child spans, embedding generation records content-safe `embedding_call` spans, and worker heartbeat summaries expose content-safe claimed/renewed/succeeded/failed job progress. Longer semantic jobs may still add specialized counters as their multi-phase internals mature.
