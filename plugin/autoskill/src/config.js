@@ -43,7 +43,11 @@ export function resolveConfig(ctx = {}) {
       process.env.AUTOSKILL_PLUGIN_INGEST_TOKEN ??
       process.env.AUTOSKILL_INGEST_TOKEN ??
       null,
-    workspaceId: cfg.workspaceId ?? "auto",
+    workspaceId:
+      cfg.workspaceId ??
+      process.env.AUTOSKILL_PLUGIN_WORKSPACE_ID ??
+      process.env.AUTOSKILL_WORKSPACE_ID ??
+      "auto",
     spoolDir: cfg.spoolDir ?? path.join(workspaceDir, ".autoskill", "spool"),
     replayBatchSize: cfg.replayBatchSize ?? 25,
     maxSpoolBytes: cfg.maxSpoolBytes ?? 10 * 1024 * 1024,

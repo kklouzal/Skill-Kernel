@@ -79,7 +79,7 @@ services:
       - --worker-id
       - autoskill-scheduler-1
       - --workspace-id
-      - openclaw-main
+      - dev-01
       - --workspace-root
       - /workspace
       - --external-skill-root
@@ -104,7 +104,7 @@ services:
       - --worker-id
       - autoskill-maintenance-1
       - --workspace-id
-      - openclaw-main
+      - dev-01
       - --workspace-root
       - /workspace
       - --external-skill-root
@@ -129,7 +129,7 @@ services:
       - --worker-id
       - autoskill-mutation-1
       - --workspace-id
-      - openclaw-main
+      - dev-01
       - --workspace-root
       - /workspace
     working_dir: /workspace

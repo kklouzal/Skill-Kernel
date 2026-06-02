@@ -299,7 +299,9 @@ def test_profile_list_endpoints_return_operator_profile_surfaces() -> None:
     assert embeddings.profiles[0]["embedding_dim"] == 768
 
 
-def test_deployment_readiness_reports_blockers_without_mutating_runtime() -> None:
+def test_deployment_readiness_reports_blockers_without_mutating_runtime(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", raising=False)
+    get_settings.cache_clear()
     app = create_app(job_store=NullJobStore())
     route = next(route for route in app.routes if route.path == "/v1/deployment/readiness")
 

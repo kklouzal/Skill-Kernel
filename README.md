@@ -46,17 +46,19 @@ Implemented now:
   deterministic scanner red-team smoke runner;
 - runtime context-hint request compatibility for both `user_intent` and `intent`
   payloads;
+- deployed Dev-01 plugin policy with fail-soft runtime context hints enabled,
+  raw conversation capture disabled, runtime tool-boundary blocking disabled, and
+  environment fallback coverage for hook contexts that do not receive explicit
+  plugin config;
 - OpenClaw plugin/hook package with local redaction, bounded spool, forwarding, replay utilities, and smoke-tested hook loading;
 - focused Python, Node, and local Postgres compose smoke validation for deterministic primitives.
 
 Deployment/operator gates still outside repo implementation:
 
-- production plugin policy enablement outside the development profile;
-- production embedding provider validation against the real deployment endpoint and
-  credentials using the validation API;
-- production broker replay corpus population from redacted deployment telemetry;
-- live production repair/import rollout after operator config enables the plugin
-  outside the development profile.
+- larger production broker replay corpus population from sustained redacted
+  deployment telemetry;
+- live production repair/import rollout after replay/embedding validation remains
+  green under sustained traffic.
 
 ## Development
 

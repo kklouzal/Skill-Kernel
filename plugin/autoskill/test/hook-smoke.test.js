@@ -224,6 +224,7 @@ test("capture can read ingest token from environment fallback", async () => {
 
 test("config reads sidecar and canary toggles from environment fallbacks", () => {
   const previous = {
+    workspaceId: process.env.AUTOSKILL_WORKSPACE_ID,
     sidecarUrl: process.env.AUTOSKILL_SIDECAR_URL,
     brokerEnabled: process.env.AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED,
     brokerTimeout: process.env.AUTOSKILL_RUNTIME_CONTEXT_TIMEOUT_MS,
@@ -231,6 +232,7 @@ test("config reads sidecar and canary toggles from environment fallbacks", () =>
     toolBoundary: process.env.AUTOSKILL_RUNTIME_TOOL_BOUNDARY_ENABLED,
     blockHighRisk: process.env.AUTOSKILL_RUNTIME_TOOL_BOUNDARY_BLOCK_ON_HIGH_RISK,
   };
+  process.env.AUTOSKILL_WORKSPACE_ID = "env-workspace";
   process.env.AUTOSKILL_SIDECAR_URL = "http://127.0.0.1:9876";
   process.env.AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED = "true";
   process.env.AUTOSKILL_RUNTIME_CONTEXT_TIMEOUT_MS = "250";
@@ -241,6 +243,7 @@ test("config reads sidecar and canary toggles from environment fallbacks", () =>
   try {
     const config = resolveConfig({ workspaceDir: "/tmp/autoskill-test" });
 
+    assert.equal(config.workspaceId, "env-workspace");
     assert.equal(config.sidecarUrl, "http://127.0.0.1:9876");
     assert.equal(config.runtimeContextBroker.enabled, true);
     assert.equal(config.runtimeContextBroker.timeoutMs, 250);
@@ -249,6 +252,7 @@ test("config reads sidecar and canary toggles from environment fallbacks", () =>
     assert.equal(config.runtimeToolBoundary.blockOnHighRisk, false);
   } finally {
     for (const [key, value] of Object.entries({
+      AUTOSKILL_WORKSPACE_ID: previous.workspaceId,
       AUTOSKILL_SIDECAR_URL: previous.sidecarUrl,
       AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED: previous.brokerEnabled,
       AUTOSKILL_RUNTIME_CONTEXT_TIMEOUT_MS: previous.brokerTimeout,
@@ -266,7 +270,11 @@ test("config reads sidecar and canary toggles from environment fallbacks", () =>
 });
 
 test("explicit plugin config wins over environment fallbacks", () => {
-  const previous = process.env.AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED;
+  const previous = {
+    workspaceId: process.env.AUTOSKILL_WORKSPACE_ID,
+    brokerEnabled: process.env.AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED,
+  };
+  process.env.AUTOSKILL_WORKSPACE_ID = "env-workspace";
   process.env.AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED = "true";
 
   try {
@@ -274,6 +282,7 @@ test("explicit plugin config wins over environment fallbacks", () => {
       workspaceDir: "/tmp/autoskill-test",
       context: {
         pluginConfig: {
+          workspaceId: "explicit-workspace",
           runtimeContextBroker: {
             enabled: false,
           },
@@ -281,12 +290,18 @@ test("explicit plugin config wins over environment fallbacks", () => {
       },
     });
 
+    assert.equal(config.workspaceId, "explicit-workspace");
     assert.equal(config.runtimeContextBroker.enabled, false);
   } finally {
-    if (previous === undefined) {
-      delete process.env.AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED;
-    } else {
-      process.env.AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED = previous;
+    for (const [key, value] of Object.entries({
+      AUTOSKILL_WORKSPACE_ID: previous.workspaceId,
+      AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED: previous.brokerEnabled,
+    })) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   }
 });
@@ -547,6 +562,13 @@ test("plugin runtime registers typed OpenClaw hooks", async () => {
   assert.equal(
     registrations.find((entry) => entry.hookName === "before_prompt_build").options.name,
     "autoskill-context-hint",
+  );
+  assert.equal(
+    registrations.find((entry) => entry.hookName === "tool_result_persist").handler(
+      { result: "saved" },
+      { workspaceDir: "/tmp/autoskill-test", config: { autoskill: { enabled: false } } },
+    ),
+    undefined,
   );
 });
 

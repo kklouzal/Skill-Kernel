@@ -35,6 +35,17 @@ export function register(api) {
       });
       continue;
     }
+    if (hookName === "tool_result_persist") {
+      api.on(
+        hookName,
+        (event, ctx) => {
+          void captureEvent({ eventType, payload: event, trust, taint, hookContext: ctx });
+          return undefined;
+        },
+        { name: `autoskill-${eventType}` },
+      );
+      continue;
+    }
     api.on(
       hookName,
       (event, ctx) => captureEvent({ eventType, payload: event, trust, taint, hookContext: ctx }),

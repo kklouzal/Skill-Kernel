@@ -393,7 +393,11 @@ Deliverables:
   exfiltration chains, and allowed secret-boundary language;
 - production preflight remains sidecar-state-only and does not install the
   plugin, write runtime skills, activate autonomous apply, or mutate live
-  OpenClaw configuration.
+  OpenClaw configuration;
+- Dev-01 deployment alignment is implemented separately from the sidecar
+  preflight: compose workers, plugin config, and gateway env fallback all target
+  `dev-01`, runtime context hints are enabled fail-soft, raw capture remains off,
+  and runtime tool-boundary blocking remains off.
 
 Acceptance:
 
@@ -402,5 +406,6 @@ Acceptance:
 - persisted executor, qualified text model, active embedding profile, active
   broker policy, and production replay records can make the readiness report pass
   through the real asyncpg stores after compose migrations;
-- readiness reporting is an operator preflight before live gateway
-  capture/spool/replay smoke, not a substitute for that live validation.
+- readiness reporting is an operator preflight; the current Dev-01 deployment
+  also passed live gateway capture/hint validation, stored broker replay,
+  production embedding validation, red-team smoke, and backup/restore dry-run.

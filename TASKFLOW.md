@@ -274,29 +274,56 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `user_intent`, preventing an otherwise valid broker smoke or caller from
   silently dropping the intent and receiving an empty-intent `no_skill`
   decision.
+- Dev-01 production plugin policy is now enabled outside the dev profile:
+  OpenClaw `autoskill` plugin config and gateway env fallback both target
+  `dev-01`, runtime context hints are enabled with a 150 ms fail-soft timeout and
+  800 token cap, raw conversation capture remains disabled, and runtime
+  tool-boundary blocking remains disabled.
+- Live gateway capture/hint smoke passed after remediation: sidecar logs showed
+  fresh `/v1/ingest/events` and `/v1/runtime/context-hint` 200s after gateway
+  restart, fresh DB rows landed under `workspaces.external_key='dev-01'` instead
+  of `auto`, local spool remained empty, and gateway logs no longer showed the
+  synchronous `tool_result_persist` Promise warning.
+- Final Dev-01 operational validation passed after the deployment fixes:
+  `uv run pytest -q` passed with 206 tests; `uv run ruff check sidecar scripts`,
+  `uv run python -m compileall -q sidecar scripts`, `npm run check --prefix
+  plugin/autoskill`, `npm test --prefix plugin/autoskill`, `docker compose config
+  --quiet`, and `git diff --check` passed; live readiness returned
+  `ready=true`; stored production broker replay matched 3/3 with no degradation;
+  production embedding validation qualified `llama-cpp-embeddings-nomic`; runtime
+  context hint returned the active diagram-accessibility skill with bundle scan
+  passed; `scripts/autoskill_red_team.py` passed 9/9; and backup plus restore
+  dry-run verified `autoskill-backup-20260602T163525Z`.
 
 ## Next Gates
 
-1. Enable the production plugin policy outside the development profile and run a full gateway capture/spool/replay smoke.
-2. Populate more broker replay episodes from sustained redacted deployment telemetry, then run stored-corpus replay/canary tuning against those real episodes.
-3. Run `scripts/autoskill_backup.py` to an operator-approved backup location after the production roots contain activated SkillKernel-owned skills, then verify with `scripts/autoskill_restore.py --dry-run`.
-4. Roll out live repair/import execution only after operator config enables the plugin and production replay/embedding validation remains green.
+1. Populate more broker replay episodes from sustained redacted deployment telemetry, then run stored-corpus replay/canary tuning against those real episodes.
+2. Run `scripts/autoskill_backup.py` to an operator-approved backup location after the production roots contain activated SkillKernel-owned skills, then verify with `scripts/autoskill_restore.py --dry-run`.
+3. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
 
 ## Known Risks
 
-- Installed-plugin runtime loading is now smoke-tested under the dev profile. Full
-  hook coverage requires plugin entry hook policy to allow conversation access
-  and prompt injection; production config still needs that explicit operator
-  setting. Runtime tool boundary blocking is available but disabled by default
+- Installed-plugin runtime loading is now smoke-tested under the dev profile and
+  live Dev-01 capture is working, but `openclaw plugins inspect autoskill --json`
+  still reports `hookCount=0`/`imported=false` while the running gateway invokes
+  hooks and the sidecar receives events; treat this as an OpenClaw
+  registry/inspection visibility gap until separately fixed.
+- Runtime tool boundary blocking is available but disabled by default
   until explicitly enabled by operator config.
-- Spool replay is best-effort from capture hooks and covered by plugin-level outage, replay-failure, and concurrent-capture tests; a full production gateway run is still useful after operator config enables the plugin outside the dev profile.
+- Spool replay is best-effort from capture hooks and covered by plugin-level
+  outage, replay-failure, and concurrent-capture tests. The live Dev-01 smoke
+  observed an empty spool while sidecar ingest was healthy; a forced sidecar
+  outage drill can be run later if the operator wants destructive/noisy failure
+  testing.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
 - Worker health now includes persistent heartbeat records, long-running handlers renew job leases, and single-job worker runs emit content-safe progress phases through heartbeat summaries. Future lengthy semantic handlers may still add deeper domain-specific counters when their internal phases mature.
 - Evidence derivation now creates observed event evidence plus deterministic recurring evidence clusters; richer cross-session semantic aggregation and additional contrastive evidence mining beyond evaluator replay maturity remain pending.
 - Memory quarantine/control-flow tables and operator APIs now exist, the runtime broker can record approved memory-influenced retrieval decisions without injecting memory text while blocking unapproved memory references before retrieval, and repair/writer mutation paths now gate and log approved or blocked memory influence.
 - Embedding generation defaults to deterministic local hash embeddings unless an active qualified embedding profile is configured; storage now supports profile-scoped variable dimensions, with the default 1536-dimensional path retaining the indexed HNSW fast path.
 - Runtime context broker is still conservative: vector fusion is available for local deterministic hash embeddings, policy artifact replay/canary primitives exist, and stored redacted replay episodes can drive policy replay; production replay quality still depends on deployment telemetry being populated.
-- Deployment readiness is a deterministic sidecar/state preflight, not a substitute for the full live gateway capture/spool/replay smoke after production plugin policy is enabled.
+- Deployment readiness is a deterministic sidecar/state preflight, not a
+  substitute for sustained telemetry review; the one-shot live gateway
+  capture/hint smoke has passed for the current Dev-01 deployment.
 - Dev-01 readiness is green for the current canary, but the active/archive/staging
   runtime roots were absent during backup smoke because no SkillKernel-owned
   runtime skill has been activated into those roots yet. The backup bundle still
