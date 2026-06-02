@@ -153,6 +153,15 @@ def _parse_item(item: HistoricalDiscoveryItem, *, remaining: int) -> list[Histor
         return _parse_session_store(item)
     if item.source_kind in {"trajectory", "diagnostics_export"}:
         return _parse_json_or_jsonl_summary(item, remaining=remaining)
+    if item.source_kind == "observability_export":
+        return _parse_json_or_jsonl_summary(item, remaining=remaining)
+    if item.source_kind in {
+        "media_artifact",
+        "plugin_hook_manifest",
+        "plugin_manifest",
+        "plugin_source",
+    }:
+        return _parse_metadata_only_item(item)
     return []
 
 
@@ -396,6 +405,120 @@ def _parse_transcript_corpus(
             )
         ]
     return []
+
+
+def _parse_metadata_only_item(item: HistoricalDiscoveryItem) -> list[HistoricalChunkInput]:
+    if item.source_kind == "plugin_manifest":
+        return _parse_plugin_manifest(item)
+    summary = _metadata_summary(
+        item,
+        metadata={
+            "file_name": item.metadata.get("file_name"),
+            "suffix": item.metadata.get("suffix"),
+            "bytes_estimate": item.metadata.get("bytes_estimate"),
+            "risk_class": item.metadata.get("risk_class"),
+            "import_recommendation": item.metadata.get("import_recommendation"),
+        },
+    )
+    if not summary:
+        return []
+    body_flags = {
+        "plugin_hook_manifest": {"plugin_hook_manifest": True, "metadata_only": True},
+        "plugin_source": {
+            "plugin_surface": True,
+            "metadata_only": True,
+            "source_body_not_imported": True,
+        },
+        "media_artifact": {
+            "media_artifact": True,
+            "metadata_only": True,
+            "media_body_not_imported": True,
+        },
+    }
+    return [
+        _chunk(
+            item,
+            item_key=f"{item.metadata['relative_path_hash']}#metadata",
+            chunk_index=0,
+            text=summary,
+            chunk_kind=f"{item.source_kind}_metadata",
+            taint_extra=body_flags.get(item.source_kind, {"metadata_only": True}),
+            metadata={
+                "chunking_version": HISTORICAL_CHUNKING_VERSION,
+                "metadata_only": True,
+                "body_imported": False,
+                "safe_metadata_keys": [
+                    key
+                    for key in (
+                        "file_name",
+                        "suffix",
+                        "bytes_estimate",
+                        "risk_class",
+                        "import_recommendation",
+                    )
+                    if item.metadata.get(key) is not None
+                ],
+            },
+        )
+    ]
+
+
+def _parse_plugin_manifest(item: HistoricalDiscoveryItem) -> list[HistoricalChunkInput]:
+    assert item.path is not None
+    payload = json.loads(item.path.read_text(encoding="utf-8", errors="replace"))
+    if not isinstance(payload, dict):
+        return []
+    safe = _plugin_manifest_metadata(payload)
+    summary = _metadata_summary(item, metadata=safe)
+    if not summary:
+        return []
+    return [
+        _chunk(
+            item,
+            item_key=f"{item.metadata['relative_path_hash']}#manifest",
+            chunk_index=0,
+            text=summary,
+            chunk_kind="plugin_manifest_metadata",
+            taint_extra={"plugin_surface": True, "metadata_only": True},
+            metadata={
+                "chunking_version": HISTORICAL_CHUNKING_VERSION,
+                "metadata_only": True,
+                "body_imported": False,
+                "safe_metadata_keys": sorted(safe),
+            },
+        )
+    ]
+
+
+def _plugin_manifest_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for key in ("name", "packageName", "version", "description", "type"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            safe[key] = value.strip()
+    for key in ("dependencies", "optionalDependencies", "peerDependencies", "scripts"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            safe[f"{key}_count"] = len(value)
+            safe[f"{key}_keys"] = sorted(str(item) for item in value)[:50]
+    hooks = payload.get("hooks")
+    if isinstance(hooks, list):
+        safe["hook_count"] = len(hooks)
+    elif isinstance(hooks, dict):
+        safe["hook_count"] = len(hooks)
+        safe["hook_keys"] = sorted(str(item) for item in hooks)[:50]
+    return safe
+
+
+def _metadata_summary(item: HistoricalDiscoveryItem, *, metadata: dict[str, Any]) -> str:
+    safe = {
+        key: value
+        for key, value in metadata.items()
+        if value is not None and value != "" and value != []
+    }
+    if not safe:
+        return ""
+    return f"{item.source_kind} metadata: " + json.dumps(safe, sort_keys=True)
 
 
 def _transcript_corpus_metadata(payload: dict[str, Any]) -> dict[str, Any]:

@@ -509,6 +509,12 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   writer archive roots. Focused tests and a real Postgres smoke passed with a
   source -> chunk -> evidence traversal of 3 impacted objects and one completed
   invalidation request.
+- Historical datasource coverage now includes metadata-only plugin and media
+  import surfaces: discovery classifies plugin package manifests, hook
+  manifests, plugin source files, media artifacts, and observability exports;
+  parsing stores only safe metadata chunks for plugin/source/media files,
+  taints plugin/control-plane and body-not-imported surfaces, redacts manifest
+  metadata, and continues to avoid raw path storage.
 - `create` is now a first-class propose-only topology operation alongside
   improve/compose/decompose: `CreateTopologyRequest` produces SkillGraphIR,
   rollback actions, target/no-skill/collision/rollback trial plans, governance
@@ -560,9 +566,11 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Historical import now has durable source/chunk inventory, bounded discovery,
   parser checkpoint workers, redacted chunk storage, evidence derivation,
   provenance, embedding-source discovery, transcript-corpus export parsing, and
-  source-rooted revocation traversal/invalidation. Remaining historical coverage
-  is still incomplete for task/plugin/media and observability sources, and
-  historical imports cannot activate candidates without the normal gates.
+  source-rooted revocation traversal/invalidation. Plugin manifests/hooks/source
+  files, media artifacts, and observability exports now have metadata-only
+  source/chunk coverage. Remaining historical coverage is still incomplete for
+  richer task ledgers and source-item lineage beyond file/section/line metadata,
+  and historical imports cannot activate candidates without the normal gates.
 - Embedding generation defaults to deterministic local hash embeddings unless an active qualified embedding profile is configured; storage now supports profile-scoped variable dimensions, with the default 1536-dimensional path retaining the indexed HNSW fast path.
 - Runtime context broker is still conservative: vector fusion is available for local deterministic hash embeddings, policy artifact replay/canary primitives exist, and stored redacted replay episodes can drive policy replay; production replay quality still depends on deployment telemetry being populated.
 - Deployment readiness is a deterministic sidecar/state preflight, not a

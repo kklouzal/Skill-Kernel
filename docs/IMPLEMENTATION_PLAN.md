@@ -163,8 +163,10 @@ Deliverables:
   transient in-memory raw paths, source upsert, redacted chunk recording,
   transcript JSONL turn parsing, transcript-corpus metadata/summary/transcript
   parsing, Markdown memory/context/taskflow section parsing, session-store
-  metadata parsing, trajectory/diagnostic JSON summary parsing, existing-skill
-  read-only section parsing, max chunk limits, and duplicate-safe reruns;
+  metadata parsing, trajectory/diagnostic/observability JSON summary parsing,
+  existing-skill read-only section parsing, metadata-only plugin manifest/hook/
+  source import, metadata-only media artifact import, max chunk limits, and
+  duplicate-safe reruns;
 - imported chunk downstream readiness; implemented by existing evidence and
   embedding source discovery paths consuming observed historical chunks only
   after storage-time redaction and taint labeling.
@@ -186,8 +188,8 @@ Acceptance:
 - historical chunks can become observed evidence and embedding sources, but
   cannot directly activate skills, broker runtime context, or trusted memory;
 - remaining historical ingestion work is richer datasource coverage for
-  trajectory/session-corpus/task/plugin/media/observability sources, source-item
-  lineage beyond file/section/line granularity, executing full source-revocation
+  task-ledger variants and source-item lineage beyond file/section/line
+  metadata, executing full source-revocation
   traversal into derived evidence/embeddings/memory/candidates, and bounded
   bootstrap consolidation.
 

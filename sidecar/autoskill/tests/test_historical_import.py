@@ -695,6 +695,53 @@ def test_historical_discovery_can_upsert_inventory_only_sources(tmp_path) -> Non
     assert list(store.sources.values())[0].status == "inventory_only"
 
 
+def test_historical_discovery_classifies_plugin_media_and_observability_sources(
+    tmp_path,
+) -> None:
+    root = tmp_path / "workspace"
+    plugin = root / "plugin" / "autoskill"
+    hook = plugin / "hooks" / "before-prompt-build"
+    observability = root / "observability"
+    media = root / "media"
+    hook.mkdir(parents=True)
+    observability.mkdir(parents=True)
+    media.mkdir(parents=True)
+    (plugin / "package.json").write_text(
+        '{"name":"skillkernel-plugin","version":"0.1.0","scripts":{"test":"node --test"}}',
+        encoding="utf-8",
+    )
+    (plugin / "src.js").write_text("console.log('do not import body')", encoding="utf-8")
+    (hook / "HOOK.md").write_text("# Hook\nRuntime metadata only.\n", encoding="utf-8")
+    (observability / "trace.jsonl").write_text(
+        '{"trace_id":"abc","status":"ok"}\n',
+        encoding="utf-8",
+    )
+    (media / "screenshot.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    store = MemoryHistoricalImportStore()
+
+    inventory = asyncio.run(
+        discover_historical_sources(
+            store,
+            workspace_key="dev-01",
+            roots=[root],
+            max_files=20,
+            preview_only=True,
+        )
+    )
+
+    assert inventory.source_counts["plugin_manifest"] == 1
+    assert inventory.source_counts["plugin_source"] == 1
+    assert inventory.source_counts["plugin_hook_manifest"] == 1
+    assert inventory.source_counts["observability_export"] == 1
+    assert inventory.source_counts["media_artifact"] == 1
+    assert all(item.source_key.startswith("path-sha256:") for item in inventory.items)
+    assert all(not item.metadata["stored_raw_path"] for item in inventory.items)
+    source_item = next(item for item in inventory.items if item.source_kind == "plugin_source")
+    assert source_item.taint["source_body_not_imported"] is True
+    media_item = next(item for item in inventory.items if item.source_kind == "media_artifact")
+    assert media_item.taint["media_body_not_imported"] is True
+
+
 def test_historical_discovery_api_route_preview_and_upsert(tmp_path) -> None:
     root = tmp_path / "workspace"
     root.mkdir()
@@ -927,6 +974,75 @@ def test_historical_import_parses_transcript_corpus_exports(tmp_path) -> None:
     assert len(turn_chunks) == 2
     assert all(chunk.taint["transcript_corpus"] for chunk in turn_chunks)
     assert all("test@example.com" not in chunk.redacted_text for chunk in turn_chunks)
+
+
+def test_historical_import_parses_plugin_and_media_sources_as_metadata_only(
+    tmp_path,
+) -> None:
+    root = tmp_path / "workspace"
+    plugin = root / "plugin" / "autoskill"
+    hook = plugin / "hooks" / "before-prompt-build"
+    media = root / "media"
+    plugin.mkdir(parents=True)
+    hook.mkdir(parents=True)
+    media.mkdir(parents=True)
+    (plugin / "package.json").write_text(
+        (
+            '{"name":"skillkernel-plugin","version":"0.1.0",'
+            '"description":"test@example.com should redact",'
+            '"dependencies":{"secret-package":"1.0.0"},'
+            '"scripts":{"test":"node --test"}}'
+        ),
+        encoding="utf-8",
+    )
+    (plugin / "src.js").write_text(
+        "const token = 'sk-abcdefghijklmnopqrstuvwxyz';\n",
+        encoding="utf-8",
+    )
+    (hook / "HOOK.md").write_text(
+        "# Hook\nDo not ingest this hook body as historical evidence.\n",
+        encoding="utf-8",
+    )
+    (media / "capture.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    store = MemoryHistoricalImportStore()
+
+    result = asyncio.run(
+        import_historical_sources(
+            store,
+            workspace_key="dev-01",
+            roots=[root],
+            max_files=20,
+            max_chunks=20,
+            idempotency_key="historical-import:plugin-media",
+        )
+    )
+
+    assert result.parsed_sources == 4
+    kinds = {chunk.chunk_kind for chunk in store.chunks.values()}
+    assert kinds == {
+        "media_artifact_metadata",
+        "plugin_hook_manifest_metadata",
+        "plugin_manifest_metadata",
+        "plugin_source_metadata",
+    }
+    manifest_chunk = next(
+        chunk for chunk in store.chunks.values() if chunk.chunk_kind == "plugin_manifest_metadata"
+    )
+    assert "test@example.com" not in manifest_chunk.redacted_text
+    assert manifest_chunk.metadata["metadata_only"] is True
+    assert manifest_chunk.taint["plugin_surface"] is True
+    source_chunk = next(
+        chunk for chunk in store.chunks.values() if chunk.chunk_kind == "plugin_source_metadata"
+    )
+    assert "sk-abcdefghijklmnopqrstuvwxyz" not in source_chunk.redacted_text
+    assert "const token" not in source_chunk.redacted_text
+    assert source_chunk.metadata["body_imported"] is False
+    assert source_chunk.taint["source_body_not_imported"] is True
+    media_chunk = next(
+        chunk for chunk in store.chunks.values() if chunk.chunk_kind == "media_artifact_metadata"
+    )
+    assert media_chunk.metadata["body_imported"] is False
+    assert media_chunk.taint["media_body_not_imported"] is True
 
 
 def test_historical_import_is_idempotent_for_duplicate_chunks(tmp_path) -> None:

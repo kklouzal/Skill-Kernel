@@ -29,7 +29,23 @@ WORKSPACE_CONTEXT_FILES = {
     "BOOT.md",
 }
 WORKSPACE_MEMORY_FILES = {"MEMORY.md", "DREAMS.md"}
-TEXT_SUFFIXES = {".md", ".json", ".jsonl", ".txt", ".yaml", ".yml"}
+TEXT_SUFFIXES = {".md", ".json", ".jsonl", ".txt", ".yaml", ".yml", ".log"}
+PLUGIN_SOURCE_SUFFIXES = {".js", ".ts", ".mjs", ".cjs"}
+MEDIA_SUFFIXES = {
+    ".aac",
+    ".flac",
+    ".gif",
+    ".jpeg",
+    ".jpg",
+    ".m4a",
+    ".mp3",
+    ".mp4",
+    ".ogg",
+    ".png",
+    ".wav",
+    ".webm",
+    ".webp",
+}
 
 
 @dataclass(frozen=True)
@@ -206,7 +222,7 @@ def _discover_roots(
             except ValueError:
                 skipped_files += 1
                 continue
-            if path.suffix.lower() not in TEXT_SUFFIXES:
+            if not _supported_historical_file(path):
                 skipped_files += 1
                 continue
             stat = path.stat()
@@ -295,15 +311,24 @@ def _source_kind(path: Path) -> str:
     name = path.name
     relative = path.as_posix()
     lowered_relative = relative.lower()
+    suffix = path.suffix.lower()
     if name == "sessions.json":
         return "session_store"
+    if _is_plugin_hook_manifest(name, lowered_relative):
+        return "plugin_hook_manifest"
+    if _is_plugin_manifest(name, lowered_relative):
+        return "plugin_manifest"
+    if _is_plugin_source(suffix, lowered_relative):
+        return "plugin_source"
+    if suffix in MEDIA_SUFFIXES:
+        return "media_artifact"
     if _is_transcript_corpus_file(path, lowered_relative):
         return "transcript_corpus"
-    if path.suffix == ".jsonl" and "/sessions/" in relative:
+    if suffix == ".jsonl" and "/sessions/" in relative:
         return "transcript"
-    if path.suffix == ".jsonl" and "transcript" in lowered_relative:
+    if suffix == ".jsonl" and "transcript" in lowered_relative:
         return "transcript"
-    if "trajectory" in lowered_relative and path.suffix.lower() in {".json", ".jsonl"}:
+    if "trajectory" in lowered_relative and suffix in {".json", ".jsonl"}:
         return "trajectory"
     if name in WORKSPACE_MEMORY_FILES or "/memory/" in relative:
         return "workspace_memory"
@@ -313,6 +338,8 @@ def _source_kind(path: Path) -> str:
         return "taskflow_record"
     if name == "SKILL.md":
         return "existing_skill"
+    if _is_observability_export(lowered_relative):
+        return "observability_export"
     if "diagnostic" in lowered_relative or "otel" in lowered_relative:
         return "diagnostics_export"
     return "other"
@@ -321,9 +348,21 @@ def _source_kind(path: Path) -> str:
 def _risk_class(source_kind: str) -> str:
     if source_kind in {"transcript", "transcript_corpus", "trajectory", "workspace_memory"}:
         return "sensitive"
-    if source_kind in {"workspace_context", "plugin_session_state", "queued_injection"}:
+    if source_kind in {
+        "workspace_context",
+        "plugin_hook_manifest",
+        "plugin_manifest",
+        "plugin_session_state",
+        "plugin_source",
+        "queued_injection",
+    }:
         return "policy_sensitive"
-    if source_kind in {"diagnostics_export", "session_store"}:
+    if source_kind in {
+        "diagnostics_export",
+        "media_artifact",
+        "observability_export",
+        "session_store",
+    }:
         return "metadata"
     return "mixed"
 
@@ -335,6 +374,14 @@ def _recommendation(source_kind: str) -> str:
         return "inventory_policy_context_only"
     if source_kind == "existing_skill":
         return "inventory_read_only_external_skill"
+    if source_kind in {
+        "media_artifact",
+        "observability_export",
+        "plugin_hook_manifest",
+        "plugin_manifest",
+        "plugin_source",
+    }:
+        return "metadata_only_import_with_taint"
     return "inventory_first"
 
 
@@ -351,6 +398,15 @@ def _taint(source_kind: str) -> dict[str, Any]:
         taint["external_instruction"] = True
     if source_kind == "existing_skill":
         taint["third_party_skill"] = True
+    if source_kind in {"plugin_hook_manifest", "plugin_manifest", "plugin_source"}:
+        taint["plugin_surface"] = True
+        taint["control_plane_context"] = True
+    if source_kind == "plugin_source":
+        taint["source_body_not_imported"] = True
+    if source_kind == "media_artifact":
+        taint["media_body_not_imported"] = True
+    if source_kind == "observability_export":
+        taint["observability"] = True
     return taint
 
 
@@ -358,6 +414,39 @@ def _is_transcript_corpus_file(path: Path, lowered_relative: str) -> bool:
     if "transcript" not in lowered_relative and "corpus" not in lowered_relative:
         return False
     return path.name in {"summary.md", "metadata.json", "transcript.jsonl"}
+
+
+def _supported_historical_file(path: Path) -> bool:
+    suffix = path.suffix.lower()
+    lowered_relative = path.as_posix().lower()
+    if suffix in TEXT_SUFFIXES or suffix in MEDIA_SUFFIXES:
+        return True
+    return _is_plugin_source(suffix, lowered_relative)
+
+
+def _is_plugin_manifest(name: str, lowered_relative: str) -> bool:
+    if "/plugin/" not in lowered_relative and "/plugins/" not in lowered_relative:
+        return False
+    return name in {"package.json", "plugin.json"}
+
+
+def _is_plugin_hook_manifest(name: str, lowered_relative: str) -> bool:
+    return "/hooks/" in lowered_relative and name in {"HOOK.md", "hook.json"}
+
+
+def _is_plugin_source(suffix: str, lowered_relative: str) -> bool:
+    return suffix in PLUGIN_SOURCE_SUFFIXES and (
+        "/plugin/" in lowered_relative
+        or "/plugins/" in lowered_relative
+        or "/hooks/" in lowered_relative
+    )
+
+
+def _is_observability_export(lowered_relative: str) -> bool:
+    return any(
+        marker in lowered_relative
+        for marker in ("observability", "trace", "traces", "span", "spans", "metrics")
+    )
 
 
 def _mtime(value: float) -> str:
