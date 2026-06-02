@@ -2,8 +2,10 @@ import asyncio
 from uuid import uuid4
 
 from autoskill.db.contracts import (
+    DriftCheckResult,
     _check_contract,
     _contracts_from_skill_ir,
+    _is_false_positive_contract,
     _retire_resolved_drift_probes,
     _upsert_drift_probe,
 )
@@ -172,3 +174,24 @@ def test_drift_probe_upsert_and_retire_are_contract_scoped() -> None:
     assert retired == 1
     assert f'"environment_contract_id":"{contract_id}"' in conn.upserts[0][2]
     assert conn.retire_args[1] == str(contract_id)
+
+
+def test_false_positive_contracts_are_serialized_and_detected() -> None:
+    assert _is_false_positive_contract(
+        {
+            "status": "violated",
+            "metadata": {"false_positive": {"operator_id": "tester"}},
+        }
+    )
+    assert _is_false_positive_contract({"status": "false_positive", "metadata": {}})
+
+    payload = DriftCheckResult(
+        scanned=2,
+        valid=0,
+        violated=1,
+        unknown=0,
+        false_positive=1,
+        events=[],
+    ).to_json()
+
+    assert payload["false_positive"] == 1

@@ -261,6 +261,6 @@ Deliverables:
 
 Acceptance:
 
-- drift violations trigger targeted repair; implemented as drift-event repair-candidate metadata with localized repair plans and active drift probes that retire when contracts return valid, with actual repair proposal execution and false-positive lifecycle still pending;
+- drift violations trigger targeted repair; implemented as drift-event repair-candidate metadata with localized repair plans and active drift probes that retire when contracts return valid or when an operator marks a known-noisy contract false-positive, with actual repair proposal execution still pending;
 - curation logs features/actions/outcomes;
 - audit integrity verifies.

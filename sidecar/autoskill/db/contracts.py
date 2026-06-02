@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import UUID
 
 import asyncpg
 
@@ -34,6 +35,7 @@ class DriftCheckResult:
     events: list[dict[str, Any]]
     probes_created: int = 0
     probes_retired: int = 0
+    false_positive: int = 0
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -43,7 +45,26 @@ class DriftCheckResult:
             "unknown": self.unknown,
             "probes_created": self.probes_created,
             "probes_retired": self.probes_retired,
+            "false_positive": self.false_positive,
             "events": self.events,
+        }
+
+
+@dataclass(frozen=True)
+class DriftFalsePositiveResult:
+    environment_contract_id: UUID
+    status: str
+    probes_retired: int
+    drift_events_closed: int
+    metadata: dict[str, Any]
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "environment_contract_id": str(self.environment_contract_id),
+            "status": self.status,
+            "probes_retired": self.probes_retired,
+            "drift_events_closed": self.drift_events_closed,
+            "metadata": self.metadata,
         }
 
 
@@ -63,6 +84,16 @@ class ContractStore(Protocol):
         limit: int = 250,
     ) -> DriftCheckResult:
         """Run deterministic first-pass drift checks for extracted contracts."""
+
+    async def mark_drift_false_positive(
+        self,
+        *,
+        workspace_key: str,
+        environment_contract_id: UUID,
+        operator_id: str | None = None,
+        rationale: str | None = None,
+    ) -> DriftFalsePositiveResult:
+        """Suppress a known-noisy contract and retire its active drift probes."""
 
 
 class NullContractStore:
@@ -87,7 +118,28 @@ class NullContractStore:
             unknown=0,
             probes_created=0,
             probes_retired=0,
+            false_positive=0,
             events=[],
+        )
+
+    async def mark_drift_false_positive(
+        self,
+        *,
+        workspace_key: str,
+        environment_contract_id: UUID,
+        operator_id: str | None = None,
+        rationale: str | None = None,
+    ) -> DriftFalsePositiveResult:
+        return DriftFalsePositiveResult(
+            environment_contract_id=environment_contract_id,
+            status="not_found",
+            probes_retired=0,
+            drift_events_closed=0,
+            metadata={
+                "workspace_key": workspace_key,
+                "operator_id": operator_id,
+                "rationale": rationale,
+            },
         )
 
 
@@ -168,6 +220,7 @@ class AsyncpgContractStore(AsyncpgPoolOwner):
         valid = violated = unknown = 0
         probes_created = 0
         probes_retired = 0
+        false_positive = 0
         async with pool.acquire() as conn, conn.transaction():
             workspace_id = await ensure_workspace(conn, workspace_key)
             rows = await conn.fetch(
@@ -182,6 +235,30 @@ class AsyncpgContractStore(AsyncpgPoolOwner):
                 max(1, min(limit, 1000)),
             )
             for row in rows:
+                if _is_false_positive_contract(row):
+                    false_positive += 1
+                    probes_retired += await _retire_resolved_drift_probes(
+                        conn,
+                        workspace_id=workspace_id,
+                        contract_id=row["environment_contract_id"],
+                    )
+                    await _close_false_positive_drift_events(
+                        conn,
+                        workspace_id=workspace_id,
+                        contract_id=row["environment_contract_id"],
+                    )
+                    await conn.execute(
+                        """
+                        UPDATE autoskill.environment_contracts
+                        SET status = 'false_positive',
+                            last_checked_at = now(),
+                            metadata = metadata || $2::jsonb
+                        WHERE environment_contract_id = $1
+                        """,
+                        row["environment_contract_id"],
+                        _json({"last_reason": "operator-marked false positive"}),
+                    )
+                    continue
                 status, reason = _check_contract(row)
                 if status == "valid":
                     valid += 1
@@ -264,8 +341,70 @@ class AsyncpgContractStore(AsyncpgPoolOwner):
             unknown=unknown,
             probes_created=probes_created,
             probes_retired=probes_retired,
+            false_positive=false_positive,
             events=events,
         )
+
+    async def mark_drift_false_positive(
+        self,
+        *,
+        workspace_key: str,
+        environment_contract_id: UUID,
+        operator_id: str | None = None,
+        rationale: str | None = None,
+    ) -> DriftFalsePositiveResult:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                UPDATE autoskill.environment_contracts
+                SET status = 'false_positive',
+                    last_checked_at = now(),
+                    metadata = metadata || jsonb_build_object(
+                      'false_positive',
+                      jsonb_build_object(
+                        'marked_at', now(),
+                        'operator_id', $3::text,
+                        'rationale', $4::text
+                      ),
+                      'last_reason',
+                      'operator-marked false positive'
+                    )
+                WHERE workspace_id = $1
+                  AND environment_contract_id = $2
+                RETURNING *
+                """,
+                workspace_id,
+                environment_contract_id,
+                operator_id,
+                rationale,
+            )
+            if row is None:
+                return DriftFalsePositiveResult(
+                    environment_contract_id=environment_contract_id,
+                    status="not_found",
+                    probes_retired=0,
+                    drift_events_closed=0,
+                    metadata={},
+                )
+            probes_retired = await _retire_resolved_drift_probes(
+                conn,
+                workspace_id=workspace_id,
+                contract_id=environment_contract_id,
+            )
+            drift_events_closed = await _close_false_positive_drift_events(
+                conn,
+                workspace_id=workspace_id,
+                contract_id=environment_contract_id,
+            )
+            return DriftFalsePositiveResult(
+                environment_contract_id=environment_contract_id,
+                status=row["status"],
+                probes_retired=probes_retired,
+                drift_events_closed=drift_events_closed,
+                metadata=_json_dict(row["metadata"]),
+            )
 
 
 async def _upsert_drift_probe(
@@ -334,6 +473,37 @@ async def _retire_resolved_drift_probes(
         str(contract_id),
     )
     return _command_count(command)
+
+
+async def _close_false_positive_drift_events(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: Any,
+    contract_id: Any,
+) -> int:
+    command = await conn.execute(
+        """
+        UPDATE autoskill.drift_events
+        SET status = 'false_positive',
+            repair_candidate = repair_candidate || $3::jsonb
+        WHERE workspace_id = $1
+          AND environment_contract_id = $2
+          AND status = 'open'
+        """,
+        workspace_id,
+        contract_id,
+        _json({"closed_reason": "operator-marked false positive"}),
+    )
+    return _command_count(command)
+
+
+def _is_false_positive_contract(row: asyncpg.Record | dict[str, Any]) -> bool:
+    metadata = _json_dict(row["metadata"])
+    try:
+        status = row["status"]
+    except KeyError:
+        status = None
+    return bool(metadata.get("false_positive")) or status == "false_positive"
 
 
 def _repair_plan_for_contract(contract: asyncpg.Record, reason: str) -> dict[str, Any]:

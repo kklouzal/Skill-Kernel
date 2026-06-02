@@ -591,7 +591,19 @@ class DriftCheckResponse(BaseModel):
     unknown: int
     probes_created: int = 0
     probes_retired: int = 0
+    false_positive: int = 0
     events: list[dict[str, object]]
+
+
+class DriftFalsePositiveRequest(BaseModel):
+    workspace_id: str
+    environment_contract_id: UUID
+    operator_id: str | None = None
+    rationale: str | None = None
+
+
+class DriftFalsePositiveResponse(BaseModel):
+    result: dict[str, object]
 
 
 class EvolutionTransactionStartRequest(BaseModel):
@@ -2390,6 +2402,25 @@ def create_app(
             limit=max(1, min(request.limit, 1000)),
         )
         return DriftCheckResponse(**result.to_json())
+
+    @app.post("/v1/drift/false-positive", response_model=DriftFalsePositiveResponse)
+    async def mark_drift_false_positive(
+        request: DriftFalsePositiveRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> DriftFalsePositiveResponse:
+        _require_control_auth(authorization)
+        result = await contracts.mark_drift_false_positive(
+            workspace_key=request.workspace_id,
+            environment_contract_id=request.environment_contract_id,
+            operator_id=request.operator_id,
+            rationale=request.rationale,
+        )
+        if result.status == "not_found":
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail=result.to_json(),
+            )
+        return DriftFalsePositiveResponse(result=result.to_json())
 
     @app.post("/v1/evolution/transactions/start", response_model=EvolutionTransactionStartResponse)
     async def start_evolution_transaction(
