@@ -272,7 +272,13 @@ def test_topology_proposal_endpoint_persists_propose_only_operation() -> None:
     assert response.proposal["status"] == "candidate"
     assert response.persistence is not None
     assert response.persistence["operation"]["operation_kind"] == "compose"
-    assert len(response.persistence["trials"]) == 3
+    assert {trial["trial_kind"] for trial in response.persistence["trials"]} == {
+        "component_baseline",
+        "composed_workflow",
+        "shadowing",
+        "broker_replay",
+        "broker_canary",
+    }
     assert topology.operations[0].evolution_transaction_id is not None
 
 

@@ -55,6 +55,14 @@ export async function fetchContextHint(sidecarUrl, request, options = {}) {
   return postJson(`${sidecarUrl.replace(/\/$/, "")}/v1/runtime/context-hint`, request, options);
 }
 
+export async function recordActionAttributionCheck(sidecarUrl, request, options = {}) {
+  return postJson(
+    `${sidecarUrl.replace(/\/$/, "")}/v1/attribution/action-checks`,
+    request,
+    options,
+  );
+}
+
 export async function fetchStatus(sidecarUrl, options = {}) {
   return getJson(`${sidecarUrl.replace(/\/$/, "")}/v1/status`, options);
 }

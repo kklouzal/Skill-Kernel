@@ -245,12 +245,12 @@ Acceptance:
 Deliverables:
 
 - `autonomous_guarded` apply; implemented as fail-closed mutation-worker `writer.apply` orchestration that only applies a staged manifest when the queued job carries explicit `policy_approved=true`;
-- repair-proposal execution; implemented as mutation-worker `repair.execute` orchestration that claims planned curation repair proposals and open drift repair candidates, records governance transactions/items/provenance, queues policy-approved staged manifests to `writer.apply`, and otherwise fail-closes to evaluator or drift recheck jobs with source execution metadata;
+- repair-proposal execution; implemented as mutation-worker `repair.execute` orchestration that claims planned curation repair proposals and open drift repair candidates, records governance transactions/items/provenance, queues explicit policy-approved staged manifests to `writer.apply`, can generate guarded staged repair manifests from policy-approved bounded proposals with skill-version anchors, and otherwise fail-closes to evaluator or drift recheck jobs with source execution metadata;
 - improvement engine;
 - archive/promote/merge/split; archive, evaluator-gated archived promotion, evaluator-gated explicit duplicate merge/archive, active-bank budget overflow, and planned split/improvement/disambiguation curation actions are implemented as deterministic lifecycle-state or planning actions with structured repair proposal payloads;
-- external-skill review actions; implemented as a control-authenticated operator decision ledger for reuse/import/ignore/quarantine, with no autonomous mutation of external-owned files;
+- external-skill review actions and import materialization; implemented as a control-authenticated operator decision ledger for reuse/import/ignore/quarantine plus operator-approved stage-only import candidates, with no autonomous mutation of external-owned files;
 - utility rollups; implemented as deterministic v1 rollups from attribution events, rendered retrieval counts, shadowing/hurt outcomes, and canary failures;
-- attribution ledger.
+- attribution ledger and action-attribution checks; implemented for attribution events, runtime blocked-tool action checks, and revocation invalidation of derived attribution records.
 
 Acceptance:
 

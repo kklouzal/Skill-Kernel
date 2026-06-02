@@ -766,6 +766,27 @@ class BrokerPolicyCanaryResponse(BaseModel):
     policy_version: dict[str, object] | None
 
 
+class ActionAttributionCheckRequest(BaseModel):
+    workspace_id: str
+    session_id: str | None = None
+    turn_id: str | None = None
+    tool_call_id: str | None = None
+    action_kind: str
+    risk_tier: str
+    verdict: str
+    metrics: dict[str, object] = {}
+    user_intent_hash: str | None = None
+    contributing_skill_ids: list[UUID] = []
+    contributing_memory_ids: list[UUID] = []
+    contributing_evidence_ids: list[UUID] = []
+    broker_policy_version_id: UUID | None = None
+    counterfactual_kind: str | None = None
+
+
+class ActionAttributionCheckResponse(BaseModel):
+    check: dict[str, object]
+
+
 class CanaryResultRequest(BaseModel):
     workspace_id: str
     skill_id: UUID
@@ -1691,6 +1712,33 @@ def create_app(
             duplicate=summary.duplicate,
             rejected=summary.rejected,
         )
+
+    @app.post(
+        "/v1/attribution/action-checks",
+        response_model=ActionAttributionCheckResponse,
+    )
+    async def record_action_attribution_check(
+        request: ActionAttributionCheckRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ActionAttributionCheckResponse:
+        _require_ingest_auth(authorization)
+        record = await attribution.record_action_check(
+            workspace_key=request.workspace_id,
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            tool_call_id=request.tool_call_id,
+            action_kind=request.action_kind,
+            risk_tier=request.risk_tier,
+            verdict=request.verdict,
+            metrics=request.metrics,
+            user_intent_hash=request.user_intent_hash,
+            contributing_skill_ids=request.contributing_skill_ids,
+            contributing_memory_ids=request.contributing_memory_ids,
+            contributing_evidence_ids=request.contributing_evidence_ids,
+            broker_policy_version_id=request.broker_policy_version_id,
+            counterfactual_kind=request.counterfactual_kind,
+        )
+        return ActionAttributionCheckResponse(check=record.to_json())
 
     @app.post("/v1/runtime/context-hint", response_model=ContextHintResponse)
     async def context_hint(request: ContextHintRequest) -> ContextHintResponse:

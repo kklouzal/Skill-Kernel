@@ -8,6 +8,7 @@ from autoskill.db.activation import ActivationReadiness
 from autoskill.db.contracts import ContractExtractResult, DriftCheckResult, DriftRepairEventRecord
 from autoskill.db.evaluations import EvaluationRunResult
 from autoskill.db.evidence import EvidenceDeriveResult
+from autoskill.db.external_skills import ExternalSkillInput
 from autoskill.db.observability import TraceSpanRecord
 from autoskill.db.scheduler import SchedulerTickResult
 from autoskill.db.topology import NullTopologyStore
@@ -1118,6 +1119,73 @@ def test_mutation_worker_applies_topology_downstream_actions() -> None:
     ]
 
 
+def test_mutation_worker_scores_topology_broker_trials() -> None:
+    jobs = MemoryJobStore()
+    topology = NullTopologyStore()
+
+    async def run():
+        operation = await topology.record_operation(
+            workspace_key="dev-01",
+            operation_kind="compose",
+            status="candidate",
+        )
+        await topology.record_planned_trial(
+            workspace_key="dev-01",
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+            trial_kind="broker_replay",
+            objective="broker replay",
+        )
+        await topology.record_planned_trial(
+            workspace_key="dev-01",
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+            trial_kind="broker_canary",
+            objective="broker canary",
+        )
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="topology.score_broker_trials",
+            idempotency_key="topology-score-broker:one",
+            payload={
+                "workspace_id": "dev-01",
+                "skill_graph_operation_id": str(operation.skill_graph_operation_id),
+                "broker_replay": {
+                    "total": 2,
+                    "matched": 2,
+                    "mismatched": 0,
+                    "degradation_count": 0,
+                },
+                "broker_canary_metrics": {
+                    "harmful_rate": 0.0,
+                    "shadowed_rate": 0.0,
+                    "ignored_rate": 0.0,
+                },
+            },
+        )
+        result = await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=MemoryInvalidationStore(),
+                topology=topology,
+            ),
+            worker_id="mutation-worker",
+            pool="mutation",
+        )
+        return result
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["allowed"] is True
+    assert result.output["updated_count"] == 2
+    assert {trial.status for trial in topology.trials} == {"passed"}
+    assert {
+        trial.result["broker_trial_score"]["status"]
+        for trial in topology.trials
+    } == {"passed"}
+
+
 def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) -> None:
     jobs = MemoryJobStore()
     governance = MemoryGovernanceStore()
@@ -1406,6 +1474,64 @@ def test_worker_run_once_dispatches_external_skill_scan(tmp_path) -> None:
     assert str(root) not in str(external_skills.records[0].to_json())
 
 
+def test_mutation_worker_materializes_operator_approved_external_import() -> None:
+    jobs = MemoryJobStore()
+    external_skills = MemoryExternalSkillStore()
+
+    async def run():
+        await external_skills.upsert_external_skills(
+            workspace_key="dev-01",
+            skills=[
+                ExternalSkillInput(
+                    source="workspace-skill-root",
+                    root_path_hash="root-hash",
+                    slug="pdf-table-cleanup",
+                    file_hash="file-hash",
+                    name="PDF table cleanup",
+                    description="External skill for malformed PDF cells.",
+                    risk_summary={"scanner_status": "passed"},
+                )
+            ],
+        )
+        external_skill_id = external_skills.records[0].external_skill_id
+        await external_skills.record_review_action(
+            workspace_key="dev-01",
+            external_skill_id=external_skill_id,
+            action="import",
+            status="approved",
+            operator_id="operator-1",
+        )
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="external_skills.materialize_import",
+            idempotency_key="external-import:one",
+            payload={
+                "workspace_id": "dev-01",
+                "external_skill_id": str(external_skill_id),
+                "operator_id": "operator-1",
+            },
+        )
+        result = await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                external_skills=external_skills,
+                embeddings=MemoryPendingEmbeddingStore(),
+            ),
+            worker_id="mutation-worker",
+            pool="mutation",
+        )
+        return result
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["allowed"] is True
+    assert result.output["candidate"]["mode"] == "stage_only"
+    assert external_skills.review_actions[-1].status == "completed"
+
+
 def test_worker_health_api_uses_configured_pool_concurrency(monkeypatch) -> None:
     monkeypatch.setenv("AUTOSKILL_WORKER_MAINTENANCE_CONCURRENCY", "5")
     from autoskill.core.config import get_settings
@@ -1595,6 +1721,72 @@ def test_repair_execute_queues_evaluator_when_curation_source_lacks_staged_manif
     assert governance.items[0].item_kind == "curation_action_repair_proposal"
     assert governance.items[0].activation_state == "planned"
     assert governance.edges[0].relation == "records_repair_execution_plan"
+
+
+def test_repair_execute_materializes_policy_approved_repair_candidate(tmp_path) -> None:
+    jobs = MemoryJobStore()
+    utility = MemoryUtilityWorkerStore()
+    governance = MemoryGovernanceStore()
+    action_id = uuid4()
+    skill_id = uuid4()
+    skill_version_id = uuid4()
+    utility.repair_actions.append(
+        CurationActionRecord(
+            curation_action_id=action_id,
+            skill_id=skill_id,
+            action="plan_improvement",
+            status="planned",
+            reason="repeated evaluator failure",
+            features={
+                "repair_proposal": {
+                    "schema": "autoskill.curation_repair_proposal.v1",
+                    "proposal_kind": "improve",
+                    "objectives": ["Tighten VERIFY around evaluator failure."],
+                    "acceptance_gate": {"regression": "passed"},
+                    "materialization": {
+                        "policy_approved": True,
+                        "skill_version_id": str(skill_version_id),
+                        "slug": "repair-evaluator-failure",
+                    },
+                }
+            },
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="repair.execute",
+            idempotency_key="repair-execute:materialize",
+            payload={"workspace_id": "dev-01", "curation_limit": 1, "drift_limit": 0},
+        )
+        return await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=MemoryPendingEmbeddingStore(),
+                utility=utility,
+                governance=governance,
+                workspace_root=tmp_path,
+            ),
+            worker_id="mutation-worker",
+            pool="mutation",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["writer_apply_queued"] == 1
+    queued_apply = jobs.jobs[f"repair-execute:curation_action:{action_id}:writer-apply"]
+    assert queued_apply.job_kind == "writer.apply"
+    assert queued_apply.payload["policy_approved"] is True
+    assert queued_apply.payload["activation_gate_required"] is True
+    assert queued_apply.payload["repair_execution"]["materialization"]["slug"] == (
+        "repair-evaluator-failure"
+    )
+    assert (tmp_path / queued_apply.payload["manifest_relative_path"]).exists()
 
 
 def test_repair_execute_queues_writer_apply_only_for_policy_approved_manifest() -> None:

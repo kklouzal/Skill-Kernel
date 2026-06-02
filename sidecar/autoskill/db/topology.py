@@ -172,6 +172,23 @@ class TopologyDownstreamApplyResult:
         }
 
 
+@dataclass(frozen=True)
+class TopologyBrokerTrialScoreResult:
+    allowed: bool
+    operation: SkillGraphOperationRecord | None
+    blockers: list[str]
+    updated_trials: list[PlannedTopologyTrialRecord]
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "allowed": self.allowed,
+            "operation": self.operation.to_json() if self.operation else None,
+            "blockers": self.blockers,
+            "updated_trials": [trial.to_json() for trial in self.updated_trials],
+            "updated_count": len(self.updated_trials),
+        }
+
+
 class TopologyStore(Protocol):
     async def record_operation(
         self,
@@ -228,6 +245,17 @@ class TopologyStore(Protocol):
         applied_by: str = "autoskill-worker",
     ) -> TopologyDownstreamApplyResult:
         """Apply lifecycle and graph-edge effects for an accepted topology operation."""
+
+    async def record_broker_trial_scores(
+        self,
+        *,
+        workspace_key: str,
+        skill_graph_operation_id: UUID,
+        replay_result: dict[str, Any] | None = None,
+        canary_metrics: dict[str, Any] | None = None,
+        scored_by: str = "autoskill-worker",
+    ) -> TopologyBrokerTrialScoreResult:
+        """Record deterministic broker replay/canary trial pass/fail results."""
 
 
 class NullTopologyStore:
@@ -461,6 +489,80 @@ class NullTopologyStore:
             actions=outcome["actions"],
             lifecycle_updates=outcome["lifecycle_updates"],
             edges_materialized=outcome["edges_materialized"],
+        )
+
+    async def record_broker_trial_scores(
+        self,
+        *,
+        workspace_key: str,
+        skill_graph_operation_id: UUID,
+        replay_result: dict[str, Any] | None = None,
+        canary_metrics: dict[str, Any] | None = None,
+        scored_by: str = "autoskill-worker",
+    ) -> TopologyBrokerTrialScoreResult:
+        operation = next(
+            (
+                item
+                for item in self.operations
+                if item.skill_graph_operation_id == skill_graph_operation_id
+            ),
+            None,
+        )
+        if operation is None:
+            return TopologyBrokerTrialScoreResult(
+                allowed=False,
+                operation=None,
+                blockers=["topology operation not found"],
+                updated_trials=[],
+            )
+        trials = [
+            trial
+            for trial in self.trials
+            if trial.skill_graph_operation_id == skill_graph_operation_id
+            and trial.trial_kind in {"broker_replay", "broker_canary"}
+        ]
+        if not trials:
+            return TopologyBrokerTrialScoreResult(
+                allowed=False,
+                operation=operation,
+                blockers=[
+                    "topology operation has no broker replay or canary trials to score"
+                ],
+                updated_trials=[],
+            )
+        now = datetime.now(UTC)
+        updated_trials = [
+            _scored_broker_trial(
+                trial,
+                replay_result=replay_result,
+                canary_metrics=canary_metrics,
+                scored_by=scored_by,
+                scored_at=now,
+            )
+            for trial in trials
+        ]
+        updated_by_id = {
+            trial.planned_topology_trial_id: trial
+            for trial in updated_trials
+        }
+        self.trials = [
+            updated_by_id.get(trial.planned_topology_trial_id, trial)
+            for trial in self.trials
+        ]
+        blockers = [
+            blocker
+            for trial in updated_trials
+            for blocker in (
+                _broker_replay_blockers(trial)
+                if trial.trial_kind == "broker_replay"
+                else _broker_canary_blockers(trial)
+            )
+        ]
+        return TopologyBrokerTrialScoreResult(
+            allowed=not blockers,
+            operation=operation,
+            blockers=blockers,
+            updated_trials=updated_trials,
         )
 
 
@@ -775,6 +877,162 @@ class AsyncpgTopologyStore(AsyncpgPoolOwner):
                 edges_materialized=edges_materialized,
             )
 
+    async def record_broker_trial_scores(
+        self,
+        *,
+        workspace_key: str,
+        skill_graph_operation_id: UUID,
+        replay_result: dict[str, Any] | None = None,
+        canary_metrics: dict[str, Any] | None = None,
+        scored_by: str = "autoskill-worker",
+    ) -> TopologyBrokerTrialScoreResult:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            operation_row = await conn.fetchrow(
+                """
+                SELECT o.*, w.external_key AS workspace_key
+                FROM autoskill.skill_graph_operations o
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE o.workspace_id = $1
+                  AND o.skill_graph_operation_id = $2
+                FOR UPDATE
+                """,
+                workspace_id,
+                skill_graph_operation_id,
+            )
+            if operation_row is None:
+                return TopologyBrokerTrialScoreResult(
+                    allowed=False,
+                    operation=None,
+                    blockers=["topology operation not found"],
+                    updated_trials=[],
+                )
+            operation = SkillGraphOperationRecord.from_row(operation_row)
+            trial_rows = await conn.fetch(
+                """
+                SELECT t.*, w.external_key AS workspace_key
+                FROM autoskill.planned_topology_trials t
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE t.workspace_id = $1
+                  AND t.skill_graph_operation_id = $2
+                  AND t.trial_kind = ANY($3::text[])
+                ORDER BY t.created_at ASC, t.planned_topology_trial_id ASC
+                FOR UPDATE
+                """,
+                workspace_id,
+                skill_graph_operation_id,
+                ["broker_replay", "broker_canary"],
+            )
+            trials = [PlannedTopologyTrialRecord.from_row(row) for row in trial_rows]
+            if not trials:
+                return TopologyBrokerTrialScoreResult(
+                    allowed=False,
+                    operation=operation,
+                    blockers=[
+                        "topology operation has no broker replay or canary trials to score"
+                    ],
+                    updated_trials=[],
+                )
+            now = datetime.now(UTC)
+            updated_trials = [
+                _scored_broker_trial(
+                    trial,
+                    replay_result=replay_result,
+                    canary_metrics=canary_metrics,
+                    scored_by=scored_by,
+                    scored_at=now,
+                )
+                for trial in trials
+            ]
+            rows = []
+            for trial in updated_trials:
+                row = await conn.fetchrow(
+                    """
+                    UPDATE autoskill.planned_topology_trials t
+                    SET status = $3,
+                        result = $4::jsonb,
+                        updated_at = now()
+                    FROM autoskill.workspaces w
+                    WHERE t.workspace_id = w.workspace_id
+                      AND t.workspace_id = $1
+                      AND t.planned_topology_trial_id = $2
+                    RETURNING t.*, w.external_key AS workspace_key
+                    """,
+                    workspace_id,
+                    trial.planned_topology_trial_id,
+                    trial.status,
+                    _json(trial.result),
+                )
+                rows.append(PlannedTopologyTrialRecord.from_row(row))
+            blockers = [
+                blocker
+                for trial in rows
+                for blocker in (
+                    _broker_replay_blockers(trial)
+                    if trial.trial_kind == "broker_replay"
+                    else _broker_canary_blockers(trial)
+                )
+            ]
+            return TopologyBrokerTrialScoreResult(
+                allowed=not blockers,
+                operation=operation,
+                blockers=blockers,
+                updated_trials=rows,
+            )
+
+
+def _scored_broker_trial(
+    trial: PlannedTopologyTrialRecord,
+    *,
+    replay_result: dict[str, Any] | None,
+    canary_metrics: dict[str, Any] | None,
+    scored_by: str,
+    scored_at: datetime,
+) -> PlannedTopologyTrialRecord:
+    if trial.trial_kind == "broker_replay":
+        result = {"replay": replay_result or {}}
+        probe = PlannedTopologyTrialRecord(
+            **{
+                **trial.__dict__,
+                "status": "passed",
+                "result": result,
+                "updated_at": scored_at,
+            }
+        )
+        blockers = _broker_replay_blockers(probe)
+    elif trial.trial_kind == "broker_canary":
+        result = {"metrics": canary_metrics or {}}
+        probe = PlannedTopologyTrialRecord(
+            **{
+                **trial.__dict__,
+                "status": "passed",
+                "result": result,
+                "updated_at": scored_at,
+            }
+        )
+        blockers = _broker_canary_blockers(probe)
+    else:
+        result = {}
+        blockers = []
+    result = {
+        **result,
+        "broker_trial_score": {
+            "status": "failed" if blockers else "passed",
+            "blockers": blockers,
+            "scored_by": scored_by,
+            "scored_at": scored_at.isoformat(),
+        },
+    }
+    return PlannedTopologyTrialRecord(
+        **{
+            **trial.__dict__,
+            "status": "failed" if blockers else "passed",
+            "result": result,
+            "updated_at": scored_at,
+        }
+    )
+
 
 def _json(value: dict[str, Any] | list[Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
@@ -829,6 +1087,76 @@ def _topology_apply_blockers(
             blockers.append(
                 f"topology trial {trial.planned_topology_trial_id} is {trial.status}"
             )
+    blockers.extend(_topology_broker_gate_blockers(operation, trials))
+    return blockers
+
+
+def _topology_broker_gate_blockers(
+    operation: SkillGraphOperationRecord,
+    trials: list[PlannedTopologyTrialRecord],
+) -> list[str]:
+    if operation.operation_kind not in {"compose", "decompose"}:
+        return []
+    blockers: list[str] = []
+    trials_by_kind: dict[str, list[PlannedTopologyTrialRecord]] = {}
+    for trial in trials:
+        trials_by_kind.setdefault(trial.trial_kind, []).append(trial)
+
+    for required_kind in ("broker_replay", "broker_canary"):
+        if required_kind not in trials_by_kind:
+            blockers.append(
+                f"topology {operation.operation_kind} requires {required_kind} trial"
+            )
+
+    for trial in trials_by_kind.get("broker_replay", []):
+        blockers.extend(_broker_replay_blockers(trial))
+    for trial in trials_by_kind.get("broker_canary", []):
+        blockers.extend(_broker_canary_blockers(trial))
+    return blockers
+
+
+def _broker_replay_blockers(trial: PlannedTopologyTrialRecord) -> list[str]:
+    if trial.status != "passed" or not trial.result:
+        return []
+    replay = _json_dict(trial.result.get("replay", trial.result))
+    blockers: list[str] = []
+    mismatched = _nonnegative_int(replay.get("mismatched"))
+    degradation_count = _nonnegative_int(replay.get("degradation_count"))
+    if mismatched > 0:
+        blockers.append(
+            f"broker replay trial {trial.planned_topology_trial_id} has {mismatched} mismatches"
+        )
+    if degradation_count > 0:
+        blockers.append(
+            "broker replay trial "
+            f"{trial.planned_topology_trial_id} has {degradation_count} degradations"
+        )
+    return blockers
+
+
+def _broker_canary_blockers(trial: PlannedTopologyTrialRecord) -> list[str]:
+    if trial.status != "passed" or not trial.result:
+        return []
+    metrics = _json_dict(trial.result.get("metrics", trial.result))
+    blockers: list[str] = []
+    harmful_rate = _bounded_float(metrics.get("harmful_rate"))
+    shadowed_rate = _bounded_float(metrics.get("shadowed_rate"))
+    ignored_rate = _bounded_float(metrics.get("ignored_rate"))
+    if harmful_rate > 0.0:
+        blockers.append(
+            "broker canary trial "
+            f"{trial.planned_topology_trial_id} has harmful_rate={harmful_rate:g}"
+        )
+    if shadowed_rate >= 0.2:
+        blockers.append(
+            "broker canary trial "
+            f"{trial.planned_topology_trial_id} has shadowed_rate={shadowed_rate:g}"
+        )
+    if ignored_rate >= 0.5:
+        blockers.append(
+            "broker canary trial "
+            f"{trial.planned_topology_trial_id} has ignored_rate={ignored_rate:g}"
+        )
     return blockers
 
 
@@ -1106,6 +1434,25 @@ def _uuid_or_none(value: object) -> UUID | None:
         return UUID(str(value))
     except ValueError:
         return None
+
+
+def _nonnegative_int(value: object) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _bounded_float(value: object) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if number < 0.0:
+        return 0.0
+    if number > 1.0:
+        return 1.0
+    return number
 
 
 def _command_count(status: str) -> int:

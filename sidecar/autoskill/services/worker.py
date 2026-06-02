@@ -7,7 +7,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from autoskill.core.hashing import sha256_json
 from autoskill.db.activation import ActivationGateStore
@@ -27,6 +27,7 @@ from autoskill.db.topology import TopologyStore
 from autoskill.db.utility import UtilityStore
 from autoskill.services.embedding_generation import TextEmbedder, generate_pending_embeddings
 from autoskill.services.evaluation_runner import run_pending_proposal_gates_with_trace
+from autoskill.services.external_import import materialize_external_skill_import
 from autoskill.services.external_inventory import scan_external_skill_roots
 from autoskill.services.opportunity import mine_opportunities
 from autoskill.services.writer import (
@@ -34,6 +35,7 @@ from autoskill.services.writer import (
     delete_active_skill_with_governance,
     resolve_contained,
     rollback_active_skill_with_governance,
+    stage_compiled_skill,
 )
 
 WorkerPool = Literal["scheduler", "maintenance", "mutation"]
@@ -716,6 +718,7 @@ async def _execute_repair_source(
             "fail_closed": True,
             "writer_apply_requires_policy_approved": True,
             "writer_apply_requires_activation_gate": True,
+            "repair_materialization_requires_policy_approved": True,
             "insufficient_source_data_action": "queue_gate_or_recheck_job",
         },
     )
@@ -751,6 +754,13 @@ async def _execute_repair_source(
         source,
         transaction_id=transaction.transaction.evolution_transaction_id,
     )
+    if apply_payload is None:
+        apply_payload = _materialized_writer_apply_payload_for_repair(
+            stores,
+            source,
+            workspace_key=workspace_key,
+            transaction_id=transaction.transaction.evolution_transaction_id,
+        )
     if apply_payload is not None:
         queued_job = await stores.jobs.enqueue_job(
             workspace_key=workspace_key,
@@ -856,6 +866,106 @@ def _writer_apply_payload_for_repair(
     }
 
 
+def _materialized_writer_apply_payload_for_repair(
+    stores: WorkerStores,
+    source: RepairExecutionSource,
+    *,
+    workspace_key: str,
+    transaction_id: UUID,
+) -> dict[str, Any] | None:
+    materialization = _json_object(source.proposal.get("materialization"))
+    if not materialization:
+        return None
+    if materialization.get("policy_approved") is not True:
+        return None
+    if stores.workspace_root is None:
+        return None
+    skill_version_id = (
+        source.skill_version_id
+        or _uuid_value(materialization.get("skill_version_id"))
+        or _uuid_value(source.proposal.get("skill_version_id"))
+    )
+    if skill_version_id is None:
+        return None
+    slug = _string_value(materialization.get("slug")) or (
+        f"repair-{source.source_kind}-{source.source_id.hex[:8]}"
+    )
+    compiled_skill_md = _string_value(materialization.get("compiled_skill_md")) or (
+        _compiled_repair_skill_md(source, slug=slug)
+    )
+    staged = stage_compiled_skill(
+        stores.workspace_root,
+        staging_id=uuid4(),
+        skill_version_id=skill_version_id,
+        slug=slug,
+        compiled_skill_md=compiled_skill_md,
+        max_context_tokens=_payload_int(
+            materialization,
+            "max_context_tokens",
+            default=900,
+            minimum=100,
+            maximum=2000,
+        ),
+    )
+    return {
+        "workspace_id": workspace_key,
+        "policy_approved": True,
+        "activation_gate_required": True,
+        "evolution_transaction_id": str(transaction_id),
+        "manifest_relative_path": staged.manifest_relative_path,
+        "repair_execution": {
+            "source_kind": source.source_kind,
+            "source_id": str(source.source_id),
+            "materialization": {
+                "mode": "generated_staged_manifest",
+                "skill_version_id": str(skill_version_id),
+                "slug": staged.slug,
+                "manifest_sha256": staged.manifest_sha256,
+                "scanner_findings": [
+                    finding.to_json() for finding in staged.scanner_findings
+                ],
+            },
+        },
+    }
+
+
+def _compiled_repair_skill_md(source: RepairExecutionSource, *, slug: str) -> str:
+    proposal_kind = (
+        _string_value(source.proposal.get("proposal_kind"))
+        or _string_value(source.proposal.get("kind"))
+        or "repair"
+    )
+    objectives = _string_list(source.proposal.get("objectives")) or [source.reason]
+    acceptance = _json_object(source.proposal.get("acceptance_gate"))
+    verify_lines = [
+        f"- {key}: {value}"
+        for key, value in sorted(acceptance.items())
+        if isinstance(key, str)
+    ] or ["- Run the proposal-specific evaluator or drift check before activation."]
+    return "\n".join(
+        [
+            "---",
+            f"name: {slug}",
+            f"description: Guarded {proposal_kind} repair candidate.",
+            "---",
+            "",
+            "## WHEN",
+            f"- A SkillKernel repair proposal of type `{proposal_kind}` is approved.",
+            "",
+            "## DO",
+            *[f"- {item}" for item in objectives],
+            "",
+            "## VERIFY",
+            *verify_lines,
+            "",
+            "## NEVER",
+            "- Do not bypass scanner, evaluator, activation, or rollback gates.",
+            "- Do not include raw secrets, credentials, or private source content.",
+            "",
+        ]
+    )
+
+
 async def _complete_repair_execution_source(
     stores: WorkerStores,
     *,
@@ -897,6 +1007,54 @@ async def _run_external_skill_scan(stores: WorkerStores, job: JobRecord) -> dict
         roots=roots,
         source=_payload_str(job.payload, "source") or "workspace-skill-root",
         limit=_payload_int(job.payload, "limit", default=250, minimum=1, maximum=1000),
+    )
+    return result.to_json()
+
+
+async def _run_external_skill_materialize_import(
+    stores: WorkerStores,
+    job: JobRecord,
+) -> dict[str, Any]:
+    if stores.external_skills is None:
+        raise ValueError("external skill store is required for external skill import")
+    workspace = _payload_workspace(job)
+    if workspace is None:
+        raise ValueError("external skill import requires workspace_id")
+    external_skill_id = _payload_uuid(job.payload, "external_skill_id")
+    if external_skill_id is None:
+        raise ValueError("external skill import requires external_skill_id")
+    result = await materialize_external_skill_import(
+        stores.external_skills,
+        workspace_key=workspace,
+        external_skill_id=external_skill_id,
+        operator_id=_payload_str(job.payload, "operator_id"),
+    )
+    if not result.allowed:
+        raise ValueError("; ".join(result.blockers) or "external skill import blocked")
+    return result.to_json()
+
+
+async def _run_topology_score_broker_trials(
+    stores: WorkerStores,
+    job: JobRecord,
+) -> dict[str, Any]:
+    if stores.topology is None:
+        raise ValueError("topology store is required for topology broker trial scoring")
+    workspace = _payload_workspace(job)
+    if workspace is None:
+        raise ValueError("topology broker trial scoring requires workspace_id")
+    operation_id = _payload_uuid(job.payload, "skill_graph_operation_id")
+    if operation_id is None:
+        raise ValueError(
+            "topology broker trial scoring requires skill_graph_operation_id"
+        )
+
+    result = await stores.topology.record_broker_trial_scores(
+        workspace_key=workspace,
+        skill_graph_operation_id=operation_id,
+        replay_result=_json_object(job.payload.get("broker_replay")),
+        canary_metrics=_json_object(job.payload.get("broker_canary_metrics")),
+        scored_by=job.lease_owner or "autoskill-worker",
     )
     return result.to_json()
 
@@ -1464,6 +1622,12 @@ def _json_object(value: object) -> dict[str, Any]:
     return {}
 
 
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
 def _string_value(value: object) -> str | None:
     if value is None:
         return None
@@ -1519,10 +1683,20 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "maintenance",
         _run_external_skill_scan,
     ),
+    "external_skills.materialize_import": JobDefinition(
+        "external_skills.materialize_import",
+        "mutation",
+        _run_external_skill_materialize_import,
+    ),
     "topology.apply_downstream": JobDefinition(
         "topology.apply_downstream",
         "mutation",
         _run_topology_apply_downstream,
+    ),
+    "topology.score_broker_trials": JobDefinition(
+        "topology.score_broker_trials",
+        "mutation",
+        _run_topology_score_broker_trials,
     ),
     "revocations.rollback": JobDefinition(
         "revocations.rollback",

@@ -288,6 +288,8 @@ def test_topology_proposal_persistence_records_operation_trials_and_transaction(
         "component_baseline",
         "composed_workflow",
         "shadowing",
+        "broker_replay",
+        "broker_canary",
     ]
 
 
@@ -474,3 +476,129 @@ def test_topology_apply_api_activation_gate_blocks_state_change() -> None:
     assert getattr(raised, "status_code", None) == 409
     assert activation_gate.calls[0]["skill_version_id"] == skill_version_id
     assert topology.operations[0].status == "candidate"
+
+
+def test_topology_compose_apply_requires_broker_trials() -> None:
+    topology = NullTopologyStore()
+    operation = asyncio.run(
+        topology.record_operation(
+            workspace_key="dev-01",
+            operation_kind="compose",
+            status="candidate",
+        )
+    )
+    asyncio.run(
+        topology.record_planned_trial(
+            workspace_key="dev-01",
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+            trial_kind="composed_workflow",
+            objective="candidate improves the workflow",
+            status="passed",
+        )
+    )
+
+    result = asyncio.run(
+        topology.apply_operation(
+            workspace_key="dev-01",
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+        )
+    )
+
+    assert result.allowed is False
+    assert any("requires broker_replay trial" in blocker for blocker in result.blockers)
+    assert any("requires broker_canary trial" in blocker for blocker in result.blockers)
+
+
+def test_topology_decompose_apply_blocks_bad_broker_scores() -> None:
+    topology = NullTopologyStore()
+    operation = asyncio.run(
+        topology.record_operation(
+            workspace_key="dev-01",
+            operation_kind="decompose",
+            status="candidate",
+        )
+    )
+
+    async def add_trials():
+        for trial_kind in ("original_baseline", "successor_routing", "coverage_regression"):
+            await topology.record_planned_trial(
+                workspace_key="dev-01",
+                skill_graph_operation_id=operation.skill_graph_operation_id,
+                trial_kind=trial_kind,
+                objective=trial_kind,
+                status="passed",
+            )
+        await topology.record_planned_trial(
+            workspace_key="dev-01",
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+            trial_kind="broker_replay",
+            objective="broker replay",
+            status="passed",
+            result={"mismatched": 1, "degradation_count": 1},
+        )
+        await topology.record_planned_trial(
+            workspace_key="dev-01",
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+            trial_kind="broker_canary",
+            objective="broker canary",
+            status="passed",
+            result={"metrics": {"harmful_rate": 0.0, "shadowed_rate": 0.25}},
+        )
+
+    asyncio.run(add_trials())
+
+    result = asyncio.run(
+        topology.apply_operation(
+            workspace_key="dev-01",
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+        )
+    )
+
+    assert result.allowed is False
+    assert any("has 1 mismatches" in blocker for blocker in result.blockers)
+    assert any("has 1 degradations" in blocker for blocker in result.blockers)
+    assert any("shadowed_rate=0.25" in blocker for blocker in result.blockers)
+
+
+def test_topology_broker_trial_scoring_persists_passed_results() -> None:
+    topology = NullTopologyStore()
+    operation = asyncio.run(
+        topology.record_operation(
+            workspace_key="dev-01",
+            operation_kind="compose",
+            status="candidate",
+        )
+    )
+
+    async def add_trials():
+        await topology.record_planned_trial(
+            workspace_key="dev-01",
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+            trial_kind="broker_replay",
+            objective="broker replay",
+        )
+        await topology.record_planned_trial(
+            workspace_key="dev-01",
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+            trial_kind="broker_canary",
+            objective="broker canary",
+        )
+
+    asyncio.run(add_trials())
+    result = asyncio.run(
+        topology.record_broker_trial_scores(
+            workspace_key="dev-01",
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+            replay_result={"total": 3, "matched": 3, "mismatched": 0},
+            canary_metrics={"harmful_rate": 0.0, "shadowed_rate": 0.0},
+            scored_by="test-worker",
+        )
+    )
+
+    assert result.allowed is True
+    assert result.blockers == []
+    assert {trial.status for trial in result.updated_trials} == {"passed"}
+    assert {
+        trial.result["broker_trial_score"]["scored_by"]
+        for trial in result.updated_trials
+    } == {"test-worker"}

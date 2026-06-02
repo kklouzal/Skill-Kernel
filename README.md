@@ -36,7 +36,10 @@ Implemented now:
   exfiltration, destructive host commands, and sensitive file harvesting;
 - staged writer apply/rollback, provenance traversal, revocation invalidation, canary freeze, and mutation-worker rollback paths;
 - topology proposal, trial, apply, downstream action, and invalidation primitives;
-- curation, utility, duplicate-merge probe planning, repair proposal planning, drift probes, false-positive controls, and HTTP-status contract probes;
+- topology-specific broker replay/canary trial scoring for compose/decompose apply gates;
+- curation, utility, duplicate-merge probe planning, repair proposal planning, guarded repair materialization, drift probes, false-positive controls, and HTTP-status contract probes;
+- external-skill operator review plus stage-only import materialization that never mutates external-owned roots;
+- runtime action-attribution check recording for blocked high-risk tool-boundary decisions;
 - OpenClaw plugin/hook package with local redaction, bounded spool, forwarding, replay utilities, and smoke-tested hook loading;
 - focused Python, Node, and local Postgres compose smoke validation for deterministic primitives.
 
@@ -45,11 +48,9 @@ Not implemented yet:
 - production plugin policy enablement outside the development profile;
 - production embedding provider live validation against a real configured endpoint
   in the deployment environment;
-- topology-specific broker replay and canary scoring for compose/decompose routing
-  decisions;
-- optional operator-approved import materialization for external skills;
-- semantic SkillIR repair generation/materialization beyond conservative
-  policy-approved staged writer applies.
+- richer historical replay over production episode corpora for broker-policy tuning;
+- live production repair/import rollout after operator config enables the plugin
+  outside the development profile.
 
 ## Development
 

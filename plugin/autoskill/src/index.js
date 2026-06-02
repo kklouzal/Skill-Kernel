@@ -1,4 +1,10 @@
-import { fetchContextHint, fetchStatus, forwardEvent, forwardEvents } from "./client/index.js";
+import {
+  fetchContextHint,
+  fetchStatus,
+  forwardEvent,
+  forwardEvents,
+  recordActionAttributionCheck,
+} from "./client/index.js";
 import { resolveConfig } from "./config.js";
 import { buildEventEnvelope } from "./event-envelope.js";
 import { appendSpool, getSpoolStats, replaySpool } from "./spool/index.js";
@@ -101,10 +107,20 @@ export async function beforeToolCall(event, hookContext) {
   if (!decision.block) {
     return capture;
   }
+  let attributionCheck;
+  try {
+    attributionCheck = await recordBoundaryAttributionCheck(event, hookContext, config, decision);
+  } catch (error) {
+    attributionCheck = {
+      recorded: false,
+      error: String(error?.message ?? error),
+    };
+  }
   return {
     ...capture,
     block: true,
     blockReason: decision.reason,
+    attributionCheck,
   };
 }
 
@@ -146,6 +162,32 @@ export function evaluateToolBoundary(event, config = {}) {
     block: true,
     reason: `autoskill runtime tool boundary blocked ${match.code}`,
     code: match.code,
+  };
+}
+
+async function recordBoundaryAttributionCheck(event, hookContext, config, decision) {
+  const response = await recordActionAttributionCheck(
+    config.sidecarUrl,
+    {
+      workspace_id: config.workspaceId,
+      session_id: hookContext?.sessionId ?? null,
+      turn_id: hookContext?.turnId ?? null,
+      tool_call_id: event?.tool_call_id ?? event?.toolCallId ?? event?.id ?? null,
+      action_kind: event?.tool ?? event?.name ?? event?.tool_name ?? "tool_call",
+      risk_tier: "high",
+      verdict: "blocked",
+      counterfactual_kind: "runtime_boundary",
+      metrics: {
+        boundary_code: decision.code ?? "unknown",
+        blocked: true,
+        payload_keys: Object.keys(event ?? {}).sort(),
+      },
+    },
+    { timeoutMs: 500, authToken: config.ingestToken },
+  );
+  return {
+    recorded: true,
+    actionAttributionCheckId: response?.check?.action_attribution_check_id ?? null,
   };
 }
 

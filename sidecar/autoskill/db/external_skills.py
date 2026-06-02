@@ -178,6 +178,17 @@ class ExternalSkillStore(Protocol):
     ) -> ExternalSkillReviewActionRecord:
         """Record an explicit operator decision for external skill reuse/import review."""
 
+    async def list_review_actions(
+        self,
+        *,
+        workspace_key: str,
+        external_skill_id: UUID | None = None,
+        action: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ExternalSkillReviewActionRecord]:
+        """List operator decisions for guarded external-skill workflows."""
+
 
 class NullExternalSkillStore:
     def __init__(self) -> None:
@@ -230,6 +241,24 @@ class NullExternalSkillStore:
         )
         self.review_actions.append(record)
         return record
+
+    async def list_review_actions(
+        self,
+        *,
+        workspace_key: str,
+        external_skill_id: UUID | None = None,
+        action: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ExternalSkillReviewActionRecord]:
+        return [
+            record
+            for record in self.review_actions[:limit]
+            if record.workspace_key == workspace_key
+            and (external_skill_id is None or record.external_skill_id == external_skill_id)
+            and (action is None or record.action == action)
+            and (status is None or record.status == status)
+        ]
 
 
 class AsyncpgExternalSkillStore(AsyncpgPoolOwner):
@@ -333,6 +362,42 @@ class AsyncpgExternalSkillStore(AsyncpgPoolOwner):
                 max(1, min(limit, 500)),
             )
         return [ExternalSkillRecord.from_row(row) for row in rows]
+
+    async def list_review_actions(
+        self,
+        *,
+        workspace_key: str,
+        external_skill_id: UUID | None = None,
+        action: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ExternalSkillReviewActionRecord]:
+        if action is not None and action not in EXTERNAL_SKILL_REVIEW_ACTIONS:
+            raise ValueError(f"action must be one of {sorted(EXTERNAL_SKILL_REVIEW_ACTIONS)}")
+        if status is not None and status not in EXTERNAL_SKILL_REVIEW_STATUSES:
+            raise ValueError(f"status must be one of {sorted(EXTERNAL_SKILL_REVIEW_STATUSES)}")
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await ensure_workspace(conn, workspace_key)
+            rows = await conn.fetch(
+                """
+                SELECT a.*, w.external_key AS workspace_key
+                FROM autoskill.external_skill_review_actions a
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE w.external_key = $1
+                  AND ($2::uuid IS NULL OR a.external_skill_id = $2)
+                  AND ($3::text IS NULL OR a.action = $3)
+                  AND ($4::text IS NULL OR a.status = $4)
+                ORDER BY a.created_at DESC, a.external_skill_review_action_id DESC
+                LIMIT $5
+                """,
+                workspace_key,
+                external_skill_id,
+                action,
+                status,
+                max(1, min(limit, 500)),
+            )
+        return [ExternalSkillReviewActionRecord.from_row(row) for row in rows]
 
     async def record_review_action(
         self,

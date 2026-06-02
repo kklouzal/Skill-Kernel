@@ -16,6 +16,7 @@ from autoskill.db.external_skills import (
     ExternalSkillUpsertResult,
 )
 from autoskill.db.scheduler import ScheduleRecord, ScheduleUpsertResult
+from autoskill.services.external_import import materialize_external_skill_import
 from autoskill.services.external_inventory import (
     ensure_external_skill_scan_schedule,
     scan_external_skill_roots,
@@ -148,6 +149,24 @@ class MemoryExternalSkillStore:
         self.review_actions.append(review)
         return review
 
+    async def list_review_actions(
+        self,
+        *,
+        workspace_key: str,
+        external_skill_id=None,
+        action: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ExternalSkillReviewActionRecord]:
+        return [
+            review
+            for review in self.review_actions[:limit]
+            if review.workspace_key == workspace_key
+            and (external_skill_id is None or review.external_skill_id == external_skill_id)
+            and (action is None or review.action == action)
+            and (status is None or review.status == status)
+        ]
+
 
 def test_external_skill_inventory_api_uses_store() -> None:
     store = MemoryExternalSkillStore()
@@ -255,6 +274,54 @@ def test_external_skill_review_action_api_rejects_invalid_action() -> None:
 
     assert getattr(raised, "status_code", None) == 400
     assert "action must be one of" in str(getattr(raised, "detail", ""))
+
+
+def test_external_skill_import_materialization_requires_operator_approval() -> None:
+    store = MemoryExternalSkillStore()
+
+    async def run():
+        await store.upsert_external_skills(
+            workspace_key="dev-01",
+            skills=[
+                ExternalSkillInput(
+                    source="workspace-skill-root",
+                    root_path_hash="root-hash",
+                    slug="pdf-table-cleanup",
+                    file_hash="file-hash",
+                    name="PDF table cleanup",
+                    description="External skill for malformed PDF cells.",
+                    risk_summary={"scanner_status": "passed"},
+                )
+            ],
+        )
+        blocked = await materialize_external_skill_import(
+            store,
+            workspace_key="dev-01",
+            external_skill_id=store.records[0].external_skill_id,
+        )
+        await store.record_review_action(
+            workspace_key="dev-01",
+            external_skill_id=store.records[0].external_skill_id,
+            action="import",
+            status="approved",
+            operator_id="operator-1",
+        )
+        allowed = await materialize_external_skill_import(
+            store,
+            workspace_key="dev-01",
+            external_skill_id=store.records[0].external_skill_id,
+        )
+        return blocked, allowed
+
+    blocked, allowed = asyncio.run(run())
+
+    assert blocked.allowed is False
+    assert "requires approved operator review action" in blocked.blockers[0]
+    assert allowed.allowed is True
+    assert allowed.candidate["mode"] == "stage_only"
+    assert allowed.candidate["mutates_external_root"] is False
+    assert allowed.candidate["skill_ir"]["slug"] == "external-pdf-table-cleanup"
+    assert store.review_actions[-1].status == "completed"
 
 
 def test_external_skill_scanner_hashes_roots_without_storing_paths(tmp_path: Path) -> None:

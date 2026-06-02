@@ -62,6 +62,86 @@ class AttributionEventRecord:
         }
 
 
+@dataclass(frozen=True)
+class ActionAttributionCheckRecord:
+    action_attribution_check_id: UUID
+    workspace_id: UUID | None
+    workspace_key: str | None
+    session_id: str | None
+    turn_id: str | None
+    tool_call_id: str | None
+    action_kind: str
+    risk_tier: str
+    user_intent_hash: str | None
+    contributing_skill_ids: list[UUID]
+    contributing_memory_ids: list[UUID]
+    contributing_evidence_ids: list[UUID]
+    broker_policy_version_id: UUID | None
+    counterfactual_kind: str | None
+    verdict: str
+    metrics: dict[str, Any]
+    created_at: datetime
+
+    @classmethod
+    def from_row(
+        cls,
+        row: asyncpg.Record | dict[str, Any],
+    ) -> ActionAttributionCheckRecord:
+        metrics = row["metrics"]
+        if isinstance(metrics, str):
+            metrics = json.loads(metrics)
+        return cls(
+            action_attribution_check_id=row["action_attribution_check_id"],
+            workspace_id=_row_get(row, "workspace_id"),
+            workspace_key=_row_get(row, "workspace_key"),
+            session_id=_row_get(row, "session_id"),
+            turn_id=_row_get(row, "turn_id"),
+            tool_call_id=_row_get(row, "tool_call_id"),
+            action_kind=row["action_kind"],
+            risk_tier=row["risk_tier"],
+            user_intent_hash=_row_get(row, "user_intent_hash"),
+            contributing_skill_ids=list(row["contributing_skill_ids"]),
+            contributing_memory_ids=list(row["contributing_memory_ids"]),
+            contributing_evidence_ids=list(row["contributing_evidence_ids"]),
+            broker_policy_version_id=_row_get(row, "broker_policy_version_id"),
+            counterfactual_kind=_row_get(row, "counterfactual_kind"),
+            verdict=row["verdict"],
+            metrics=metrics,
+            created_at=row["created_at"],
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "action_attribution_check_id": str(self.action_attribution_check_id),
+            "workspace_id": str(self.workspace_id) if self.workspace_id else None,
+            "workspace_key": self.workspace_key,
+            "session_id": self.session_id,
+            "turn_id": self.turn_id,
+            "tool_call_id": self.tool_call_id,
+            "action_kind": self.action_kind,
+            "risk_tier": self.risk_tier,
+            "user_intent_hash": self.user_intent_hash,
+            "contributing_skill_ids": [
+                str(skill_id) for skill_id in self.contributing_skill_ids
+            ],
+            "contributing_memory_ids": [
+                str(memory_id) for memory_id in self.contributing_memory_ids
+            ],
+            "contributing_evidence_ids": [
+                str(evidence_id) for evidence_id in self.contributing_evidence_ids
+            ],
+            "broker_policy_version_id": (
+                str(self.broker_policy_version_id)
+                if self.broker_policy_version_id
+                else None
+            ),
+            "counterfactual_kind": self.counterfactual_kind,
+            "verdict": self.verdict,
+            "metrics": self.metrics,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
 class AttributionStore(Protocol):
     async def record_event(
         self,
@@ -85,8 +165,31 @@ class AttributionStore(Protocol):
     ) -> int:
         """Mark attribution records influenced by revoked objects."""
 
+    async def record_action_check(
+        self,
+        *,
+        workspace_key: str,
+        session_id: str | None,
+        turn_id: str | None,
+        tool_call_id: str | None,
+        action_kind: str,
+        risk_tier: str,
+        verdict: str,
+        metrics: dict[str, Any],
+        user_intent_hash: str | None = None,
+        contributing_skill_ids: list[UUID] | None = None,
+        contributing_memory_ids: list[UUID] | None = None,
+        contributing_evidence_ids: list[UUID] | None = None,
+        broker_policy_version_id: UUID | None = None,
+        counterfactual_kind: str | None = None,
+    ) -> ActionAttributionCheckRecord:
+        """Record a deterministic risky-action attribution check."""
+
 
 class NullAttributionStore:
+    def __init__(self) -> None:
+        self.checks: list[ActionAttributionCheckRecord] = []
+
     async def record_event(
         self,
         *,
@@ -120,6 +223,46 @@ class NullAttributionStore:
         objects: list[dict[str, str]],
     ) -> int:
         return 0
+
+    async def record_action_check(
+        self,
+        *,
+        workspace_key: str,
+        session_id: str | None,
+        turn_id: str | None,
+        tool_call_id: str | None,
+        action_kind: str,
+        risk_tier: str,
+        verdict: str,
+        metrics: dict[str, Any],
+        user_intent_hash: str | None = None,
+        contributing_skill_ids: list[UUID] | None = None,
+        contributing_memory_ids: list[UUID] | None = None,
+        contributing_evidence_ids: list[UUID] | None = None,
+        broker_policy_version_id: UUID | None = None,
+        counterfactual_kind: str | None = None,
+    ) -> ActionAttributionCheckRecord:
+        record = ActionAttributionCheckRecord(
+            action_attribution_check_id=UUID("00000000-0000-0000-0000-000000000000"),
+            workspace_id=None,
+            workspace_key=workspace_key,
+            session_id=session_id,
+            turn_id=turn_id,
+            tool_call_id=tool_call_id,
+            action_kind=action_kind,
+            risk_tier=risk_tier,
+            user_intent_hash=user_intent_hash,
+            contributing_skill_ids=contributing_skill_ids or [],
+            contributing_memory_ids=contributing_memory_ids or [],
+            contributing_evidence_ids=contributing_evidence_ids or [],
+            broker_policy_version_id=broker_policy_version_id,
+            counterfactual_kind=counterfactual_kind,
+            verdict=verdict,
+            metrics=metrics,
+            created_at=datetime.now().astimezone(),
+        )
+        self.checks.append(record)
+        return record
 
 
 class AsyncpgAttributionStore(AsyncpgPoolOwner):
@@ -167,6 +310,71 @@ class AsyncpgAttributionStore(AsyncpgPoolOwner):
                 json.dumps(metadata, sort_keys=True, separators=(",", ":")),
             )
             return AttributionEventRecord.from_row({**dict(row), "workspace_key": workspace_key})
+
+    async def record_action_check(
+        self,
+        *,
+        workspace_key: str,
+        session_id: str | None,
+        turn_id: str | None,
+        tool_call_id: str | None,
+        action_kind: str,
+        risk_tier: str,
+        verdict: str,
+        metrics: dict[str, Any],
+        user_intent_hash: str | None = None,
+        contributing_skill_ids: list[UUID] | None = None,
+        contributing_memory_ids: list[UUID] | None = None,
+        contributing_evidence_ids: list[UUID] | None = None,
+        broker_policy_version_id: UUID | None = None,
+        counterfactual_kind: str | None = None,
+    ) -> ActionAttributionCheckRecord:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                INSERT INTO autoskill.action_attribution_checks (
+                  action_attribution_check_id,
+                  workspace_id,
+                  session_id,
+                  turn_id,
+                  tool_call_id,
+                  action_kind,
+                  risk_tier,
+                  user_intent_hash,
+                  contributing_skill_ids,
+                  contributing_memory_ids,
+                  contributing_evidence_ids,
+                  broker_policy_version_id,
+                  counterfactual_kind,
+                  verdict,
+                  metrics
+                )
+                VALUES (
+                  gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7,
+                  $8::uuid[], $9::uuid[], $10::uuid[], $11, $12, $13, $14::jsonb
+                )
+                RETURNING *
+                """,
+                workspace_id,
+                session_id,
+                turn_id,
+                tool_call_id,
+                action_kind,
+                risk_tier,
+                user_intent_hash,
+                contributing_skill_ids or [],
+                contributing_memory_ids or [],
+                contributing_evidence_ids or [],
+                broker_policy_version_id,
+                counterfactual_kind,
+                verdict,
+                json.dumps(metrics, sort_keys=True, separators=(",", ":")),
+            )
+            return ActionAttributionCheckRecord.from_row(
+                {**dict(row), "workspace_key": workspace_key}
+            )
 
     async def invalidate_objects(
         self,

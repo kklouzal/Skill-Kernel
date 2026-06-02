@@ -3,8 +3,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from autoskill.api.app import ShadowingDetectRequest, create_app
-from autoskill.db.attribution import AttributionEventRecord
+from autoskill.api.app import ActionAttributionCheckRequest, ShadowingDetectRequest, create_app
+from autoskill.db.attribution import ActionAttributionCheckRecord, AttributionEventRecord
 from autoskill.db.evidence import EvidenceRecord
 from autoskill.services.shadowing import detect_shadowing_events
 
@@ -29,6 +29,7 @@ class MemoryAttributionStore:
     def __init__(self) -> None:
         self.events: list[AttributionEventRecord] = []
         self.controls: list[dict[str, object]] = []
+        self.action_checks: list[ActionAttributionCheckRecord] = []
 
     async def record_event(
         self,
@@ -79,6 +80,46 @@ class MemoryAttributionStore:
         }
         self.controls.append(control)
         return control
+
+    async def record_action_check(
+        self,
+        *,
+        workspace_key: str,
+        session_id: str | None,
+        turn_id: str | None,
+        tool_call_id: str | None,
+        action_kind: str,
+        risk_tier: str,
+        verdict: str,
+        metrics: dict[str, object],
+        user_intent_hash: str | None = None,
+        contributing_skill_ids: list[UUID] | None = None,
+        contributing_memory_ids: list[UUID] | None = None,
+        contributing_evidence_ids: list[UUID] | None = None,
+        broker_policy_version_id: UUID | None = None,
+        counterfactual_kind: str | None = None,
+    ) -> ActionAttributionCheckRecord:
+        record = ActionAttributionCheckRecord(
+            action_attribution_check_id=uuid4(),
+            workspace_id=None,
+            workspace_key=workspace_key,
+            session_id=session_id,
+            turn_id=turn_id,
+            tool_call_id=tool_call_id,
+            action_kind=action_kind,
+            risk_tier=risk_tier,
+            user_intent_hash=user_intent_hash,
+            contributing_skill_ids=contributing_skill_ids or [],
+            contributing_memory_ids=contributing_memory_ids or [],
+            contributing_evidence_ids=contributing_evidence_ids or [],
+            broker_policy_version_id=broker_policy_version_id,
+            counterfactual_kind=counterfactual_kind,
+            verdict=verdict,
+            metrics=metrics,
+            created_at=datetime.now(UTC),
+        )
+        self.action_checks.append(record)
+        return record
 
 
 @dataclass(frozen=True)
@@ -194,3 +235,34 @@ def test_shadowing_detection_api_uses_stores() -> None:
 
     assert response.detected == 1
     assert response.events[0]["metadata"]["reason"] == "user correction indicated skill shadowing"
+
+
+def test_action_attribution_check_api_records_boundary_verdict() -> None:
+    attribution = MemoryAttributionStore()
+    app = create_app(attribution_store=attribution)
+    route = next(
+        route for route in app.routes if route.path == "/v1/attribution/action-checks"
+    )
+
+    async def run():
+        return await route.endpoint(
+            request=ActionAttributionCheckRequest(
+                workspace_id="dev-01",
+                session_id="session-1",
+                turn_id="turn-1",
+                tool_call_id="tool-1",
+                action_kind="exec",
+                risk_tier="high",
+                verdict="blocked",
+                counterfactual_kind="runtime_boundary",
+                metrics={"boundary_code": "sensitive-file-harvest"},
+            ),
+            authorization=None,
+        )
+
+    response = asyncio.run(run())
+
+    assert len(attribution.action_checks) == 1
+    assert response.check["verdict"] == "blocked"
+    assert response.check["counterfactual_kind"] == "runtime_boundary"
+    assert response.check["metrics"]["boundary_code"] == "sensitive-file-harvest"

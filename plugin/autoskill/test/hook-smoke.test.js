@@ -233,7 +233,16 @@ test("runtime tool boundary is disabled by default", () => {
 
 test("runtime tool boundary blocks high-risk tool calls when enabled", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => Response.json({ accepted: 1, duplicate: 0, rejected: 0 });
+  const calls = [];
+  globalThis.fetch = async (url, request) => {
+    calls.push({ url, body: JSON.parse(request.body) });
+    if (String(url).endsWith("/v1/attribution/action-checks")) {
+      return Response.json({
+        check: { action_attribution_check_id: "check-1" },
+      });
+    }
+    return Response.json({ accepted: 1, duplicate: 0, rejected: 0 });
+  };
 
   try {
     const workspaceDir = await tempWorkspace();
@@ -251,6 +260,14 @@ test("runtime tool boundary blocks high-risk tool calls when enabled", async () 
       "autoskill runtime tool boundary blocked sensitive-file-harvest",
     );
     assert.equal(result.forwarded, true);
+    assert.deepEqual(result.attributionCheck, {
+      recorded: true,
+      actionAttributionCheckId: "check-1",
+    });
+    assert.equal(calls[1].url, "http://127.0.0.1:8765/v1/attribution/action-checks");
+    assert.equal(calls[1].body.verdict, "blocked");
+    assert.equal(calls[1].body.metrics.boundary_code, "sensitive-file-harvest");
+    assert.deepEqual(calls[1].body.metrics.payload_keys, ["input", "tool"]);
   } finally {
     globalThis.fetch = originalFetch;
   }

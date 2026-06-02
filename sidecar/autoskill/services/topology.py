@@ -432,6 +432,45 @@ def propose_composition(request: ComposeTopologyRequest) -> TopologyProposalResu
                 objective="Reject if the composed skill steals narrow component tasks.",
                 expected={"no_component_shadowing": True},
             ),
+            TopologyTrialPlan(
+                kind="broker_replay",
+                objective=(
+                    "Replay component, composed-workflow, and no-skill control "
+                    "episodes before compose activation."
+                ),
+                expected={
+                    "operation_kind": "compose",
+                    "component_skill_ids": [
+                        str(component.skill_id)
+                        for component in request.components
+                        if component.skill_id
+                    ],
+                    "composed_skill_id": (
+                        str(request.composed_output.skill_id)
+                        if request.composed_output.skill_id
+                        else None
+                    ),
+                    "required_decisions": [
+                        "component_baseline",
+                        "composed_workflow",
+                        "no_skill_control",
+                    ],
+                    "block_on_mismatch": True,
+                },
+            ),
+            TopologyTrialPlan(
+                kind="broker_canary",
+                objective=(
+                    "Canary composed routing and roll back if component shadowing "
+                    "or harmful routing appears."
+                ),
+                expected={
+                    "operation_kind": "compose",
+                    "max_harmful_rate": 0.0,
+                    "max_shadowed_rate": 0.2,
+                    "max_ignored_rate": 0.5,
+                },
+            ),
         ],
         rollback_actions=_compose_rollback_actions(request),
     )
@@ -509,6 +548,45 @@ def propose_decomposition(request: DecomposeTopologyRequest) -> TopologyProposal
                     "covered_effects": sorted(
                         term for term, slugs in coverage.items() if slugs
                     )
+                },
+            ),
+            TopologyTrialPlan(
+                kind="broker_replay",
+                objective=(
+                    "Replay subject, successor, and no-skill control episodes "
+                    "before decompose activation."
+                ),
+                expected={
+                    "operation_kind": "decompose",
+                    "subject_skill_ids": [
+                        str(request.subject.skill_id)
+                    ]
+                    if request.subject.skill_id
+                    else [],
+                    "successor_skill_ids": [
+                        str(successor.skill_id)
+                        for successor in request.successors
+                        if successor.skill_id
+                    ],
+                    "required_decisions": [
+                        "original_baseline",
+                        "successor_routing",
+                        "no_skill_control",
+                    ],
+                    "block_on_mismatch": True,
+                },
+            ),
+            TopologyTrialPlan(
+                kind="broker_canary",
+                objective=(
+                    "Canary successor routing and roll back if decomposition "
+                    "loses coverage or creates harmful routing."
+                ),
+                expected={
+                    "operation_kind": "decompose",
+                    "max_harmful_rate": 0.0,
+                    "max_shadowed_rate": 0.2,
+                    "max_ignored_rate": 0.5,
                 },
             ),
         ],
