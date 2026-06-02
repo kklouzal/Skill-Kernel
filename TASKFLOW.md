@@ -221,15 +221,18 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Validation passed for broker memory control-flow wiring: focused broker tests passed with 16 tests, `uv run ruff check sidecar`, `uv run pytest` with 188 tests, `uv run python -m compileall -q sidecar`, and `git diff --check` passed, and a real compose Postgres smoke persisted one memory-to-retrieval control-flow event through the runtime context-hint API path without injecting proposed memory text.
 - Runtime broker memory-influence trust gating is implemented: cited memory IDs are resolved through memory quarantine state before retrieval/cache lookup, only approved memory can influence the broker audit path, and pending/missing/governance-unavailable references fail closed without loading runtime hints.
 - Validation passed for memory-influence trust gating: focused broker tests passed with 18 tests, `uv run ruff check sidecar`, `uv run pytest` with 190 tests, `uv run python -m compileall -q sidecar`, and `git diff --check` passed, and a real compose Postgres smoke proved a pending quarantined memory produced `memory-influence-blocked`, wrote one blocked control-flow event, and made zero retrieval calls.
+- Context compiler governance persistence is implemented for v16 context-budget gates: `context_compile_runs`, `context_budget_events`, and `semantic_compression_trials` now migrate idempotently, have asyncpg/null store primitives, and are exposed through control-authenticated context admin APIs without storing compiled text or prompt bodies.
+- Validation passed for context compiler governance records: focused admin tests passed with 9 tests, `uv run ruff check sidecar`, `uv run pytest` with 190 tests, `uv run python -m compileall -q sidecar`, and a real compose Postgres smoke persisted one compile run, one token-budget event, and one semantic compression trial after a rebuilt migration image applied the new DDL.
 
 ## Next Gates
 
-1. Run `/v1/deployment/readiness` against the intended deployment workspace after seeding/qualifying the real executor, text, embedding, broker policy, and production replay records.
-2. Enable the production plugin policy outside the development profile and run a full gateway capture/spool/replay smoke.
-3. Populate broker replay episodes from redacted deployment telemetry, then run stored-corpus replay/canary tuning against real production episodes.
-4. Run `/v1/profiles/embeddings/validate-production` or a bounded `embeddings.generate` smoke against the configured local embedding endpoint with the intended `AUTOSKILL_EMBEDDING_DIM`.
-5. Run `/v1/profiles/embeddings/validate-production` against the real configured endpoint/credentials in the deployment environment.
-6. Roll out live repair/import execution only after operator config enables the plugin and production replay/embedding validation passes.
+1. Build the deterministic context compiler/gate service that writes these compile-run, budget-event, and compression-trial records from SkillIR artifacts before staged writer activation.
+2. Run `/v1/deployment/readiness` against the intended deployment workspace after seeding/qualifying the real executor, text, embedding, broker policy, and production replay records.
+3. Enable the production plugin policy outside the development profile and run a full gateway capture/spool/replay smoke.
+4. Populate broker replay episodes from redacted deployment telemetry, then run stored-corpus replay/canary tuning against real production episodes.
+5. Run `/v1/profiles/embeddings/validate-production` or a bounded `embeddings.generate` smoke against the configured local embedding endpoint with the intended `AUTOSKILL_EMBEDDING_DIM`.
+6. Run `/v1/profiles/embeddings/validate-production` against the real configured endpoint/credentials in the deployment environment.
+7. Roll out live repair/import execution only after operator config enables the plugin and production replay/embedding validation passes.
 
 ## Known Risks
 

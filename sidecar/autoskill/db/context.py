@@ -141,6 +141,223 @@ class TokenLedgerRecord:
         }
 
 
+@dataclass(frozen=True)
+class ContextCompileRunRecord:
+    context_compile_run_id: UUID
+    workspace_id: UUID | None
+    workspace_key: str | None
+    skill_id: UUID | None
+    skill_version_id: UUID | None
+    candidate_id: UUID | None
+    context_artifact_id: UUID | None
+    compiler_version: str
+    model_assist_used: bool
+    input_skillir_hash: str
+    output_manifest_hash: str
+    target_runtime_tokens: int | None
+    actual_runtime_tokens: int
+    compression_ratio: float | None
+    semantic_equivalence_score: float | None
+    status: str
+    reject_reason: str | None
+    metadata: dict[str, Any]
+    created_at: datetime
+
+    @classmethod
+    def from_row(cls, row: asyncpg.Record | dict[str, Any]) -> ContextCompileRunRecord:
+        return cls(
+            context_compile_run_id=row["context_compile_run_id"],
+            workspace_id=_row_get(row, "workspace_id"),
+            workspace_key=_row_get(row, "workspace_key"),
+            skill_id=_row_get(row, "skill_id"),
+            skill_version_id=_row_get(row, "skill_version_id"),
+            candidate_id=_row_get(row, "candidate_id"),
+            context_artifact_id=_row_get(row, "context_artifact_id"),
+            compiler_version=row["compiler_version"],
+            model_assist_used=bool(row["model_assist_used"]),
+            input_skillir_hash=row["input_skillir_hash"],
+            output_manifest_hash=row["output_manifest_hash"],
+            target_runtime_tokens=_optional_int(row, "target_runtime_tokens"),
+            actual_runtime_tokens=int(row["actual_runtime_tokens"]),
+            compression_ratio=_optional_float(row, "compression_ratio"),
+            semantic_equivalence_score=_optional_float(row, "semantic_equivalence_score"),
+            status=row["status"],
+            reject_reason=_row_get(row, "reject_reason"),
+            metadata=_json_dict(row["metadata"]),
+            created_at=row["created_at"],
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "context_compile_run_id": str(self.context_compile_run_id),
+            "workspace_id": str(self.workspace_id) if self.workspace_id else None,
+            "workspace_key": self.workspace_key,
+            "skill_id": str(self.skill_id) if self.skill_id else None,
+            "skill_version_id": str(self.skill_version_id) if self.skill_version_id else None,
+            "candidate_id": str(self.candidate_id) if self.candidate_id else None,
+            "context_artifact_id": (
+                str(self.context_artifact_id) if self.context_artifact_id else None
+            ),
+            "compiler_version": self.compiler_version,
+            "model_assist_used": self.model_assist_used,
+            "input_skillir_hash": self.input_skillir_hash,
+            "output_manifest_hash": self.output_manifest_hash,
+            "target_runtime_tokens": self.target_runtime_tokens,
+            "actual_runtime_tokens": self.actual_runtime_tokens,
+            "compression_ratio": self.compression_ratio,
+            "semantic_equivalence_score": self.semantic_equivalence_score,
+            "status": self.status,
+            "reject_reason": self.reject_reason,
+            "metadata": self.metadata,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+@dataclass(frozen=True)
+class ContextBudgetEventRecord:
+    context_budget_event_id: UUID
+    workspace_id: UUID | None
+    workspace_key: str | None
+    skill_id: UUID | None
+    skill_version_id: UUID | None
+    context_artifact_id: UUID | None
+    event_type: str
+    tokens_delta: int | None
+    marginal_success_delta: float | None
+    false_positive_load_delta: float | None
+    ignored_load_delta: float | None
+    shadowing_delta: float | None
+    decision: str
+    evidence: dict[str, Any]
+    metadata: dict[str, Any]
+    created_at: datetime
+
+    @classmethod
+    def from_row(cls, row: asyncpg.Record | dict[str, Any]) -> ContextBudgetEventRecord:
+        return cls(
+            context_budget_event_id=row["context_budget_event_id"],
+            workspace_id=_row_get(row, "workspace_id"),
+            workspace_key=_row_get(row, "workspace_key"),
+            skill_id=_row_get(row, "skill_id"),
+            skill_version_id=_row_get(row, "skill_version_id"),
+            context_artifact_id=_row_get(row, "context_artifact_id"),
+            event_type=row["event_type"],
+            tokens_delta=_optional_int(row, "tokens_delta"),
+            marginal_success_delta=_optional_float(row, "marginal_success_delta"),
+            false_positive_load_delta=_optional_float(row, "false_positive_load_delta"),
+            ignored_load_delta=_optional_float(row, "ignored_load_delta"),
+            shadowing_delta=_optional_float(row, "shadowing_delta"),
+            decision=row["decision"],
+            evidence=_json_dict(row["evidence"]),
+            metadata=_json_dict(row["metadata"]),
+            created_at=row["created_at"],
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "context_budget_event_id": str(self.context_budget_event_id),
+            "workspace_id": str(self.workspace_id) if self.workspace_id else None,
+            "workspace_key": self.workspace_key,
+            "skill_id": str(self.skill_id) if self.skill_id else None,
+            "skill_version_id": str(self.skill_version_id) if self.skill_version_id else None,
+            "context_artifact_id": (
+                str(self.context_artifact_id) if self.context_artifact_id else None
+            ),
+            "event_type": self.event_type,
+            "tokens_delta": self.tokens_delta,
+            "marginal_success_delta": self.marginal_success_delta,
+            "false_positive_load_delta": self.false_positive_load_delta,
+            "ignored_load_delta": self.ignored_load_delta,
+            "shadowing_delta": self.shadowing_delta,
+            "decision": self.decision,
+            "evidence": self.evidence,
+            "metadata": self.metadata,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+@dataclass(frozen=True)
+class SemanticCompressionTrialRecord:
+    semantic_compression_trial_id: UUID
+    workspace_id: UUID | None
+    workspace_key: str | None
+    skill_id: UUID | None
+    source_revision_id: UUID | None
+    candidate_revision_id: UUID | None
+    source_context_artifact_id: UUID | None
+    candidate_context_artifact_id: UUID | None
+    source_tokens: int
+    candidate_tokens: int
+    preserved_requirements: int
+    lost_requirements: int
+    added_unsupported_requirements: int
+    equivalence_score: float
+    target_probe_pass_rate: float | None
+    regression_probe_pass_rate: float | None
+    status: str
+    metadata: dict[str, Any]
+    created_at: datetime
+
+    @classmethod
+    def from_row(cls, row: asyncpg.Record | dict[str, Any]) -> SemanticCompressionTrialRecord:
+        return cls(
+            semantic_compression_trial_id=row["semantic_compression_trial_id"],
+            workspace_id=_row_get(row, "workspace_id"),
+            workspace_key=_row_get(row, "workspace_key"),
+            skill_id=_row_get(row, "skill_id"),
+            source_revision_id=_row_get(row, "source_revision_id"),
+            candidate_revision_id=_row_get(row, "candidate_revision_id"),
+            source_context_artifact_id=_row_get(row, "source_context_artifact_id"),
+            candidate_context_artifact_id=_row_get(row, "candidate_context_artifact_id"),
+            source_tokens=int(row["source_tokens"]),
+            candidate_tokens=int(row["candidate_tokens"]),
+            preserved_requirements=int(row["preserved_requirements"]),
+            lost_requirements=int(row["lost_requirements"]),
+            added_unsupported_requirements=int(row["added_unsupported_requirements"]),
+            equivalence_score=float(row["equivalence_score"]),
+            target_probe_pass_rate=_optional_float(row, "target_probe_pass_rate"),
+            regression_probe_pass_rate=_optional_float(row, "regression_probe_pass_rate"),
+            status=row["status"],
+            metadata=_json_dict(row["metadata"]),
+            created_at=row["created_at"],
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "semantic_compression_trial_id": str(self.semantic_compression_trial_id),
+            "workspace_id": str(self.workspace_id) if self.workspace_id else None,
+            "workspace_key": self.workspace_key,
+            "skill_id": str(self.skill_id) if self.skill_id else None,
+            "source_revision_id": (
+                str(self.source_revision_id) if self.source_revision_id else None
+            ),
+            "candidate_revision_id": (
+                str(self.candidate_revision_id) if self.candidate_revision_id else None
+            ),
+            "source_context_artifact_id": (
+                str(self.source_context_artifact_id)
+                if self.source_context_artifact_id
+                else None
+            ),
+            "candidate_context_artifact_id": (
+                str(self.candidate_context_artifact_id)
+                if self.candidate_context_artifact_id
+                else None
+            ),
+            "source_tokens": self.source_tokens,
+            "candidate_tokens": self.candidate_tokens,
+            "preserved_requirements": self.preserved_requirements,
+            "lost_requirements": self.lost_requirements,
+            "added_unsupported_requirements": self.added_unsupported_requirements,
+            "equivalence_score": self.equivalence_score,
+            "target_probe_pass_rate": self.target_probe_pass_rate,
+            "regression_probe_pass_rate": self.regression_probe_pass_rate,
+            "status": self.status,
+            "metadata": self.metadata,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
 class ContextGovernanceStore(Protocol):
     async def record_artifact(
         self,
@@ -200,6 +417,69 @@ class ContextGovernanceStore(Protocol):
         objects: list[dict[str, str]],
     ) -> int:
         """Mark context artifacts and ledgers derived from revoked objects."""
+
+    async def record_compile_run(
+        self,
+        *,
+        workspace_key: str,
+        compiler_version: str,
+        input_skillir_hash: str,
+        output_manifest_hash: str,
+        actual_runtime_tokens: int,
+        status: str,
+        skill_id: UUID | None = None,
+        skill_version_id: UUID | None = None,
+        candidate_id: UUID | None = None,
+        context_artifact_id: UUID | None = None,
+        model_assist_used: bool = False,
+        target_runtime_tokens: int | None = None,
+        compression_ratio: float | None = None,
+        semantic_equivalence_score: float | None = None,
+        reject_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ContextCompileRunRecord:
+        """Persist a deterministic context compiler run and its gate result."""
+
+    async def record_budget_event(
+        self,
+        *,
+        workspace_key: str,
+        event_type: str,
+        decision: str,
+        skill_id: UUID | None = None,
+        skill_version_id: UUID | None = None,
+        context_artifact_id: UUID | None = None,
+        tokens_delta: int | None = None,
+        marginal_success_delta: float | None = None,
+        false_positive_load_delta: float | None = None,
+        ignored_load_delta: float | None = None,
+        shadowing_delta: float | None = None,
+        evidence: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ContextBudgetEventRecord:
+        """Persist a token-budget governor decision."""
+
+    async def record_semantic_compression_trial(
+        self,
+        *,
+        workspace_key: str,
+        source_tokens: int,
+        candidate_tokens: int,
+        preserved_requirements: int,
+        lost_requirements: int,
+        added_unsupported_requirements: int,
+        equivalence_score: float,
+        status: str,
+        skill_id: UUID | None = None,
+        source_revision_id: UUID | None = None,
+        candidate_revision_id: UUID | None = None,
+        source_context_artifact_id: UUID | None = None,
+        candidate_context_artifact_id: UUID | None = None,
+        target_probe_pass_rate: float | None = None,
+        regression_probe_pass_rate: float | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SemanticCompressionTrialRecord:
+        """Persist a semantic compression acceptance trial."""
 
 
 class NullContextGovernanceStore:
@@ -336,6 +616,132 @@ class NullContextGovernanceStore:
                 **(metadata or {}),
                 "marginal_value": marginal,
             },
+            created_at=datetime.now(),
+        )
+
+    async def record_compile_run(
+        self,
+        *,
+        workspace_key: str,
+        compiler_version: str,
+        input_skillir_hash: str,
+        output_manifest_hash: str,
+        actual_runtime_tokens: int,
+        status: str,
+        skill_id: UUID | None = None,
+        skill_version_id: UUID | None = None,
+        candidate_id: UUID | None = None,
+        context_artifact_id: UUID | None = None,
+        model_assist_used: bool = False,
+        target_runtime_tokens: int | None = None,
+        compression_ratio: float | None = None,
+        semantic_equivalence_score: float | None = None,
+        reject_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ContextCompileRunRecord:
+        from uuid import uuid4
+
+        return ContextCompileRunRecord(
+            context_compile_run_id=uuid4(),
+            workspace_id=None,
+            workspace_key=workspace_key,
+            skill_id=skill_id,
+            skill_version_id=skill_version_id,
+            candidate_id=candidate_id,
+            context_artifact_id=context_artifact_id,
+            compiler_version=compiler_version,
+            model_assist_used=model_assist_used,
+            input_skillir_hash=input_skillir_hash,
+            output_manifest_hash=output_manifest_hash,
+            target_runtime_tokens=target_runtime_tokens,
+            actual_runtime_tokens=actual_runtime_tokens,
+            compression_ratio=compression_ratio,
+            semantic_equivalence_score=semantic_equivalence_score,
+            status=status,
+            reject_reason=reject_reason,
+            metadata=metadata or {},
+            created_at=datetime.now(),
+        )
+
+    async def record_budget_event(
+        self,
+        *,
+        workspace_key: str,
+        event_type: str,
+        decision: str,
+        skill_id: UUID | None = None,
+        skill_version_id: UUID | None = None,
+        context_artifact_id: UUID | None = None,
+        tokens_delta: int | None = None,
+        marginal_success_delta: float | None = None,
+        false_positive_load_delta: float | None = None,
+        ignored_load_delta: float | None = None,
+        shadowing_delta: float | None = None,
+        evidence: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ContextBudgetEventRecord:
+        from uuid import uuid4
+
+        return ContextBudgetEventRecord(
+            context_budget_event_id=uuid4(),
+            workspace_id=None,
+            workspace_key=workspace_key,
+            skill_id=skill_id,
+            skill_version_id=skill_version_id,
+            context_artifact_id=context_artifact_id,
+            event_type=event_type,
+            tokens_delta=tokens_delta,
+            marginal_success_delta=marginal_success_delta,
+            false_positive_load_delta=false_positive_load_delta,
+            ignored_load_delta=ignored_load_delta,
+            shadowing_delta=shadowing_delta,
+            decision=decision,
+            evidence=evidence or {},
+            metadata=metadata or {},
+            created_at=datetime.now(),
+        )
+
+    async def record_semantic_compression_trial(
+        self,
+        *,
+        workspace_key: str,
+        source_tokens: int,
+        candidate_tokens: int,
+        preserved_requirements: int,
+        lost_requirements: int,
+        added_unsupported_requirements: int,
+        equivalence_score: float,
+        status: str,
+        skill_id: UUID | None = None,
+        source_revision_id: UUID | None = None,
+        candidate_revision_id: UUID | None = None,
+        source_context_artifact_id: UUID | None = None,
+        candidate_context_artifact_id: UUID | None = None,
+        target_probe_pass_rate: float | None = None,
+        regression_probe_pass_rate: float | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SemanticCompressionTrialRecord:
+        from uuid import uuid4
+
+        return SemanticCompressionTrialRecord(
+            semantic_compression_trial_id=uuid4(),
+            workspace_id=None,
+            workspace_key=workspace_key,
+            skill_id=skill_id,
+            source_revision_id=source_revision_id,
+            candidate_revision_id=candidate_revision_id,
+            source_context_artifact_id=source_context_artifact_id,
+            candidate_context_artifact_id=candidate_context_artifact_id,
+            source_tokens=source_tokens,
+            candidate_tokens=candidate_tokens,
+            preserved_requirements=preserved_requirements,
+            lost_requirements=lost_requirements,
+            added_unsupported_requirements=added_unsupported_requirements,
+            equivalence_score=equivalence_score,
+            target_probe_pass_rate=target_probe_pass_rate,
+            regression_probe_pass_rate=regression_probe_pass_rate,
+            status=status,
+            metadata=metadata or {},
             created_at=datetime.now(),
         )
 
@@ -644,6 +1050,207 @@ class AsyncpgContextGovernanceStore(AsyncpgPoolOwner):
                 )
         return TokenLedgerRecord.from_row(row)
 
+    async def record_compile_run(
+        self,
+        *,
+        workspace_key: str,
+        compiler_version: str,
+        input_skillir_hash: str,
+        output_manifest_hash: str,
+        actual_runtime_tokens: int,
+        status: str,
+        skill_id: UUID | None = None,
+        skill_version_id: UUID | None = None,
+        candidate_id: UUID | None = None,
+        context_artifact_id: UUID | None = None,
+        model_assist_used: bool = False,
+        target_runtime_tokens: int | None = None,
+        compression_ratio: float | None = None,
+        semantic_equivalence_score: float | None = None,
+        reject_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ContextCompileRunRecord:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                INSERT INTO autoskill.context_compile_runs (
+                  context_compile_run_id,
+                  workspace_id,
+                  skill_id,
+                  skill_version_id,
+                  candidate_id,
+                  context_artifact_id,
+                  compiler_version,
+                  model_assist_used,
+                  input_skillir_hash,
+                  output_manifest_hash,
+                  target_runtime_tokens,
+                  actual_runtime_tokens,
+                  compression_ratio,
+                  semantic_equivalence_score,
+                  status,
+                  reject_reason,
+                  metadata
+                )
+                VALUES (
+                  gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                  $11, $12, $13, $14, $15, $16::jsonb
+                )
+                RETURNING *, $17::text AS workspace_key
+                """,
+                workspace_id,
+                skill_id,
+                skill_version_id,
+                candidate_id,
+                context_artifact_id,
+                compiler_version,
+                model_assist_used,
+                input_skillir_hash,
+                output_manifest_hash,
+                target_runtime_tokens,
+                actual_runtime_tokens,
+                compression_ratio,
+                semantic_equivalence_score,
+                status,
+                reject_reason,
+                _json(metadata or {}),
+                workspace_key,
+            )
+        return ContextCompileRunRecord.from_row(row)
+
+    async def record_budget_event(
+        self,
+        *,
+        workspace_key: str,
+        event_type: str,
+        decision: str,
+        skill_id: UUID | None = None,
+        skill_version_id: UUID | None = None,
+        context_artifact_id: UUID | None = None,
+        tokens_delta: int | None = None,
+        marginal_success_delta: float | None = None,
+        false_positive_load_delta: float | None = None,
+        ignored_load_delta: float | None = None,
+        shadowing_delta: float | None = None,
+        evidence: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ContextBudgetEventRecord:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                INSERT INTO autoskill.context_budget_events (
+                  context_budget_event_id,
+                  workspace_id,
+                  skill_id,
+                  skill_version_id,
+                  context_artifact_id,
+                  event_type,
+                  tokens_delta,
+                  marginal_success_delta,
+                  false_positive_load_delta,
+                  ignored_load_delta,
+                  shadowing_delta,
+                  decision,
+                  evidence,
+                  metadata
+                )
+                VALUES (
+                  gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                  $11, $12::jsonb, $13::jsonb
+                )
+                RETURNING *, $14::text AS workspace_key
+                """,
+                workspace_id,
+                skill_id,
+                skill_version_id,
+                context_artifact_id,
+                event_type,
+                tokens_delta,
+                marginal_success_delta,
+                false_positive_load_delta,
+                ignored_load_delta,
+                shadowing_delta,
+                decision,
+                _json(evidence or {}),
+                _json(metadata or {}),
+                workspace_key,
+            )
+        return ContextBudgetEventRecord.from_row(row)
+
+    async def record_semantic_compression_trial(
+        self,
+        *,
+        workspace_key: str,
+        source_tokens: int,
+        candidate_tokens: int,
+        preserved_requirements: int,
+        lost_requirements: int,
+        added_unsupported_requirements: int,
+        equivalence_score: float,
+        status: str,
+        skill_id: UUID | None = None,
+        source_revision_id: UUID | None = None,
+        candidate_revision_id: UUID | None = None,
+        source_context_artifact_id: UUID | None = None,
+        candidate_context_artifact_id: UUID | None = None,
+        target_probe_pass_rate: float | None = None,
+        regression_probe_pass_rate: float | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SemanticCompressionTrialRecord:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                INSERT INTO autoskill.semantic_compression_trials (
+                  semantic_compression_trial_id,
+                  workspace_id,
+                  skill_id,
+                  source_revision_id,
+                  candidate_revision_id,
+                  source_context_artifact_id,
+                  candidate_context_artifact_id,
+                  source_tokens,
+                  candidate_tokens,
+                  preserved_requirements,
+                  lost_requirements,
+                  added_unsupported_requirements,
+                  equivalence_score,
+                  target_probe_pass_rate,
+                  regression_probe_pass_rate,
+                  status,
+                  metadata
+                )
+                VALUES (
+                  gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                  $11, $12, $13, $14, $15, $16::jsonb
+                )
+                RETURNING *, $17::text AS workspace_key
+                """,
+                workspace_id,
+                skill_id,
+                source_revision_id,
+                candidate_revision_id,
+                source_context_artifact_id,
+                candidate_context_artifact_id,
+                source_tokens,
+                candidate_tokens,
+                preserved_requirements,
+                lost_requirements,
+                added_unsupported_requirements,
+                equivalence_score,
+                target_probe_pass_rate,
+                regression_probe_pass_rate,
+                status,
+                _json(metadata or {}),
+                workspace_key,
+            )
+        return SemanticCompressionTrialRecord.from_row(row)
+
 
 def _estimate_tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
@@ -724,6 +1331,16 @@ def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:
         return row[key]
     except KeyError:
         return None
+
+
+def _optional_int(row: asyncpg.Record | dict[str, Any], key: str) -> int | None:
+    value = _row_get(row, key)
+    return int(value) if value is not None else None
+
+
+def _optional_float(row: asyncpg.Record | dict[str, Any], key: str) -> float | None:
+    value = _row_get(row, key)
+    return float(value) if value is not None else None
 
 
 def _object_keys(objects: list[dict[str, str]]) -> list[tuple[str, UUID]]:

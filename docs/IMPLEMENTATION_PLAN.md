@@ -140,6 +140,12 @@ Deliverables:
 - external-skill inventory awareness; implemented as control-authenticated upsert/list APIs, hashed-root/file-hash/status/risk metadata persistence, read-only scanner job wiring, lexical retrieval of visible/changed external skills, broker suppression as non-runtime collisions, and duplicate-match `external_collision_review` decisions that block automatic candidate creation.
 - executor-profile compatibility suppression; implemented through `skill_profile_compatibility`, a control upsert API, executor-scoped broker cache keys, and runtime suppression of explicitly `blocked` or `drifted` skill versions for the requesting executor profile.
 - broker policy artifacts; implemented as persisted `broker_policy_versions` with active-version lookup, bounded policy overrides for retrieval/graph/render limits, policy-scoped cache keys, replay evaluation primitives, and canary feedback recording.
+- context compiler governance records; implemented as idempotent migration
+  tables, asyncpg/null store primitives, and control-authenticated APIs for
+  `context_compile_runs`, `context_budget_events`, and
+  `semantic_compression_trials`, giving the future deterministic compiler a
+  content-safe place to persist token-budget, semantic-equivalence, and
+  compression-trial decisions.
 
 Acceptance:
 
@@ -150,6 +156,10 @@ Acceptance:
 - external skills are visible to collision analysis but are never injected as runtime hints or selected for autonomous mutation; scanner jobs hash external roots/files and quarantine scanner-blocked external skills without storing raw root paths.
 - blocked/drifted executor compatibility suppresses otherwise renderable skills for that profile while leaving unscoped/no-row retrieval unchanged; implemented and validated with focused broker tests plus compose/Postgres smoke coverage.
 - active broker policy versions are represented in retrieval/context telemetry and can be replayed against bounded episodes before canary feedback marks a policy passed, failed, or rolled back.
+- context compile runs, token-budget governor decisions, and semantic
+  compression trials can be recorded without storing compiled text or prompt
+  bodies; implemented and validated through focused admin tests plus a real
+  compose Postgres smoke.
 - opt-in runtime tool-call boundary enforcement is implemented on
   `before_tool_call`, preserving capture-only behavior by default and returning
   terminal OpenClaw block decisions for deterministic high-risk tool patterns

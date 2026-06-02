@@ -4,6 +4,8 @@ from uuid import UUID, uuid4
 
 from autoskill.api.app import (
     ContextArtifactRecordRequest,
+    ContextBudgetEventRequest,
+    ContextCompileRunRequest,
     ContextTokenLedgerOutcomeRequest,
     ContextTokenLedgerRequest,
     ControlFlowEventRequest,
@@ -13,6 +15,7 @@ from autoskill.api.app import (
     MemoryQuarantineDecisionRequest,
     MemoryQuarantineRequest,
     ModelProfileUpsertRequest,
+    SemanticCompressionTrialRequest,
     TopologyProposalRequest,
     TopologySkillPayload,
     TraceSpanStartRequest,
@@ -512,9 +515,75 @@ def test_v14_trace_diagnostics_profiles_and_context_surfaces() -> None:
                 token_savings=10,
             ),
         )
-        return trace, profile, model, embedding, momentum, artifact, ledger, outcome
+        compile_run = await routes[("/v1/context/compile-runs", "POST")].endpoint(
+            request=ContextCompileRunRequest(
+                workspace_id="dev-01",
+                compiler_version="context-compiler.v1",
+                input_skillir_hash="skillir-hash",
+                output_manifest_hash="manifest-hash",
+                target_runtime_tokens=350,
+                actual_runtime_tokens=120,
+                compression_ratio=0.4,
+                semantic_equivalence_score=0.96,
+                status="passed",
+                context_artifact_id=artifact.artifact["context_artifact_id"],
+            )
+        )
+        budget_event = await routes[("/v1/context/budget-events", "POST")].endpoint(
+            request=ContextBudgetEventRequest(
+                workspace_id="dev-01",
+                event_type="compile_budget_gate",
+                decision="accept",
+                context_artifact_id=artifact.artifact["context_artifact_id"],
+                tokens_delta=-180,
+                marginal_success_delta=0.2,
+                evidence={"gate": "token_budget_governor"},
+            )
+        )
+        compression_trial = await routes[
+            ("/v1/context/semantic-compression-trials", "POST")
+        ].endpoint(
+            request=SemanticCompressionTrialRequest(
+                workspace_id="dev-01",
+                source_tokens=300,
+                candidate_tokens=120,
+                preserved_requirements=8,
+                lost_requirements=0,
+                added_unsupported_requirements=0,
+                equivalence_score=0.96,
+                target_probe_pass_rate=1.0,
+                regression_probe_pass_rate=1.0,
+                status="passed",
+                candidate_context_artifact_id=artifact.artifact["context_artifact_id"],
+            )
+        )
+        return (
+            trace,
+            profile,
+            model,
+            embedding,
+            momentum,
+            artifact,
+            ledger,
+            outcome,
+            compile_run,
+            budget_event,
+            compression_trial,
+        )
 
-    trace, profile, model, embedding, momentum, artifact, ledger, outcome = asyncio.run(run())
+    (
+        trace,
+        profile,
+        model,
+        embedding,
+        momentum,
+        artifact,
+        ledger,
+        outcome,
+        compile_run,
+        budget_event,
+        compression_trial,
+    ) = asyncio.run(run())
 
     assert trace.span["operation_kind"] == "ingest"
     assert profile.profile["profile_key"] == "codex-dev"
@@ -525,6 +594,12 @@ def test_v14_trace_diagnostics_profiles_and_context_surfaces() -> None:
     assert ledger.ledger["visibility_state"] == "skill_visible"
     assert outcome.ledger["outcome"] == "helped"
     assert "marginal_value" in outcome.ledger["metadata"]
+    assert compile_run.run["status"] == "passed"
+    assert compile_run.run["context_artifact_id"] == artifact.artifact["context_artifact_id"]
+    assert budget_event.event["decision"] == "accept"
+    assert budget_event.event["evidence"]["gate"] == "token_budget_governor"
+    assert compression_trial.trial["equivalence_score"] == 0.96
+    assert compression_trial.trial["status"] == "passed"
 
 
 def test_topology_proposal_endpoint_persists_propose_only_operation() -> None:

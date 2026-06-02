@@ -409,6 +409,72 @@ class ContextTokenLedgerOutcomeRequest(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
+class ContextCompileRunRequest(BaseModel):
+    workspace_id: str
+    compiler_version: str
+    input_skillir_hash: str
+    output_manifest_hash: str
+    actual_runtime_tokens: int
+    status: str
+    skill_id: UUID | None = None
+    skill_version_id: UUID | None = None
+    candidate_id: UUID | None = None
+    context_artifact_id: UUID | None = None
+    model_assist_used: bool = False
+    target_runtime_tokens: int | None = None
+    compression_ratio: float | None = None
+    semantic_equivalence_score: float | None = None
+    reject_reason: str | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class ContextCompileRunResponse(BaseModel):
+    run: dict[str, object]
+
+
+class ContextBudgetEventRequest(BaseModel):
+    workspace_id: str
+    event_type: str
+    decision: str
+    skill_id: UUID | None = None
+    skill_version_id: UUID | None = None
+    context_artifact_id: UUID | None = None
+    tokens_delta: int | None = None
+    marginal_success_delta: float | None = None
+    false_positive_load_delta: float | None = None
+    ignored_load_delta: float | None = None
+    shadowing_delta: float | None = None
+    evidence: dict[str, object] = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class ContextBudgetEventResponse(BaseModel):
+    event: dict[str, object]
+
+
+class SemanticCompressionTrialRequest(BaseModel):
+    workspace_id: str
+    source_tokens: int
+    candidate_tokens: int
+    preserved_requirements: int
+    lost_requirements: int
+    added_unsupported_requirements: int
+    equivalence_score: float
+    status: str
+    skill_id: UUID | None = None
+    source_revision_id: UUID | None = None
+    candidate_revision_id: UUID | None = None
+    source_context_artifact_id: UUID | None = None
+    candidate_context_artifact_id: UUID | None = None
+    target_probe_pass_rate: float | None = None
+    regression_probe_pass_rate: float | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class SemanticCompressionTrialResponse(BaseModel):
+    trial: dict[str, object]
+
+
 class TopologySkillPayload(BaseModel):
     slug: str
     skill_id: UUID | None = None
@@ -3018,6 +3084,84 @@ def create_app(
                 detail=str(error),
             ) from error
         return ContextTokenLedgerResponse(ledger=ledger.to_json())
+
+    @app.post("/v1/context/compile-runs", response_model=ContextCompileRunResponse)
+    async def record_context_compile_run(
+        request: ContextCompileRunRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ContextCompileRunResponse:
+        _require_control_auth(authorization)
+        run = await context_governance.record_compile_run(
+            workspace_key=request.workspace_id,
+            compiler_version=request.compiler_version,
+            input_skillir_hash=request.input_skillir_hash,
+            output_manifest_hash=request.output_manifest_hash,
+            actual_runtime_tokens=request.actual_runtime_tokens,
+            status=request.status,
+            skill_id=request.skill_id,
+            skill_version_id=request.skill_version_id,
+            candidate_id=request.candidate_id,
+            context_artifact_id=request.context_artifact_id,
+            model_assist_used=request.model_assist_used,
+            target_runtime_tokens=request.target_runtime_tokens,
+            compression_ratio=request.compression_ratio,
+            semantic_equivalence_score=request.semantic_equivalence_score,
+            reject_reason=request.reject_reason,
+            metadata=request.metadata,
+        )
+        return ContextCompileRunResponse(run=run.to_json())
+
+    @app.post("/v1/context/budget-events", response_model=ContextBudgetEventResponse)
+    async def record_context_budget_event(
+        request: ContextBudgetEventRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ContextBudgetEventResponse:
+        _require_control_auth(authorization)
+        event = await context_governance.record_budget_event(
+            workspace_key=request.workspace_id,
+            event_type=request.event_type,
+            decision=request.decision,
+            skill_id=request.skill_id,
+            skill_version_id=request.skill_version_id,
+            context_artifact_id=request.context_artifact_id,
+            tokens_delta=request.tokens_delta,
+            marginal_success_delta=request.marginal_success_delta,
+            false_positive_load_delta=request.false_positive_load_delta,
+            ignored_load_delta=request.ignored_load_delta,
+            shadowing_delta=request.shadowing_delta,
+            evidence=request.evidence,
+            metadata=request.metadata,
+        )
+        return ContextBudgetEventResponse(event=event.to_json())
+
+    @app.post(
+        "/v1/context/semantic-compression-trials",
+        response_model=SemanticCompressionTrialResponse,
+    )
+    async def record_semantic_compression_trial(
+        request: SemanticCompressionTrialRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> SemanticCompressionTrialResponse:
+        _require_control_auth(authorization)
+        trial = await context_governance.record_semantic_compression_trial(
+            workspace_key=request.workspace_id,
+            source_tokens=request.source_tokens,
+            candidate_tokens=request.candidate_tokens,
+            preserved_requirements=request.preserved_requirements,
+            lost_requirements=request.lost_requirements,
+            added_unsupported_requirements=request.added_unsupported_requirements,
+            equivalence_score=request.equivalence_score,
+            status=request.status,
+            skill_id=request.skill_id,
+            source_revision_id=request.source_revision_id,
+            candidate_revision_id=request.candidate_revision_id,
+            source_context_artifact_id=request.source_context_artifact_id,
+            candidate_context_artifact_id=request.candidate_context_artifact_id,
+            target_probe_pass_rate=request.target_probe_pass_rate,
+            regression_probe_pass_rate=request.regression_probe_pass_rate,
+            metadata=request.metadata,
+        )
+        return SemanticCompressionTrialResponse(trial=trial.to_json())
 
     @app.post("/v1/topology/propose", response_model=TopologyProposalResponse)
     async def propose_topology_operation(

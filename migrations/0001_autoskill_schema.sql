@@ -492,6 +492,74 @@ CREATE TABLE IF NOT EXISTS autoskill.context_token_ledgers (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.context_compile_runs (
+  context_compile_run_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_id uuid REFERENCES autoskill.skills(skill_id),
+  skill_version_id uuid REFERENCES autoskill.skill_versions(skill_version_id),
+  candidate_id uuid,
+  context_artifact_id uuid REFERENCES autoskill.context_artifacts(context_artifact_id),
+  compiler_version text NOT NULL,
+  model_assist_used boolean NOT NULL DEFAULT false,
+  input_skillir_hash text NOT NULL,
+  output_manifest_hash text NOT NULL,
+  target_runtime_tokens integer,
+  actual_runtime_tokens integer NOT NULL,
+  compression_ratio double precision,
+  semantic_equivalence_score double precision,
+  status text NOT NULL CHECK (status IN (
+    'planned','passed','failed','rejected','needs_probe','over_budget'
+  )),
+  reject_reason text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.context_budget_events (
+  context_budget_event_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_id uuid REFERENCES autoskill.skills(skill_id),
+  skill_version_id uuid REFERENCES autoskill.skill_versions(skill_version_id),
+  context_artifact_id uuid REFERENCES autoskill.context_artifacts(context_artifact_id),
+  event_type text NOT NULL,
+  tokens_delta integer,
+  marginal_success_delta double precision,
+  false_positive_load_delta double precision,
+  ignored_load_delta double precision,
+  shadowing_delta double precision,
+  decision text NOT NULL CHECK (decision IN (
+    'compress_again','split_support_file','decompose_skill',
+    'tighten_description','broker_abstain','archive_low_value_skill',
+    'reject_change','accept','observe'
+  )),
+  evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.semantic_compression_trials (
+  semantic_compression_trial_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_id uuid REFERENCES autoskill.skills(skill_id),
+  source_revision_id uuid,
+  candidate_revision_id uuid,
+  source_context_artifact_id uuid REFERENCES autoskill.context_artifacts(context_artifact_id),
+  candidate_context_artifact_id uuid REFERENCES autoskill.context_artifacts(context_artifact_id),
+  source_tokens integer NOT NULL,
+  candidate_tokens integer NOT NULL,
+  preserved_requirements integer NOT NULL,
+  lost_requirements integer NOT NULL,
+  added_unsupported_requirements integer NOT NULL,
+  equivalence_score double precision NOT NULL,
+  target_probe_pass_rate double precision,
+  regression_probe_pass_rate double precision,
+  status text NOT NULL CHECK (status IN (
+    'passed','failed','needs_probe','rejected','planned'
+  )),
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS autoskill.external_skill_inventory (
   external_skill_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
@@ -1136,6 +1204,18 @@ CREATE INDEX IF NOT EXISTS context_artifacts_workspace_kind_idx
 
 CREATE INDEX IF NOT EXISTS context_token_ledgers_workspace_visibility_idx
   ON autoskill.context_token_ledgers(workspace_id, visibility_state, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS context_compile_runs_workspace_status_idx
+  ON autoskill.context_compile_runs(workspace_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS context_compile_runs_skill_idx
+  ON autoskill.context_compile_runs(workspace_id, skill_id, skill_version_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS context_budget_events_skill_time_idx
+  ON autoskill.context_budget_events(workspace_id, skill_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS semantic_compression_trials_skill_idx
+  ON autoskill.semantic_compression_trials(workspace_id, skill_id, status, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS skill_graph_operations_workspace_status_idx
   ON autoskill.skill_graph_operations(workspace_id, status, created_at DESC);
