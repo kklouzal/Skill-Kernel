@@ -7,15 +7,15 @@ import test from "node:test";
 import { beforeToolCall, captureEvent, evaluateToolBoundary } from "../src/index.js";
 
 const captureHooks = [
-  ["after-tool-call", "tool_call_end"],
-  ["before-tool-call", "tool_call_start"],
-  ["gateway-startup", "gateway_startup"],
-  ["llm-input", "llm_input"],
-  ["llm-output", "llm_output"],
-  ["message-received", "message_received"],
-  ["message-sent", "message_sent"],
-  ["model-call-ended", "model_call_ended"],
-  ["model-call-started", "model_call_started"],
+  ["after-tool-call", "tool_call_end", "tool_output"],
+  ["before-tool-call", "tool_call_start", "agent_output"],
+  ["gateway-startup", "gateway_startup", "system_owned"],
+  ["llm-input", "llm_input", "agent_output"],
+  ["llm-output", "llm_output", "agent_output"],
+  ["message-received", "message_received", "external_content"],
+  ["message-sent", "message_sent", "agent_output"],
+  ["model-call-ended", "model_call_ended", "system_owned"],
+  ["model-call-started", "model_call_started", "system_owned"],
 ];
 
 async function tempWorkspace() {
@@ -48,6 +48,21 @@ function hookContext(workspaceDir) {
   };
 }
 
+function runtimeHookContext(workspaceDir) {
+  return {
+    workspaceDir,
+    context: {
+      pluginConfig: {
+        enabled: true,
+        sidecarUrl: "http://127.0.0.1:8765",
+        workspaceId: "runtime-workspace",
+        ingestToken: "runtime-token",
+        maxSpoolBytes: 1024 * 1024,
+      },
+    },
+  };
+}
+
 test("capture hook handlers import and forward redacted envelopes", async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];
@@ -57,7 +72,7 @@ test("capture hook handlers import and forward redacted envelopes", async () => 
   };
 
   try {
-    for (const [hookDir, eventType] of captureHooks) {
+    for (const [hookDir, eventType, trust] of captureHooks) {
       const workspaceDir = await tempWorkspace();
       const { default: handler } = await import(`../hooks/${hookDir}/handler.js`);
 
@@ -68,12 +83,83 @@ test("capture hook handlers import and forward redacted envelopes", async () => 
       assert.equal(call.request.headers.authorization, "Bearer token-1");
       assert.equal(call.body.events.length, 1);
       assert.equal(call.body.events[0].event_type, eventType);
+      assert.equal(call.body.events[0].trust, trust);
       assert.equal(call.body.events[0].workspace_id, "workspace-1");
       assert.equal(call.body.events[0].trace_id, "00000000-0000-4000-8000-000000000001");
       assert.equal(call.body.events[0].span_id, "00000000-0000-4000-8000-000000000002");
       assert.equal(call.body.events[0].payload.token, "[REDACTED]");
     }
   } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("capture reads OpenClaw runtime plugin config from hook context", async () => {
+  const originalFetch = globalThis.fetch;
+  let call;
+  globalThis.fetch = async (url, request) => {
+    call = { url, request, body: JSON.parse(request.body) };
+    return Response.json({ accepted: 1, duplicate: 0, rejected: 0 });
+  };
+
+  try {
+    const workspaceDir = await tempWorkspace();
+    const result = await captureEvent({
+      eventType: "gateway_startup",
+      payload: { port: 18789 },
+      trust: "system_owned",
+      taint: ["gateway"],
+      hookContext: runtimeHookContext(workspaceDir),
+    });
+
+    assert.equal(result.forwarded, true);
+    assert.equal(call.url, "http://127.0.0.1:8765/v1/ingest/events");
+    assert.equal(call.request.headers.authorization, "Bearer runtime-token");
+    assert.equal(call.body.events[0].workspace_id, "runtime-workspace");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("capture can read ingest token from environment fallback", async () => {
+  const originalFetch = globalThis.fetch;
+  const previousToken = process.env.AUTOSKILL_PLUGIN_INGEST_TOKEN;
+  let call;
+  globalThis.fetch = async (url, request) => {
+    call = { url, request, body: JSON.parse(request.body) };
+    return Response.json({ accepted: 1, duplicate: 0, rejected: 0 });
+  };
+  process.env.AUTOSKILL_PLUGIN_INGEST_TOKEN = "env-token";
+
+  try {
+    const workspaceDir = await tempWorkspace();
+    const result = await captureEvent({
+      eventType: "gateway_startup",
+      payload: { port: 18789 },
+      trust: "system_owned",
+      taint: ["gateway"],
+      hookContext: {
+        workspaceDir,
+        context: {
+          pluginConfig: {
+            enabled: true,
+            sidecarUrl: "http://127.0.0.1:8765",
+            workspaceId: "runtime-workspace",
+            maxSpoolBytes: 1024 * 1024,
+          },
+        },
+      },
+    });
+
+    assert.equal(result.forwarded, true);
+    assert.equal(call.request.headers.authorization, "Bearer env-token");
+    assert.equal(call.body.events[0].workspace_id, "runtime-workspace");
+  } finally {
+    if (previousToken === undefined) {
+      delete process.env.AUTOSKILL_PLUGIN_INGEST_TOKEN;
+    } else {
+      process.env.AUTOSKILL_PLUGIN_INGEST_TOKEN = previousToken;
+    }
     globalThis.fetch = originalFetch;
   }
 });
@@ -89,7 +175,7 @@ test("capture spools current event when sidecar ingest is unavailable", async ()
     const result = await captureEvent({
       eventType: "message_received",
       payload: { content: "hello" },
-      trust: "untrusted",
+      trust: "external_content",
       taint: ["message"],
       hookContext: hookContext(workspaceDir),
     });
@@ -106,6 +192,7 @@ test("capture spools current event when sidecar ingest is unavailable", async ()
       .split("\n");
     assert.equal(lines.length, 1);
     assert.equal(JSON.parse(lines[0]).event_type, "message_received");
+    assert.equal(JSON.parse(lines[0]).trust, "external_content");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -146,7 +233,7 @@ test("capture does not re-spool current event when old spool replay fails", asyn
     const result = await captureEvent({
       eventType: "tool_call_end",
       payload: { id: "current" },
-      trust: "trusted",
+      trust: "tool_output",
       taint: ["tool"],
       hookContext: hookContext(workspaceDir),
     });
@@ -180,7 +267,7 @@ test("concurrent capture appends all failed events to the spool", async () => {
         captureEvent({
           eventType: "tool_call_end",
           payload: { id: `event-${index}` },
-          trust: "trusted",
+          trust: "tool_output",
           taint: ["tool"],
           hookContext: hookContext(workspaceDir),
         }),

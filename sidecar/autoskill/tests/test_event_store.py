@@ -3,7 +3,7 @@ from uuid import uuid4
 import pytest
 from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope
-from autoskill.db.events import EventIngestSummary
+from autoskill.db.events import EventIngestSummary, _insert_event
 
 
 class MemoryEventStore:
@@ -53,3 +53,28 @@ async def test_event_store_ingest_is_idempotent() -> None:
     assert store.events[0].payload_hash
     assert store.events[0].trace_id
     assert store.events[0].span_id
+
+
+@pytest.mark.asyncio
+async def test_insert_event_binds_all_raw_event_columns() -> None:
+    class Conn:
+        def __init__(self) -> None:
+            self.query = ""
+            self.args: tuple[object, ...] = ()
+
+        async def fetchval(self, query: str, *args: object) -> object:
+            self.query = query
+            self.args = args
+            return args[0]
+
+    conn = Conn()
+    first = event()
+
+    inserted = await _insert_event(conn, uuid4(), first)  # type: ignore[arg-type]
+
+    assert inserted is True
+    assert "$17" in conn.query
+    assert len(conn.args) == 17
+    assert conn.args[12] == str(first.redaction_state)
+    assert conn.args[13] == first.payload_hash
+    assert isinstance(conn.args[14], str)

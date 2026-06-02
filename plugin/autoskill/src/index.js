@@ -12,21 +12,20 @@ import { appendSpool, getSpoolStats, replaySpool } from "./spool/index.js";
 let replayInFlight = false;
 
 const CAPTURE_HOOKS = [
-  ["after_tool_call", "tool_call_end", "trusted", ["tool"]],
-  ["before_tool_call", "tool_call_start", "trusted", ["tool"]],
-  ["gateway_start", "gateway_startup", "trusted", ["gateway"]],
-  ["llm_input", "llm_input", "trusted", ["llm"]],
-  ["llm_output", "llm_output", "trusted", ["llm"]],
-  ["message_received", "message_received", "untrusted", ["message"]],
-  ["message_sent", "message_sent", "trusted", ["message"]],
-  ["model_call_ended", "model_call_ended", "trusted", ["model"]],
-  ["model_call_started", "model_call_started", "trusted", ["model"]],
-  ["tool_result_persist", "tool_result_persist", "trusted", ["tool"]],
+  ["after_tool_call", "tool_call_end", "tool_output", ["tool"]],
+  ["before_tool_call", "tool_call_start", "agent_output", ["tool"]],
+  ["gateway_start", "gateway_startup", "system_owned", ["gateway"]],
+  ["llm_input", "llm_input", "agent_output", ["llm"]],
+  ["llm_output", "llm_output", "agent_output", ["llm"]],
+  ["message_received", "message_received", "external_content", ["message"]],
+  ["message_sent", "message_sent", "agent_output", ["message"]],
+  ["model_call_ended", "model_call_ended", "system_owned", ["model"]],
+  ["model_call_started", "model_call_started", "system_owned", ["model"]],
+  ["tool_result_persist", "tool_result_persist", "tool_output", ["tool"]],
 ];
 
 export const id = "autoskill";
 export const name = "AutoSkill Manager";
-export const kind = "memory";
 
 export function register(api) {
   for (const [hookName, eventType, trust, taint] of CAPTURE_HOOKS) {
@@ -52,7 +51,6 @@ export function register(api) {
 export default {
   id,
   name,
-  kind,
   register,
 };
 
@@ -98,7 +96,7 @@ export async function beforeToolCall(event, hookContext) {
   const capture = await captureEvent({
     eventType: "tool_call_start",
     payload: event,
-    trust: "trusted",
+    trust: "agent_output",
     taint: ["tool"],
     hookContext,
   });

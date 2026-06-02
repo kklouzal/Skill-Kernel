@@ -4,21 +4,140 @@ services:
     environment:
       POSTGRES_DB: autoskill
       POSTGRES_USER: autoskill
-      POSTGRES_PASSWORD: autoskill-dev
+      POSTGRES_PASSWORD: ${AUTOSKILL_POSTGRES_PASSWORD:-autoskill-dev}
     ports:
       - "127.0.0.1:55432:5432"
     volumes:
       - autoskill-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autoskill -d autoskill"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build: .
+    environment: &autoskill-env
+      AUTOSKILL_DATABASE_URL: postgresql://autoskill:${AUTOSKILL_POSTGRES_PASSWORD:-autoskill-dev}@127.0.0.1:55432/autoskill
+      PYTHONPATH: /app/sidecar
+      AUTOSKILL_DB_POOL_MIN_SIZE: ${AUTOSKILL_DB_POOL_MIN_SIZE:-0}
+      AUTOSKILL_DB_POOL_MAX_SIZE: ${AUTOSKILL_DB_POOL_MAX_SIZE:-1}
+      AUTOSKILL_INGEST_TOKEN: ${AUTOSKILL_INGEST_TOKEN:-}
+      AUTOSKILL_CONTROL_TOKEN: ${AUTOSKILL_CONTROL_TOKEN:-}
+      AUTOSKILL_MODE: ${AUTOSKILL_MODE:-autonomous_guarded}
+      AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED: ${AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED:-false}
+      AUTOSKILL_RUNTIME_CONTEXT_TIMEOUT_MS: ${AUTOSKILL_RUNTIME_CONTEXT_TIMEOUT_MS:-150}
+      AUTOSKILL_MAX_CONTEXT_HINT_TOKENS: ${AUTOSKILL_MAX_CONTEXT_HINT_TOKENS:-800}
+      AUTOSKILL_LLM_API_BASE_URL: ${AUTOSKILL_LLM_API_BASE_URL:-http://127.0.0.1:18080/v1}
+      AUTOSKILL_LLM_API_KEY: ${AUTOSKILL_LLM_API_KEY:-autoskill-local}
+      AUTOSKILL_EMBEDDING_PROVIDER: ${AUTOSKILL_EMBEDDING_PROVIDER:-openai_compatible}
+      AUTOSKILL_EMBEDDING_MODEL: ${AUTOSKILL_EMBEDDING_MODEL:-nomic-embed-text.gguf}
+      AUTOSKILL_EMBEDDING_API_BASE_URL: ${AUTOSKILL_EMBEDDING_API_BASE_URL:-http://127.0.0.1:18081/v1}
+      AUTOSKILL_EMBEDDING_API_KEY: ${AUTOSKILL_EMBEDDING_API_KEY:-autoskill-local}
+      AUTOSKILL_EMBEDDING_TIMEOUT_SECONDS: ${AUTOSKILL_EMBEDDING_TIMEOUT_SECONDS:-30}
+      AUTOSKILL_ACTIVE_ROOT: ${AUTOSKILL_ACTIVE_ROOT:-skills/autoskill}
+      AUTOSKILL_ARCHIVE_ROOT: ${AUTOSKILL_ARCHIVE_ROOT:-.autoskill/archive}
+      AUTOSKILL_STAGING_ROOT: ${AUTOSKILL_STAGING_ROOT:-.autoskill/staging}
+      AUTOSKILL_ALLOW_NETWORK_IN_GENERATED_SKILLS: ${AUTOSKILL_ALLOW_NETWORK_IN_GENERATED_SKILLS:-false}
+      AUTOSKILL_ALLOW_SHELL_IN_GENERATED_SKILLS: ${AUTOSKILL_ALLOW_SHELL_IN_GENERATED_SKILLS:-false}
+      AUTOSKILL_FORBID_HIDDEN_MARKDOWN: ${AUTOSKILL_FORBID_HIDDEN_MARKDOWN:-true}
+      AUTOSKILL_REDACT_BEFORE_STORE: ${AUTOSKILL_REDACT_BEFORE_STORE:-true}
+      AUTOSKILL_REDACT_BEFORE_EMBED: ${AUTOSKILL_REDACT_BEFORE_EMBED:-true}
+    command: ["python", "scripts/migrate.py"]
+    network_mode: host
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   sidecar:
     build: .
-    environment:
-      AUTOSKILL_DATABASE_URL: postgresql://autoskill:autoskill-dev@postgres:5432/autoskill
-    ports:
-      - "127.0.0.1:8765:8765"
+    environment: *autoskill-env
+    command:
+      - uvicorn
+      - autoskill.main:app
+      - --app-dir
+      - /app/sidecar
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8765"
+    network_mode: host
     depends_on:
-      - postgres
+      migrate:
+        condition: service_completed_successfully
+
+  worker-scheduler:
+    build: .
+    environment: *autoskill-env
+    command:
+      - python
+      - -m
+      - autoskill.worker_main
+      - --pool
+      - scheduler
+      - --worker-id
+      - autoskill-scheduler-1
+      - --workspace-id
+      - openclaw-main
+      - --workspace-root
+      - /workspace
+      - --external-skill-root
+      - /workspace/skills
+    working_dir: /workspace
+    volumes:
+      - /home/kklouzal/.openclaw/workspace:/workspace
+    network_mode: host
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker-maintenance:
+    build: .
+    environment: *autoskill-env
+    command:
+      - python
+      - -m
+      - autoskill.worker_main
+      - --pool
+      - maintenance
+      - --worker-id
+      - autoskill-maintenance-1
+      - --workspace-id
+      - openclaw-main
+      - --workspace-root
+      - /workspace
+      - --external-skill-root
+      - /workspace/skills
+    working_dir: /workspace
+    volumes:
+      - /home/kklouzal/.openclaw/workspace:/workspace
+    network_mode: host
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker-mutation:
+    build: .
+    environment: *autoskill-env
+    command:
+      - python
+      - -m
+      - autoskill.worker_main
+      - --pool
+      - mutation
+      - --worker-id
+      - autoskill-mutation-1
+      - --workspace-id
+      - openclaw-main
+      - --workspace-root
+      - /workspace
+    working_dir: /workspace
+    volumes:
+      - /home/kklouzal/.openclaw/workspace:/workspace
+    network_mode: host
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   autoskill-postgres:
-

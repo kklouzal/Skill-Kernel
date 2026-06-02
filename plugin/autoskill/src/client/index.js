@@ -48,7 +48,21 @@ export async function forwardEvent(sidecarUrl, event, options = {}) {
 }
 
 export async function forwardEvents(sidecarUrl, events, options = {}) {
-  return postJson(`${sidecarUrl.replace(/\/$/, "")}/v1/ingest/events`, { events }, options);
+  return postJson(
+    `${sidecarUrl.replace(/\/$/, "")}/v1/ingest/events`,
+    { events: events.map(normalizeEventForSidecar) },
+    options,
+  );
+}
+
+function normalizeEventForSidecar(event) {
+  if (event?.trust === "trusted") {
+    return { ...event, trust: "system_owned" };
+  }
+  if (event?.trust === "untrusted") {
+    return { ...event, trust: "external_content" };
+  }
+  return event;
 }
 
 export async function fetchContextHint(sidecarUrl, request, options = {}) {

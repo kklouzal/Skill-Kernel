@@ -4,9 +4,8 @@ export default async function handler(event, ctx) {
   await captureEvent({
     eventType: "llm_input",
     payload: event,
-    trust: "user_instruction",
+    trust: "agent_output",
     taint: ["llm_input", "runtime"],
     hookContext: ctx,
   });
 }
-

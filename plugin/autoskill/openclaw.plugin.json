@@ -27,6 +27,14 @@
           "maxTokens": { "type": "integer", "minimum": 50, "maximum": 1000 },
           "failSoft": { "type": "boolean" }
         }
+      },
+      "runtimeToolBoundary": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "blockOnHighRisk": { "type": "boolean" }
+        }
       }
     }
   }

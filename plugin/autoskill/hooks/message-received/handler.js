@@ -4,9 +4,8 @@ export default async function handler(event, ctx) {
   await captureEvent({
     eventType: "message_received",
     payload: event,
-    trust: "user_instruction",
+    trust: "external_content",
     taint: ["message"],
     hookContext: ctx,
   });
 }
-

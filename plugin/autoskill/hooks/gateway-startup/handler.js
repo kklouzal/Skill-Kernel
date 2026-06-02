@@ -4,9 +4,8 @@ export default async function handler(event, ctx) {
   await captureEvent({
     eventType: "gateway_startup",
     payload: event,
-    trust: "tool_output",
+    trust: "system_owned",
     taint: ["runtime"],
     hookContext: ctx,
   });
 }
-

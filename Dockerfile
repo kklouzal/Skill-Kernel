@@ -7,10 +7,11 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY sidecar ./sidecar
+COPY migrations ./migrations
+COPY scripts ./scripts
 
 RUN pip install --no-cache-dir fastapi uvicorn pydantic pydantic-settings asyncpg
 
 EXPOSE 8765
 
-CMD ["uvicorn", "autoskill.main:app", "--app-dir", "sidecar", "--host", "127.0.0.1", "--port", "8765"]
-
+CMD ["uvicorn", "autoskill.main:app", "--app-dir", "sidecar", "--host", "0.0.0.0", "--port", "8765"]

@@ -1,12 +1,21 @@
 import path from "node:path";
 
 export function resolveConfig(ctx = {}) {
-  const cfg = ctx.config?.plugins?.entries?.autoskill?.config ?? ctx.config?.autoskill ?? {};
+  const cfg =
+    ctx.context?.pluginConfig ??
+    ctx.pluginConfig ??
+    ctx.config?.plugins?.entries?.autoskill?.config ??
+    ctx.config?.autoskill ??
+    {};
   const workspaceDir = ctx.workspaceDir ?? process.cwd();
   return {
     enabled: cfg.enabled !== false,
     sidecarUrl: cfg.sidecarUrl ?? "http://127.0.0.1:8765",
-    ingestToken: cfg.ingestToken ?? null,
+    ingestToken:
+      cfg.ingestToken ??
+      process.env.AUTOSKILL_PLUGIN_INGEST_TOKEN ??
+      process.env.AUTOSKILL_INGEST_TOKEN ??
+      null,
     workspaceId: cfg.workspaceId ?? "auto",
     spoolDir: cfg.spoolDir ?? path.join(workspaceDir, ".autoskill", "spool"),
     replayBatchSize: cfg.replayBatchSize ?? 25,
