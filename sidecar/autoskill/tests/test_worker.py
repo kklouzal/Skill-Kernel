@@ -16,7 +16,7 @@ from autoskill.db.memory import NullMemoryGovernanceStore
 from autoskill.db.observability import TraceSpanRecord
 from autoskill.db.scheduler import SchedulerTickResult
 from autoskill.db.topology import NullTopologyStore
-from autoskill.db.usage import UsageAggregationResult
+from autoskill.db.usage import UsageAggregationResult, UsageTopologyRecommendation
 from autoskill.db.utility import CurationActionRecord, CurationRunResult, UtilityRollupResult
 from autoskill.services.worker import (
     WorkerLoopConfig,
@@ -352,6 +352,9 @@ class MemoryUtilityWorkerStore:
 class MemoryUsageWorkerStore:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.recommendation_calls: list[dict[str, object]] = []
+        self.first_skill_id = uuid4()
+        self.second_skill_id = uuid4()
 
     async def aggregate_usage(
         self,
@@ -373,6 +376,46 @@ class MemoryUsageWorkerStore:
             edges_updated=2,
             clusters_upserted=1,
         )
+
+    async def recommend_topology_operations(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        min_support: int = 3,
+        min_success_count: int = 1,
+        max_failure_ratio: float = 0.25,
+        min_sequence_count: int = 1,
+    ) -> list[UsageTopologyRecommendation]:
+        self.recommendation_calls.append(
+            {
+                "workspace_key": workspace_key,
+                "limit": limit,
+                "min_support": min_support,
+                "min_success_count": min_success_count,
+                "max_failure_ratio": max_failure_ratio,
+                "min_sequence_count": min_sequence_count,
+            }
+        )
+        return [
+            UsageTopologyRecommendation(
+                skill_usage_cluster_id=uuid4(),
+                cluster_key=f"compose:{self.first_skill_id}:{self.second_skill_id}",
+                skill_ids=[self.first_skill_id, self.second_skill_id],
+                evidence_ids=[],
+                recommended_operation="compose",
+                support_count=3,
+                success_count=2,
+                failure_count=0,
+                sequence_count=3,
+                operation_score=10.0,
+                blockers=[],
+                metadata={
+                    "source": "usage.aggregate",
+                    "topology_signal": "recurring_co_usage",
+                },
+            )
+        ]
 
 
 class MemoryContractWorkerStore:
@@ -1908,14 +1951,32 @@ def test_worker_dispatches_usage_aggregation_job() -> None:
     result = asyncio.run(run())
 
     assert result.status == "succeeded"
+    recommendations = result.output["topology_recommendations"]
+    assert recommendations[0]["recommended_operation"] == "compose"
+    assert recommendations[0]["accepted"] is True
+    assert recommendations[0]["skill_ids"] == [
+        str(usage.first_skill_id),
+        str(usage.second_skill_id),
+    ]
     assert result.output == {
         "windows_scanned": 4,
         "windows_created": 3,
         "edges_updated": 2,
         "clusters_upserted": 1,
+        "topology_recommendations": recommendations,
     }
     assert usage.calls == [
         {"workspace_key": "dev-01", "limit": 31, "min_support": 3}
+    ]
+    assert usage.recommendation_calls == [
+        {
+            "workspace_key": "dev-01",
+            "limit": 5,
+            "min_support": 3,
+            "min_success_count": 1,
+            "max_failure_ratio": 0.25,
+            "min_sequence_count": 1,
+        }
     ]
 
 

@@ -359,6 +359,13 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   Repair proposals must become SkillIR, pass the normal context compiler, carry
   routing/regression proof summaries, and then stage compiler-rendered `SKILL.md`
   with the full typed runtime sections.
+- Usage/topology cluster recommendation scoring is implemented: `usage.aggregate`
+  now returns ranked content-safe topology recommendations from observed
+  `skill_usage_clusters`, with fail-closed blockers for insufficient support,
+  missing successful outcomes, high failure ratio, weak sequence evidence, and
+  unsupported topology operations. Focused usage/worker tests passed, and full
+  validation passed with `uv run ruff check sidecar`, `uv run pytest` (222
+  tests), `uv run python -m compileall -q sidecar`, and `git diff --check`.
 
 ## Next Gates
 
@@ -366,9 +373,9 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
    operator-reviewed replay episodes from real usage, then run replay/canary
    tuning on the enlarged corpus.
 2. Run `scripts/autoskill_backup.py` to an operator-approved backup location after the production roots contain activated SkillKernel-owned skills, then verify with `scripts/autoskill_restore.py --dry-run`.
-3. Wire the new usage/topology clusters into compose/decompose/improve proposal
-   ranking and broker-abstain decisions only after sustained telemetry confirms
-   the aggregate signals are stable.
+3. Persist or consume the new usage/topology recommendations in propose-only
+   compose/decompose/improve planning and broker-abstain decisions only after
+   sustained telemetry confirms the aggregate signals are stable.
 4. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
 
 ## Known Risks

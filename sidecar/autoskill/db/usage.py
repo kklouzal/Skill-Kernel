@@ -31,6 +31,47 @@ class UsageAggregationResult:
         }
 
 
+@dataclass(frozen=True)
+class UsageTopologyRecommendation:
+    skill_usage_cluster_id: UUID | None
+    cluster_key: str
+    skill_ids: list[UUID]
+    evidence_ids: list[UUID]
+    recommended_operation: str
+    support_count: int
+    success_count: int
+    failure_count: int
+    sequence_count: int
+    operation_score: float
+    blockers: list[str]
+    metadata: dict[str, Any]
+
+    @property
+    def accepted(self) -> bool:
+        return not self.blockers
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "skill_usage_cluster_id": (
+                str(self.skill_usage_cluster_id)
+                if self.skill_usage_cluster_id
+                else None
+            ),
+            "cluster_key": self.cluster_key,
+            "skill_ids": [str(skill_id) for skill_id in self.skill_ids],
+            "evidence_ids": [str(evidence_id) for evidence_id in self.evidence_ids],
+            "recommended_operation": self.recommended_operation,
+            "support_count": self.support_count,
+            "success_count": self.success_count,
+            "failure_count": self.failure_count,
+            "sequence_count": self.sequence_count,
+            "operation_score": self.operation_score,
+            "accepted": self.accepted,
+            "blockers": self.blockers,
+            "metadata": self.metadata,
+        }
+
+
 class UsageStore(Protocol):
     async def aggregate_usage(
         self,
@@ -40,6 +81,18 @@ class UsageStore(Protocol):
         min_support: int = 2,
     ) -> UsageAggregationResult:
         """Aggregate content-safe usage windows into topology evidence tables."""
+
+    async def recommend_topology_operations(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        min_support: int = 3,
+        min_success_count: int = 1,
+        max_failure_ratio: float = 0.25,
+        min_sequence_count: int = 1,
+    ) -> list[UsageTopologyRecommendation]:
+        """Rank observed usage clusters as topology-operation candidates."""
 
 
 class NullUsageStore:
@@ -56,6 +109,18 @@ class NullUsageStore:
             edges_updated=0,
             clusters_upserted=0,
         )
+
+    async def recommend_topology_operations(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        min_support: int = 3,
+        min_success_count: int = 1,
+        max_failure_ratio: float = 0.25,
+        min_sequence_count: int = 1,
+    ) -> list[UsageTopologyRecommendation]:
+        return []
 
 
 class AsyncpgUsageStore(AsyncpgPoolOwner):
@@ -98,6 +163,58 @@ class AsyncpgUsageStore(AsyncpgPoolOwner):
             windows_created=windows_created,
             edges_updated=edges_updated,
             clusters_upserted=clusters_upserted,
+        )
+
+    async def recommend_topology_operations(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        min_support: int = 3,
+        min_success_count: int = 1,
+        max_failure_ratio: float = 0.25,
+        min_sequence_count: int = 1,
+    ) -> list[UsageTopologyRecommendation]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            rows = await conn.fetch(
+                """
+                SELECT
+                  skill_usage_cluster_id,
+                  cluster_key,
+                  skill_ids,
+                  evidence_ids,
+                  support_count,
+                  recommended_operation,
+                  status,
+                  metadata
+                FROM autoskill.skill_usage_clusters
+                WHERE workspace_id = $1
+                  AND status IN ('observed', 'candidate')
+                ORDER BY support_count DESC, updated_at DESC, cluster_key ASC
+                LIMIT $2
+                """,
+                workspace_id,
+                max(1, min(limit, 100)),
+            )
+        recommendations = [
+            _topology_recommendation_from_row(
+                row,
+                min_support=max(1, min_support),
+                min_success_count=max(0, min_success_count),
+                max_failure_ratio=max(0.0, min(max_failure_ratio, 1.0)),
+                min_sequence_count=max(0, min_sequence_count),
+            )
+            for row in rows
+        ]
+        return sorted(
+            recommendations,
+            key=lambda item: (
+                bool(item.blockers),
+                -item.operation_score,
+                item.cluster_key,
+            ),
         )
 
 
@@ -273,7 +390,13 @@ async def _upsert_usage_clusters(
 ) -> int:
     rows = await conn.fetch(
         """
-        SELECT left_skill_id, right_skill_id, co_usage_count, success_count, failure_count
+        SELECT
+          left_skill_id,
+          right_skill_id,
+          co_usage_count,
+          success_count,
+          failure_count,
+          sequence_count
         FROM autoskill.skill_co_usage_edges
         WHERE workspace_id = $1
           AND co_usage_count >= $2
@@ -326,11 +449,76 @@ async def _upsert_usage_clusters(
                     "source": "usage.aggregate",
                     "success_count": row["success_count"],
                     "failure_count": row["failure_count"],
+                    "sequence_count": row["sequence_count"],
+                    "topology_signal": "recurring_co_usage",
                 }
             ),
         )
         upserted += 1
     return upserted
+
+
+def _topology_recommendation_from_row(
+    row: asyncpg.Record | dict[str, Any],
+    *,
+    min_support: int,
+    min_success_count: int,
+    max_failure_ratio: float,
+    min_sequence_count: int,
+) -> UsageTopologyRecommendation:
+    metadata = _metadata_dict(row["metadata"])
+    skill_ids = _stable_skill_ids(row["skill_ids"])
+    evidence_ids = _stable_skill_ids(row["evidence_ids"])
+    support_count = int(row["support_count"] or 0)
+    success_count = int(metadata.get("success_count") or 0)
+    failure_count = int(metadata.get("failure_count") or 0)
+    sequence_count = int(metadata.get("sequence_count") or 0)
+    failure_ratio = failure_count / support_count if support_count else 0.0
+    operation_score = float(
+        support_count
+        + (success_count * 2)
+        + sequence_count
+        - (failure_count * 3)
+    )
+    operation = str(row["recommended_operation"] or "")
+    blockers: list[str] = []
+    if support_count < min_support:
+        blockers.append("usage cluster support below threshold")
+    if operation not in {"improve", "compose", "decompose"}:
+        blockers.append("usage cluster operation is not topology-primary")
+    if operation == "compose" and len(skill_ids) < 2:
+        blockers.append("compose recommendation requires at least two skills")
+    if success_count < min_success_count:
+        blockers.append("usage cluster lacks successful outcome evidence")
+    if failure_ratio > max_failure_ratio:
+        blockers.append("usage cluster failure ratio above threshold")
+    if sequence_count < min_sequence_count:
+        blockers.append("usage cluster lacks stable sequence evidence")
+
+    return UsageTopologyRecommendation(
+        skill_usage_cluster_id=_row_get(row, "skill_usage_cluster_id"),
+        cluster_key=str(row["cluster_key"]),
+        skill_ids=skill_ids,
+        evidence_ids=evidence_ids,
+        recommended_operation=operation,
+        support_count=support_count,
+        success_count=success_count,
+        failure_count=failure_count,
+        sequence_count=sequence_count,
+        operation_score=operation_score,
+        blockers=blockers,
+        metadata={
+            "source": metadata.get("source", "skill_usage_clusters"),
+            "topology_signal": metadata.get("topology_signal"),
+            "failure_ratio": failure_ratio,
+            "thresholds": {
+                "min_support": min_support,
+                "min_success_count": min_success_count,
+                "max_failure_ratio": max_failure_ratio,
+                "min_sequence_count": min_sequence_count,
+            },
+        },
+    )
 
 
 def _stable_skill_ids(values: list[UUID] | tuple[UUID, ...] | None) -> list[UUID]:
@@ -365,3 +553,12 @@ def _metadata_dict(value: object) -> dict[str, Any]:
         if isinstance(decoded, dict):
             return decoded
     return {}
+
+
+def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:
+    if isinstance(row, dict):
+        return row.get(key)
+    try:
+        return row[key]
+    except KeyError:
+        return None

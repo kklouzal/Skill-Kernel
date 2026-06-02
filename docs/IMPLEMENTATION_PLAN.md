@@ -321,6 +321,10 @@ Deliverables:
   maintenance job, which mines content-safe retrieval and attribution rows into
   idempotent usage windows, co-use/sequence edges, and observed usage clusters
   with first-pass compose recommendations for later topology consumers;
+- usage/topology recommendation scoring; implemented so `usage.aggregate`
+  returns ranked content-safe topology recommendations from observed clusters,
+  including support, success/failure, sequence, operation-score, and blocker
+  metadata before any propose-only or activation path consumes them;
 - attribution ledger and action-attribution checks; implemented for attribution events, runtime blocked-tool action checks, and revocation invalidation of derived attribution records.
 
 Acceptance:
@@ -332,11 +336,17 @@ Acceptance:
 - usage aggregation is deterministic and idempotent across repeated maintenance
   passes; implemented with focused tests and a real Postgres smoke proving
   windows, co-use edge counters, sequence/success counts, and usage clusters.
+- usage cluster recommendations fail closed when support, successful outcome,
+  sequence, or failure-ratio gates are not met, and remain recommendations only
+  rather than autonomous topology proposal/apply actions.
 - validation evidence for this slice: `uv run ruff check sidecar`, `uv run
   pytest` with 220 tests, `uv run python -m compileall -q sidecar`, and `git
   diff --check` passed; a compose Postgres smoke seeded retrieval plus
   attribution usage, aggregated 2 windows into one compose cluster, and proved a
   repeated pass left windows and edge counters unchanged.
+- validation evidence for recommendation scoring: focused usage/worker tests
+  passed, then `uv run ruff check sidecar`, `uv run pytest` with 222 tests, `uv
+  run python -m compileall -q sidecar`, and `git diff --check` passed.
 - external collisions pause candidate creation for review; real external-root scanning,
   import recommendation, operator review actions, and stage-only import
   materialization are implemented without mutating external-owned roots.

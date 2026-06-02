@@ -814,7 +814,44 @@ async def _run_usage_aggregate(stores: WorkerStores, job: JobRecord) -> dict[str
             maximum=50,
         ),
     )
-    return result.to_json()
+    min_support = _payload_int(
+        job.payload,
+        "recommendation_min_support",
+        default=max(3, _payload_int(job.payload, "min_support", default=2, minimum=1, maximum=50)),
+        minimum=1,
+        maximum=50,
+    )
+    recommendations = await stores.usage.recommend_topology_operations(
+        workspace_key=workspace,
+        limit=_payload_int(
+            job.payload,
+            "recommendation_limit",
+            default=5,
+            minimum=0,
+            maximum=50,
+        ),
+        min_support=min_support,
+        min_success_count=_payload_int(
+            job.payload,
+            "recommendation_min_success_count",
+            default=1,
+            minimum=0,
+            maximum=50,
+        ),
+        max_failure_ratio=float(_payload_dict(job.payload).get("max_failure_ratio", 0.25)),
+        min_sequence_count=_payload_int(
+            job.payload,
+            "recommendation_min_sequence_count",
+            default=1,
+            minimum=0,
+            maximum=50,
+        ),
+    )
+    output = result.to_json()
+    output["topology_recommendations"] = [
+        recommendation.to_json() for recommendation in recommendations
+    ]
+    return output
 
 
 async def _run_contract_extraction(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
