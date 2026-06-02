@@ -418,6 +418,12 @@ async def _archive_duplicate_edges(
                         "to_skill_id": str(right),
                         "from_slug": row["from_slug"],
                         "to_slug": row["to_slug"],
+                        "merge_probe_plan": _merge_probe_plan(
+                            from_skill_id=left,
+                            to_skill_id=right,
+                            from_slug=row["from_slug"],
+                            to_slug=row["to_slug"],
+                        ),
                     },
                 )
             )
@@ -456,10 +462,48 @@ async def _archive_duplicate_edges(
                     "archived_slug": archive_slug,
                     "kept_skill_id": str(keep_id),
                     "kept_slug": keep_slug,
+                    "merge_probe_plan": _merge_probe_plan(
+                        from_skill_id=left,
+                        to_skill_id=right,
+                        from_slug=row["from_slug"],
+                        to_slug=row["to_slug"],
+                    ),
                 },
             )
         )
     return actions
+
+
+def _merge_probe_plan(
+    *,
+    from_skill_id: UUID,
+    to_skill_id: UUID,
+    from_slug: str,
+    to_slug: str,
+) -> dict[str, Any]:
+    return {
+        "schema": "autoskill.merge_probe_plan.v1",
+        "kind": "duplicate_merge",
+        "candidate_skill_ids": [str(from_skill_id), str(to_skill_id)],
+        "candidate_slugs": [from_slug, to_slug],
+        "required_probe_kinds": [
+            "equivalence",
+            "regression",
+            "sibling_shadowing",
+            "no_skill_control",
+        ],
+        "acceptance_gate": {
+            "both_latest_versions_passed": True,
+            "regression_failures": 0,
+            "shadowing_delta_allowed": 0,
+            "utility_delta_positive": True,
+        },
+        "rollback": {
+            "required": True,
+            "restore_archived_duplicate": True,
+            "revoke_duplicate_edge_changes": True,
+        },
+    }
 
 
 async def _enforce_active_budget(

@@ -2,7 +2,11 @@ import asyncio
 from datetime import datetime
 from uuid import uuid4
 
-from autoskill.db.utility import SkillUtilityRollupRecord, _plan_improvements_and_splits
+from autoskill.db.utility import (
+    SkillUtilityRollupRecord,
+    _merge_probe_plan,
+    _plan_improvements_and_splits,
+)
 from autoskill.services.utility import SkillUtilityFeatures, compute_utility_score
 
 
@@ -80,4 +84,30 @@ def test_curation_plans_split_and_improvement_actions() -> None:
         "regression_failures": 0,
         "utility_delta_positive": True,
         "requires_no_skill_control": True,
+    }
+
+
+def test_duplicate_merge_probe_plan_requires_equivalence_and_rollback() -> None:
+    left = uuid4()
+    right = uuid4()
+
+    plan = _merge_probe_plan(
+        from_skill_id=left,
+        to_skill_id=right,
+        from_slug="left-skill",
+        to_slug="right-skill",
+    )
+
+    assert plan["candidate_skill_ids"] == [str(left), str(right)]
+    assert plan["required_probe_kinds"] == [
+        "equivalence",
+        "regression",
+        "sibling_shadowing",
+        "no_skill_control",
+    ]
+    assert plan["acceptance_gate"]["regression_failures"] == 0
+    assert plan["rollback"] == {
+        "required": True,
+        "restore_archived_duplicate": True,
+        "revoke_duplicate_edge_changes": True,
     }

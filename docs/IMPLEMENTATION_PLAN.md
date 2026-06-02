@@ -242,7 +242,7 @@ Acceptance:
 
 - low-utility skills archive; implemented for active skills below a configurable utility threshold with curation action logging;
 - archived skills promote when demand recurs; implemented for archived skills with repeated retrieval demand, no harm/canary failures, and latest evaluator pass;
-- duplicates merge only after probes pass; implemented for explicit duplicate graph edges as lower-utility duplicate archiving only when both latest skill versions have evaluator pass, with repair/split planning plus structured trial/gate proposals now logged for harmful or shadowing patterns and dedicated merge probe planning still pending;
+- duplicates merge only after probes pass; implemented for explicit duplicate graph edges as lower-utility duplicate archiving only when both latest skill versions have evaluator pass, with dedicated merge probe plans plus repair/split structured trial/gate proposals now logged for duplicate, harmful, or shadowing patterns;
 - active bank budget is enforced; implemented by archiving lowest-utility overflow active skills.
 - external collisions pause candidate creation for review; real external-root scanning/import recommendation flows remain pending.
 
