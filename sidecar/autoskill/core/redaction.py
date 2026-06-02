@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, MutableMapping, Sequence
 from typing import Any
@@ -14,6 +15,23 @@ SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b"),
 )
+CONTENT_KEY_NAMES = {
+    "body",
+    "completion",
+    "content",
+    "conversation",
+    "input",
+    "message",
+    "messages",
+    "output",
+    "prompt",
+    "rawconversation",
+    "response",
+    "result",
+    "systemprompt",
+    "text",
+}
+CONTENT_METADATA_KEYS = {"id", "index", "name", "provider", "role", "type"}
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 REDACTED = "[REDACTED]"
 
@@ -26,7 +44,42 @@ def redact_text(value: str) -> str:
     return redacted
 
 
-def redact_payload(value: Any) -> Any:
+def _content_key_name(key: object) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", str(key)).lower()
+
+
+def _is_content_key(key: object) -> bool:
+    return _content_key_name(key) in CONTENT_KEY_NAMES
+
+
+def _content_size(value: Any) -> int:
+    try:
+        return len(json.dumps(value, sort_keys=True, separators=(",", ":")))
+    except TypeError:
+        return len(str(value))
+
+
+def _redact_content(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        out: MutableMapping[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            normalized = _content_key_name(key_text)
+            if normalized in CONTENT_METADATA_KEYS:
+                out[key_text] = redact_payload(item, capture_raw_conversation=False)
+            elif _is_content_key(key_text):
+                out[key_text] = _redact_content(item)
+            else:
+                out[key_text] = redact_payload(item, capture_raw_conversation=False)
+        return dict(out)
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return [_redact_content(item) for item in value]
+    return f"[REDACTED_CONTENT bytes={_content_size(value)}]"
+
+
+def redact_payload(value: Any, *, capture_raw_conversation: bool = False) -> Any:
     if isinstance(value, str):
         return redact_text(value)
     if isinstance(value, Mapping):
@@ -35,10 +88,16 @@ def redact_payload(value: Any) -> Any:
             key_text = str(key)
             if SECRET_KEY_RE.search(key_text):
                 out[key_text] = REDACTED
+            elif not capture_raw_conversation and _is_content_key(key_text):
+                out[key_text] = _redact_content(item)
             else:
-                out[key_text] = redact_payload(item)
+                out[key_text] = redact_payload(
+                    item, capture_raw_conversation=capture_raw_conversation
+                )
         return dict(out)
     if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray):
-        return [redact_payload(item) for item in value]
+        return [
+            redact_payload(item, capture_raw_conversation=capture_raw_conversation)
+            for item in value
+        ]
     return value
-

@@ -95,6 +95,63 @@ test("capture hook handlers import and forward redacted envelopes", async () => 
   }
 });
 
+test("llm input capture strips prompt bodies unless raw capture is enabled", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, request) => {
+    calls.push({ url, request, body: JSON.parse(request.body) });
+    return Response.json({ accepted: 1, duplicate: 0, rejected: 0 });
+  };
+
+  try {
+    const workspaceDir = await tempWorkspace();
+    const { default: handler } = await import("../hooks/llm-input/handler.js");
+
+    await handler(
+      {
+        provider: "llama-cpp-compaction",
+        model: "gemma-4-E2B-it-IQ4_NL.gguf",
+        systemPrompt: "private system prompt with sk-testtoken000000000000000000",
+        messages: [
+          { role: "user", content: "private user message" },
+          { role: "assistant", content: "private assistant message" },
+        ],
+      },
+      hookContext(workspaceDir),
+    );
+
+    const payload = calls.at(-1).body.events[0].payload;
+    assert.equal(payload.provider, "llama-cpp-compaction");
+    assert.equal(payload.model, "gemma-4-E2B-it-IQ4_NL.gguf");
+    assert.match(payload.systemPrompt, /^\[REDACTED_CONTENT bytes=/);
+    assert.equal(payload.messages[0].role, "user");
+    assert.match(payload.messages[0].content, /^\[REDACTED_CONTENT bytes=/);
+    assert.equal(JSON.stringify(payload).includes("private user message"), false);
+    assert.equal(JSON.stringify(payload).includes("sk-testtoken"), false);
+
+    const rawWorkspaceDir = await tempWorkspace();
+    await handler(
+      {
+        systemPrompt: "keep body but redact sk-testtoken000000000000000000",
+      },
+      {
+        ...hookContext(rawWorkspaceDir),
+        config: {
+          autoskill: {
+            ...hookContext(rawWorkspaceDir).config.autoskill,
+            captureRawConversation: true,
+          },
+        },
+      },
+    );
+
+    const rawPayload = calls.at(-1).body.events[0].payload;
+    assert.equal(rawPayload.systemPrompt, "keep body but redact [REDACTED]");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("capture reads OpenClaw runtime plugin config from hook context", async () => {
   const originalFetch = globalThis.fetch;
   let call;

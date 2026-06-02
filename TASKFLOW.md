@@ -250,6 +250,11 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `control_flow_events` with influence kind `mutation`.
 - Focused validation passed for broker bundle metadata and mutation memory CFI:
   `uv run ruff check sidecar` and broker/worker tests passed with 51 tests.
+- Prompt/body capture redaction is hardened across plugin and sidecar paths:
+  conversation-like fields (`systemPrompt`, `messages[*].content`, `body`,
+  `completion`, `response`, etc.) are content-stripped by default before event
+  forwarding/storage, raw capture remains an explicit plugin opt-in that still
+  secret-redacts, and the sidecar keeps storage-time redaction fail-closed.
 
 ## Next Gates
 

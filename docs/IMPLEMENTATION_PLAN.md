@@ -57,6 +57,10 @@ Acceptance:
 - sidecar outage does not block OpenClaw; implemented with hook-level tests that
   spool failed events without throwing;
 - only redacted payloads are persisted;
+- prompt, message, body, completion, and similar conversation-content fields are
+  content-stripped by default before forwarding/storage, while an explicit raw
+  capture opt-in still runs secret/email redaction and the sidecar applies its
+  own storage-time redaction;
 - spool replay is idempotent; implemented as accepted-or-duplicate deletion from
   bounded JSONL spool, with replay failure isolated from the already-forwarded
   current event;

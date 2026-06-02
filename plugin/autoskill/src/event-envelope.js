@@ -6,7 +6,9 @@ function sha256Json(value) {
 }
 
 export function buildEventEnvelope({ eventType, payload, trust, taint = [], ctx = {}, config }) {
-  const redactedPayload = redactPayload(payload ?? {});
+  const redactedPayload = redactPayload(payload ?? {}, {
+    captureRawConversation: config.captureRawConversation === true,
+  });
   const traceId = ctx.traceId ?? crypto.randomUUID();
   const spanId = ctx.spanId ?? crypto.randomUUID();
   return {
