@@ -12,6 +12,7 @@ from autoskill.api.app import (
     HistoricalImportSourceUpsertRequest,
     create_app,
 )
+from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.core.redaction import redact_text
 from autoskill.db.historical import (
     HistoricalChunkInput,
@@ -33,6 +34,28 @@ from autoskill.services.historical_import import import_historical_sources
 from autoskill.services.worker import WorkerStores, run_worker_once
 from autoskill.tests.test_governance import MemoryGovernanceStore
 from autoskill.tests.test_jobs_api import MemoryJobStore
+
+
+class MemoryAuditStore:
+    def __init__(self) -> None:
+        self.records: list[AuditRecord] = []
+
+    async def append_record(self, record: AuditRecord, *, workspace_key: str) -> AuditRecord:
+        previous_hash = self.records[-1].audit_hash if self.records else None
+        sealed = record.model_copy(update={"previous_hash": previous_hash}).sealed()
+        self.records.append(sealed)
+        return sealed
+
+    async def list_recent(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[AuditRecord]:
+        return list(reversed(self.records))[:limit]
+
+    async def verify_chain(self, *, workspace_key: str | None = None, limit: int = 1000) -> bool:
+        return verify_hash_chain(self.records[-limit:])
 
 
 class MemoryHistoricalImportStore(HistoricalImportStore):
@@ -506,10 +529,12 @@ def test_historical_import_source_revocation_api_route() -> None:
     store = MemoryHistoricalImportStore()
     governance = MemoryGovernanceStore()
     jobs = MemoryJobStore()
+    audit = MemoryAuditStore()
     app = create_app(
         historical_import_store=store,
         governance_store=governance,
         job_store=jobs,
+        audit_store=audit,
     )
     routes = {(route.path, next(iter(route.methods))): route for route in app.routes}
 
@@ -556,6 +581,10 @@ def test_historical_import_source_revocation_api_route() -> None:
     assert revoked.revocation["root_object_type"] == "historical_import_source"
     assert revoked.job["created"] is True
     assert revoked.job["job"]["job_kind"] == "revocations.invalidate"
+    assert audit.records[-1].action == "historical_import.source_revoke"
+    assert audit.records[-1].subject_id == str(revoked.source["historical_import_source_id"])
+    assert audit.records[-1].details["chunks_revoked"] == 1
+    assert asyncio.run(audit.verify_chain(workspace_key="dev-01")) is True
 
 
 def test_historical_revocation_invalidation_worker_completes_operator_revoke() -> None:

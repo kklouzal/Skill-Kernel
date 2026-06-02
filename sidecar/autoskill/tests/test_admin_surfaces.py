@@ -759,7 +759,8 @@ def test_topology_proposal_endpoint_persists_propose_only_operation() -> None:
 
 def test_topology_proposal_endpoint_persists_create_operation() -> None:
     topology = NullTopologyStore()
-    app = create_app(topology_store=topology)
+    audit = MemoryAuditStore()
+    app = create_app(topology_store=topology, audit_store=audit)
     route = next(route for route in app.routes if route.path == "/v1/topology/propose")
 
     async def run():
@@ -788,6 +789,10 @@ def test_topology_proposal_endpoint_persists_create_operation() -> None:
         "rollback_readiness",
     }
     assert topology.operations[0].evolution_transaction_id is not None
+    assert audit.records[-1].action == "topology.propose"
+    assert audit.records[-1].subject_type == "skill_graph_operation"
+    assert audit.records[-1].details["operation_kind"] == "create"
+    assert audit.records[-1].details["trial_count"] == 4
 
 
 def test_topology_proposal_endpoint_records_blocked_trials() -> None:

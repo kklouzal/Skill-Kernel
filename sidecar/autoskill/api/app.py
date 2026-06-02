@@ -10,6 +10,7 @@ from typing import Annotated
 from uuid import UUID
 
 from autoskill import __version__
+from autoskill.core.audit import AuditRecord
 from autoskill.core.config import get_settings
 from autoskill.core.events import IngestRequest, IngestResult
 from autoskill.core.hashing import sha256_text
@@ -3067,6 +3068,20 @@ def create_app(
                 "created": queued.created,
                 "job": queued.job.to_json(),
             }
+            await audit.append_record(
+                AuditRecord(
+                    action="historical_import.source_revoke",
+                    subject_type="historical_import_source",
+                    subject_id=str(request.historical_import_source_id),
+                    details={
+                        "chunks_revoked": result.chunks_revoked,
+                        "impacted_count": traversal_json.get("impacted_count"),
+                        "revocation_request_id": str(revocation.revocation_request_id),
+                        "job_id": str(queued.job.job_id),
+                    },
+                ),
+                workspace_key=request.workspace_id,
+            )
         return HistoricalImportSourceRevokeResponse(**payload)
 
     @app.post(
@@ -3765,6 +3780,20 @@ def create_app(
                 proposal=proposal,
             )
             persistence = persisted.to_json()
+            await audit.append_record(
+                AuditRecord(
+                    action="topology.propose",
+                    subject_type="skill_graph_operation",
+                    subject_id=str(persisted.operation.skill_graph_operation_id),
+                    details={
+                        "operation_kind": proposal.operation_kind,
+                        "status": proposal.status,
+                        "plan_hash": proposal.plan_hash,
+                        "trial_count": len(persisted.trials),
+                    },
+                ),
+                workspace_key=request.workspace_id,
+            )
         return TopologyProposalResponse(
             proposal=proposal.to_json(),
             persistence=persistence,
