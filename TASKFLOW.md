@@ -905,6 +905,16 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   plugin/autoskill` with 18 tests, `npm run check --prefix plugin/autoskill`,
   `docker compose config --quiet`, `git diff --check`, and all four executable
   crosswalk reports returning `ready=true`.
+- Proposal-gate acceptance now enforces the section 23.2 utility/token policy:
+  no-skill intervention replay metrics are folded into acceptance metrics as
+  `utility_delta` and `token_delta`, and a candidate fails closed after otherwise
+  passed deterministic probes when utility is below the configured threshold or
+  token growth has no utility gain. Focused validation passed with `uv run
+  pytest -q sidecar/autoskill/tests/test_evaluator.py` and `uv run ruff check
+  sidecar/autoskill/services/evaluator.py
+  sidecar/autoskill/tests/test_evaluator.py`; full validation passed with `uv
+  run ruff check sidecar`, `uv run pytest -q` with 303 tests, `uv run python -m
+  compileall -q sidecar`, and `git diff --check`.
 
 ## Next Gates
 

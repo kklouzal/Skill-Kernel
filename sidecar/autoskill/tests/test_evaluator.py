@@ -114,6 +114,73 @@ def test_proposal_gate_passes_with_intervention_replay_improvement() -> None:
     assert payload["reason_codes"] == ["all-deterministic-probes-passed"]
 
 
+def test_proposal_gate_fails_when_replay_utility_delta_is_below_policy() -> None:
+    probes = replayed_probes()
+    probes[1] = {
+        **probes[1],
+        "spec": {
+            "evidence_ids": skill_ir()["evidence_ids"],
+            "intervention_replay": {
+                "no_skill": {"success": True, "latency_ms": 1200, "tokens": 100},
+                "skill_visible": {
+                    "success": True,
+                    "latency_ms": 900,
+                    "tokens": 100,
+                    "utility_delta": 0.01,
+                },
+            },
+        },
+    }
+
+    result = evaluate_proposal_gate(
+        skill_ir=skill_ir(),
+        scanner_status="passed",
+        probes=probes,
+    )
+
+    payload = result.to_json()
+
+    assert payload["status"] == "failed"
+    assert payload["probe_results"][1]["status"] == "passed"
+    assert payload["acceptance_metrics"]["utility_delta"] == 0.01
+    assert payload["reason_codes"] == ["utility-delta-below-threshold"]
+
+
+def test_proposal_gate_fails_token_delta_without_utility_gain() -> None:
+    probes = replayed_probes()
+    probes[1] = {
+        **probes[1],
+        "spec": {
+            "evidence_ids": skill_ir()["evidence_ids"],
+            "intervention_replay": {
+                "no_skill": {"success": True, "latency_ms": 1200, "tokens": 100},
+                "skill_visible": {
+                    "success": True,
+                    "latency_ms": 900,
+                    "tokens": 140,
+                    "utility_delta": 0.0,
+                },
+            },
+        },
+    }
+
+    result = evaluate_proposal_gate(
+        skill_ir=skill_ir(),
+        scanner_status="passed",
+        probes=probes,
+    )
+
+    payload = result.to_json()
+
+    assert payload["status"] == "failed"
+    assert payload["probe_results"][1]["status"] == "passed"
+    assert payload["acceptance_metrics"]["token_delta"] == 40.0
+    assert payload["reason_codes"] == [
+        "token-delta-without-utility-gain",
+        "utility-delta-below-threshold",
+    ]
+
+
 def test_proposal_gate_fails_critical_adversarial_probe() -> None:
     probes = replayed_probes()
     probes[3] = {

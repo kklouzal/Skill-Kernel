@@ -302,6 +302,13 @@ Acceptance:
 - evaluator reports target, regression, and no-skill results; no-skill-control remains `needs_intervention` until recorded or redacted contrastive replay evidence exists.
 - proposal-gate evaluation runs are trace-visible without storing SkillIR or probe payloads in trace attributes; implemented and validated with focused tests plus compose/Postgres smoke coverage.
 - executor-scoped proposal-gate evaluations update `skill_profile_compatibility` as derived state (`compatible`, `degraded`, or `blocked`) with evaluation IDs, reason codes, and trace/span evidence, so broker routing consumes evaluator compatibility outcomes rather than only manual operator writes.
+- proposal-gate acceptance now enforces section 23.2 utility/token policy after
+  deterministic probes pass: intervention replay metrics record utility delta
+  and token delta, then fail closed when utility is below the configured minimum
+  or when additional tokens arrive without utility gain. Validation passed with
+  focused evaluator tests plus `uv run ruff check sidecar`, `uv run pytest -q`
+  with 303 tests, `uv run python -m compileall -q sidecar`, and `git diff
+  --check`.
 
 ## Phase 7 - Deterministic Writer and Rollback
 

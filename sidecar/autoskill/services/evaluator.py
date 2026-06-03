@@ -66,17 +66,20 @@ def evaluate_proposal_gate(
             ],
             reason_codes=["scanner-blocked"],
             acceptance_policy=ACCEPTANCE_POLICY,
-            acceptance_metrics=_acceptance_metrics([]),
+            acceptance_metrics=_acceptance_metrics([], probes=[]),
         )
 
     probe_results = [_evaluate_probe(skill_ir=skill_ir, probe=probe) for probe in probes]
-    acceptance_metrics = _acceptance_metrics(probe_results)
+    acceptance_metrics = _acceptance_metrics(probe_results, probes=probes)
     if any(result.status == "failed" for result in probe_results):
         status = "failed"
         reason_codes = ["probe-failed"]
     elif any(result.status == "needs_intervention" for result in probe_results):
         status = "needs_intervention"
         reason_codes = ["intervention-required"]
+    elif policy_reason_codes := _acceptance_policy_reason_codes(acceptance_metrics):
+        status = "failed"
+        reason_codes = policy_reason_codes
     else:
         status = "passed"
         reason_codes = ["all-deterministic-probes-passed"]
@@ -280,10 +283,26 @@ def _evaluate_adversarial_probe(
     )
 
 
-def _acceptance_metrics(results: list[ProbeEvaluation]) -> dict[str, float | int]:
+def _acceptance_metrics(
+    results: list[ProbeEvaluation],
+    *,
+    probes: list[dict[str, Any]],
+) -> dict[str, float | int]:
     target = [result for result in results if result.kind == "target"]
     regression = [result for result in results if result.kind == "regression"]
     adversarial = [result for result in results if result.kind == "adversarial"]
+    replay_metrics = [
+        _intervention_replay_metrics(_dict(_dict(probe.get("spec")).get("intervention_replay")))
+        for probe in probes
+        if probe.get("kind") == "no_skill_control"
+        and _dict(_dict(probe.get("spec")).get("intervention_replay"))
+    ]
+    utility_delta = (
+        sum(metric["utility_delta"] for metric in replay_metrics) / len(replay_metrics)
+        if replay_metrics
+        else 0.0
+    )
+    token_delta = sum(metric["token_delta"] for metric in replay_metrics)
     target_pass_rate = (
         sum(1 for result in target if result.status == "passed") / len(target)
         if target
@@ -294,7 +313,92 @@ def _acceptance_metrics(results: list[ProbeEvaluation]) -> dict[str, float | int
         "regression_failures": sum(1 for result in regression if result.status == "failed"),
         "adversarial_failures": sum(1 for result in adversarial if result.status == "failed"),
         "probe_count": len(results),
+        "intervention_replay_count": len(replay_metrics),
+        "utility_delta": round(utility_delta, 6),
+        "token_delta": round(token_delta, 6),
     }
+
+
+def _acceptance_policy_reason_codes(metrics: dict[str, float | int]) -> list[str]:
+    reason_codes: list[str] = []
+    if metrics["target_probe_pass_rate"] < ACCEPTANCE_POLICY["target_probe_min_pass_rate"]:
+        reason_codes.append("target-pass-rate-below-threshold")
+    if metrics["regression_failures"] > ACCEPTANCE_POLICY["regression_failure_hard_budget"]:
+        reason_codes.append("regression-failure-budget-exceeded")
+    if metrics["adversarial_failures"] > ACCEPTANCE_POLICY["adversarial_critical_budget"]:
+        reason_codes.append("adversarial-critical-budget-exceeded")
+    if metrics["intervention_replay_count"] > 0:
+        utility_delta = float(metrics["utility_delta"])
+        token_delta = float(metrics["token_delta"])
+        if (
+            token_delta > ACCEPTANCE_POLICY["max_token_delta_without_utility_gain"]
+            and utility_delta <= 0
+        ):
+            reason_codes.append("token-delta-without-utility-gain")
+        if utility_delta < ACCEPTANCE_POLICY["min_utility_delta"]:
+            reason_codes.append("utility-delta-below-threshold")
+    return reason_codes
+
+
+def _intervention_replay_metrics(replay: dict[str, Any]) -> dict[str, float]:
+    no_skill = _dict(replay.get("no_skill"))
+    skill_visible = _dict(replay.get("skill_visible"))
+    explicit_utility_delta = _first_float(
+        replay.get("utility_delta"),
+        replay.get("marginal_utility_delta"),
+        skill_visible.get("utility_delta"),
+        skill_visible.get("marginal_utility_delta"),
+    )
+    no_skill_tokens = _first_float(
+        no_skill.get("tokens"),
+        no_skill.get("token_count"),
+        no_skill.get("total_tokens"),
+        no_skill.get("context_tokens"),
+    )
+    skill_tokens = _first_float(
+        skill_visible.get("tokens"),
+        skill_visible.get("token_count"),
+        skill_visible.get("total_tokens"),
+        skill_visible.get("context_tokens"),
+    )
+    token_delta = (
+        skill_tokens - no_skill_tokens
+        if no_skill_tokens is not None and skill_tokens is not None
+        else 0.0
+    )
+    utility_delta = (
+        explicit_utility_delta
+        if explicit_utility_delta is not None
+        else _derived_utility(no_skill=no_skill, skill_visible=skill_visible)
+    )
+    return {"utility_delta": utility_delta, "token_delta": token_delta}
+
+
+def _derived_utility(*, no_skill: dict[str, Any], skill_visible: dict[str, Any]) -> float:
+    no_skill_success = bool(no_skill.get("success"))
+    skill_success = bool(skill_visible.get("success"))
+    utility = float(skill_success) - float(no_skill_success)
+
+    no_skill_retries = _optional_float(no_skill.get("retries"))
+    skill_retries = _optional_float(skill_visible.get("retries"))
+    if no_skill_retries is not None and skill_retries is not None:
+        utility += max(0.0, no_skill_retries - skill_retries) * 0.05
+
+    no_skill_latency = _optional_float(no_skill.get("latency_ms"))
+    skill_latency = _optional_float(skill_visible.get("latency_ms"))
+    if (
+        no_skill_latency is not None
+        and skill_latency is not None
+        and no_skill_latency > 0
+        and skill_latency < no_skill_latency
+    ):
+        utility += min(0.1, ((no_skill_latency - skill_latency) / no_skill_latency) * 0.1)
+
+    no_skill_tool_errors = _optional_float(no_skill.get("tool_errors"))
+    skill_tool_errors = _optional_float(skill_visible.get("tool_errors"))
+    if no_skill_tool_errors is not None and skill_tool_errors is not None:
+        utility += max(0.0, no_skill_tool_errors - skill_tool_errors) * 0.1
+    return utility
 
 
 def _result(
@@ -324,3 +428,11 @@ def _optional_float(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _first_float(*values: object) -> float | None:
+    for value in values:
+        parsed = _optional_float(value)
+        if parsed is not None:
+            return parsed
+    return None
