@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from typing import Protocol
 
 import asyncpg
@@ -114,13 +115,35 @@ class AsyncpgAuditStore(AsyncpgPoolOwner):
             return [_record_from_row(row) for row in rows]
 
     async def verify_chain(self, *, workspace_key: str | None = None, limit: int = 1000) -> bool:
-        records = await self.list_recent(workspace_key=workspace_key, limit=limit)
-        ordered = list(reversed(records))
-        initial_previous_hash = ordered[0].previous_hash if ordered else None
-        return verify_hash_chain(
-            ordered,
-            initial_previous_hash=initial_previous_hash,
-        )
+        if workspace_key is not None:
+            records = await self.list_recent(workspace_key=workspace_key, limit=limit)
+            return _verify_recent_segment(records)
+
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT w.external_key, ar.*
+                FROM autoskill.audit_records ar
+                JOIN autoskill.workspaces w USING (workspace_id)
+                ORDER BY ar.occurred_at DESC, ar.audit_id DESC
+                LIMIT $1
+                """,
+                max(1, min(limit, 1000)),
+            )
+        records_by_workspace: dict[str, list[AuditRecord]] = defaultdict(list)
+        for row in rows:
+            records_by_workspace[row["external_key"]].append(_record_from_row(row))
+        return all(_verify_recent_segment(records) for records in records_by_workspace.values())
+
+
+def _verify_recent_segment(records: list[AuditRecord]) -> bool:
+    ordered = list(reversed(records))
+    initial_previous_hash = ordered[0].previous_hash if ordered else None
+    return verify_hash_chain(
+        ordered,
+        initial_previous_hash=initial_previous_hash,
+    )
 
 
 def _record_from_row(row: asyncpg.Record) -> AuditRecord:

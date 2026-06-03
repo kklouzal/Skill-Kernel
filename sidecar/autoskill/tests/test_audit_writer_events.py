@@ -10,6 +10,7 @@ from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope
 from autoskill.db.activation import ActivationReadiness
+from autoskill.db.audit import _verify_recent_segment
 from autoskill.db.observability import TraceSpanRecord
 from autoskill.services.writer import (
     PathContainmentError,
@@ -127,6 +128,36 @@ def test_audit_hash_chain_verifies_bounded_segment() -> None:
         [second, third],
         initial_previous_hash=first.audit_hash,
     )
+
+
+def test_audit_recent_segment_verifies_bounded_newest_first_records() -> None:
+    first = AuditRecord(action="create", subject_type="skill", subject_id="one").sealed()
+    second = AuditRecord(
+        action="activate",
+        subject_type="skill",
+        subject_id="one",
+        previous_hash=first.audit_hash,
+    ).sealed()
+    third = AuditRecord(
+        action="promote",
+        subject_type="skill",
+        subject_id="one",
+        previous_hash=second.audit_hash,
+    ).sealed()
+
+    assert _verify_recent_segment([third, second])
+
+
+def test_audit_recent_segment_rejects_broken_workspace_chain() -> None:
+    first = AuditRecord(action="create", subject_type="skill", subject_id="one").sealed()
+    broken = AuditRecord(
+        action="activate",
+        subject_type="skill",
+        subject_id="one",
+        previous_hash="wrong",
+    ).sealed()
+
+    assert _verify_recent_segment([broken, first]) is False
 
 
 def test_writer_rejects_path_escape(tmp_path: Path) -> None:
