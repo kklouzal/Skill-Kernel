@@ -651,6 +651,16 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   compileall -q sidecar`, `git diff --check`, `npm test --prefix
   plugin/autoskill` with 18 tests, and `npm run check --prefix
   plugin/autoskill`.
+- Proposal probe generation and deterministic acceptance now include an
+  adversarial probe gate: candidate and migration proposals plan adversarial
+  probes, the evaluator fails closed on critical scanner findings or explicit
+  policy-bypass/exfiltration phrases, and proposal-gate results record the
+  section 23.2 acceptance policy and metrics. Validation passed with focused
+  evaluator/candidate/migration/external tests, focused ruff checks, full `uv
+  run ruff check sidecar`, `uv run pytest -q` with 272 tests, `uv run python -m
+  compileall -q sidecar`, `git diff --check`, `npm test --prefix
+  plugin/autoskill` with 18 tests, and `npm run check --prefix
+  plugin/autoskill`.
 
 ## Next Gates
 

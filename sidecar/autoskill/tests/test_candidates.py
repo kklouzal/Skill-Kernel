@@ -67,6 +67,7 @@ def test_candidate_proposal_builds_propose_only_skillir() -> None:
         "target",
         "no_skill_control",
         "regression",
+        "adversarial",
     ]
     assert "Do not write files" in proposal["skillir"]["never"][0]
 

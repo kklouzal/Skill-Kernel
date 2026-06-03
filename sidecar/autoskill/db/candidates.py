@@ -625,7 +625,7 @@ async def _persist_evaluation_gate(
         _json(
             {
                 "candidate_slug": proposal.candidate_slug,
-                "required_gates": ["target", "no_skill_control", "regression"],
+                "required_gates": ["target", "no_skill_control", "regression", "adversarial"],
                 "probe_hashes": probe_hashes,
                 "scanner_status": scanner_status,
                 "proposal_metadata": proposal.metadata,

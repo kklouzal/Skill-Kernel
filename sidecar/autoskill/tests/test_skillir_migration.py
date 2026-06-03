@@ -63,6 +63,7 @@ def test_skillir_migration_proposes_new_gated_revision() -> None:
         "target",
         "no_skill_control",
         "regression",
+        "adversarial",
     ]
 
 
