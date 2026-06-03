@@ -10,4 +10,6 @@ __pycache__/
 node_modules/
 dist/
 coverage/
-
+*.tsbuildinfo
+sidecar/autoskill/observatory/vite.config.js
+sidecar/autoskill/observatory/vite.config.d.ts

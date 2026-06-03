@@ -1,0 +1,15 @@
+.git
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
+*.pyc
+.env
+node_modules
+dist
+coverage
+sidecar/autoskill/observatory/node_modules
+sidecar/autoskill/observatory/dist
+plugin/autoskill/node_modules
+.autoskill/spool
+.autoskill/staging

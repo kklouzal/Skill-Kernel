@@ -1,0 +1,593 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Activity,
+  Boxes,
+  Bug,
+  Database,
+  FileJson,
+  Gauge,
+  KeyRound,
+  Layers,
+  Network,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  TimerReset,
+  Workflow
+} from "lucide-react";
+import type { EChartsOption } from "echarts";
+import { fetchObject, fetchSummary, isSnapshotPayload, liveUrl, postAction, search } from "./api";
+import type { ApiSession } from "./api";
+import type { Issue, LiveEnvelope, ObservatorySnapshot, Station, Subsystem } from "./types";
+import { AssemblyLine } from "./components/AssemblyLine";
+import { EChartPanel } from "./components/EChartPanel";
+import { Inspector } from "./components/Inspector";
+import { ParticleLayer } from "./components/ParticleLayer";
+
+type View = "overview" | "workcells" | "cockpit" | "skills" | "trace" | "admin";
+
+const storedToken = sessionStorage.getItem("skillkernel.admin.token") ?? "";
+
+function App() {
+  const queryClient = useQueryClient();
+  const [session, setSession] = useState<ApiSession>({
+    token: storedToken,
+    roles: "admin,operator,auditor,viewer"
+  });
+  const [workspaceId, setWorkspaceId] = useState("dev-01");
+  const [windowMinutes, setWindowMinutes] = useState(60);
+  const [view, setView] = useState<View>("overview");
+  const [selectedStationId, setSelectedStationId] = useState<string | undefined>();
+  const [selectedSubsystemId, setSelectedSubsystemId] = useState<string | undefined>();
+  const [query, setQuery] = useState("");
+  const [liveState, setLiveState] = useState<"offline" | "connecting" | "live">("offline");
+  const [liveSnapshot, setLiveSnapshot] = useState<ObservatorySnapshot | null>(null);
+  const [reducedMotion, setReducedMotion] = useState(
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+  const lastSeq = useRef<number | undefined>(undefined);
+
+  const summary = useQuery({
+    queryKey: ["summary", session.token, session.roles, workspaceId, windowMinutes],
+    queryFn: () => fetchSummary(session, workspaceId, windowMinutes)
+  });
+
+  const snapshot = liveSnapshot ?? summary.data?.snapshot;
+  const selectedStation =
+    snapshot?.pipeline.stations.find((station) => station.component_id === selectedStationId) ??
+    snapshot?.pipeline.stations[0];
+  const selectedSubsystem =
+    snapshot?.subsystems.find((subsystem) => subsystem.subsystem_id === selectedSubsystemId) ??
+    snapshot?.subsystems[0];
+
+  const objectQuery = useQuery({
+    queryKey: ["object", session.token, workspaceId, selectedStation?.component_id],
+    enabled: Boolean(selectedStation),
+    queryFn: () => fetchObject(session, "component", selectedStation!.component_id, workspaceId)
+  });
+
+  const searchQuery = useQuery({
+    queryKey: ["search", session.token, workspaceId, query],
+    enabled: query.trim().length > 1,
+    queryFn: () => search(session, query, workspaceId)
+  });
+
+  const actionMutation = useMutation({
+    mutationFn: () =>
+      postAction(session, {
+        workspace_id: workspaceId,
+        action: "verify_audit_chain",
+        idempotency_key: `observatory-ui-${Date.now()}`,
+        reason: "operator requested Observatory UI audit proof"
+      })
+  });
+
+  useEffect(() => {
+    sessionStorage.setItem("skillkernel.admin.token", session.token);
+  }, [session.token]);
+
+  useEffect(() => {
+    let closed = false;
+    setLiveState("connecting");
+    const socket = new WebSocket(liveUrl(session, workspaceId, lastSeq.current));
+    socket.addEventListener("open", () => {
+      if (!closed) setLiveState("live");
+    });
+    socket.addEventListener("message", (event) => {
+      const envelope = JSON.parse(event.data) as LiveEnvelope;
+      lastSeq.current = envelope.seq;
+      if (isSnapshotPayload(envelope.payload)) {
+        setLiveSnapshot(envelope.payload);
+        queryClient.setQueryData(["summary", session.token, session.roles, workspaceId, windowMinutes], {
+          snapshot: envelope.payload
+        });
+      }
+    });
+    socket.addEventListener("close", () => {
+      if (!closed) setLiveState("offline");
+    });
+    socket.addEventListener("error", () => {
+      if (!closed) setLiveState("offline");
+    });
+    return () => {
+      closed = true;
+      socket.close();
+    };
+  }, [queryClient, session.roles, session.token, windowMinutes, workspaceId]);
+
+  const healthChart = useMemo<EChartsOption>(() => {
+    const counts = snapshot?.fitness.component_health_counts ?? {};
+    return {
+      backgroundColor: "transparent",
+      tooltip: {},
+      series: [
+        {
+          type: "pie",
+          radius: ["48%", "72%"],
+          avoidLabelOverlap: true,
+          data: Object.entries(counts).map(([name, value]) => ({ name, value }))
+        }
+      ]
+    };
+  }, [snapshot]);
+
+  const subsystemChart = useMemo<EChartsOption>(() => {
+    return {
+      backgroundColor: "transparent",
+      tooltip: {},
+      xAxis: { type: "category", data: snapshot?.subsystems.map((item) => item.display_name) ?? [] },
+      yAxis: { type: "value" },
+      grid: { left: 42, right: 12, bottom: 72, top: 24 },
+      series: [
+        {
+          type: "bar",
+          data: snapshot?.subsystems.map((item) => item.queue_depth) ?? [],
+          itemStyle: { color: "#68d391" }
+        }
+      ]
+    };
+  }, [snapshot]);
+
+  function selectStation(station: Station) {
+    setSelectedStationId(station.component_id);
+    setView("cockpit");
+  }
+
+  if (summary.isError && !session.token) {
+    return (
+      <main className="login-shell">
+        <section className="login-panel">
+          <KeyRound aria-hidden="true" />
+          <h1>SkillKernel Observatory</h1>
+          <p>Enter the configured admin token to open the operating console.</p>
+          <input
+            type="password"
+            aria-label="Admin token"
+            placeholder="SKILLKERNEL_ADMIN_TOKEN"
+            value={session.token}
+            onChange={(event) => setSession({ ...session, token: event.target.value })}
+          />
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="brand">
+          <Workflow aria-hidden="true" />
+          <div>
+            <h1>SkillKernel Observatory</h1>
+            <p>{snapshot?.fitness.plain_language_summary ?? "Loading sidecar read models."}</p>
+          </div>
+        </div>
+        <div className="controls-strip">
+          <label>
+            Workspace
+            <input value={workspaceId} onChange={(event) => setWorkspaceId(event.target.value)} />
+          </label>
+          <label>
+            Window
+            <input
+              type="number"
+              min={1}
+              max={1440}
+              value={windowMinutes}
+              onChange={(event) => setWindowMinutes(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            Token
+            <input
+              type="password"
+              value={session.token}
+              onChange={(event) => setSession({ ...session, token: event.target.value })}
+            />
+          </label>
+          <button
+            type="button"
+            className="icon-button"
+            title="Refresh snapshot"
+            onClick={() => void summary.refetch()}
+          >
+            <RefreshCw aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            title="Toggle reduced motion"
+            onClick={() => setReducedMotion((value) => !value)}
+          >
+            <TimerReset aria-hidden="true" />
+          </button>
+        </div>
+      </header>
+
+      <nav className="view-tabs" aria-label="Observatory views">
+        <Tab active={view === "overview"} label="Overview" icon={<Gauge />} onClick={() => setView("overview")} />
+        <Tab active={view === "workcells"} label="Workcells" icon={<Layers />} onClick={() => setView("workcells")} />
+        <Tab active={view === "cockpit"} label="Cockpit" icon={<Activity />} onClick={() => setView("cockpit")} />
+        <Tab active={view === "skills"} label="Skills" icon={<Network />} onClick={() => setView("skills")} />
+        <Tab active={view === "trace"} label="Trace" icon={<FileJson />} onClick={() => setView("trace")} />
+        <Tab active={view === "admin"} label="Admin" icon={<ShieldCheck />} onClick={() => setView("admin")} />
+      </nav>
+
+      {summary.isLoading || !snapshot ? (
+        <section className="loading-state">Loading Observatory snapshot...</section>
+      ) : (
+        <>
+          <section className="kpi-ribbon">
+            {snapshot.kpis.map((kpi) => (
+              <div className="kpi" key={kpi.label}>
+                <span>{kpi.label}</span>
+                <strong>{String(kpi.value)}</strong>
+                <small>{kpi.unit}</small>
+              </div>
+            ))}
+            <div className={`live-badge live-${liveState}`}>{liveState}</div>
+          </section>
+
+          <section className="search-row">
+            <Search aria-hidden="true" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Find components, issues, traces, jobs, skills, reason codes"
+            />
+            {searchQuery.data?.results.length ? (
+              <div className="search-results">
+                {searchQuery.data.results.slice(0, 8).map((result) => (
+                  <button
+                    key={`${result.object_type}:${result.object_id}`}
+                    type="button"
+                    onClick={() => {
+                      if (result.object_type === "component") {
+                        setSelectedStationId(result.object_id);
+                        setView("cockpit");
+                      }
+                    }}
+                  >
+                    <span>{result.object_type}</span>
+                    <strong>{result.title}</strong>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </section>
+
+          {view === "overview" && (
+            <Overview
+              snapshot={snapshot}
+              selectedStationId={selectedStation?.component_id}
+              reducedMotion={reducedMotion}
+              healthChart={healthChart}
+              subsystemChart={subsystemChart}
+              onSelectStation={selectStation}
+            />
+          )}
+          {view === "workcells" && (
+            <Workcells
+              snapshot={snapshot}
+              selectedSubsystem={selectedSubsystem}
+              onSelect={(subsystem) => setSelectedSubsystemId(subsystem.subsystem_id)}
+              onOpenStation={selectStation}
+            />
+          )}
+          {view === "cockpit" && selectedStation && (
+            <Cockpit
+              station={selectedStation}
+              issues={snapshot.issue_board.filter((issue) => issue.component_id === selectedStation.component_id)}
+              object={objectQuery.data?.object}
+            />
+          )}
+          {view === "skills" && <SkillsAndTopology snapshot={snapshot} />}
+          {view === "trace" && <TraceAndInspector snapshot={snapshot} object={objectQuery.data?.object} />}
+          {view === "admin" && (
+            <Admin
+              snapshot={snapshot}
+              actionPending={actionMutation.isPending}
+              actionResult={actionMutation.data?.receipt}
+              onAction={() => actionMutation.mutate()}
+            />
+          )}
+        </>
+      )}
+    </main>
+  );
+}
+
+function Tab({
+  active,
+  label,
+  icon,
+  onClick
+}: {
+  active: boolean;
+  label: string;
+  icon: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button className={active ? "is-active" : ""} type="button" onClick={onClick}>
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+}
+
+function Overview({
+  snapshot,
+  selectedStationId,
+  reducedMotion,
+  healthChart,
+  subsystemChart,
+  onSelectStation
+}: {
+  snapshot: ObservatorySnapshot;
+  selectedStationId?: string;
+  reducedMotion: boolean;
+  healthChart: EChartsOption;
+  subsystemChart: EChartsOption;
+  onSelectStation: (station: Station) => void;
+}) {
+  return (
+    <section className="overview-grid">
+      <div className="pipeline-region">
+        <ParticleLayer edges={snapshot.pipeline.edges} reducedMotion={reducedMotion} />
+        <AssemblyLine
+          stations={snapshot.pipeline.stations}
+          edges={snapshot.pipeline.edges}
+          selectedId={selectedStationId}
+          onSelect={onSelectStation}
+        />
+      </div>
+      <aside className="issue-board">
+        <h2>Issue Board</h2>
+        {snapshot.issue_board.slice(0, 12).map((issue) => (
+          <IssueRow key={issue.issue_id} issue={issue} />
+        ))}
+      </aside>
+      <EChartPanel title="Component Health" option={healthChart} />
+      <EChartPanel title="Workcell Queue Depth" option={subsystemChart} />
+      <section className="invariant-panel">
+        <h2>Pipeline Invariants</h2>
+        {snapshot.pipeline.invariants.map((invariant) => (
+          <div key={String(invariant.invariant_id)} className="invariant-row">
+            <strong>{String(invariant.invariant_id)}</strong>
+            <span>{String(invariant.status)}</span>
+          </div>
+        ))}
+      </section>
+    </section>
+  );
+}
+
+function Workcells({
+  snapshot,
+  selectedSubsystem,
+  onSelect,
+  onOpenStation
+}: {
+  snapshot: ObservatorySnapshot;
+  selectedSubsystem?: Subsystem;
+  onSelect: (subsystem: Subsystem) => void;
+  onOpenStation: (station: Station) => void;
+}) {
+  return (
+    <section className="workcell-layout">
+      <div className="workcell-list">
+        {snapshot.subsystems.map((subsystem) => (
+          <button
+            key={subsystem.subsystem_id}
+            className={subsystem.subsystem_id === selectedSubsystem?.subsystem_id ? "is-selected" : ""}
+            type="button"
+            onClick={() => onSelect(subsystem)}
+          >
+            <span className={`status-dot health-${subsystem.health}`} />
+            <strong>{subsystem.display_name}</strong>
+            <small>{subsystem.queue_depth} queued</small>
+          </button>
+        ))}
+      </div>
+      {selectedSubsystem ? (
+        <section className="workcell-detail">
+          <h2>{selectedSubsystem.display_name}</h2>
+          <div className="workcell-metrics">
+            <span>Health {selectedSubsystem.health}</span>
+            <span>Throughput {selectedSubsystem.throughput_1m.toFixed(1)}/min</span>
+            <span>Conversion {(selectedSubsystem.conversion_rate * 100).toFixed(0)}%</span>
+          </div>
+          <div className="question-list">
+            {selectedSubsystem.diagnostic_questions.map((question) => (
+              <p key={question}>{question}</p>
+            ))}
+          </div>
+          <div className="station-grid">
+            {selectedSubsystem.station_ids.map((stationId) => {
+              const station = snapshot.pipeline.stations.find((item) => item.component_id === stationId)!;
+              return (
+                <button key={stationId} type="button" onClick={() => onOpenStation(station)}>
+                  <span className={`status-dot health-${station.health}`} />
+                  <strong>{station.display_name}</strong>
+                  <small>{station.reason_codes.join(", ") || "within bounds"}</small>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+    </section>
+  );
+}
+
+function Cockpit({
+  station,
+  issues,
+  object
+}: {
+  station: Station;
+  issues: Issue[];
+  object?: Record<string, unknown>;
+}) {
+  return (
+    <section className="cockpit-layout">
+      <div className="cockpit-main">
+        <h2>{station.display_name}</h2>
+        <p>{station.purpose}</p>
+        <div className="workcell-metrics">
+          <span>Health {station.health}</span>
+          <span>Input {station.input_rate_1m.toFixed(1)}/min</span>
+          <span>Output {station.output_rate_1m.toFixed(1)}/min</span>
+          <span>Queue {station.queue_depth}</span>
+        </div>
+        <section className="reason-panel">
+          <h3>Reason Codes</h3>
+          {station.reason_codes.length ? (
+            station.reason_codes.map((code) => <code key={code}>{code}</code>)
+          ) : (
+            <code>no-active-reason-codes</code>
+          )}
+        </section>
+        <section className="records-panel">
+          <h3>Records</h3>
+          {station.records.map((record, index) => (
+            <pre key={index}>{JSON.stringify(record, null, 2)}</pre>
+          ))}
+        </section>
+      </div>
+      <aside className="cockpit-side">
+        <h3>Local Issues</h3>
+        {issues.length ? issues.map((issue) => <IssueRow key={issue.issue_id} issue={issue} />) : <p>No active issues.</p>}
+        <Inspector value={object ?? station} />
+      </aside>
+    </section>
+  );
+}
+
+function SkillsAndTopology({ snapshot }: { snapshot: ObservatorySnapshot }) {
+  const skillStations = snapshot.pipeline.stations.filter((station) =>
+    ["skill_ir_graph_ir", "topology_operations", "activation_curation", "context_compiler"].includes(
+      station.component_id
+    )
+  );
+  return (
+    <section className="topology-page">
+      <div>
+        <h2>Skill And Topology Lens</h2>
+        <p>
+          SkillIR, SkillGraphIR, package planning, context budget, activation, curation, and rollback
+          surfaces are linked through the component cockpits below.
+        </p>
+      </div>
+      <div className="station-grid">
+        {skillStations.map((station) => (
+          <div key={station.component_id} className="topology-tile">
+            <span className={`status-dot health-${station.health}`} />
+            <strong>{station.display_name}</strong>
+            <small>{station.object_kinds.join(" / ")}</small>
+          </div>
+        ))}
+      </div>
+      <Inspector value={snapshot.pipeline.edges.filter((edge) => edge.dominant_item_kind.includes("skill"))} />
+    </section>
+  );
+}
+
+function TraceAndInspector({
+  snapshot,
+  object
+}: {
+  snapshot: ObservatorySnapshot;
+  object?: Record<string, unknown>;
+}) {
+  return (
+    <section className="trace-page">
+      <div>
+        <h2>Trace Replay And Object Microscope</h2>
+        <p>
+          Replays use recorded spans and read models only. They do not re-run jobs, mutate skills, or reveal
+          raw content.
+        </p>
+      </div>
+      <Inspector value={object ?? snapshot.pipeline.invariants} />
+    </section>
+  );
+}
+
+function Admin({
+  snapshot,
+  actionPending,
+  actionResult,
+  onAction
+}: {
+  snapshot: ObservatorySnapshot;
+  actionPending: boolean;
+  actionResult?: Record<string, unknown>;
+  onAction: () => void;
+}) {
+  return (
+    <section className="admin-page">
+      <div className="admin-actions">
+        <h2>Operator Action Gateway</h2>
+        <p>Actions are role-checked, idempotency-keyed, policy-receipted, and written to audit.</p>
+        <button type="button" onClick={onAction} disabled={actionPending}>
+          <ShieldCheck aria-hidden="true" />
+          <span>{actionPending ? "Recording..." : "Audit Verify Action"}</span>
+        </button>
+      </div>
+      <div className="admin-columns">
+        <section>
+          <h3>Command Palette</h3>
+          {snapshot.command_palette.map((command) => (
+            <div key={String(command.command)} className="command-row">
+              <strong>{String(command.label)}</strong>
+              <code>{String(command.target)}</code>
+            </div>
+          ))}
+        </section>
+        <section>
+          <h3>Receipt</h3>
+          <Inspector value={actionResult ?? snapshot.auth} />
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function IssueRow({ issue }: { issue: Issue }) {
+  return (
+    <article className={`issue-row severity-${issue.severity}`}>
+      <Bug aria-hidden="true" />
+      <div>
+        <strong>{issue.title}</strong>
+        <p>{issue.summary}</p>
+        <small>{issue.reason_codes.join(", ")}</small>
+      </div>
+    </article>
+  );
+}
+
+export default App;

@@ -915,6 +915,30 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   sidecar/autoskill/tests/test_evaluator.py`; full validation passed with `uv
   run ruff check sidecar`, `uv run pytest -q` with 303 tests, `uv run python -m
   compileall -q sidecar`, and `git diff --check`.
+- Observatory implementation slice landed from
+  `observatory-implementation-specification.md`: sidecar web-admin config,
+  role-aware admin auth, `/admin/api/v1/*` summary/pipeline/subsystem/component
+  issue/search/object/replay/action endpoints, `/admin/live` WebSocket,
+  `/admin/live-sse`, sidecar static serving, station/subsystem/read-model
+  aggregation, issue/reason-code generation, content-safe object microscope
+  payloads, audited operator action receipts, and legacy route-inspection
+  compatibility for existing tests.
+- Observatory React/Vite frontend landed under
+  `sidecar/autoskill/observatory`: React Flow assembly-line map, lazy ELK
+  layout, ECharts health/queue charts, PixiJS live-flow overlay, Monaco
+  read-only JSON inspector, TanStack Query server-state polling, token/workspace
+  controls, global search, issue board, workcell lens, station cockpit,
+  skill/topology lens, trace/object inspector, admin action gateway, reduced
+  motion support, and Docker/Compose/Makefile build wiring.
+- Observatory validation passed: `uv run ruff check sidecar`, `uv run pytest -q`
+  with 307 passing tests, `uv run python -m compileall -q sidecar`,
+  `npm test --prefix plugin/autoskill` with 18 passing tests,
+  `npm run build` and `npm audit --omit=dev` in
+  `sidecar/autoskill/observatory`, `docker compose config`, and
+  `git diff --check`.
+- Local Observatory preview is running at `http://127.0.0.1:8757/admin/` from
+  PID file `/tmp/skillkernel-observatory-8757.pid`; verified `/v1/health`,
+  `/admin/api/v1/summary?workspace_id=dev-01`, and `/admin/` all return 200.
 
 ## Next Gates
 

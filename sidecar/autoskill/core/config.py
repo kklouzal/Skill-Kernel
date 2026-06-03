@@ -169,6 +169,22 @@ class Settings(BaseSettings):
         ),
     )
     plugin_runtime_context_fail_soft: bool = True
+    web_admin_enabled: bool = True
+    web_admin_base_path: str = "/admin"
+    web_admin_auth_mode: str = "bearer_token"
+    web_admin_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SKILLKERNEL_ADMIN_TOKEN", "AUTOSKILL_WEB_ADMIN_TOKEN"),
+    )
+    web_admin_static_dir: Path = Path("sidecar/autoskill/observatory/dist")
+    web_admin_raw_content_enabled: bool = False
+    web_admin_csrf_enabled: bool = True
+    web_admin_issue_board_enabled: bool = True
+    web_admin_subsystem_lenses_enabled: bool = True
+    web_admin_playbooks_enabled: bool = True
+    web_admin_telemetry_staleness_warning_seconds: int = 30
+    web_admin_telemetry_staleness_degraded_seconds: int = 120
+    web_admin_cors_allowed_origins: list[str] = Field(default_factory=list)
 
 
 @lru_cache(maxsize=1)
@@ -314,9 +330,7 @@ def effective_skillkernel_config(settings: Settings | None = None) -> dict[str, 
             "max_frontmatter_description_chars": resolved.max_frontmatter_description_chars,
             "max_context_hint_tokens": resolved.max_context_hint_tokens,
             "max_support_excerpt_tokens": resolved.max_support_excerpt_tokens,
-            "min_marginal_success_per_1k_tokens": (
-                resolved.min_marginal_success_per_1k_tokens
-            ),
+            "min_marginal_success_per_1k_tokens": (resolved.min_marginal_success_per_1k_tokens),
             "max_false_positive_load_delta": resolved.max_false_positive_load_delta,
             "max_shadowing_delta": resolved.max_shadowing_delta,
             "max_new_skills_per_day": resolved.max_new_skills_per_day,
@@ -363,6 +377,32 @@ def effective_skillkernel_config(settings: Settings | None = None) -> dict[str, 
                 "maintenance": resolved.worker_maintenance_concurrency,
                 "mutation": resolved.worker_mutation_concurrency,
             },
+        },
+        "web_admin": {
+            "enabled": resolved.web_admin_enabled,
+            "base_path": resolved.web_admin_base_path,
+            "auth": {
+                "mode": resolved.web_admin_auth_mode,
+                "token_env": "SKILLKERNEL_ADMIN_TOKEN",
+                "token_compat_env": "AUTOSKILL_WEB_ADMIN_TOKEN",
+                "dedicated_token_configured": bool(resolved.web_admin_token),
+                "control_token_fallback_configured": bool(resolved.control_token),
+            },
+            "static_dir": str(resolved.web_admin_static_dir),
+            "raw_content": {"enabled": resolved.web_admin_raw_content_enabled},
+            "diagnostics": {
+                "issue_board_enabled": resolved.web_admin_issue_board_enabled,
+                "subsystem_lenses_enabled": resolved.web_admin_subsystem_lenses_enabled,
+                "playbooks_enabled": resolved.web_admin_playbooks_enabled,
+                "telemetry_staleness_warning_seconds": (
+                    resolved.web_admin_telemetry_staleness_warning_seconds
+                ),
+                "telemetry_staleness_degraded_seconds": (
+                    resolved.web_admin_telemetry_staleness_degraded_seconds
+                ),
+            },
+            "csrf": {"enabled": resolved.web_admin_csrf_enabled},
+            "cors": {"allowed_origins": resolved.web_admin_cors_allowed_origins},
         },
     }
 
