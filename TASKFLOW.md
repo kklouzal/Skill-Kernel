@@ -707,6 +707,17 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   check --prefix plugin/autoskill`, `docker compose config --quiet`, and a
   compose Postgres migration smoke verifying the `misfire_policy` column and
   check constraint.
+- Scheduler startup now registers handler-backed section 26.4 core defaults
+  through a centralized default-schedule service: evidence derivation,
+  embedding generation, opportunity mining, usage aggregation, utility rollup,
+  curation, contract extraction, drift checks, historical parsing, historical
+  bootstrap consolidation, evaluator gates, and guarded repair execution get
+  deterministic intervals, workspace-scoped payloads, and section 26.5 misfire
+  policies. Validation passed with focused scheduler/worker tests, focused
+  ruff checks, full `uv run ruff check sidecar`, `uv run pytest -q` with 279
+  tests, `uv run python -m compileall -q sidecar`, `git diff --check`, `npm
+  test --prefix plugin/autoskill` with 18 tests, and `npm run check --prefix
+  plugin/autoskill`.
 
 ## Next Gates
 

@@ -28,6 +28,7 @@ from autoskill.db.utility import AsyncpgUtilityStore
 from autoskill.services.embedding_generation import build_text_embedder_from_settings
 from autoskill.services.external_inventory import ensure_external_skill_scan_schedule
 from autoskill.services.historical_discovery import ensure_historical_discovery_schedule
+from autoskill.services.scheduler_defaults import ensure_core_schedules
 from autoskill.services.worker import WorkerLoopConfig, WorkerPool, WorkerStores, run_worker_loop
 
 
@@ -123,6 +124,11 @@ async def run_worker(args: argparse.Namespace) -> int:
             workspace_root=workspace_root,
             archive_root=archive_root,
         )
+        if args.pool == "scheduler":
+            await ensure_core_schedules(
+                scheduler,
+                workspace_key=args.workspace_id,
+            )
         await ensure_external_skill_scan_schedule(
             scheduler,
             workspace_key=args.workspace_id,
