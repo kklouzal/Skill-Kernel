@@ -661,7 +661,9 @@ Deliverables:
   resolves captured events, saved baseline comparisons, and diagnostic bundles
   from those stores instead of falling back to placeholder snapshot objects;
 - live updates; implemented with `/admin/live` WebSocket and `/admin/live-sse`
-  fallback, plus frontend fallback logic and snapshot reload handling;
+  fallback, frontend fallback logic, snapshot reload handling, and persisted
+  `admin_live_event_outbox` events for audited operator actions, diagnostic
+  bundles, and read-model invalidation signals;
 - operator action gateway; implemented as audited, policy-checked action
   receipts plus guarded aliases for retry/cancel jobs, pause/resume schedules,
   historical import actions, candidate quarantine, freeze/unfreeze/rollback,
@@ -671,6 +673,10 @@ Deliverables:
   the generic audit hash-chain record, preserving actor roles, target identity,
   idempotency key, result, request ID, metadata-key summary, and confirmation
   hashes without storing raw confirmation text;
+- collection pagination and browser action protection; implemented as bounded
+  cursor metadata on Observatory collection envelopes, malformed/stale cursor
+  rejection, browser-session CSRF header enforcement for POST actions, and
+  in-process per-actor rate limits for operator actions and raw reveal attempts;
 - frontend overview and cockpits; implemented with assembly-line/workcell
   views, issue board, global search, object inspector, admin actions,
   deep-link state, reduced-motion support, and station cockpit tabs for records,
@@ -733,3 +739,14 @@ Acceptance:
   `admin_action_audit` row links to `audit_records` and contains only redacted
   request metadata, deleted the smoke rows, and stopped Postgres while
   preserving the dev volume.
+- validation evidence for the cursor/security/live-outbox slice passed on the
+  final tree: Observatory API tests `14 passed`, `uv run ruff check sidecar
+  scripts` passed, `uv run pytest -q` passed with 317 tests,
+  `uv run python -m compileall -q sidecar scripts` passed,
+  `npm test --prefix plugin/autoskill` passed with 18 tests,
+  `npm run build --prefix sidecar/autoskill/observatory` passed,
+  `docker compose config --quiet` passed, and a compose/Postgres smoke applied
+  migrations, recorded one `refresh_read_models` admin action, verified its
+  `read_model_invalidated` row in `admin_live_event_outbox`, verified linked
+  `admin_action_audit` and `audit_records` rows, deleted the smoke rows, and
+  stopped Postgres while preserving the dev volume.

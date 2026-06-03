@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from hmac import compare_digest
 from pathlib import Path
+from time import monotonic
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
@@ -396,6 +398,12 @@ class ObservatoryActionResponse(AdminResponseEnvelope):
 
 class ObservatoryCollectionResponse(AdminResponseEnvelope):
     collection: dict[str, object]
+
+
+ADMIN_CSRF_HEADER = "X-SkillKernel-CSRF"
+ADMIN_BROWSER_SESSION_HEADER = "X-SkillKernel-Browser-Session"
+ADMIN_ACTION_RATE_LIMIT = 60
+ADMIN_RAW_REVEAL_RATE_LIMIT = 10
 
 
 class DiagnosticSignalRequest(BaseModel):
@@ -1993,6 +2001,119 @@ def _admin_base_path() -> str:
     return value.rstrip("/") or "/admin"
 
 
+def _admin_csrf_token(authorization: str | None) -> str:
+    settings = get_settings()
+    bearer = ""
+    if authorization and authorization.startswith("Bearer "):
+        bearer = authorization.removeprefix("Bearer ").strip()
+    seed = bearer or settings.web_admin_token or settings.control_token or "local-dev-admin"
+    return sha256_text(f"skillkernel-observatory-csrf:{seed}")[:32]
+
+
+def _is_admin_browser_action(request: Request | None) -> bool:
+    if request is None:
+        return False
+    return (
+        request.headers.get(ADMIN_BROWSER_SESSION_HEADER, "").lower() == "true"
+        or bool(request.headers.get("origin"))
+        or bool(request.headers.get("referer"))
+        or bool(request.headers.get("cookie"))
+    )
+
+
+def _require_admin_csrf(
+    *,
+    request: Request | None,
+    authorization: str | None,
+    csrf_token: str | None,
+) -> None:
+    if not get_settings().web_admin_csrf_enabled or not _is_admin_browser_action(request):
+        return
+    supplied = csrf_token
+    if not supplied and request is not None:
+        supplied = request.headers.get(ADMIN_CSRF_HEADER)
+    expected = _admin_csrf_token(authorization)
+    if not supplied or not compare_digest(supplied, expected):
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail="invalid admin csrf token",
+        )
+
+
+def _source_identity(request: Request | None) -> dict[str, object]:
+    if request is None:
+        return {"ip": None, "proxy": None}
+    client_ip = request.client.host if request.client else None
+    proxy = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")
+    return {"ip": client_ip, "proxy": proxy}
+
+
+def _encode_admin_cursor(item: dict[str, Any]) -> str | None:
+    object_id = _admin_cursor_object_id(item)
+    if not object_id:
+        return None
+    payload = {
+        "id": object_id,
+        "t": _admin_cursor_time(item),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _decode_admin_cursor(cursor: str) -> dict[str, str]:
+    try:
+        padded = cursor + ("=" * (-len(cursor) % 4))
+        decoded = base64.urlsafe_b64decode(padded.encode()).decode()
+        payload = json.loads(decoded)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="invalid admin pagination cursor",
+        ) from exc
+    if not isinstance(payload, dict) or not payload.get("id"):
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="invalid admin pagination cursor",
+        )
+    return {"id": str(payload["id"]), "t": str(payload.get("t") or "")}
+
+
+def _admin_cursor_object_id(item: dict[str, Any]) -> str | None:
+    for key in (
+        "object_id",
+        "event_id",
+        "trace_id",
+        "job_id",
+        "schedule_id",
+        "skill_id",
+        "skill_version_id",
+        "evaluation_id",
+        "historical_import_source_id",
+        "retrieval_log_id",
+        "profile_id",
+        "audit_id",
+        "comparison_id",
+        "bundle_id",
+        "component_id",
+        "subsystem_id",
+        "reason_code",
+        "playbook_id",
+        "invariant_id",
+    ):
+        value = item.get(key)
+        if value is not None:
+            return str(value)
+    return None
+
+
+def _admin_cursor_time(item: dict[str, Any]) -> str:
+    for key in ("created_at", "occurred_at", "last_event_at", "started_at", "captured_at"):
+        value = item.get(key)
+        if value is not None:
+            return str(value)
+    return ""
+
+
 def _count_by(items: list[dict[str, object]], key: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     for item in items:
@@ -3158,6 +3279,31 @@ def create_app(
     topology = topology_store or _build_topology_store()
     activation_gate = activation_gate_store or _build_activation_gate_store()
     broker_cache = ContextHintCache()
+    admin_rate_limit_events: dict[tuple[str, str], list[float]] = {}
+
+    def _require_admin_rate_limit(
+        principal: dict[str, object],
+        *,
+        bucket: str,
+        limit: int,
+        window_seconds: int = 60,
+    ) -> None:
+        actor = str(principal["subject"])
+        now = monotonic()
+        key = (actor, bucket)
+        recent = [
+            event_at
+            for event_at in admin_rate_limit_events.get(key, [])
+            if now - event_at < window_seconds
+        ]
+        if len(recent) >= limit:
+            admin_rate_limit_events[key] = recent
+            raise HTTPException(
+                status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="admin rate limit exceeded",
+            )
+        recent.append(now)
+        admin_rate_limit_events[key] = recent
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -4448,11 +4594,36 @@ def create_app(
         title: str,
         items: list[dict[str, Any]],
         limit: int,
+        cursor: str | None = None,
         source: str,
         diagnostics: dict[str, Any] | None = None,
     ) -> ObservatoryCollectionResponse:
         bounded_limit = max(1, min(limit, 500))
-        visible_items = items[:bounded_limit]
+        start_index = 0
+        decoded_cursor = _decode_admin_cursor(cursor) if cursor else None
+        if decoded_cursor is not None:
+            for index, item in enumerate(items):
+                if _admin_cursor_object_id(item) == decoded_cursor["id"]:
+                    start_index = index + 1
+                    break
+            else:
+                raise HTTPException(
+                    status_code=http_status.HTTP_400_BAD_REQUEST,
+                    detail="admin pagination cursor is outside the bounded result window",
+                )
+        window = items[start_index : start_index + bounded_limit + 1]
+        visible_items = window[:bounded_limit]
+        has_more = len(window) > bounded_limit or len(items) > start_index + bounded_limit
+        next_cursor = (
+            _encode_admin_cursor(visible_items[-1]) if has_more and visible_items else None
+        )
+        meta = _admin_response_meta()
+        meta["pagination"] = {
+            "cursor": cursor,
+            "next_cursor": next_cursor,
+            "limit": bounded_limit,
+            "has_more": has_more,
+        }
         return ObservatoryCollectionResponse(
             collection={
                 "schema_version": "skillkernel.observatory.collection.v1",
@@ -4461,7 +4632,9 @@ def create_app(
                 "items": visible_items,
                 "count": len(visible_items),
                 "limit": bounded_limit,
-                "has_more": len(items) > bounded_limit,
+                "cursor": cursor,
+                "next_cursor": next_cursor,
+                "has_more": has_more,
                 "source": source,
                 "content_policy": {
                     "raw_available": False,
@@ -4469,7 +4642,8 @@ def create_app(
                     "redaction_state": "redacted_or_not_applicable",
                 },
                 "diagnostics": diagnostics or {},
-            }
+            },
+            meta=meta,
         )
 
     def _find_by_id(
@@ -4591,11 +4765,24 @@ def create_app(
         request: ObservatoryActionRequest,
         authorization: str | None,
         roles_header: str | None,
+        *,
+        http_request: Request | None = None,
+        csrf_token: str | None = None,
     ) -> ObservatoryActionResponse:
         principal = _require_admin_auth(
             authorization,
             roles_header,
             required_roles={"operator", "admin"},
+        )
+        _require_admin_csrf(
+            request=http_request,
+            authorization=authorization,
+            csrf_token=csrf_token,
+        )
+        _require_admin_rate_limit(
+            principal,
+            bucket="admin-actions",
+            limit=ADMIN_ACTION_RATE_LIMIT,
         )
         allowed_actions = {
             "noop.audit",
@@ -4640,6 +4827,12 @@ def create_app(
         ):
             accepted = False
             reason_codes = ["raw-content-disabled"]
+        if request.action == "reveal_raw_content":
+            _require_admin_rate_limit(
+                principal,
+                bucket="raw-reveal",
+                limit=ADMIN_RAW_REVEAL_RATE_LIMIT,
+            )
         confirmation_required = request.action in high_impact_actions
         if (
             accepted
@@ -4668,7 +4861,7 @@ def create_app(
             "metadata_keys": sorted(request.metadata.keys()),
             "confirmation_present": request.confirmation is not None,
             "confirmation_hash": confirmation_hash,
-            "source": {"ip": None, "proxy": None},
+            "source": _source_identity(http_request),
         }
         audit_record = await audit.append_record(
             AuditRecord(
@@ -4678,7 +4871,7 @@ def create_app(
                 subject_id=request.idempotency_key,
                 details={
                     "target": request.target,
-                    "reason": request.reason,
+                    "reason": request.reason or "",
                     "dry_run": request.dry_run,
                     "accepted": accepted,
                     "reason_codes": reason_codes,
@@ -4701,9 +4894,23 @@ def create_app(
             target_id=target_id,
             idempotency_key=request.idempotency_key,
             request_payload_redacted=action_request_payload,
-            reason=request.reason,
+            reason=request.reason or "",
             result="accepted" if accepted else "rejected",
             linked_audit_id=audit_record.audit_id,
+        )
+        live_event = await observatory_admin.append_live_event(
+            kind=_observatory_live_kind_for_action(request.action, accepted=accepted),
+            component_id=_observatory_component_for_action(request.action),
+            object_type=target_type,
+            object_id=target_id,
+            payload={
+                "workspace_id": request.workspace_id,
+                "action": request.action,
+                "accepted": accepted,
+                "reason_codes": reason_codes,
+                "audit_id": str(audit_record.audit_id),
+                "action_id": str(action_audit.action_id),
+            },
         )
         return ObservatoryActionResponse(
             receipt=action_receipt(
@@ -4714,9 +4921,51 @@ def create_app(
                 reason_codes=reason_codes,
                 audit=audit_record.model_dump(mode="json"),
                 action_audit=action_audit.to_json(),
+                live_event=live_event.to_json(),
             ),
             meta=response_meta,
         )
+
+    def _observatory_live_kind_for_action(action: str, *, accepted: bool) -> str:
+        if not accepted:
+            return "observatory_self_health_changed"
+        if action == "refresh_read_models":
+            return "read_model_invalidated"
+        if action == "verify_live_stream":
+            return "observatory_self_health_changed"
+        if action == "verify_audit_chain":
+            return "audit_record_appended"
+        if action in {"freeze_skill", "unfreeze_skill", "rollback_skill", "rollback_transaction"}:
+            return "skill_state_changed"
+        if action in {"retry_job", "cancel_job"}:
+            return "job_progress"
+        return "audit_record_appended"
+
+    def _observatory_component_for_action(action: str) -> str:
+        if action in {"verify_audit_chain"}:
+            return "audit_trace"
+        if action in {"refresh_read_models", "verify_live_stream"}:
+            return "observatory_admin"
+        if action in {"retry_job", "cancel_job", "pause_schedule", "resume_schedule"}:
+            return "scheduler_jobs"
+        if "broker" in action:
+            return "broker_runtime"
+        if "profile" in action:
+            return "model_embedding"
+        if "storage" in action:
+            return "storage_db"
+        return "observatory_admin"
+
+    def _snapshot_live_fallback(
+        snapshot: dict[str, object],
+        *,
+        last_seq: int | None,
+    ) -> dict[str, object]:
+        payload = build_live_envelope(snapshot, last_seq=None)
+        payload["seq"] = last_seq or 0
+        payload["event_type"] = "snapshot" if last_seq is None else "heartbeat"
+        payload["requires_snapshot_reload"] = False
+        return payload
 
     def _observatory_action_target(
         action: str,
@@ -4762,6 +5011,9 @@ def create_app(
             x_skillkernel_roles: Annotated[
                 str | None, Header(alias="X-SkillKernel-Roles")
             ] = None,
+            x_skillkernel_csrf: Annotated[
+                str | None, Header(alias=ADMIN_CSRF_HEADER)
+            ] = None,
             workspace_id: str = "dev-01",
             idempotency_key: str | None = None,
             reason: str | None = None,
@@ -4785,6 +5037,8 @@ def create_app(
                 ),
                 authorization,
                 x_skillkernel_roles,
+                http_request=request,
+                csrf_token=x_skillkernel_csrf,
             )
 
     @app.get("/admin/api/v1/config", response_model=ObservatoryConfigResponse)
@@ -4805,6 +5059,16 @@ def create_app(
                 "static_dir": str(static_dir),
                 "principal": principal,
                 "raw_content": {"enabled": settings.web_admin_raw_content_enabled},
+                "csrf": {
+                    "enabled": settings.web_admin_csrf_enabled,
+                    "browser_session_header": ADMIN_BROWSER_SESSION_HEADER,
+                    "header": ADMIN_CSRF_HEADER,
+                    "token": _admin_csrf_token(authorization),
+                },
+                "rate_limits": {
+                    "action_per_actor_per_minute": ADMIN_ACTION_RATE_LIMIT,
+                    "raw_reveal_per_actor_per_minute": ADMIN_RAW_REVEAL_RATE_LIMIT,
+                },
                 "diagnostics": {
                     "issue_board_enabled": settings.web_admin_issue_board_enabled,
                     "subsystem_lenses_enabled": settings.web_admin_subsystem_lenses_enabled,
@@ -4904,6 +5168,7 @@ def create_app(
         workspace_id: str | None = None,
         window_minutes: int = 60,
         limit: int = 100,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         snapshot = await _observatory_snapshot(
@@ -4916,6 +5181,7 @@ def create_app(
             title="Observatory components",
             items=stations,
             limit=limit,
+            cursor=cursor,
             source="observatory_snapshot.pipeline.stations",
         )
 
@@ -5068,6 +5334,7 @@ def create_app(
         workspace_id: str | None = None,
         window_minutes: int = 60,
         limit: int = 100,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         snapshot = await _observatory_snapshot(
@@ -5079,6 +5346,7 @@ def create_app(
             title="Diagnostic reason-code catalog",
             items=list(snapshot["reason_code_catalog"]),  # type: ignore[arg-type]
             limit=limit,
+            cursor=cursor,
             source="observatory_snapshot.reason_code_catalog",
         )
 
@@ -5089,6 +5357,7 @@ def create_app(
         workspace_id: str | None = None,
         window_minutes: int = 60,
         limit: int = 100,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         snapshot = await _observatory_snapshot(
@@ -5105,6 +5374,7 @@ def create_app(
             title="Guided diagnostic playbooks",
             items=playbooks,
             limit=limit,
+            cursor=cursor,
             source="observatory_snapshot.subsystems.playbooks",
         )
 
@@ -5156,6 +5426,7 @@ def create_app(
         workspace_id: str | None = None,
         window_minutes: int = 60,
         limit: int = 100,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         snapshot = await _observatory_snapshot(
@@ -5167,6 +5438,7 @@ def create_app(
             title="Pipeline invariant status",
             items=list(snapshot["pipeline"]["invariants"]),  # type: ignore[index]
             limit=limit,
+            cursor=cursor,
             source="observatory_snapshot.pipeline.invariants",
         )
 
@@ -5258,19 +5530,21 @@ def create_app(
         trace_id: UUID | None = None,
         window_minutes: int = 60,
         limit: int = 50,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         records = await store.list_events(
             workspace_key=workspace_id,
             event_type=event_type,
             trace_id=trace_id,
-            limit=max(1, min(limit, 500)),
+            limit=500,
         )
         return _observatory_collection(
             object_type="captured_event",
             title="Redacted captured events",
             items=[record.to_json() for record in records],
             limit=limit,
+            cursor=cursor,
             source="event_store.list_events",
             diagnostics={
                 "supporting_component": "spool_ingest",
@@ -5286,17 +5560,19 @@ def create_app(
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
         workspace_id: str | None = None,
         limit: int = 50,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         traces = await observability.list_traces(
             workspace_key=workspace_id,
-            limit=max(1, min(limit, 500)),
+            limit=500,
         )
         return _observatory_collection(
             object_type="trace",
             title="Trace search",
             items=[trace.to_json() for trace in traces],
             limit=limit,
+            cursor=cursor,
             source="observability_store.list_traces",
             diagnostics={
                 "supporting_component": "audit_trace",
@@ -5353,14 +5629,16 @@ def create_app(
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
         status_filter: Annotated[str | None, Query(alias="status")] = None,
         limit: int = 50,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
-        listed = await jobs.list_jobs(status=status_filter, limit=max(1, min(limit, 250)))
+        listed = await jobs.list_jobs(status=status_filter, limit=250)
         return _observatory_collection(
             object_type="job",
             title="Sidecar jobs",
             items=[job.to_json() for job in listed],
             limit=limit,
+            cursor=cursor,
             source="job_store.list_jobs",
         )
 
@@ -5398,14 +5676,16 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
         limit: int = 50,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
-        listed = await scheduler.list_schedules(limit=max(1, min(limit, 250)))
+        listed = await scheduler.list_schedules(limit=250)
         return _observatory_collection(
             object_type="schedule",
             title="Sidecar schedules",
             items=[schedule.to_json() for schedule in listed],
             limit=limit,
+            cursor=cursor,
             source="scheduler_store.list_schedules",
         )
 
@@ -5416,18 +5696,20 @@ def create_app(
         workspace_id: str | None = None,
         lifecycle_state: str | None = None,
         limit: int = 100,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         listed = await skills.list_skills(
             workspace_key=workspace_id,
             lifecycle_state=lifecycle_state,
-            limit=max(1, min(limit, 500)),
+            limit=500,
         )
         return _observatory_collection(
             object_type="skill",
             title="Skill library",
             items=[skill.to_json() for skill in listed],
             limit=limit,
+            cursor=cursor,
             source="skill_store.list_skills",
         )
 
@@ -5534,18 +5816,20 @@ def create_app(
         workspace_id: str | None = None,
         lifecycle_state: str | None = "candidate",
         limit: int = 100,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         listed = await candidates.list_candidate_reviews(
             workspace_key=workspace_id,
             lifecycle_state=lifecycle_state,
-            limit=max(1, min(limit, 250)),
+            limit=250,
         )
         return _observatory_collection(
             object_type="candidate",
             title="Candidate reviews",
             items=[candidate.to_json() for candidate in listed],
             limit=limit,
+            cursor=cursor,
             source="candidate_store.list_candidate_reviews",
         )
 
@@ -5594,18 +5878,20 @@ def create_app(
         workspace_id: str | None = None,
         status: str | None = None,
         limit: int = 100,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         listed = await evaluations.list_evaluation_reviews(
             workspace_key=workspace_id,
             status=status,
-            limit=max(1, min(limit, 250)),
+            limit=250,
         )
         return _observatory_collection(
             object_type="evaluation",
             title="Evaluation reviews",
             items=[evaluation.to_json() for evaluation in listed],
             limit=limit,
+            cursor=cursor,
             source="evaluation_store.list_evaluation_reviews",
         )
 
@@ -5654,6 +5940,7 @@ def create_app(
         workspace_id: str | None = None,
         window_minutes: int = 60,
         limit: int = 50,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         snapshot = await _observatory_snapshot(
@@ -5671,6 +5958,7 @@ def create_app(
             title="Scanner findings",
             items=items,
             limit=limit,
+            cursor=cursor,
             source="observatory_snapshot.scanner_security.records",
             diagnostics=scanner
             or _missing_read_model("scanner_finding", supporting_component="scanner_security"),
@@ -5711,18 +5999,20 @@ def create_app(
         workspace_id: str | None = None,
         status: str | None = None,
         limit: int = 100,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         sources = await historical_import.list_sources(
             workspace_key=workspace_id,
             status=status,
-            limit=max(1, min(limit, 250)),
+            limit=250,
         )
         return _observatory_collection(
             object_type="historical_import",
             title="Historical import sources",
             items=[source.to_json() for source in sources],
             limit=limit,
+            cursor=cursor,
             source="historical_import_store.list_sources",
         )
 
@@ -5775,11 +6065,12 @@ def create_app(
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
         workspace_id: str | None = None,
         limit: int = 50,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         logs = await retrieval.list_recent_logs(
             workspace_key=workspace_id,
-            limit=max(1, min(limit, 500)),
+            limit=500,
         )
         return _observatory_collection(
             object_type="broker_decision",
@@ -5799,6 +6090,7 @@ def create_app(
                 for log in logs
             ],
             limit=limit,
+            cursor=cursor,
             source="retrieval_store.list_recent_logs",
             diagnostics={
                 "supporting_component": "broker_runtime",
@@ -5909,6 +6201,7 @@ def create_app(
         workspace_id: str | None = None,
         window_minutes: int = 60,
         limit: int = 50,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         snapshot = await _observatory_snapshot(
@@ -5925,6 +6218,7 @@ def create_app(
             title="Context artifacts",
             items=list(context.get("records", [])) if context else [],
             limit=limit,
+            cursor=cursor,
             source="observatory_snapshot.context_compiler.records",
             diagnostics=context
             or _missing_read_model("context_artifact", supporting_component="context_compiler"),
@@ -5937,18 +6231,20 @@ def create_app(
         workspace_id: str = "default",
         status: str | None = None,
         limit: int = 100,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         listed = await profiles.list_model_profiles(
             workspace_key=workspace_id,
             status=status,
-            limit=max(1, min(limit, 500)),
+            limit=500,
         )
         return _observatory_collection(
             object_type="model_profile",
             title="Text model profiles",
             items=[profile.to_json() for profile in listed],
             limit=limit,
+            cursor=cursor,
             source="profile_store.list_model_profiles",
         )
 
@@ -5959,18 +6255,20 @@ def create_app(
         workspace_id: str = "default",
         status: str | None = None,
         limit: int = 100,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         listed = await profiles.list_embedding_profiles(
             workspace_key=workspace_id,
             status=status,
-            limit=max(1, min(limit, 500)),
+            limit=500,
         )
         return _observatory_collection(
             object_type="embedding_profile",
             title="Embedding profiles",
             items=[profile.to_json() for profile in listed],
             limit=limit,
+            cursor=cursor,
             source="profile_store.list_embedding_profiles",
         )
 
@@ -5996,15 +6294,17 @@ def create_app(
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
         workspace_id: str | None = None,
         limit: int = 100,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         bounded_limit = max(1, min(limit, 500))
-        records = await audit.list_recent(workspace_key=workspace_id, limit=bounded_limit)
+        records = await audit.list_recent(workspace_key=workspace_id, limit=500)
         return _observatory_collection(
             object_type="audit_record",
             title="Audit trail",
             items=[record.model_dump(mode="json") for record in records],
             limit=bounded_limit,
+            cursor=cursor,
             source="audit_store.list_recent",
             diagnostics={
                 "chain_valid": await audit.verify_chain(
@@ -6020,17 +6320,19 @@ def create_app(
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
         workspace_id: str | None = None,
         limit: int = 50,
+        cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         comparisons = await observatory_admin.list_comparisons(
             workspace_key=workspace_id,
-            limit=max(1, min(limit, 500)),
+            limit=500,
         )
         return _observatory_collection(
             object_type="baseline_comparison",
             title="Saved baseline comparisons",
             items=[comparison.to_json() for comparison in comparisons],
             limit=limit,
+            cursor=cursor,
             source="observatory_admin_store.list_comparisons",
             diagnostics={
                 "supporting_component": "observatory_admin",
@@ -6070,6 +6372,17 @@ def create_app(
                 "differences": [],
                 "global_health": snapshot["global_health"],
                 "issue_count": len(snapshot["issue_board"]),
+                "mutates_policy": False,
+            },
+        )
+        await observatory_admin.append_live_event(
+            kind="read_model_invalidated",
+            component_id="observatory_admin",
+            object_type="baseline_comparison",
+            object_id=str(comparison.comparison_id),
+            payload={
+                "workspace_id": workspace_key,
+                "comparison_kind": comparison.comparison_kind,
                 "mutates_policy": False,
             },
         )
@@ -6122,8 +6435,21 @@ def create_app(
             ),
             workspace_key=workspace_id,
         )
+        live_event = await observatory_admin.append_live_event(
+            kind="audit_record_appended",
+            component_id="observatory_admin",
+            object_type="diagnostic_bundle",
+            object_id=str(bundle.bundle_id),
+            payload={
+                "workspace_id": workspace_id,
+                "audit_id": str(audit_record.audit_id),
+                "bundle_id": str(bundle.bundle_id),
+                "redaction_level": bundle.redaction_level,
+            },
+        )
         payload = bundle.to_json()
         payload["audit"] = audit_record.model_dump(mode="json")
+        payload["live_event"] = live_event.to_json()
         return ObservatoryObjectResponse(
             object=payload
         )
@@ -6200,14 +6526,18 @@ def create_app(
 
     @app.post("/admin/api/v1/actions", response_model=ObservatoryActionResponse)
     async def observatory_action(
+        http_request: Request,
         request: ObservatoryActionRequest,
         authorization: Annotated[str | None, Header()] = None,
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        x_skillkernel_csrf: Annotated[str | None, Header(alias=ADMIN_CSRF_HEADER)] = None,
     ) -> ObservatoryActionResponse:
         return await _record_observatory_action(
             request,
             authorization,
             x_skillkernel_roles,
+            http_request=http_request,
+            csrf_token=x_skillkernel_csrf,
         )
 
     _register_observatory_action_route("/admin/api/v1/actions/jobs/{id}/retry", "retry_job")
@@ -6298,12 +6628,22 @@ def create_app(
         last_seq = int(last_seq_param) if last_seq_param and last_seq_param.isdigit() else None
         try:
             while True:
-                snapshot = await _observatory_snapshot(
-                    workspace_id=workspace_id,
-                    window_minutes=60,
+                live_events = await observatory_admin.list_live_events(
+                    after_seq=last_seq,
+                    limit=50,
                 )
-                await websocket.send_json(build_live_envelope(snapshot, last_seq=last_seq))
-                last_seq = int(snapshot["snapshot_seq"])
+                if live_events:
+                    for live_event in live_events:
+                        await websocket.send_json(live_event.to_json())
+                        last_seq = live_event.seq
+                else:
+                    snapshot = await _observatory_snapshot(
+                        workspace_id=workspace_id,
+                        window_minutes=60,
+                    )
+                    await websocket.send_json(
+                        _snapshot_live_fallback(snapshot, last_seq=last_seq)
+                    )
                 await asyncio.sleep(5)
         except WebSocketDisconnect:
             return
@@ -6324,14 +6664,24 @@ def create_app(
         async def stream() -> AsyncIterator[str]:
             current_last_seq = last_seq
             while True:
-                snapshot = await _observatory_snapshot(
-                    workspace_id=workspace_id,
-                    window_minutes=60,
+                live_events = await observatory_admin.list_live_events(
+                    after_seq=current_last_seq,
+                    limit=50,
                 )
-                payload = build_live_envelope(snapshot, last_seq=current_last_seq)
-                yield f"event: {payload['event_type']}\n"
-                yield f"data: {json.dumps(payload, sort_keys=True)}\n\n"
-                current_last_seq = int(snapshot["snapshot_seq"])
+                if live_events:
+                    for live_event in live_events:
+                        payload = live_event.to_json()
+                        yield f"event: {payload['event_type']}\n"
+                        yield f"data: {json.dumps(payload, sort_keys=True)}\n\n"
+                        current_last_seq = live_event.seq
+                else:
+                    snapshot = await _observatory_snapshot(
+                        workspace_id=workspace_id,
+                        window_minutes=60,
+                    )
+                    payload = _snapshot_live_fallback(snapshot, last_seq=current_last_seq)
+                    yield f"event: {payload['event_type']}\n"
+                    yield f"data: {json.dumps(payload, sort_keys=True)}\n\n"
                 await asyncio.sleep(5)
 
         return StreamingResponse(stream(), media_type="text/event-stream")

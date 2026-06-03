@@ -1036,6 +1036,25 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `admin_action_audit`, verified the linked `audit_records` row and redacted
   payload shape, deleted the smoke rows, and stopped Postgres without removing
   the persistent volume.
+- Observatory cursor/security/live-outbox remediation is implemented for the
+  Phase 2/12.4/16.4 gaps: admin collection envelopes now expose bounded cursor,
+  next-cursor, and pagination metadata while rejecting malformed/stale cursors;
+  browser-originated POST actions require `X-SkillKernel-CSRF`, while API-token
+  clients remain usable; per-actor in-memory rate limits protect operator
+  actions and raw-reveal attempts; and accepted/rejected admin actions,
+  comparison creation, and diagnostic bundle creation now append UI-safe
+  `admin_live_event_outbox` rows. `/admin/live` and `/admin/live-sse` drain the
+  persisted outbox before falling back to snapshot/heartbeat events, preserving
+  the existing nonblank live dashboard behavior. Final validation passed with
+  `uv run ruff check sidecar scripts`, `uv run pytest -q` with 317 passing
+  tests, `uv run python -m compileall -q sidecar scripts`, `npm test --prefix
+  plugin/autoskill` with 18 passing tests, `npm run build --prefix
+  sidecar/autoskill/observatory`, `docker compose config --quiet`, and a
+  compose/Postgres smoke that applied migrations, recorded one
+  `refresh_read_models` action, verified the `read_model_invalidated`
+  `admin_live_event_outbox` row plus linked `admin_action_audit` and
+  `audit_records` rows, deleted the smoke rows, and stopped Postgres without
+  removing the persistent volume.
 
 ## Next Gates
 

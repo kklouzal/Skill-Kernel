@@ -1,6 +1,8 @@
 import type { LiveEnvelope, ObjectResponse, SearchResponse, SnapshotResponse } from "./types";
 
 const API_BASE = import.meta.env.VITE_ADMIN_API_BASE ?? "/admin/api/v1";
+const CSRF_HEADER = "X-SkillKernel-CSRF";
+const BROWSER_SESSION_HEADER = "X-SkillKernel-Browser-Session";
 
 export type ApiSession = {
   token: string;
@@ -13,6 +15,16 @@ function headers(session: ApiSession): HeadersInit {
     ...(session.token ? { Authorization: `Bearer ${session.token}` } : {}),
     ...(session.roles ? { "X-SkillKernel-Roles": session.roles } : {})
   };
+}
+
+async function csrfToken(session: ApiSession): Promise<string> {
+  const seed = session.token || "local-dev-admin";
+  const bytes = new TextEncoder().encode(`skillkernel-observatory-csrf:${seed}`);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 32);
 }
 
 async function fetchJson<T>(
@@ -73,10 +85,16 @@ export function postAction(
     metadata?: Record<string, unknown>;
   }
 ) {
-  return fetchJson<{ receipt: Record<string, unknown> }>("/actions", session, {
+  return csrfToken(session).then((token) =>
+    fetchJson<{ receipt: Record<string, unknown> }>("/actions", session, {
     method: "POST",
+    headers: {
+      [BROWSER_SESSION_HEADER]: "true",
+      [CSRF_HEADER]: token
+    },
     body: JSON.stringify({ dry_run: true, target: {}, metadata: {}, ...body })
-  });
+    })
+  );
 }
 
 export function liveUrl(session: ApiSession, workspaceId: string, lastSeq?: number) {

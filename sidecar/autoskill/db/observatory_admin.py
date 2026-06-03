@@ -13,6 +13,51 @@ from autoskill.db.workspaces import ensure_workspace
 
 
 @dataclass(frozen=True)
+class AdminLiveEventRecord:
+    seq: int
+    kind: str
+    component_id: str | None
+    trace_id: str | None
+    object_type: str | None
+    object_id: str | None
+    payload: dict[str, Any]
+    redaction_level: str
+    created_at: datetime
+    delivered_hint: bool
+
+    @classmethod
+    def from_row(cls, row: asyncpg.Record | dict[str, Any]) -> AdminLiveEventRecord:
+        return cls(
+            seq=int(row["seq"]),
+            kind=row["kind"],
+            component_id=_row_get(row, "component_id"),
+            trace_id=_row_get(row, "trace_id"),
+            object_type=_row_get(row, "object_type"),
+            object_id=_row_get(row, "object_id"),
+            payload=_json_dict(row["payload"]),
+            redaction_level=row["redaction_level"],
+            created_at=row["created_at"],
+            delivered_hint=bool(row["delivered_hint"]),
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "schema_version": "skillkernel.observatory.live-event.v1",
+            "seq": self.seq,
+            "sent_at": self.created_at.isoformat(),
+            "event_type": self.kind,
+            "kind": self.kind,
+            "component_id": self.component_id,
+            "trace_id": self.trace_id,
+            "object_type": self.object_type,
+            "object_id": self.object_id,
+            "payload": self.payload,
+            "redaction_level": self.redaction_level,
+            "requires_snapshot_reload": self.kind == "read_model_invalidated",
+        }
+
+
+@dataclass(frozen=True)
 class AdminActionAuditRecord:
     action_id: UUID
     actor_id: str
@@ -183,6 +228,27 @@ class AdminDiagnosticBundleRecord:
 
 
 class ObservatoryAdminStore(Protocol):
+    async def append_live_event(
+        self,
+        *,
+        kind: str,
+        component_id: str | None = None,
+        trace_id: str | None = None,
+        object_type: str | None = None,
+        object_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+        redaction_level: str = "default",
+    ) -> AdminLiveEventRecord:
+        """Persist one UI-safe admin live event."""
+
+    async def list_live_events(
+        self,
+        *,
+        after_seq: int | None = None,
+        limit: int = 50,
+    ) -> list[AdminLiveEventRecord]:
+        """Return bounded UI-safe live events newer than the given outbox sequence."""
+
     async def record_action_audit(
         self,
         *,
@@ -251,9 +317,48 @@ class ObservatoryAdminStore(Protocol):
 
 class NullObservatoryAdminStore:
     def __init__(self) -> None:
+        self.live_events: list[AdminLiveEventRecord] = []
         self.actions: list[AdminActionAuditRecord] = []
         self.comparisons: list[AdminComparisonRecord] = []
         self.bundles: list[AdminDiagnosticBundleRecord] = []
+
+    async def append_live_event(
+        self,
+        *,
+        kind: str,
+        component_id: str | None = None,
+        trace_id: str | None = None,
+        object_type: str | None = None,
+        object_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+        redaction_level: str = "default",
+    ) -> AdminLiveEventRecord:
+        record = AdminLiveEventRecord(
+            seq=len(self.live_events) + 1,
+            kind=kind,
+            component_id=component_id,
+            trace_id=trace_id,
+            object_type=object_type,
+            object_id=object_id,
+            payload=payload or {},
+            redaction_level=redaction_level,
+            created_at=datetime.now(UTC),
+            delivered_hint=False,
+        )
+        self.live_events.append(record)
+        return record
+
+    async def list_live_events(
+        self,
+        *,
+        after_seq: int | None = None,
+        limit: int = 50,
+    ) -> list[AdminLiveEventRecord]:
+        bounded_limit = max(1, min(limit, 500))
+        records = self.live_events
+        if after_seq is not None:
+            records = [record for record in records if record.seq > after_seq]
+        return records[:bounded_limit]
 
     async def record_action_audit(
         self,
@@ -386,6 +491,65 @@ class NullObservatoryAdminStore:
 
 
 class AsyncpgObservatoryAdminStore(AsyncpgPoolOwner):
+    async def append_live_event(
+        self,
+        *,
+        kind: str,
+        component_id: str | None = None,
+        trace_id: str | None = None,
+        object_type: str | None = None,
+        object_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+        redaction_level: str = "default",
+    ) -> AdminLiveEventRecord:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO autoskill.admin_live_event_outbox (
+                  kind,
+                  component_id,
+                  trace_id,
+                  object_type,
+                  object_id,
+                  payload,
+                  redaction_level
+                )
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+                RETURNING *
+                """,
+                kind,
+                component_id,
+                trace_id,
+                object_type,
+                object_id,
+                _json(payload or {}),
+                redaction_level,
+            )
+        return AdminLiveEventRecord.from_row(row)
+
+    async def list_live_events(
+        self,
+        *,
+        after_seq: int | None = None,
+        limit: int = 50,
+    ) -> list[AdminLiveEventRecord]:
+        bounded_limit = max(1, min(limit, 500))
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT *
+                FROM autoskill.admin_live_event_outbox
+                WHERE ($1::bigint IS NULL OR seq > $1)
+                ORDER BY seq ASC
+                LIMIT $2
+                """,
+                after_seq,
+                bounded_limit,
+            )
+        return [AdminLiveEventRecord.from_row(row) for row in rows]
+
     async def record_action_audit(
         self,
         *,

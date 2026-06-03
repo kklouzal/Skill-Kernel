@@ -1,13 +1,19 @@
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from autoskill.api.app import ObservatoryActionRequest, create_app
+from autoskill.api.app import (
+    ADMIN_ACTION_RATE_LIMIT,
+    ObservatoryActionRequest,
+    create_app,
+)
 from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.core.config import get_settings
 from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope
+from autoskill.core.hashing import sha256_text
 from autoskill.db.events import NullEventStore
 from autoskill.db.observability import TraceSpanRecord, TraceSummaryRecord
 from autoskill.db.observatory_admin import NullObservatoryAdminStore
@@ -144,6 +150,60 @@ async def _asgi_get(app, path: str) -> tuple[int, dict[str, str]]:
     return int(start["status"]), headers
 
 
+async def _asgi_post(
+    app,
+    path: str,
+    *,
+    body: dict[str, object],
+    headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, str], str]:
+    payload = json.dumps(body).encode()
+    messages = [{"type": "http.request", "body": payload, "more_body": False}]
+    sent: list[dict[str, object]] = []
+
+    async def receive():
+        return messages.pop(0)
+
+    async def send(message):
+        sent.append(message)
+
+    encoded_headers = [
+        (b"content-type", b"application/json"),
+        *[
+            (key.lower().encode(), value.encode())
+            for key, value in (headers or {}).items()
+        ],
+    ]
+    await app(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": b"",
+            "headers": encoded_headers,
+            "client": ("testclient", 0),
+            "server": ("testserver", 80),
+        },
+        receive,
+        send,
+    )
+    start = next(message for message in sent if message["type"] == "http.response.start")
+    response_headers = {
+        key.decode().lower(): value.decode()
+        for key, value in start.get("headers", [])
+    }
+    body_text = b"".join(
+        message.get("body", b"")
+        for message in sent
+        if message["type"] == "http.response.body"
+    ).decode()
+    return int(start["status"]), response_headers, body_text
+
+
 def test_observatory_summary_exposes_all_pipeline_stations_and_truth_states() -> None:
     app = create_app(audit_store=MemoryAuditStore())
     route = _routes(app)[("/admin/api/v1/summary", "GET")]
@@ -245,13 +305,25 @@ def test_observatory_collection_routes_return_bounded_content_safe_envelopes() -
             workspace_id="dev-01",
             window_minutes=10,
         )
-        return components, reason_codes, playbooks, ready
+        components_next = await routes[("/admin/api/v1/components", "GET")].endpoint(
+            workspace_id="dev-01",
+            window_minutes=10,
+            limit=2,
+            cursor=components.collection["next_cursor"],
+        )
+        return components, components_next, reason_codes, playbooks, ready
 
-    components, reason_codes, playbooks, ready = asyncio.run(run())
+    components, components_next, reason_codes, playbooks, ready = asyncio.run(run())
 
     assert components.collection["object_type"] == "component"
     assert components.collection["count"] == 2
     assert components.collection["has_more"] is True
+    assert components.collection["next_cursor"]
+    assert components.meta["pagination"]["next_cursor"] == components.collection["next_cursor"]
+    assert components_next.collection["cursor"] == components.collection["next_cursor"]
+    assert components_next.collection["items"][0]["component_id"] != (
+        components.collection["items"][0]["component_id"]
+    )
     assert components.collection["content_policy"]["raw_available"] is False
     assert components.ok is True
     assert components.data["collection"]["object_type"] == "component"
@@ -556,6 +628,8 @@ def test_observatory_comparisons_and_diagnostic_bundles_are_persisted() -> None:
     assert comparison_object.object["effects"]["mutates_policy"] is False
     assert bundle_object.object["effects"]["manifest"]["component_count"] == 24
     assert audit_store.records[-1].subject_id == bundle.object["object_id"]
+    assert bundle.object["live_event"]["object_type"] == "diagnostic_bundle"
+    assert bundle.object["live_event"]["redaction_level"] == "default"
 
 
 def test_observatory_stale_or_missing_telemetry_never_reports_healthy() -> None:
@@ -605,6 +679,7 @@ def test_observatory_action_records_audited_policy_receipt() -> None:
 
     async def run():
         return await route.endpoint(
+            http_request=None,
             request=ObservatoryActionRequest(
                 workspace_id="dev-01",
                 action="verify_audit_chain",
@@ -628,6 +703,9 @@ def test_observatory_action_records_audited_policy_receipt() -> None:
         response.meta["request_id"]
     )
     assert response.receipt["action_audit"]["content_policy"]["raw_available"] is False
+    assert response.receipt["live_event"]["event_type"] == "audit_record_appended"
+    assert response.receipt["live_event"]["object_type"] == "audit"
+    assert observatory_admin.live_events[0].seq == response.receipt["live_event"]["seq"]
     assert observatory_admin.actions[0].action_id.hex == (
         response.receipt["action_audit"]["action_id"].replace("-", "")
     )
@@ -642,6 +720,7 @@ def test_observatory_high_impact_action_requires_confirmation() -> None:
 
     async def run():
         return await route.endpoint(
+            http_request=None,
             request=ObservatoryActionRequest(
                 workspace_id="dev-01",
                 action="rollback_skill",
@@ -673,6 +752,76 @@ def test_observatory_high_impact_action_requires_confirmation() -> None:
     )
     assert observatory_admin.actions[0].linked_audit_id == audit_store.records[0].audit_id
     assert audit_store.records[0].details["confirmation_required"] is True
+
+
+def test_observatory_browser_action_requires_csrf(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
+    get_settings.cache_clear()
+    app = create_app(audit_store=MemoryAuditStore())
+    body = {
+        "workspace_id": "dev-01",
+        "action": "verify_audit_chain",
+        "idempotency_key": "csrf-test-1",
+        "reason": "operator requested audit proof",
+    }
+
+    missing_status, _, missing_body = asyncio.run(
+        _asgi_post(
+            app,
+            "/admin/api/v1/actions",
+            body=body,
+            headers={"X-SkillKernel-Browser-Session": "true"},
+        )
+    )
+    token = sha256_text("skillkernel-observatory-csrf:local-dev-admin")[:32]
+    ok_status, _, ok_body = asyncio.run(
+        _asgi_post(
+            app,
+            "/admin/api/v1/actions",
+            body={**body, "idempotency_key": "csrf-test-2"},
+            headers={
+                "X-SkillKernel-Browser-Session": "true",
+                "X-SkillKernel-CSRF": token,
+            },
+        )
+    )
+
+    assert missing_status == 403
+    assert "invalid admin csrf token" in missing_body
+    assert ok_status == 200
+    assert json.loads(ok_body)["receipt"]["accepted"] is True
+    get_settings.cache_clear()
+
+
+def test_observatory_action_rate_limit_is_enforced() -> None:
+    app = create_app(audit_store=MemoryAuditStore())
+    route = _routes(app)[("/admin/api/v1/actions", "POST")]
+
+    async def run() -> None:
+        for index in range(ADMIN_ACTION_RATE_LIMIT):
+            response = await route.endpoint(
+                http_request=None,
+                request=ObservatoryActionRequest(
+                    workspace_id="dev-01",
+                    action="verify_audit_chain",
+                    idempotency_key=f"rate-limit-{index}",
+                    reason="operator requested audit proof",
+                ),
+            )
+            assert response.receipt["accepted"] is True
+        with pytest.raises(HTTPException) as exc:
+            await route.endpoint(
+                http_request=None,
+                request=ObservatoryActionRequest(
+                    workspace_id="dev-01",
+                    action="verify_audit_chain",
+                    idempotency_key="rate-limit-overflow",
+                    reason="operator requested audit proof",
+                ),
+            )
+        assert exc.value.status_code == 429
+
+    asyncio.run(run())
 
 
 def test_observatory_admin_token_is_enforced(monkeypatch) -> None:
