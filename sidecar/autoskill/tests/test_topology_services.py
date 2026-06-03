@@ -620,6 +620,163 @@ def test_topology_usage_recommendations_can_persist_compose_proposals() -> None:
     ]
 
 
+def test_topology_usage_recommendations_can_persist_improve_and_decompose_proposals() -> None:
+    skill_id = uuid4()
+    improve_evidence = uuid4()
+    decompose_evidence = uuid4()
+    hydrated_metadata = {
+        "skill_snapshots": [
+            {
+                "skill_id": str(skill_id),
+                "slug": "real-runtime-skill",
+                "description": "Real runtime skill description",
+                "effects": {
+                    "outputs": ["real-output"],
+                    "effects": ["real-effect"],
+                    "state_delta": ["real-state-delta"],
+                    "termination": ["real-termination"],
+                    "failure_modes": ["real-failure-mode"],
+                    "idempotency": "retry_safe",
+                },
+                "contracts": {
+                    "environment_contract_count": 1,
+                    "runtime_guard_count": 1,
+                    "support_artifact_count": 1,
+                },
+                "body_index": {
+                    "document_kinds": ["runtime", "skillir"],
+                    "document_count": 2,
+                },
+            }
+        ]
+    }
+    usage = MemoryTopologyUsageStore(
+        [
+            UsageTopologyRecommendation(
+                skill_usage_cluster_id=uuid4(),
+                cluster_key=f"improve:{skill_id}",
+                skill_ids=[skill_id],
+                evidence_ids=[improve_evidence],
+                recommended_operation="improve",
+                support_count=5,
+                success_count=0,
+                failure_count=3,
+                sequence_count=0,
+                operation_score=11.0,
+                blockers=[],
+                metadata={
+                    "source": "usage.aggregate",
+                    "topology_signal": "repeated_negative_outcome",
+                    "context_signal_count": 0,
+                    **hydrated_metadata,
+                },
+            ),
+            UsageTopologyRecommendation(
+                skill_usage_cluster_id=uuid4(),
+                cluster_key=f"decompose:{skill_id}",
+                skill_ids=[skill_id],
+                evidence_ids=[decompose_evidence],
+                recommended_operation="decompose",
+                support_count=6,
+                success_count=0,
+                failure_count=0,
+                sequence_count=0,
+                operation_score=12.0,
+                blockers=[],
+                metadata={
+                    "source": "usage.aggregate",
+                    "topology_signal": "context_waste_or_false_positive",
+                    "context_signal_count": 4,
+                    "token_waste": 900,
+                    "avg_context_value_per_token": -0.025,
+                    "suggested_context_actions": [
+                        "broker_abstain",
+                        "tighten_description",
+                    ],
+                    **hydrated_metadata,
+                },
+            ),
+        ]
+    )
+    topology = NullTopologyStore()
+    app = create_app(
+        usage_store=usage,
+        topology_store=topology,
+        governance_store=NullGovernanceStore(),
+    )
+    route = next(
+        route for route in app.routes if route.path == "/v1/topology/propose-from-usage"
+    )
+
+    async def run():
+        return await route.endpoint(
+            request=TopologyUsageProposalRequest(workspace_id="dev-01", persist=True)
+        )
+
+    response = asyncio.run(run())
+
+    assert response.recommendations_scanned == 2
+    assert response.skipped == []
+    assert [item["proposal"]["operation_kind"] for item in response.proposals] == [
+        "improve",
+        "decompose",
+    ]
+    improve = response.proposals[0]["proposal"]
+    decompose = response.proposals[1]["proposal"]
+    assert improve["status"] == "candidate"
+    assert improve["evidence_ids"] == [str(improve_evidence)]
+    assert improve["skill_graph_ir"]["nodes"][0]["slug"] == "real-runtime-skill"
+    assert improve["skill_graph_ir"]["nodes"][0]["effects"]["outputs"] == [
+        "real-output"
+    ]
+    assert improve["skill_graph_ir"]["nodes"][1]["slug"].startswith(
+        "real-runtime-skill-improved-"
+    )
+    assert "failure_count:3" in improve["trial_plan"][0]["expected"]["reasons"]
+    assert (
+        "current_skillir_description_present"
+        in improve["trial_plan"][0]["expected"]["reasons"]
+    )
+    assert "environment_contract_count:1" in improve["trial_plan"][0]["expected"][
+        "reasons"
+    ]
+    assert "body_index_kind:skillir" in improve["trial_plan"][0]["expected"][
+        "reasons"
+    ]
+    assert "real-failure-mode" in improve["skill_graph_ir"]["nodes"][1]["effects"][
+        "failure_modes"
+    ]
+    assert improve["skill_graph_ir"]["nodes"][1]["effects"][
+        "idempotency"
+    ] == "retry_safe"
+    assert decompose["status"] == "candidate"
+    assert decompose["evidence_ids"] == [str(decompose_evidence)]
+    assert decompose["skill_graph_ir"]["operation_kind"] == "decompose"
+    assert len(decompose["skill_graph_ir"]["nodes"]) == 3
+    assert decompose["skill_graph_ir"]["effect_coverage"]["real-state-delta"]
+    assert "real-state-delta" in decompose["trial_plan"][2]["expected"][
+        "covered_effects"
+    ]
+    assert "token_waste:900" in decompose["trial_plan"][3]["expected"]["reasons"]
+    assert "avg_context_value_per_token:-0.025" in decompose["trial_plan"][3][
+        "expected"
+    ]["reasons"]
+    assert response.proposals[1]["recommendation"]["metadata"]["token_waste"] == 900
+    assert (
+        response.proposals[1]["recommendation"]["metadata"][
+            "avg_context_value_per_token"
+        ]
+        == -0.025
+    )
+    assert "broker_abstain" in response.proposals[1]["recommendation"]["metadata"][
+        "suggested_context_actions"
+    ]
+    assert [operation.operation_kind for operation in topology.operations] == [
+        "improve",
+        "decompose",
+    ]
+
+
 def test_topology_usage_recommendations_skip_blocked_or_unsupported_signals() -> None:
     skill_id = uuid4()
     usage = MemoryTopologyUsageStore(
@@ -640,10 +797,10 @@ def test_topology_usage_recommendations_skip_blocked_or_unsupported_signals() ->
             ),
             UsageTopologyRecommendation(
                 skill_usage_cluster_id=uuid4(),
-                cluster_key=f"improve:{skill_id}",
+                cluster_key=f"create:{skill_id}",
                 skill_ids=[skill_id],
                 evidence_ids=[],
-                recommended_operation="improve",
+                recommended_operation="create",
                 support_count=5,
                 success_count=5,
                 failure_count=0,

@@ -2035,6 +2035,7 @@ def _build_topology_proposal(request: TopologyProposalRequest):
                 subject=_topology_skill(request.subject),
                 successors=[_topology_skill(successor) for successor in request.successors],
                 evidence_ids=request.evidence_ids,
+                decomposition_reasons=request.improvement_reasons,
                 coverage_requirements=request.coverage_requirements,
             )
         )
@@ -2044,10 +2045,22 @@ def _build_topology_proposal(request: TopologyProposalRequest):
     )
 
 
-def _topology_skill_from_usage_id(skill_id: UUID) -> TopologySkill:
+def _topology_skill_from_usage_id(
+    skill_id: UUID,
+    recommendation: UsageTopologyRecommendation | None = None,
+) -> TopologySkill:
+    snapshot = _usage_skill_snapshot_for(recommendation, skill_id)
+    if snapshot:
+        effects = _effect_payload_from_usage_snapshot(snapshot)
+        if effects:
+            return TopologySkill(
+                slug=str(snapshot.get("slug") or _usage_skill_fallback_slug(skill_id)),
+                skill_id=skill_id,
+                effects=EffectSignature(**effects),
+            )
     short_id = str(skill_id)[:8]
     return TopologySkill(
-        slug=f"usage-observed-skill-{short_id}",
+        slug=_usage_skill_fallback_slug(skill_id),
         skill_id=skill_id,
         effects=EffectSignature(
             outputs=[f"usage-observed-output:{short_id}"],
@@ -2056,17 +2069,259 @@ def _topology_skill_from_usage_id(skill_id: UUID) -> TopologySkill:
     )
 
 
+def _usage_skill_fallback_slug(skill_id: UUID) -> str:
+    return f"usage-observed-skill-{str(skill_id)[:8]}"
+
+
+def _usage_skill_snapshot_for(
+    recommendation: UsageTopologyRecommendation | None,
+    skill_id: UUID,
+) -> dict[str, object]:
+    if recommendation is None:
+        return {}
+    snapshots = recommendation.metadata.get("skill_snapshots", [])
+    if not isinstance(snapshots, list):
+        return {}
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict):
+            continue
+        if snapshot.get("skill_id") == str(skill_id):
+            return snapshot
+    return {}
+
+
+def _effect_payload_from_usage_snapshot(
+    snapshot: dict[str, object],
+) -> dict[str, object]:
+    effects = snapshot.get("effects")
+    if not isinstance(effects, dict):
+        return {}
+    payload: dict[str, object] = {}
+    for key in (
+        "outputs",
+        "effects",
+        "state_delta",
+        "side_effects",
+        "termination",
+        "unsafe_when",
+        "failure_modes",
+    ):
+        values = [
+            value
+            for value in effects.get(key, [])
+            if isinstance(value, str) and value.strip()
+        ] if isinstance(effects.get(key), list) else []
+        if values:
+            payload[key] = values
+    idempotency = effects.get("idempotency")
+    if isinstance(idempotency, str) and idempotency:
+        payload["idempotency"] = idempotency
+    return payload
+
+
+def _effect_payload_with_extra(
+    effects: dict[str, object],
+    *,
+    extra_effects: list[str],
+) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key in (
+        "outputs",
+        "effects",
+        "state_delta",
+        "side_effects",
+        "termination",
+        "unsafe_when",
+        "failure_modes",
+    ):
+        values = _string_values(effects.get(key))
+        if key == "effects":
+            values = [*values, *extra_effects]
+        if values:
+            payload[key] = values
+    idempotency = effects.get("idempotency")
+    if isinstance(idempotency, str) and idempotency:
+        payload["idempotency"] = idempotency
+    return payload
+
+
+def _topology_skill_payload_from_usage(
+    skill: TopologySkill,
+) -> TopologySkillPayload:
+    return TopologySkillPayload(
+        slug=skill.slug,
+        skill_id=skill.skill_id,
+        effects=skill.effects.model_dump(mode="json"),
+    )
+
+
+def _usage_skill_snapshots(
+    recommendation: UsageTopologyRecommendation,
+) -> list[dict[str, object]]:
+    snapshots = recommendation.metadata.get("skill_snapshots", [])
+    return [snapshot for snapshot in snapshots if isinstance(snapshot, dict)]
+
+
+def _usage_snapshot_signal_reasons(
+    recommendation: UsageTopologyRecommendation,
+) -> list[str]:
+    reasons: list[str] = []
+    for snapshot in _usage_skill_snapshots(recommendation):
+        if snapshot.get("description"):
+            reasons.append("current_skillir_description_present")
+        contracts = snapshot.get("contracts")
+        if isinstance(contracts, dict):
+            for key in (
+                "environment_contract_count",
+                "runtime_guard_count",
+                "support_artifact_count",
+            ):
+                count = contracts.get(key)
+                if isinstance(count, int) and count > 0:
+                    reasons.append(f"{key}:{count}")
+        body_index = snapshot.get("body_index")
+        if isinstance(body_index, dict):
+            document_count = body_index.get("document_count")
+            if isinstance(document_count, int) and document_count > 0:
+                reasons.append(f"body_index_document_count:{document_count}")
+            for kind in body_index.get("document_kinds", []):
+                if isinstance(kind, str) and kind.strip():
+                    reasons.append(f"body_index_kind:{kind.strip()}")
+    return reasons
+
+
+def _usage_signal_reasons(recommendation: UsageTopologyRecommendation) -> list[str]:
+    reasons = [
+        value
+        for value in (
+            recommendation.metadata.get("topology_signal"),
+            *recommendation.metadata.get("suggested_context_actions", []),
+        )
+        if isinstance(value, str) and value.strip()
+    ]
+    if recommendation.failure_count:
+        reasons.append(f"failure_count:{recommendation.failure_count}")
+    context_signal_count = recommendation.metadata.get("context_signal_count")
+    if context_signal_count:
+        reasons.append(f"context_signal_count:{context_signal_count}")
+    token_waste = recommendation.metadata.get("token_waste")
+    if token_waste:
+        reasons.append(f"token_waste:{token_waste}")
+    avg_context_value = recommendation.metadata.get("avg_context_value_per_token")
+    if isinstance(avg_context_value, int | float):
+        reasons.append(f"avg_context_value_per_token:{avg_context_value:.6g}")
+    min_context_value = recommendation.metadata.get("min_context_value_per_token")
+    if isinstance(min_context_value, int | float):
+        reasons.append(f"min_context_value_per_token:{min_context_value:.6g}")
+    reasons.extend(_usage_snapshot_signal_reasons(recommendation))
+    return sorted(set(reasons)) or ["usage-backed topology signal"]
+
+
+def _usage_subject_terms(subject_effects: dict[str, object]) -> list[str]:
+    return [
+        term
+        for key in ("outputs", "effects", "state_delta", "termination")
+        for term in _string_values(subject_effects.get(key))
+    ]
+
+
+def _string_values(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _usage_improvement_proposal_request(
+    recommendation: UsageTopologyRecommendation,
+) -> TopologyProposalRequest | None:
+    if len(recommendation.skill_ids) != 1:
+        return None
+    subject = _topology_skill_from_usage_id(recommendation.skill_ids[0], recommendation)
+    subject_effects = subject.effects.model_dump(mode="json")
+    proposed_slug = (
+        subject.slug[:36].strip("-") + "-improved-" + sha256_text(recommendation.cluster_key)[:12]
+    )
+    proposed_effects = _effect_payload_with_extra(
+        subject_effects,
+        extra_effects=[
+            "usage-backed improvement candidate",
+            "preserve current SkillIR contract while reducing negative outcomes",
+        ],
+    )
+    return TopologyProposalRequest(
+        workspace_id="",
+        operation_kind="improve",
+        subject=_topology_skill_payload_from_usage(subject),
+        proposed=TopologySkillPayload(
+            slug=proposed_slug,
+            effects=proposed_effects,
+        ),
+        evidence_ids=[str(evidence_id) for evidence_id in recommendation.evidence_ids],
+        improvement_reasons=_usage_signal_reasons(recommendation),
+        persist=True,
+    )
+
+
+def _usage_decomposition_proposal_request(
+    recommendation: UsageTopologyRecommendation,
+) -> TopologyProposalRequest | None:
+    if len(recommendation.skill_ids) != 1:
+        return None
+    subject = _topology_skill_from_usage_id(recommendation.skill_ids[0], recommendation)
+    subject_effects = subject.effects.model_dump(mode="json")
+    subject_terms = _usage_subject_terms(subject_effects)
+    if not subject_terms:
+        return None
+    slug_suffix = sha256_text(recommendation.cluster_key)[:12]
+    successors = [
+        TopologySkillPayload(
+            slug=f"usage-focused-{slug_suffix}",
+            effects=_effect_payload_with_extra(
+                subject_effects,
+                extra_effects=[
+                    "focused successor for confirmed matching contexts",
+                    "preserve current SkillIR contract for positive routing cases",
+                ],
+            ),
+        ),
+        TopologySkillPayload(
+            slug=f"usage-boundary-{slug_suffix}",
+            effects=_effect_payload_with_extra(
+                subject_effects,
+                extra_effects=[
+                    "broker abstain boundary for false-positive contexts",
+                    "preserve current SkillIR contract while reducing context waste",
+                ],
+            ),
+        ),
+    ]
+    return TopologyProposalRequest(
+        workspace_id="",
+        operation_kind="decompose",
+        subject=_topology_skill_payload_from_usage(subject),
+        successors=successors,
+        coverage_requirements=subject_terms,
+        evidence_ids=[str(evidence_id) for evidence_id in recommendation.evidence_ids],
+        improvement_reasons=_usage_signal_reasons(recommendation),
+        persist=True,
+    )
+
+
 def _usage_topology_proposal_request(
     recommendation: UsageTopologyRecommendation,
 ) -> TopologyProposalRequest | None:
     if not recommendation.accepted:
         return None
+    if recommendation.recommended_operation == "improve":
+        return _usage_improvement_proposal_request(recommendation)
+    if recommendation.recommended_operation == "decompose":
+        return _usage_decomposition_proposal_request(recommendation)
     if recommendation.recommended_operation != "compose":
         return None
     if len(recommendation.skill_ids) < 2:
         return None
     components = [
-        _topology_skill_from_usage_id(skill_id)
+        _topology_skill_from_usage_id(skill_id, recommendation)
         for skill_id in recommendation.skill_ids
     ]
     output_terms = [

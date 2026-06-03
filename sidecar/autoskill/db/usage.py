@@ -210,9 +210,15 @@ class AsyncpgUsageStore(AsyncpgPoolOwner):
                 workspace_id,
                 max(1, min(limit, 100)),
             )
+            skill_snapshots = await _load_usage_skill_snapshots(
+                conn,
+                workspace_id,
+                _skill_ids_from_cluster_rows(rows),
+            )
         recommendations = [
             _topology_recommendation_from_row(
                 row,
+                skill_snapshots=skill_snapshots,
                 min_support=max(1, min_support),
                 min_success_count=max(0, min_success_count),
                 max_failure_ratio=max(0.0, min(max_failure_ratio, 1.0)),
@@ -503,11 +509,46 @@ async def _upsert_single_skill_usage_clusters(
           count(*) FILTER (WHERE outcome = ANY($3::text[]))::int AS success_count,
           count(*) FILTER (WHERE outcome = ANY($4::text[]))::int AS failure_count,
           count(*) FILTER (WHERE outcome = ANY($5::text[]))::int AS context_signal_count,
+          COALESCE(
+            sum(
+              CASE
+                WHEN outcome = ANY($5::text[])
+                THEN COALESCE((metadata #>> '{source_metadata,token_count}')::int, 0)
+                ELSE 0
+              END
+            ),
+            0
+          )::int AS token_waste,
+          avg(
+            CASE
+              WHEN jsonb_typeof(
+                metadata #> '{source_metadata,marginal_value,context_value_per_token}'
+              ) = 'number'
+              THEN (
+                metadata #>> '{source_metadata,marginal_value,context_value_per_token}'
+              )::double precision
+              ELSE NULL
+            END
+          ) AS avg_context_value_per_token,
+          min(
+            CASE
+              WHEN jsonb_typeof(
+                metadata #> '{source_metadata,marginal_value,context_value_per_token}'
+              ) = 'number'
+              THEN (
+                metadata #>> '{source_metadata,marginal_value,context_value_per_token}'
+              )::double precision
+              ELSE NULL
+            END
+          ) AS min_context_value_per_token,
           array_agg(
             jsonb_build_object(
               'source_kind', metadata #>> '{source_kind}',
               'source_id', metadata #>> '{source_id}',
-              'outcome', outcome
+              'outcome', outcome,
+              'token_count', metadata #>> '{source_metadata,token_count}',
+              'context_value_per_token',
+                metadata #>> '{source_metadata,marginal_value,context_value_per_token}'
             )
             ORDER BY observed_at DESC
           ) FILTER (
@@ -536,12 +577,26 @@ async def _upsert_single_skill_usage_clusters(
         skill_id = row["skill_id"]
         failure_count = int(row["failure_count"] or 0)
         context_signal_count = int(row["context_signal_count"] or 0)
+        token_waste = int(row["token_waste"] or 0)
+        avg_context_value_per_token = _optional_float(
+            row["avg_context_value_per_token"]
+        )
+        min_context_value_per_token = _optional_float(
+            row["min_context_value_per_token"]
+        )
         operation = "decompose" if context_signal_count >= max(1, failure_count) else "improve"
         cluster_key = f"{operation}:{skill_id}"
         context_actions = []
         if context_signal_count:
             context_actions.append("broker_abstain")
             context_actions.append("tighten_description")
+        if token_waste:
+            context_actions.append("decompose_skill")
+        if (
+            avg_context_value_per_token is not None
+            and avg_context_value_per_token < 0
+        ):
+            context_actions.append("context_value_recheck")
         await conn.execute(
             """
             INSERT INTO autoskill.skill_usage_clusters (
@@ -584,6 +639,9 @@ async def _upsert_single_skill_usage_clusters(
                     "failure_count": failure_count,
                     "sequence_count": 0,
                     "context_signal_count": context_signal_count,
+                    "token_waste": token_waste,
+                    "avg_context_value_per_token": avg_context_value_per_token,
+                    "min_context_value_per_token": min_context_value_per_token,
                     "topology_signal": (
                         "context_waste_or_false_positive"
                         if operation == "decompose"
@@ -599,9 +657,130 @@ async def _upsert_single_skill_usage_clusters(
     return upserted
 
 
+async def _load_usage_skill_snapshots(
+    conn: asyncpg.Connection,
+    workspace_id: UUID,
+    skill_ids: list[UUID],
+) -> dict[UUID, dict[str, Any]]:
+    if not skill_ids:
+        return {}
+    rows = await conn.fetch(
+        """
+        SELECT
+          s.skill_id,
+          s.slug,
+          s.name,
+          s.lifecycle_state,
+          s.source,
+          s.active_version_id,
+          sv.skill_version_id,
+          sv.version,
+          sv.skill_ir,
+          COALESCE(
+            array_agg(DISTINCT d.document_kind)
+              FILTER (WHERE d.body_index_document_id IS NOT NULL),
+            '{}'::text[]
+          ) AS document_kinds,
+          count(DISTINCT d.body_index_document_id)::int AS body_index_document_count
+        FROM autoskill.skills s
+        LEFT JOIN autoskill.skill_versions sv
+          ON sv.skill_version_id = s.active_version_id
+        LEFT JOIN autoskill.body_index_documents d
+          ON d.skill_id = s.skill_id
+         AND (
+           s.active_version_id IS NULL
+           OR d.skill_version_id = s.active_version_id
+         )
+        WHERE s.workspace_id = $1
+          AND s.skill_id = ANY($2::uuid[])
+        GROUP BY
+          s.skill_id,
+          s.slug,
+          s.name,
+          s.lifecycle_state,
+          s.source,
+          s.active_version_id,
+          sv.skill_version_id,
+          sv.version,
+          sv.skill_ir
+        """,
+        workspace_id,
+        skill_ids,
+    )
+    return {row["skill_id"]: _usage_skill_snapshot(row) for row in rows}
+
+
+def _usage_skill_snapshot(row: asyncpg.Record) -> dict[str, Any]:
+    skill_ir = _metadata_dict(row["skill_ir"])
+    return {
+        "skill_id": str(row["skill_id"]),
+        "slug": row["slug"],
+        "name": row["name"],
+        "lifecycle_state": row["lifecycle_state"],
+        "source": row["source"],
+        "active_version_id": (
+            str(row["active_version_id"]) if row["active_version_id"] else None
+        ),
+        "skill_version_id": (
+            str(row["skill_version_id"]) if row["skill_version_id"] else None
+        ),
+        "version": row["version"],
+        "description": _compact_text(skill_ir.get("description")),
+        "effects": _effect_payload_from_skill_ir(skill_ir),
+        "contracts": {
+            "environment_contract_count": len(
+                _json_object_list(skill_ir.get("environment_contracts"))
+            ),
+            "runtime_guard_count": len(
+                _json_object_list(skill_ir.get("runtime_guards"))
+            ),
+            "support_artifact_count": len(
+                _json_object_list(skill_ir.get("support_artifacts"))
+            ),
+        },
+        "body_index": {
+            "document_kinds": sorted(row["document_kinds"] or []),
+            "document_count": row["body_index_document_count"],
+        },
+    }
+
+
+def _effect_payload_from_skill_ir(skill_ir: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key in (
+        "outputs",
+        "effects",
+        "state_delta",
+        "side_effects",
+        "termination",
+        "unsafe_when",
+        "failure_modes",
+    ):
+        values = _string_list(skill_ir.get(key))
+        if values:
+            payload[key] = values
+    idempotency = skill_ir.get("idempotency")
+    if isinstance(idempotency, str) and idempotency:
+        payload["idempotency"] = idempotency
+    return payload
+
+
+def _skill_ids_from_cluster_rows(rows: list[asyncpg.Record]) -> list[UUID]:
+    seen: set[UUID] = set()
+    ordered: list[UUID] = []
+    for row in rows:
+        for skill_id in _stable_skill_ids(row["skill_ids"]):
+            if skill_id in seen:
+                continue
+            seen.add(skill_id)
+            ordered.append(skill_id)
+    return ordered
+
+
 def _topology_recommendation_from_row(
     row: asyncpg.Record | dict[str, Any],
     *,
+    skill_snapshots: dict[UUID, dict[str, Any]] | None = None,
     min_support: int,
     min_success_count: int,
     max_failure_ratio: float,
@@ -615,14 +794,33 @@ def _topology_recommendation_from_row(
     failure_count = int(metadata.get("failure_count") or 0)
     sequence_count = int(metadata.get("sequence_count") or 0)
     context_signal_count = int(metadata.get("context_signal_count") or 0)
+    token_waste = int(metadata.get("token_waste") or 0)
+    avg_context_value_per_token = _optional_float(
+        metadata.get("avg_context_value_per_token")
+    )
+    min_context_value_per_token = _optional_float(
+        metadata.get("min_context_value_per_token")
+    )
     failure_ratio = failure_count / support_count if support_count else 0.0
     operation = str(row["recommended_operation"] or "")
+    snapshots = [
+        skill_snapshots[skill_id]
+        for skill_id in skill_ids
+        if skill_snapshots and skill_id in skill_snapshots
+    ]
     if operation in {"improve", "decompose"}:
         operation_score = float(
             support_count
             + (failure_count * 2)
             + (context_signal_count * 2)
             + success_count
+            + min(token_waste / 250.0, 4.0)
+            + (
+                abs(avg_context_value_per_token) * 10.0
+                if avg_context_value_per_token is not None
+                and avg_context_value_per_token < 0
+                else 0.0
+            )
         )
     else:
         operation_score = float(
@@ -667,7 +865,11 @@ def _topology_recommendation_from_row(
             "topology_signal": metadata.get("topology_signal"),
             "failure_ratio": failure_ratio,
             "context_signal_count": context_signal_count,
+            "token_waste": token_waste,
+            "avg_context_value_per_token": avg_context_value_per_token,
+            "min_context_value_per_token": min_context_value_per_token,
             "subject_skill_ids": metadata.get("subject_skill_ids", []),
+            "skill_snapshots": snapshots,
             "suggested_context_actions": metadata.get("suggested_context_actions", []),
             "negative_sources": metadata.get("negative_sources", []),
             "thresholds": {
@@ -730,6 +932,28 @@ def _json_object_list(value: object) -> list[dict[str, Any]]:
             if isinstance(decoded, dict):
                 objects.append(decoded)
     return objects
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item.strip()]
+
+
+def _compact_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:

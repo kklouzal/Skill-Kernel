@@ -529,6 +529,25 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   hash-chain segments instead of incorrectly requiring the oldest returned row
   to be the genesis record; full-chain verification semantics remain available
   by using a genesis-anchored record list.
+- Accepted single-skill usage recommendations now feed propose-only topology
+  planning for `improve` and `decompose` as well as `compose`: repeated
+  negative-outcome clusters become improvement successors with deterministic
+  target/regression/rollback trials, context-waste/false-positive clusters
+  become two-successor decomposition proposals with broker replay/canary trials,
+  and persistence still writes only topology/governance/trial records without
+  staging or activating runtime files. Focused topology tests passed, then `uv
+  run ruff check sidecar`, `uv run pytest` (255 tests), `uv run python -m
+  compileall -q sidecar`, and `git diff --check` passed.
+- Usage-derived improve/decompose proposals now hydrate current SkillIR effect
+  signatures instead of placeholder-only nodes, preserve failure/idempotency
+  metadata, and persist contract/body-index/description presence plus measured
+  context-value/token-waste signals into deterministic trial expectations.
+- Historical import now records compact per-chunk source-item lineage metadata
+  and parses TaskFlow JSON/JSONL ledgers as metadata-only, redacted, tainted
+  task records with hashed record locators instead of Markdown-like blobs.
+  Validation passed with `uv run ruff check sidecar`, `uv run pytest` (256
+  tests), `uv run python -m compileall -q sidecar`, `npm test --prefix
+  plugin/autoskill` (18 tests), and `git diff --check`.
 
 ## Next Gates
 
@@ -538,13 +557,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 2. Promote or replace the operator smoke runtime skill with the first genuinely
    useful SkillKernel-owned runtime skill once replay/probe evidence supports a
    non-smoke activation target.
-3. Build the next historical-import layer on top of the new parse substrate:
-   richer datasource coverage for task/plugin/media and observability sources,
-   and source-item lineage beyond file/section/line granularity.
-4. Consume the new improve/decompose usage recommendations into propose-only
-   topology or repair planning once sustained telemetry confirms their aggregate
-   signals are stable, including successor/boundary detail for decomposition.
-5. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
+3. Build bounded bootstrap consolidation over the historical import substrate,
+   keeping imported history tainted and subject to normal evidence/evaluator
+   gates before any candidate proposal is activated.
+4. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
 
 ## Known Risks
 

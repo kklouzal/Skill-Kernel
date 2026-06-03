@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from autoskill.core.hashing import sha256_text
 from autoskill.core.redaction import redact_text
 from autoskill.db.historical import (
     HistoricalChunkInput,
@@ -145,8 +146,10 @@ def _parse_item(item: HistoricalDiscoveryItem, *, remaining: int) -> list[Histor
         return _parse_jsonl_transcript(item, remaining=remaining)
     if item.source_kind == "transcript_corpus":
         return _parse_transcript_corpus(item, remaining=remaining)
-    if item.source_kind in {"workspace_memory", "workspace_context", "taskflow_record"}:
+    if item.source_kind in {"workspace_memory", "workspace_context"}:
         return _parse_markdown_sections(item, remaining=remaining)
+    if item.source_kind == "taskflow_record":
+        return _parse_taskflow_record(item, remaining=remaining)
     if item.source_kind == "existing_skill":
         return _parse_skill_sections(item, remaining=remaining)
     if item.source_kind == "session_store":
@@ -232,6 +235,75 @@ def _parse_markdown_sections(
                     "line_end": end_line,
                     "chunking_version": HISTORICAL_CHUNKING_VERSION,
                     "lossy": False,
+                },
+            )
+        )
+    return chunks
+
+
+def _parse_taskflow_record(
+    item: HistoricalDiscoveryItem,
+    *,
+    remaining: int,
+) -> list[HistoricalChunkInput]:
+    assert item.path is not None
+    if item.path.suffix.lower() not in {".json", ".jsonl"}:
+        chunks = _parse_markdown_sections(item, remaining=remaining)
+        return [
+            HistoricalChunkInput(
+                source_kind=chunk.source_kind,
+                source_key=chunk.source_key,
+                fingerprint=chunk.fingerprint,
+                item_key=chunk.item_key,
+                chunk_index=chunk.chunk_index,
+                redacted_text=chunk.redacted_text,
+                parser_version=chunk.parser_version,
+                redaction_policy_version=chunk.redaction_policy_version,
+                chunk_kind="taskflow_markdown_section",
+                token_estimate=chunk.token_estimate,
+                trust_level=chunk.trust_level,
+                taint={**(chunk.taint or {}), "task_ledger": True},
+                metadata={**(chunk.metadata or {}), "taskflow_variant": "markdown"},
+            )
+            for chunk in chunks
+        ]
+
+    text = item.path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    chunks: list[HistoricalChunkInput] = []
+    for index, payload in enumerate(_json_payloads(text, lines)):
+        if len(chunks) >= remaining:
+            break
+        safe = _taskflow_record_metadata(payload)
+        if not safe:
+            continue
+        record_id = _string(
+            safe.get("flow_id")
+            or safe.get("task_id")
+            or safe.get("id")
+            or safe.get("run_id")
+        )
+        item_suffix = record_id or f"record-{index}"
+        chunks.append(
+            _chunk(
+                item,
+                item_key=(
+                    f"{item.metadata['relative_path_hash']}#"
+                    f"task-{sha256_text(item_suffix)}"
+                ),
+                chunk_index=index,
+                text="TaskFlow record metadata: " + json.dumps(safe, sort_keys=True),
+                chunk_kind="taskflow_record_metadata",
+                taint_extra={"task_ledger": True, "metadata_only": True},
+                metadata={
+                    "record_index": index,
+                    "taskflow_variant": "json" if item.path.suffix.lower() == ".json" else "jsonl",
+                    "metadata_only": True,
+                    "safe_metadata_keys": sorted(safe),
+                    "status": safe.get("status"),
+                    "record_id_hash": sha256_text(item_suffix),
+                    "chunking_version": HISTORICAL_CHUNKING_VERSION,
+                    "lossy": True,
                 },
             )
         )
@@ -571,7 +643,10 @@ def _chunk(
         token_estimate=max(1, (len(redacted) + 3) // 4),
         trust_level=item.trust_level,
         taint={**item.taint, **taint_extra},
-        metadata={**metadata, "source_path_stored": False},
+        metadata={
+            **metadata,
+            **_lineage_metadata(item, item_key=item_key, chunk_index=chunk_index),
+        },
     )
 
 
@@ -641,6 +716,54 @@ def _json_summary(payload: dict[str, Any]) -> str:
     return json.dumps(safe_keys, sort_keys=True) if safe_keys else ""
 
 
+def _taskflow_record_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    safe_keys = {
+        "flow_id",
+        "flowId",
+        "task_id",
+        "taskId",
+        "run_id",
+        "runId",
+        "id",
+        "kind",
+        "job_kind",
+        "jobKind",
+        "status",
+        "state",
+        "phase",
+        "current_step",
+        "currentStep",
+        "goal",
+        "objective",
+        "title",
+        "name",
+        "owner",
+        "created_at",
+        "createdAt",
+        "updated_at",
+        "updatedAt",
+        "last_event_at",
+        "lastEventAt",
+        "blocked_summary",
+        "blockedSummary",
+        "next_step",
+        "nextStep",
+    }
+    safe: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key not in safe_keys:
+            continue
+        if isinstance(value, str) and value.strip():
+            safe[key] = value.strip()
+        elif isinstance(value, int | float | bool):
+            safe[key] = value
+    nested = payload.get("flow") if isinstance(payload.get("flow"), dict) else None
+    if nested:
+        for key, value in _taskflow_record_metadata(nested).items():
+            safe.setdefault(key, value)
+    return safe
+
+
 def _section_taint(item: HistoricalDiscoveryItem, body: str) -> dict[str, Any]:
     taint: dict[str, Any] = {}
     lowered = body.lower()
@@ -661,3 +784,22 @@ def _string(value: object) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def _lineage_metadata(
+    item: HistoricalDiscoveryItem,
+    *,
+    item_key: str,
+    chunk_index: int,
+) -> dict[str, Any]:
+    return {
+        "source_path_stored": False,
+        "lineage": {
+            "source_kind": item.source_kind,
+            "source_key": item.source_key,
+            "fingerprint": item.fingerprint,
+            "item_key": item_key,
+            "chunk_index": chunk_index,
+            "relative_path_hash": item.metadata.get("relative_path_hash"),
+        },
+    }

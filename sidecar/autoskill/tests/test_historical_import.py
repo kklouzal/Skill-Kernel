@@ -914,6 +914,56 @@ def test_historical_import_parses_transcripts_and_markdown_sections(tmp_path) ->
         chunk for chunk in store.chunks.values() if chunk.chunk_kind == "workspace_memory_section"
     )
     assert memory_chunk.taint["memory_poisoning_suspected"] is True
+    assert memory_chunk.metadata["lineage"]["source_kind"] == "workspace_memory"
+    assert memory_chunk.metadata["lineage"]["item_key"] == memory_chunk.item_key
+
+
+def test_historical_import_parses_taskflow_jsonl_as_metadata_only(
+    tmp_path,
+) -> None:
+    root = tmp_path / "workspace"
+    taskflow = root / "taskflow"
+    taskflow.mkdir(parents=True)
+    (taskflow / "runs.jsonl").write_text(
+        (
+            '{"flow_id":"flow-1","status":"running","currentStep":"validate",'
+            '"goal":"Fix test@example.com without storing raw mail",'
+            '"raw_prompt":"do not persist"}\n'
+            '{"task_id":"task-2","status":"blocked","nextStep":"rerun canary"}\n'
+        ),
+        encoding="utf-8",
+    )
+    store = MemoryHistoricalImportStore()
+
+    result = asyncio.run(
+        import_historical_sources(
+            store,
+            workspace_key="dev-01",
+            roots=[root],
+            max_files=10,
+            max_chunks=10,
+            idempotency_key="historical-import:taskflow-jsonl",
+        )
+    )
+
+    assert result.parsed_sources == 1
+    assert result.chunks.created == 2
+    chunks = list(store.chunks.values())
+    assert {chunk.chunk_kind for chunk in chunks} == {"taskflow_record_metadata"}
+    assert all(chunk.metadata["metadata_only"] is True for chunk in chunks)
+    assert all(chunk.taint["task_ledger"] is True for chunk in chunks)
+    assert all("raw_prompt" not in chunk.redacted_text for chunk in chunks)
+    assert all("test@example.com" not in chunk.redacted_text for chunk in chunks)
+    first = chunks[0]
+    assert first.metadata["safe_metadata_keys"] == [
+        "currentStep",
+        "flow_id",
+        "goal",
+        "status",
+    ]
+    assert first.metadata["lineage"]["source_kind"] == "taskflow_record"
+    assert first.metadata["lineage"]["item_key"] == first.item_key
+    assert first.metadata["source_path_stored"] is False
 
 
 def test_historical_import_parses_transcript_corpus_exports(tmp_path) -> None:

@@ -174,9 +174,16 @@ def test_topology_recommendation_accepts_context_waste_decompose_signal() -> Non
             "success_count": 0,
             "failure_count": 0,
             "context_signal_count": 3,
+            "token_waste": 900,
+            "avg_context_value_per_token": -0.025,
+            "min_context_value_per_token": -0.04,
             "topology_signal": "context_waste_or_false_positive",
             "subject_skill_ids": [str(skill_id)],
-            "suggested_context_actions": ["broker_abstain", "tighten_description"],
+            "suggested_context_actions": [
+                "broker_abstain",
+                "tighten_description",
+                "decompose_skill",
+            ],
             "negative_sources": [
                 {
                     "source_kind": "context_token_ledger",
@@ -197,9 +204,13 @@ def test_topology_recommendation_accepts_context_waste_decompose_signal() -> Non
 
     assert recommendation.accepted
     assert recommendation.recommended_operation == "decompose"
-    assert recommendation.operation_score == 10.0
+    assert recommendation.operation_score == 13.85
     assert recommendation.metadata["context_signal_count"] == 3
+    assert recommendation.metadata["token_waste"] == 900
+    assert recommendation.metadata["avg_context_value_per_token"] == -0.025
+    assert recommendation.metadata["min_context_value_per_token"] == -0.04
     assert recommendation.metadata["suggested_context_actions"] == [
         "broker_abstain",
         "tighten_description",
+        "decompose_skill",
     ]

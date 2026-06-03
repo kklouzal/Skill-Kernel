@@ -70,6 +70,7 @@ class DecomposeTopologyRequest:
     subject: TopologySkill
     successors: list[TopologySkill]
     evidence_ids: list[str]
+    decomposition_reasons: list[str] | None = None
     coverage_requirements: list[str] | None = None
     max_successors: int = MAX_SUCCESSORS
 
@@ -591,6 +592,7 @@ def propose_decomposition(request: DecomposeTopologyRequest) -> TopologyProposal
         "successors": [successor.to_json() for successor in request.successors],
         "evidence_ids": sorted(request.evidence_ids),
         "coverage_requirements": sorted(required),
+        "decomposition_reasons": sorted(request.decomposition_reasons or []),
         "blockers": blockers,
         "graph": _graph_json(graph),
     }
@@ -604,7 +606,10 @@ def propose_decomposition(request: DecomposeTopologyRequest) -> TopologyProposal
             TopologyTrialPlan(
                 kind="original_baseline",
                 objective="Measure original broad-skill routing and token cost.",
-                expected={"subject_slug": request.subject.slug},
+                expected={
+                    "subject_slug": request.subject.slug,
+                    "reasons": sorted(request.decomposition_reasons or []),
+                },
             ),
             TopologyTrialPlan(
                 kind="successor_routing",
@@ -628,6 +633,7 @@ def propose_decomposition(request: DecomposeTopologyRequest) -> TopologyProposal
                 ),
                 expected={
                     "operation_kind": "decompose",
+                    "reasons": sorted(request.decomposition_reasons or []),
                     "subject_skill_ids": [
                         str(request.subject.skill_id)
                     ]

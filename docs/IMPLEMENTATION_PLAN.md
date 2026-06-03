@@ -187,11 +187,15 @@ Acceptance:
   invalidation;
 - historical chunks can become observed evidence and embedding sources, but
   cannot directly activate skills, broker runtime context, or trusted memory;
-- remaining historical ingestion work is richer datasource coverage for
-  task-ledger variants and source-item lineage beyond file/section/line
-  metadata, executing full source-revocation
-  traversal into derived evidence/embeddings/memory/candidates, and bounded
-  bootstrap consolidation.
+- historical task-ledger variants now include metadata-only JSON/JSONL parsing
+  with safe keys, task-ledger tainting, redacted text storage, and hashed record
+  locators;
+- imported chunks now carry compact source-item lineage metadata with source
+  kind, source key, fingerprint, item key, chunk index, and relative path hash
+  while continuing to avoid raw path storage;
+- remaining historical ingestion work is bounded bootstrap consolidation plus
+  richer source-item lineage for future non-file ledgers and live source
+  systems beyond the current hashed file/item/chunk model.
 
 ## Phase 5 - Runtime Context Broker
 
@@ -384,7 +388,17 @@ Deliverables:
   attribution and false-positive/ignored context-token outcomes create
   subject-scoped `improve` or `decompose` recommendations with structured
   negative-source metadata and suggested `broker_abstain`/`tighten_description`
-  context actions, while remaining recommendations only;
+  context actions;
+- usage/topology negative-signal proposal consumption; implemented so accepted
+  single-skill `improve` and `decompose` recommendations can persist
+  propose-only SkillGraphIR operations, governance transactions, and target/
+  regression/broker/rollback trial plans without staging or activating runtime
+  skill files;
+- usage/topology real-skill hydration for negative-signal proposals; implemented
+  so accepted `improve` and `decompose` proposals preserve current SkillIR
+  effect signatures, carry contract/body-index/description presence signals,
+  preserve side-effect/failure/idempotency metadata, and persist measured
+  context-value/token-waste reasons into relevant trial expectations;
 - topology operation metrics; implemented as a control-authenticated
   `/v1/topology/metrics` surface that reports create/improve/compose/decompose
   operation counts separately, trial status breakdowns by operation and trial
@@ -417,6 +431,15 @@ Acceptance:
   passed; a real Compose Postgres smoke seeded harmful attribution plus
   false-positive context-token outcomes and produced accepted `improve` and
   `decompose` recommendations without writing runtime skills.
+- validation evidence for improve/decompose recommendation proposal
+  consumption: focused topology tests passed, `uv run ruff check sidecar`, `uv
+  run pytest` with 255 tests, `uv run python -m compileall -q sidecar`, and
+  `git diff --check` passed.
+- validation evidence for hydrated improve/decompose topology proposal reasons
+  and task-ledger historical import lineage: focused topology/history tests
+  passed, `uv run ruff check sidecar`, `uv run pytest` with 256 tests, `uv run
+  python -m compileall -q sidecar`, `npm test --prefix plugin/autoskill` with
+  18 tests, and `git diff --check` passed.
 - external collisions pause candidate creation for review; real external-root scanning,
   import recommendation, operator review actions, and stage-only import
   materialization are implemented without mutating external-owned roots.
