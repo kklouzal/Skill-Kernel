@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -23,6 +24,7 @@ from autoskill.services.writer import (
     rollback_active_skill_with_governance,
     stage_compiled_skill,
     stage_text,
+    validate_active_skill_relative_path,
     validate_support_artifact_path,
     verify_archive_manifest,
     verify_staged_manifest,
@@ -276,11 +278,44 @@ def test_writer_rejects_blocked_compiled_skill(tmp_path: Path) -> None:
 def test_writer_rejects_unsafe_support_artifact_paths() -> None:
     assert validate_support_artifact_path("scripts/safe-tool.py") == "scripts/safe-tool.py"
     assert validate_support_artifact_path("references/notes.md") == "references/notes.md"
+    assert validate_support_artifact_path("templates/sample.md") == "templates/sample.md"
+    assert validate_support_artifact_path("templates/sample.txt") == "templates/sample.txt"
+    assert validate_support_artifact_path("templates/sample.json") == "templates/sample.json"
+    assert validate_support_artifact_path("schemas/sample.json") == "schemas/sample.json"
+    assert validate_support_artifact_path("schemas/sample.yaml") == "schemas/sample.yaml"
+    assert validate_support_artifact_path("data/sample.json") == "data/sample.json"
+    assert validate_support_artifact_path("data/sample.csv") == "data/sample.csv"
+    assert validate_support_artifact_path("data/sample.yaml") == "data/sample.yaml"
     assert validate_support_artifact_path("assets/sample.json") == "assets/sample.json"
+    assert validate_support_artifact_path("examples/sample.md") == "examples/sample.md"
+    assert validate_support_artifact_path("tests/test_sample.py") == "tests/test_sample.py"
+    assert validate_support_artifact_path("probes/sample.jsonl") == "probes/sample.jsonl"
+    assert (
+        validate_support_artifact_path("adjunct_requests/sample.json")
+        == "adjunct_requests/sample.json"
+    )
+    assert (
+        validate_active_skill_relative_path(".autoskill-contract.json")
+        == ".autoskill-contract.json"
+    )
     with pytest.raises(WriterPolicyError):
         validate_support_artifact_path("../escape.py")
     with pytest.raises(WriterPolicyError):
         validate_support_artifact_path("scripts/fetcher.exe")
+    with pytest.raises(WriterPolicyError):
+        validate_support_artifact_path("templates/sample.py")
+    with pytest.raises(WriterPolicyError):
+        validate_support_artifact_path("schemas/sample.md")
+    with pytest.raises(WriterPolicyError):
+        validate_support_artifact_path("data/sample.txt")
+    with pytest.raises(WriterPolicyError):
+        validate_support_artifact_path("examples/sample.txt")
+    with pytest.raises(WriterPolicyError):
+        validate_support_artifact_path("tests/sample.py")
+    with pytest.raises(WriterPolicyError):
+        validate_support_artifact_path("probes/sample.json")
+    with pytest.raises(WriterPolicyError):
+        validate_support_artifact_path("adjunct_requests/sample.md")
 
 
 def test_writer_rejects_symlink_path(tmp_path: Path) -> None:
@@ -291,6 +326,55 @@ def test_writer_rejects_symlink_path(tmp_path: Path) -> None:
 
     with pytest.raises(PathContainmentError):
         stage_text(tmp_path, "skills/example/SKILL.md", "hello")
+
+
+def test_writer_rejects_staged_hardlink_source(tmp_path: Path) -> None:
+    staging_root = tmp_path / "staging"
+    workspace_root = tmp_path / "workspace"
+    archive_root = workspace_root / ".autoskill" / "archive"
+    staged = stage_compiled_skill(
+        staging_root,
+        staging_id=uuid4(),
+        skill_version_id=uuid4(),
+        slug="autoskill-example",
+        compiled_skill_md="# Safe\n\n## WHEN\n- Safe.\n",
+    )
+    source = staging_root / staged.files[0].relative_path
+    os.link(source, staging_root / "hardlink-copy")
+
+    with pytest.raises(PathContainmentError, match="hardlinked"):
+        apply_staged_manifest(
+            staging_root,
+            workspace_root,
+            archive_root,
+            staged.manifest_relative_path,
+        )
+
+
+def test_writer_rejects_active_snapshot_hardlink(tmp_path: Path) -> None:
+    staging_root = tmp_path / "staging"
+    workspace_root = tmp_path / "workspace"
+    archive_root = workspace_root / ".autoskill" / "archive"
+    active_path = workspace_root / "skills" / "autoskill" / "autoskill-example"
+    active_path.mkdir(parents=True)
+    active_skill = active_path / "SKILL.md"
+    active_skill.write_text("# Old\n\n## WHEN\n- Old.\n", encoding="utf-8")
+    os.link(active_skill, tmp_path / "old-hardlink")
+    staged = stage_compiled_skill(
+        staging_root,
+        staging_id=uuid4(),
+        skill_version_id=uuid4(),
+        slug="autoskill-example",
+        compiled_skill_md="# New\n\n## WHEN\n- New.\n",
+    )
+
+    with pytest.raises(PathContainmentError, match="hardlinked"):
+        apply_staged_manifest(
+            staging_root,
+            workspace_root,
+            archive_root,
+            staged.manifest_relative_path,
+        )
 
 
 def test_writer_applies_staged_manifest_and_snapshots_previous_active(

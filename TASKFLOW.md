@@ -684,6 +684,17 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   with 275 tests, `uv run python -m compileall -q sidecar`, `git diff
   --check`, `npm test --prefix plugin/autoskill` with 18 tests, and `npm run
   check --prefix plugin/autoskill`.
+- Writer path containment now matches the section 25.4 allowlist: support
+  artifacts can use the approved scripts/references/templates/schemas/data/
+  assets/examples/tests/probes/adjunct_requests directories with
+  directory-specific suffix checks, `.autoskill-contract.json` is accepted as a
+  root active artifact, and staged, active-snapshot, archive-verify, and
+  rollback source files reject hardlinks as well as symlinks/path escapes.
+  Validation passed with focused writer/worker/admin tests, focused ruff
+  checks, full `uv run ruff check sidecar`, `uv run pytest -q` with 277 tests,
+  `uv run python -m compileall -q sidecar`, `git diff --check`, `npm test
+  --prefix plugin/autoskill` with 18 tests, and `npm run check --prefix
+  plugin/autoskill`.
 
 ## Next Gates
 

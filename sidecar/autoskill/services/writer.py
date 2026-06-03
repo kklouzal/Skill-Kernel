@@ -162,13 +162,29 @@ def reject_symlink_path(root: Path, relative_path: str) -> None:
             raise PathContainmentError(f"symlink paths are forbidden: {relative_path}")
 
 
+def reject_hardlink_file(path: Path, relative_path: str) -> None:
+    if path.is_file() and path.stat().st_nlink > 1:
+        raise PathContainmentError(f"hardlinked files are forbidden: {relative_path}")
+
+
 def validate_support_artifact_path(relative_path: str) -> str:
     path = Path(relative_path)
     parts = path.parts
     if len(parts) != 2:
         raise WriterPolicyError("support artifact path must be exactly one directory and one file")
     directory, filename = parts
-    if directory not in {"scripts", "references", "assets"}:
+    if directory not in {
+        "scripts",
+        "references",
+        "templates",
+        "schemas",
+        "data",
+        "assets",
+        "examples",
+        "tests",
+        "probes",
+        "adjunct_requests",
+    }:
         raise WriterPolicyError("support artifact directory is not allowed")
     if not SAFE_SUPPORT_NAME.fullmatch(filename):
         raise WriterPolicyError("support artifact filename is not safe")
@@ -177,8 +193,22 @@ def validate_support_artifact_path(relative_path: str) -> str:
         raise WriterPolicyError("script artifacts must be .py or .sh")
     if directory == "references" and suffix != ".md":
         raise WriterPolicyError("reference artifacts must be .md")
+    if directory == "templates" and suffix not in {".md", ".txt", ".json"}:
+        raise WriterPolicyError("template artifacts must be .md, .txt, or .json")
+    if directory == "schemas" and suffix not in {".json", ".yaml"}:
+        raise WriterPolicyError("schema artifacts must be .json or .yaml")
+    if directory == "data" and suffix not in {".json", ".csv", ".yaml"}:
+        raise WriterPolicyError("data artifacts must be .json, .csv, or .yaml")
     if directory == "assets" and suffix not in ALLOWED_ASSET_EXTENSIONS:
         raise WriterPolicyError("asset extension is not allowed")
+    if directory == "examples" and suffix != ".md":
+        raise WriterPolicyError("example artifacts must be .md")
+    if directory == "tests" and (suffix != ".py" or not filename.startswith("test_")):
+        raise WriterPolicyError("test artifacts must be test_<safe-name>.py")
+    if directory == "probes" and suffix != ".jsonl":
+        raise WriterPolicyError("probe artifacts must be .jsonl")
+    if directory == "adjunct_requests" and suffix != ".json":
+        raise WriterPolicyError("adjunct request artifacts must be .json")
     return f"{directory}/{filename}"
 
 
@@ -312,6 +342,7 @@ def apply_staged_manifest(
     ]
     for file in staged_files:
         source = resolve_contained(staging_root, file.relative_path)
+        reject_hardlink_file(source, file.relative_path)
         target_inside_skill = _target_path_inside_skill(slug, file.target_relative_path)
         reject_symlink_path(apply_tmp_root, target_inside_skill)
         destination = resolve_contained(apply_tmp_root, target_inside_skill)
@@ -383,6 +414,7 @@ def archive_active_skill(
             continue
         source = path
         relative_inside_skill = source.relative_to(active_path).as_posix()
+        reject_hardlink_file(source, relative_inside_skill)
         validate_active_skill_relative_path(relative_inside_skill)
         destination = resolve_contained(snapshot_path, relative_inside_skill)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -489,6 +521,7 @@ def rollback_active_skill(
     for file in files:
         validate_active_skill_relative_path(file.relative_path)
         source = resolve_contained(snapshot_root, file.relative_path)
+        reject_hardlink_file(source, file.relative_path)
         destination = resolve_contained(staging_tmp_path, file.relative_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
@@ -969,6 +1002,7 @@ def verify_archive_manifest(root: Path, manifest_relative_path: str) -> dict[str
         validate_active_skill_relative_path(relative_path)
         _target_path_inside_skill(slug, str(entry["target_relative_path"]))
         path = resolve_contained(snapshot_root, relative_path)
+        reject_hardlink_file(path, relative_path)
         digest = sha256_bytes(path.read_bytes())
         if digest != entry["sha256"]:
             raise WriterPolicyError(f"archive file hash mismatch: {relative_path}")
@@ -976,7 +1010,11 @@ def verify_archive_manifest(root: Path, manifest_relative_path: str) -> dict[str
 
 
 def validate_active_skill_relative_path(relative_path: str) -> str:
-    if relative_path in {"SKILL.md", ".autoskill-manifest.json"}:
+    if relative_path in {
+        "SKILL.md",
+        ".autoskill-manifest.json",
+        ".autoskill-contract.json",
+    }:
         return relative_path
     return validate_support_artifact_path(relative_path)
 
@@ -1080,7 +1118,20 @@ def _support_artifact_metadata(
         "operator_only",
     }:
         raise WriterPolicyError("unsupported support artifact load policy")
-    if artifact.kind not in {"script", "template", "fixture", "manifest", "asset"}:
+    if artifact.kind not in {
+        "script",
+        "template",
+        "fixture",
+        "manifest",
+        "asset",
+        "schema",
+        "data",
+        "example",
+        "test",
+        "probe",
+        "adjunct_request",
+        "reference",
+    }:
         raise WriterPolicyError("unsupported support artifact kind")
     token_count = _estimate_tokens(text or "") if text else 0
     findings = scan_text(text or "") if text is not None else []
@@ -1140,6 +1191,12 @@ def _archive_file_metadata(relative_inside_skill: str) -> dict[str, object]:
             "artifact_kind": "provenance_manifest",
             "loadability_class": "operator_only",
             "schema": "skillkernel-artifact-manifest.v1",
+        }
+    if relative_inside_skill == ".autoskill-contract.json":
+        return {
+            "artifact_kind": "environment_contract",
+            "loadability_class": "operator_only",
+            "schema": "skillkernel-contract-manifest.v1",
         }
     return {
         "artifact_kind": "support_artifact",
