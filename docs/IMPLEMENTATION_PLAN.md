@@ -218,6 +218,12 @@ Deliverables:
 - shadowing logs; broker suppression/rendering telemetry is attached to retrieval logs, and outcome/correction-based shadowing detection records attribution events.
 - external-skill inventory awareness; implemented as control-authenticated upsert/list APIs, hashed-root/file-hash/status/risk metadata persistence, read-only scanner job wiring, lexical retrieval of visible/changed external skills, broker suppression as non-runtime collisions, and duplicate-match `external_collision_review` decisions that block automatic candidate creation.
 - executor-profile compatibility suppression; implemented through `skill_profile_compatibility`, a control upsert API, executor-scoped broker cache keys, and runtime suppression of explicitly `blocked` or `drifted` skill versions for the requesting executor profile.
+- usage-derived broker policy proposals; implemented as
+  `/v1/broker/policies/propose-from-usage`, which consumes accepted
+  context-waste/false-positive usage recommendations carrying `broker_abstain`
+  or `tighten_description`, turns them into content-safe operator-review
+  actions, and can persist a candidate-only broker policy version without
+  activating or changing runtime routing.
 - broker policy artifacts; implemented as persisted `broker_policy_versions` with active-version lookup, bounded policy overrides for retrieval/graph/render limits, policy-scoped cache keys, replay evaluation primitives, and canary feedback recording.
 - context compiler governance records; implemented as idempotent migration
   tables, asyncpg/null store primitives, and control-authenticated APIs for
@@ -400,6 +406,11 @@ Deliverables:
   propose-only SkillGraphIR operations, governance transactions, and target/
   regression/broker/rollback trial plans without staging or activating runtime
   skill files;
+- broker-abstain and description-tightening recommendation consumption;
+  implemented so context-waste/false-positive usage recommendations also feed
+  a candidate-only broker policy review surface with hashed cluster keys,
+  subject skill IDs, evidence IDs, reason codes, token-waste metrics, and
+  operator-review-required action records;
 - usage/topology real-skill hydration for negative-signal proposals; implemented
   so accepted `improve` and `decompose` proposals preserve current SkillIR
   effect signatures, carry contract/body-index/description presence signals,

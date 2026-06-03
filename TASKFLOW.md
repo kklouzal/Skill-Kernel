@@ -859,6 +859,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   with 18 tests, `uv run python -m compileall -q sidecar scripts`, `git diff
   --check`, `docker compose config --quiet`, and full `uv run pytest -q` with
   294 tests.
+- Usage-derived broker policy proposal consumption is implemented for the
+  previously stale broker-abstain gap: accepted context-waste/false-positive
+  usage recommendations carrying `broker_abstain` or `tighten_description` now
+  feed `/v1/broker/policies/propose-from-usage`, returning content-safe
+  operator-review action records and optionally persisting a candidate-only
+  broker policy version without activating it or changing runtime routing.
+  Validation passed with focused broker-policy/topology tests, `uv run ruff
+  check sidecar/autoskill/api/app.py
+  sidecar/autoskill/tests/test_broker_policy_api.py`, full `uv run ruff check
+  sidecar scripts`, full `uv run pytest -q` with 296 tests, `uv run python -m
+  compileall -q sidecar scripts`, `npm test --prefix plugin/autoskill` with 18
+  tests, `npm run check --prefix plugin/autoskill`, `docker compose config
+  --quiet`, `git diff --check`, and acceptance/readiness/handoff/traceability
+  reports all `ready=true`.
 
 ## Next Gates
 
@@ -889,7 +903,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   testing.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
 - Worker health now includes persistent heartbeat records, long-running handlers renew job leases, and single-job worker runs emit content-safe progress phases through heartbeat summaries. Future lengthy semantic handlers may still add deeper domain-specific counters when their internal phases mature.
-- Evidence derivation now creates observed event evidence plus deterministic recurring evidence clusters, and `usage.aggregate` now mines retrieval/attribution co-use windows into topology evidence tables. Accepted recurring co-use clusters can now become propose-only compose topology operations; remaining work is structured improve/decompose and broker-abstain consumption plus additional contrastive evidence mining beyond evaluator replay maturity.
+- Evidence derivation now creates observed event evidence plus deterministic recurring evidence clusters, and `usage.aggregate` now mines retrieval/attribution co-use windows into topology evidence tables. Accepted recurring co-use clusters can now become propose-only compose topology operations; structured improve/decompose and broker-abstain consumption now exist. Remaining work is sustained replay/canary validation plus additional contrastive evidence mining beyond evaluator replay maturity.
 - Memory quarantine/control-flow tables and operator APIs now exist, the runtime broker can record approved memory-influenced retrieval decisions without injecting memory text while blocking unapproved memory references before retrieval, and repair/writer mutation paths now gate and log approved or blocked memory influence.
 - Historical import now has durable source/chunk inventory, bounded discovery,
   parser checkpoint workers, redacted chunk storage, evidence derivation,

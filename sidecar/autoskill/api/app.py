@@ -1124,6 +1124,24 @@ class BrokerPolicyReviewResponse(BaseModel):
     audit: dict[str, object]
 
 
+class BrokerPolicyUsageProposalRequest(BaseModel):
+    workspace_id: str
+    limit: int = 10
+    min_support: int = 3
+    min_success_count: int = 1
+    max_failure_ratio: float = 0.25
+    min_sequence_count: int = 1
+    persist: bool = False
+    version_prefix: str = "usage-broker-policy"
+
+
+class BrokerPolicyUsageProposalResponse(BaseModel):
+    recommendations_scanned: int
+    proposals: list[dict[str, object]]
+    skipped: list[dict[str, object]]
+    policy_version: dict[str, object] | None = None
+
+
 class ActionAttributionCheckRequest(BaseModel):
     workspace_id: str
     session_id: str | None = None
@@ -2380,6 +2398,77 @@ def _usage_signal_reasons(recommendation: UsageTopologyRecommendation) -> list[s
     return sorted(set(reasons)) or ["usage-backed topology signal"]
 
 
+def _usage_broker_policy_review_actions(
+    recommendation: UsageTopologyRecommendation,
+) -> list[dict[str, object]]:
+    context_actions = [
+        action
+        for action in recommendation.metadata.get("suggested_context_actions", [])
+        if action in {"broker_abstain", "tighten_description"}
+    ]
+    if not context_actions:
+        return []
+    subject_skill_ids = recommendation.metadata.get("subject_skill_ids")
+    if not isinstance(subject_skill_ids, list) or not subject_skill_ids:
+        subject_skill_ids = [str(skill_id) for skill_id in recommendation.skill_ids]
+    reason_codes = _usage_signal_reasons(recommendation)
+    common = {
+        "schema": "autoskill.broker_policy_usage_review.v1",
+        "status": "operator_review_required",
+        "source": "usage.aggregate",
+        "cluster_key_hash": sha256_text(recommendation.cluster_key),
+        "skill_usage_cluster_id": (
+            str(recommendation.skill_usage_cluster_id)
+            if recommendation.skill_usage_cluster_id
+            else None
+        ),
+        "subject_skill_ids": [str(skill_id) for skill_id in subject_skill_ids],
+        "evidence_ids": [str(evidence_id) for evidence_id in recommendation.evidence_ids],
+        "recommended_operation": recommendation.recommended_operation,
+        "support_count": recommendation.support_count,
+        "failure_count": recommendation.failure_count,
+        "sequence_count": recommendation.sequence_count,
+        "operation_score": recommendation.operation_score,
+        "context_signal_count": recommendation.metadata.get("context_signal_count", 0),
+        "token_waste": recommendation.metadata.get("token_waste", 0),
+        "avg_context_value_per_token": recommendation.metadata.get(
+            "avg_context_value_per_token"
+        ),
+        "min_context_value_per_token": recommendation.metadata.get(
+            "min_context_value_per_token"
+        ),
+        "reason_codes": reason_codes,
+    }
+    return [{**common, "action": action} for action in context_actions]
+
+
+def _broker_policy_with_usage_review_actions(
+    base_policy: dict[str, object],
+    *,
+    review_actions: list[dict[str, object]],
+) -> dict[str, object]:
+    policy = json.loads(json.dumps(base_policy)) if base_policy else {}
+    broker = policy.get("runtime_context_broker")
+    if not isinstance(broker, dict):
+        broker = {}
+    existing = broker.get("usage_context_action_reviews", [])
+    if not isinstance(existing, list):
+        existing = []
+    broker["usage_context_action_reviews"] = [*existing, *review_actions]
+    policy["runtime_context_broker"] = broker
+    return policy
+
+
+def _usage_broker_policy_skip(
+    recommendation: UsageTopologyRecommendation,
+    *,
+    reason: str,
+) -> dict[str, object]:
+    payload = recommendation.to_json()
+    payload["skipped_reason"] = reason
+    return payload
+
+
 def _usage_subject_terms(subject_effects: dict[str, object]) -> list[str]:
     return [
         term
@@ -3400,6 +3489,78 @@ def create_app(
                 "limit": bounded_audit_limit,
                 "chain_valid": audit_chain_valid,
             },
+        )
+
+    @app.post(
+        "/v1/broker/policies/propose-from-usage",
+        response_model=BrokerPolicyUsageProposalResponse,
+    )
+    async def propose_broker_policy_from_usage(
+        request: BrokerPolicyUsageProposalRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> BrokerPolicyUsageProposalResponse:
+        _require_control_auth(authorization)
+        recommendations = await usage.recommend_topology_operations(
+            workspace_key=request.workspace_id,
+            limit=request.limit,
+            min_support=request.min_support,
+            min_success_count=request.min_success_count,
+            max_failure_ratio=request.max_failure_ratio,
+            min_sequence_count=request.min_sequence_count,
+        )
+        proposals: list[dict[str, object]] = []
+        skipped: list[dict[str, object]] = []
+        review_actions: list[dict[str, object]] = []
+        for recommendation in recommendations:
+            if not recommendation.accepted:
+                skipped.append(
+                    _usage_broker_policy_skip(
+                        recommendation,
+                        reason="recommendation blocked by usage thresholds",
+                    )
+                )
+                continue
+            actions = _usage_broker_policy_review_actions(recommendation)
+            if not actions:
+                skipped.append(
+                    _usage_broker_policy_skip(
+                        recommendation,
+                        reason="usage recommendation has no broker policy action",
+                    )
+                )
+                continue
+            review_actions.extend(actions)
+            proposals.append(
+                {
+                    "recommendation": recommendation.to_json(),
+                    "review_actions": actions,
+                }
+            )
+
+        policy_version = None
+        if request.persist and review_actions:
+            active_policy = await broker_policies.get_active_policy(
+                workspace_key=request.workspace_id,
+            )
+            base_policy = active_policy.policy if active_policy else {}
+            candidate_policy = _broker_policy_with_usage_review_actions(
+                base_policy,
+                review_actions=review_actions,
+            )
+            policy_hash = sha256_text(json.dumps(candidate_policy, sort_keys=True))[:12]
+            record = await broker_policies.upsert_policy_version(
+                workspace_key=request.workspace_id,
+                version=f"{request.version_prefix}.{policy_hash}",
+                policy=candidate_policy,
+                status="candidate",
+            )
+            policy_version = record.to_json()
+
+        return BrokerPolicyUsageProposalResponse(
+            recommendations_scanned=len(recommendations),
+            proposals=proposals,
+            skipped=skipped,
+            policy_version=policy_version,
         )
 
     @app.post(

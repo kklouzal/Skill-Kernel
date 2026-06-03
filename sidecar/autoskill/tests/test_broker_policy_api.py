@@ -6,13 +6,43 @@ from autoskill.api.app import (
     BrokerPolicyCanaryRequest,
     BrokerPolicyReplayRequest,
     BrokerPolicyUpsertRequest,
+    BrokerPolicyUsageProposalRequest,
     BrokerReplayEpisodeRecordRequest,
     create_app,
 )
 from autoskill.db.broker_policy import NullBrokerPolicyStore
 from autoskill.db.retrieval import RetrievalCandidate
+from autoskill.db.usage import UsageTopologyRecommendation
 from autoskill.services.broker import BrokerReplayEpisode
 from autoskill.tests.test_broker import MemoryBrokerRetrievalStore
+
+
+class MemoryUsageRecommendationStore:
+    def __init__(self, recommendations: list[UsageTopologyRecommendation]) -> None:
+        self.recommendations = recommendations
+        self.calls: list[dict[str, object]] = []
+
+    async def recommend_topology_operations(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        min_support: int = 3,
+        min_success_count: int = 1,
+        max_failure_ratio: float = 0.25,
+        min_sequence_count: int = 1,
+    ) -> list[UsageTopologyRecommendation]:
+        self.calls.append(
+            {
+                "workspace_key": workspace_key,
+                "limit": limit,
+                "min_support": min_support,
+                "min_success_count": min_success_count,
+                "max_failure_ratio": max_failure_ratio,
+                "min_sequence_count": min_sequence_count,
+            }
+        )
+        return self.recommendations[:limit]
 
 
 def test_broker_policy_api_activates_policy_and_replay_uses_it() -> None:
@@ -228,4 +258,159 @@ def test_broker_policy_review_blocks_missing_active_policy_and_warns_empty_repla
     assert response.warnings == [
         "broker replay corpus is empty",
         "production-tagged broker replay corpus is empty",
+    ]
+
+
+def test_broker_policy_propose_from_usage_persists_candidate_review_actions() -> None:
+    policy_store = NullBrokerPolicyStore()
+    skill_id = uuid4()
+    evidence_id = uuid4()
+    cluster_id = uuid4()
+    usage = MemoryUsageRecommendationStore(
+        [
+            UsageTopologyRecommendation(
+                skill_usage_cluster_id=cluster_id,
+                cluster_key=f"decompose:{skill_id}",
+                skill_ids=[skill_id],
+                evidence_ids=[evidence_id],
+                recommended_operation="decompose",
+                support_count=6,
+                success_count=0,
+                failure_count=0,
+                sequence_count=0,
+                operation_score=12.0,
+                blockers=[],
+                metadata={
+                    "source": "usage.aggregate",
+                    "topology_signal": "context_waste_or_false_positive",
+                    "context_signal_count": 4,
+                    "token_waste": 900,
+                    "avg_context_value_per_token": -0.025,
+                    "min_context_value_per_token": -0.03,
+                    "subject_skill_ids": [str(skill_id)],
+                    "suggested_context_actions": [
+                        "broker_abstain",
+                        "tighten_description",
+                    ],
+                },
+            )
+        ]
+    )
+    app = create_app(broker_policy_store=policy_store, usage_store=usage)
+    upsert = next(route for route in app.routes if route.path == "/v1/broker/policies")
+    propose = next(
+        route
+        for route in app.routes
+        if route.path == "/v1/broker/policies/propose-from-usage"
+    )
+
+    async def run():
+        active = await upsert.endpoint(
+            request=BrokerPolicyUpsertRequest(
+                workspace_id="dev-01",
+                version="active-policy.v1",
+                policy={"runtime_context_broker": {"lexical_limit": 4}},
+                status="active",
+            )
+        )
+        proposed = await propose.endpoint(
+            request=BrokerPolicyUsageProposalRequest(
+                workspace_id="dev-01",
+                persist=True,
+            )
+        )
+        still_active = await policy_store.get_active_policy(workspace_key="dev-01")
+        return active, proposed, still_active
+
+    active, response, still_active = asyncio.run(run())
+
+    assert response.recommendations_scanned == 1
+    assert response.skipped == []
+    assert len(response.proposals) == 1
+    assert [item["action"] for item in response.proposals[0]["review_actions"]] == [
+        "broker_abstain",
+        "tighten_description",
+    ]
+    assert response.policy_version is not None
+    assert response.policy_version["status"] == "candidate"
+    assert response.policy_version["version"].startswith("usage-broker-policy.")
+    assert response.policy_version["policy"]["runtime_context_broker"]["lexical_limit"] == 4
+    reviews = response.policy_version["policy"]["runtime_context_broker"][
+        "usage_context_action_reviews"
+    ]
+    assert len(reviews) == 2
+    assert reviews[0]["status"] == "operator_review_required"
+    assert reviews[0]["subject_skill_ids"] == [str(skill_id)]
+    assert reviews[0]["evidence_ids"] == [str(evidence_id)]
+    assert reviews[0]["context_signal_count"] == 4
+    assert reviews[0]["token_waste"] == 900
+    assert "broker_abstain" in reviews[0]["reason_codes"]
+    assert still_active is not None
+    assert str(still_active.broker_policy_version_id) == active.policy_version[
+        "broker_policy_version_id"
+    ]
+
+
+def test_broker_policy_propose_from_usage_skips_non_policy_signals() -> None:
+    skill_id = uuid4()
+    usage = MemoryUsageRecommendationStore(
+        [
+            UsageTopologyRecommendation(
+                skill_usage_cluster_id=uuid4(),
+                cluster_key=f"improve:{skill_id}",
+                skill_ids=[skill_id],
+                evidence_ids=[],
+                recommended_operation="improve",
+                support_count=2,
+                success_count=0,
+                failure_count=1,
+                sequence_count=0,
+                operation_score=1.0,
+                blockers=["usage cluster support below threshold"],
+                metadata={"source": "usage.aggregate"},
+            ),
+            UsageTopologyRecommendation(
+                skill_usage_cluster_id=uuid4(),
+                cluster_key=f"compose:{skill_id}",
+                skill_ids=[skill_id],
+                evidence_ids=[],
+                recommended_operation="compose",
+                support_count=5,
+                success_count=3,
+                failure_count=0,
+                sequence_count=2,
+                operation_score=7.0,
+                blockers=[],
+                metadata={
+                    "source": "usage.aggregate",
+                    "suggested_context_actions": ["decompose_skill"],
+                },
+            ),
+        ]
+    )
+    app = create_app(
+        broker_policy_store=NullBrokerPolicyStore(),
+        usage_store=usage,
+    )
+    propose = next(
+        route
+        for route in app.routes
+        if route.path == "/v1/broker/policies/propose-from-usage"
+    )
+
+    response = asyncio.run(
+        propose.endpoint(
+            request=BrokerPolicyUsageProposalRequest(
+                workspace_id="dev-01",
+                persist=True,
+            )
+        )
+    )
+
+    assert response.recommendations_scanned == 2
+    assert response.proposals == []
+    assert response.policy_version is None
+    assert [item["skipped_reason"] for item in response.skipped] == [
+        "recommendation blocked by usage thresholds",
+        "usage recommendation has no broker policy action",
     ]
