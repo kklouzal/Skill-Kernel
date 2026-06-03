@@ -9,6 +9,7 @@ from autoskill.core.hashing import sha256_text
 from autoskill.db.activation import ActivationReadiness
 from autoskill.db.context import NullContextGovernanceStore
 from autoskill.db.contracts import ContractExtractResult, DriftCheckResult, DriftRepairEventRecord
+from autoskill.db.diagnostics import DiagnosticMomentumRecord
 from autoskill.db.evaluations import EvaluationRunResult
 from autoskill.db.evidence import EvidenceDeriveResult
 from autoskill.db.external_skills import ExternalSkillInput
@@ -503,6 +504,8 @@ class MemoryContractWorkerStore:
 class MemoryDiagnosticWorkerStore:
     def __init__(self) -> None:
         self.signals: list[dict[str, object]] = []
+        self.ready: list[DiagnosticMomentumRecord] = []
+        self.completed: list[dict[str, object]] = []
 
     async def record_signal(self, **kwargs):
         self.signals.append(kwargs)
@@ -510,6 +513,15 @@ class MemoryDiagnosticWorkerStore:
 
     async def list_ready(self, **_kwargs):
         return []
+
+    async def claim_ready_for_repair(self, **kwargs):
+        claimed = self.ready[: kwargs.get("limit", 25)]
+        self.ready = self.ready[len(claimed) :]
+        self.completed.append({"operation": "claim", **kwargs})
+        return claimed
+
+    async def complete_repair_execution(self, **kwargs):
+        self.completed.append({"operation": "complete", **kwargs})
 
 
 @dataclass
@@ -2123,6 +2135,76 @@ def test_repair_execute_queues_evaluator_when_curation_source_lacks_staged_manif
     assert governance.items[0].item_kind == "curation_action_repair_proposal"
     assert governance.items[0].activation_state == "planned"
     assert governance.edges[0].relation == "records_repair_execution_plan"
+
+
+def test_repair_execute_consumes_ready_drift_diagnostic_momentum() -> None:
+    jobs = MemoryJobStore()
+    diagnostics = MemoryDiagnosticWorkerStore()
+    governance = MemoryGovernanceStore()
+    diagnostic_id = uuid4()
+    skill_id = uuid4()
+    skill_version_id = uuid4()
+    diagnostics.ready.append(
+        DiagnosticMomentumRecord(
+            diagnostic_momentum_id=diagnostic_id,
+            workspace_id=uuid4(),
+            workspace_key="dev-01",
+            skill_id=skill_id,
+            skill_version_id=skill_version_id,
+            executor_profile_id=None,
+            issue_signature_hash="drift-signature",
+            diagnostic_kind="drift",
+            root_cause_hypothesis="deterministic drift check violated a contract",
+            suggested_change_direction="run localized drift probes",
+            evidence_count=4,
+            contrastive_support_count=0,
+            counterevidence_count=0,
+            momentum_score=4.0,
+            risk_score=0.6,
+            status="ready_for_patch",
+            first_seen_at=datetime.now(UTC),
+            last_seen_at=datetime.now(UTC),
+        )
+    )
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="repair.execute",
+            idempotency_key="repair:diagnostic",
+            payload={
+                "workspace_id": "dev-01",
+                "curation_limit": 0,
+                "drift_limit": 0,
+                "diagnostic_limit": 1,
+            },
+        )
+        stores = WorkerStores(
+            jobs=jobs,
+            scheduler=MemorySchedulerWorkerStore(),
+            evidence=MemoryEvidenceWorkerStore(),
+            embeddings=MemoryPendingEmbeddingStore(),
+            diagnostics=diagnostics,
+            governance=governance,
+        )
+        return await run_worker_once(stores, worker_id="worker-1", pool="mutation")
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["claimed"] == 1
+    assert result.output["gate_jobs_queued"] == 1
+    queued_recheck = jobs.jobs[
+        f"repair-execute:diagnostic_momentum:{diagnostic_id}:drift.check"
+    ]
+    assert queued_recheck.job_kind == "drift.check"
+    assert queued_recheck.payload["repair_execution"]["proposal_kind"] == (
+        "diagnostic_patch"
+    )
+    assert diagnostics.completed[-1]["operation"] == "complete"
+    assert diagnostics.completed[-1]["status"] == "queued"
+    assert governance.items[0].item_kind == "diagnostic_momentum_repair_proposal"
+    assert governance.items[0].item_id == diagnostic_id
 
 
 def test_repair_execute_materializes_policy_approved_repair_candidate(tmp_path) -> None:

@@ -446,6 +446,10 @@ Acceptance:
   passed, `uv run ruff check sidecar`, `uv run pytest` with 256 tests, `uv run
   python -m compileall -q sidecar`, `npm test --prefix plugin/autoskill` with
   18 tests, and `git diff --check` passed.
+- historical source-item lineage; implemented as v2 content-safe lineage
+  metadata on every parsed historical chunk, including source-item locator hash,
+  item-key hash, item kind, chunk kind/index, optional record index, and optional
+  line-range hash without storing raw filesystem paths.
 - external collisions pause candidate creation for review; real external-root scanning,
   import recommendation, operator review actions, and stage-only import
   materialization are implemented without mutating external-owned roots.
@@ -461,6 +465,11 @@ Deliverables:
   `drift.check` jobs record one content-safe diagnostic signal per drift event
   into the existing momentum store, scoped to skill/version when available and
   keyed by hashed contract/probe identifiers;
+- diagnostic momentum consumption; implemented so mutation-worker
+  `repair.execute` jobs can claim ready-for-probe/ready-for-patch momentum
+  records as fail-closed repair sources, record governance/provenance metadata,
+  and queue drift rechecks or evaluator gates unless a future policy-approved
+  staged manifest exists;
 - localized repair;
 - skill graph maintenance;
 - repeated shadowing events materialize deterministic `shadow` skill graph edges plus active contrastive shadowing probes;
@@ -478,11 +487,12 @@ Acceptance:
   preserving the spec rule that recurring drift evidence should guide probe or
   patch readiness instead of one-off reflection;
 - validation evidence for drift diagnostic momentum: focused worker tests and
-  focused ruff checks passed, full `uv run ruff check sidecar`, `uv run pytest`
-  with 262 tests, `uv run python -m compileall -q sidecar`, and `git diff
-  --check` passed, and a real Compose/Postgres smoke persisted a
-  skill/version-scoped `drift` momentum row from a worker-executed violated
-  environment contract;
+  focused ruff checks passed, full `uv run ruff check sidecar scripts`, `uv run
+  pytest` with 263 tests, `uv run python -m compileall -q sidecar scripts`,
+  plugin tests/check, compose config, and `git diff --check` passed; real
+  Compose/Postgres smokes verified migration idempotency, `NULLS NOT DISTINCT`
+  diagnostic aggregation for unscoped records, and claim/complete status flow
+  through `repairing` -> `repair_queued`;
 - curation logs features/actions/outcomes;
 - audit integrity verifies, and retrieval-policy review fails closed on missing
   active policy or invalid bounded audit hash-chain verification while warning

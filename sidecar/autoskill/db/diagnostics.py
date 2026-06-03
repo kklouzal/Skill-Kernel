@@ -112,6 +112,27 @@ class DiagnosticMomentumStore(Protocol):
     ) -> list[DiagnosticMomentumRecord]:
         """Return diagnostic records ready for probe or patch planning."""
 
+    async def claim_ready_for_repair(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        min_momentum_score: float = 2.0,
+        worker_id: str | None = None,
+        job_id: UUID | None = None,
+    ) -> list[DiagnosticMomentumRecord]:
+        """Claim ready diagnostic records for fail-closed repair execution."""
+
+    async def complete_repair_execution(
+        self,
+        *,
+        workspace_key: str,
+        diagnostic_momentum_id: UUID,
+        status: str,
+        execution: dict[str, Any],
+    ) -> None:
+        """Record that a ready diagnostic record has queued or blocked repair work."""
+
 
 class NullDiagnosticMomentumStore:
     async def record_signal(
@@ -166,6 +187,27 @@ class NullDiagnosticMomentumStore:
         limit: int = 100,
     ) -> list[DiagnosticMomentumRecord]:
         return []
+
+    async def claim_ready_for_repair(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        min_momentum_score: float = 2.0,
+        worker_id: str | None = None,
+        job_id: UUID | None = None,
+    ) -> list[DiagnosticMomentumRecord]:
+        return []
+
+    async def complete_repair_execution(
+        self,
+        *,
+        workspace_key: str,
+        diagnostic_momentum_id: UUID,
+        status: str,
+        execution: dict[str, Any],
+    ) -> None:
+        return None
 
 
 class AsyncpgDiagnosticMomentumStore(AsyncpgPoolOwner):
@@ -356,6 +398,69 @@ class AsyncpgDiagnosticMomentumStore(AsyncpgPoolOwner):
                 max(1, min(limit, 1000)),
             )
         return [DiagnosticMomentumRecord.from_row(row) for row in rows]
+
+    async def claim_ready_for_repair(
+        self,
+        *,
+        workspace_key: str,
+        limit: int = 25,
+        min_momentum_score: float = 2.0,
+        worker_id: str | None = None,
+        job_id: UUID | None = None,
+    ) -> list[DiagnosticMomentumRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            rows = await conn.fetch(
+                """
+                WITH ready AS (
+                  SELECT diagnostic_momentum_id
+                  FROM autoskill.diagnostic_momentum
+                  WHERE workspace_id = $1
+                    AND momentum_score >= $2
+                    AND status IN ('ready_for_probe', 'ready_for_patch')
+                  ORDER BY momentum_score DESC, last_seen_at DESC
+                  LIMIT $4
+                  FOR UPDATE SKIP LOCKED
+                )
+                UPDATE autoskill.diagnostic_momentum dm
+                SET status = 'repairing',
+                    last_seen_at = now()
+                FROM ready
+                WHERE dm.diagnostic_momentum_id = ready.diagnostic_momentum_id
+                RETURNING dm.*, $3::text AS workspace_key
+                """,
+                workspace_id,
+                min_momentum_score,
+                workspace_key,
+                max(1, min(limit, 1000)),
+            )
+        return [DiagnosticMomentumRecord.from_row(row) for row in rows]
+
+    async def complete_repair_execution(
+        self,
+        *,
+        workspace_key: str,
+        diagnostic_momentum_id: UUID,
+        status: str,
+        execution: dict[str, Any],
+    ) -> None:
+        next_status = "repair_queued" if status == "queued" else "ready_for_probe"
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            await conn.execute(
+                """
+                UPDATE autoskill.diagnostic_momentum
+                SET status = $3,
+                    last_seen_at = now()
+                WHERE workspace_id = $1
+                  AND diagnostic_momentum_id = $2
+                """,
+                workspace_id,
+                diagnostic_momentum_id,
+                next_status,
+            )
 
 
 def _momentum_score(

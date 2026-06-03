@@ -562,20 +562,29 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   with cited historical evidence IDs, and optionally persist inactive candidate
   rows through the existing governance/candidate/probe path without writing
   runtime skill files.
+- Historical source-item lineage now has a v2 content-safe locator layer:
+  parsed historical chunks carry stable source-item locator hashes, item-key
+  hashes, item kind, chunk kind/index, optional record index, and optional
+  line-range hashes while preserving the no-raw-path storage rule.
 
 ## Latest Validated Increment
 
-- Phase 9 drift-governance hardening: `drift.check` worker jobs now convert
-  deterministic drift events into content-safe diagnostic momentum signals
-  keyed by contract/probe identifiers and scoped to skill/version when
-  available. Validation passed with
-  `uv run pytest sidecar/autoskill/tests/test_worker.py::test_worker_dispatches_contract_and_drift_jobs -q`
-  and focused ruff checks, then `uv run ruff check sidecar`,
-  `uv run pytest` with 262 tests, `uv run python -m compileall -q sidecar`,
-  and `git diff --check`. A real Compose/Postgres smoke seeded one violated
-  environment contract, ran one maintenance `drift.check` worker job, and
-  verified one skill/version-scoped `diagnostic_momentum` row with
-  `diagnostic_kind='drift'`, `evidence_count=1`, and `status='accumulating'`.
+- Phase 9 drift-governance hardening now includes diagnostic momentum
+  consumption: `drift.check` worker jobs record content-safe diagnostic
+  momentum, unscoped diagnostic records now aggregate correctly with a
+  `NULLS NOT DISTINCT` uniqueness constraint, and mutation-worker
+  `repair.execute` jobs can claim ready-for-probe/ready-for-patch diagnostic
+  momentum as fail-closed repair sources. Claimed diagnostics record a
+  governance transaction/provenance item and queue a drift recheck for drift
+  diagnostics or an evaluator gate for other diagnostics unless a future
+  policy-approved staged manifest exists. Validation passed with focused worker
+  tests and ruff checks, full `uv run ruff check sidecar scripts`, `uv run
+  pytest` with 263 tests, `uv run python -m compileall -q sidecar scripts`,
+  `npm test --prefix plugin/autoskill` with 18 tests, `npm run check --prefix
+  plugin/autoskill`, `docker compose config --quiet`, and `git diff --check`.
+  Real Compose/Postgres smokes verified migration idempotency, the diagnostic
+  status/unique constraints, unscoped diagnostic aggregation, and
+  ready-record claim/complete flow to `repair_queued`.
 
 ## Next Gates
 
@@ -585,10 +594,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 2. Promote or replace the operator smoke runtime skill with the first genuinely
    useful SkillKernel-owned runtime skill once replay/probe evidence supports a
    non-smoke activation target.
-3. Continue richer historical source-item lineage work beyond the current
-   hashed file/item/chunk model. Bounded bootstrap consolidation over the
-   historical import substrate now exists and keeps imported history tainted,
-   propose-only, and subject to normal evidence/evaluator gates.
+3. Keep historical bootstrap consolidation tainted, propose-only, and subject
+   to normal evidence/evaluator gates while collecting enough imported-history
+   signal to decide whether the v2 source-item locator layer needs schema-level
+   promotion.
 4. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
 
 ## Known Risks
@@ -613,9 +622,9 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   provenance, embedding-source discovery, transcript-corpus export parsing, and
   source-rooted revocation traversal/invalidation. Plugin manifests/hooks/source
   files, media artifacts, and observability exports now have metadata-only
-  source/chunk coverage. Remaining historical coverage is still incomplete for
-  richer task ledgers and source-item lineage beyond file/section/line metadata,
-  and historical imports cannot activate candidates without the normal gates.
+  source/chunk coverage. Historical chunks now also carry v2 source-item
+  locator metadata beyond file/section/line references; historical imports
+  still cannot activate candidates without the normal gates.
 - Embedding generation defaults to deterministic local hash embeddings unless an active qualified embedding profile is configured; storage now supports profile-scoped variable dimensions, with the default 1536-dimensional path retaining the indexed HNSW fast path.
 - Runtime context broker is still conservative: vector fusion is available for local deterministic hash embeddings, policy artifact replay/canary primitives exist, and stored redacted replay episodes can drive policy replay; production replay quality still depends on deployment telemetry being populated.
 - Deployment readiness is a deterministic sidecar/state preflight, not a
@@ -641,10 +650,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints; mutation-worker apply exists but fails closed unless the queued job is explicitly policy-approved.
 - Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, invalidates body-index/embedding/context/retrieval/topology/evaluator/attribution/governance objects from traversal summaries, and freeze/critical-canary paths evict affected broker cache entries.
 - Utility rollups are deterministic v1 scoring, not full intervention scoring yet; curation now handles archived promotion, explicit duplicate merge/archive, low-utility archive, active-bank budget overflow, context-value/token-waste features, evaluator blocking, duplicate merge probe planning, and planned split/improvement/disambiguation actions with structured repair proposals. Conservative repair execution now claims planned repairs, records governance/provenance, queues evaluator or policy-approved writer work, and can generate guarded staged repair manifests from policy-approved bounded proposals.
-- Context-value/token ledgers feed utility rollups and repair planning, but
-  usage-cluster consumers still need to use context-value-per-token and token
-  waste outcomes before they fully drive improve, decompose,
-  tighten-description, or broker-abstain actions.
+- Context-value/token ledgers feed utility rollups, repair planning, and
+  usage/topology consumers for improve, decompose, tighten-description, and
+  broker-abstain recommendations; remaining work is sustained production
+  replay/canary validation of those actions under real traffic.
 - Support artifacts now have SkillIR/schema representation, writer-manifest
   scan/token/provenance coverage, apply/archive/rollback handling, and
   declaration-only context-governance excerpt registration. Runtime guard
@@ -652,7 +661,6 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   projection. Remaining support work is sustained operational validation of
   retrieval policy boundaries.
 - Contract/drift checks are deterministic v1 path/command/env/package/schema/TCP/HTTP-status probes only; drift probe creation/retirement, localized repair metadata, live API status probes, operator false-positive suppression, and conservative repair execution/recheck queueing are implemented.
-- Drift checks now feed the diagnostic momentum store from worker execution, but
-  momentum consumers are still conservative; future repair planners should use
-  ready-for-probe/ready-for-patch records as an additional gate rather than
-  bypassing scanner/evaluator/context proof.
+- Diagnostic momentum now feeds conservative repair execution as an additional
+  fail-closed source; it still queues normal drift/evaluator gates unless a
+  policy-approved staged manifest with scanner/evaluator/context proof exists.

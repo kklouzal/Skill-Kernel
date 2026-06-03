@@ -16,7 +16,7 @@ from autoskill.db.attribution import AttributionStore
 from autoskill.db.candidates import CandidateStore
 from autoskill.db.context import ContextGovernanceStore
 from autoskill.db.contracts import ContractStore
-from autoskill.db.diagnostics import DiagnosticMomentumStore
+from autoskill.db.diagnostics import DiagnosticMomentumRecord, DiagnosticMomentumStore
 from autoskill.db.embeddings import EmbeddingStore
 from autoskill.db.evaluations import EvaluationStore
 from autoskill.db.evidence import EvidenceStore
@@ -180,7 +180,7 @@ class JobDefinition:
 
 @dataclass(frozen=True)
 class RepairExecutionSource:
-    source_kind: Literal["curation_action", "drift_event"]
+    source_kind: Literal["curation_action", "drift_event", "diagnostic_momentum"]
     source_id: UUID
     skill_id: UUID | None
     skill_version_id: UUID | None
@@ -935,11 +935,19 @@ async def _run_repair_execute(stores: WorkerStores, job: JobRecord) -> dict[str,
         maximum=100,
     )
     drift_limit = _payload_int(job.payload, "drift_limit", default=10, minimum=0, maximum=100)
+    diagnostic_limit = _payload_int(
+        job.payload,
+        "diagnostic_limit",
+        default=10,
+        minimum=0,
+        maximum=100,
+    )
     sources = await _claim_repair_execution_sources(
         stores,
         workspace_key=workspace,
         curation_limit=curation_limit,
         drift_limit=drift_limit,
+        diagnostic_limit=diagnostic_limit,
         worker_id=job.lease_owner,
         job_id=job.job_id,
     )
@@ -985,6 +993,7 @@ async def _claim_repair_execution_sources(
     workspace_key: str,
     curation_limit: int,
     drift_limit: int,
+    diagnostic_limit: int,
     worker_id: str | None,
     job_id: UUID,
 ) -> list[RepairExecutionSource]:
@@ -1030,6 +1039,26 @@ async def _claim_repair_execution_sources(
                         skill_version_id=event.skill_version_id,
                         proposal=event.repair_candidate,
                         reason=event.reason,
+                    )
+                )
+    if diagnostic_limit > 0 and stores.diagnostics is not None:
+        claim = getattr(stores.diagnostics, "claim_ready_for_repair", None)
+        if claim is not None:
+            records = await claim(
+                workspace_key=workspace_key,
+                limit=diagnostic_limit,
+                worker_id=worker_id,
+                job_id=job_id,
+            )
+            for record in records:
+                sources.append(
+                    RepairExecutionSource(
+                        source_kind="diagnostic_momentum",
+                        source_id=record.diagnostic_momentum_id,
+                        skill_id=record.skill_id,
+                        skill_version_id=record.skill_version_id,
+                        proposal=_repair_proposal_from_diagnostic(record),
+                        reason=record.root_cause_hypothesis,
                     )
                 )
     return sources
@@ -1147,11 +1176,7 @@ async def _execute_repair_source(
         )
         queued_kind = "writer.apply"
     else:
-        queued_kind = (
-            "evaluations.run"
-            if source.source_kind == "curation_action"
-            else "drift.check"
-        )
+        queued_kind = _fallback_gate_job_kind_for_repair(source)
         queued_job = await stores.jobs.enqueue_job(
             workspace_key=workspace_key,
             job_kind=queued_kind,
@@ -1426,6 +1451,62 @@ async def _complete_repair_execution_source(
                 status="repair_queued" if status == "queued" else status,
                 execution=execution,
             )
+    elif source.source_kind == "diagnostic_momentum" and stores.diagnostics is not None:
+        complete = getattr(stores.diagnostics, "complete_repair_execution", None)
+        if complete is not None:
+            await complete(
+                workspace_key=workspace_key,
+                diagnostic_momentum_id=source.source_id,
+                status=status,
+                execution=execution,
+            )
+
+
+def _repair_proposal_from_diagnostic(
+    record: DiagnosticMomentumRecord,
+) -> dict[str, Any]:
+    return {
+        "schema": "autoskill.diagnostic_repair_proposal.v1",
+        "kind": "diagnostic_momentum_repair",
+        "proposal_kind": (
+            "diagnostic_patch"
+            if record.status == "ready_for_patch"
+            else "diagnostic_probe"
+        ),
+        "diagnostic_kind": record.diagnostic_kind,
+        "diagnostic_momentum_id": str(record.diagnostic_momentum_id),
+        "issue_signature_hash": record.issue_signature_hash,
+        "momentum_score": record.momentum_score,
+        "risk_score": record.risk_score,
+        "evidence_count": record.evidence_count,
+        "contrastive_support_count": record.contrastive_support_count,
+        "counterevidence_count": record.counterevidence_count,
+        "objectives": [
+            record.suggested_change_direction,
+            "preserve normal scanner/evaluator/context proof before mutation",
+        ],
+        "acceptance_gate": {
+            "requires_no_skill_control": True,
+            "requires_regression_gate": True,
+            "requires_scanner_pass": True,
+            "requires_context_gate": True,
+        },
+        "skill_id": str(record.skill_id) if record.skill_id else None,
+        "skill_version_id": (
+            str(record.skill_version_id) if record.skill_version_id else None
+        ),
+    }
+
+
+def _fallback_gate_job_kind_for_repair(source: RepairExecutionSource) -> str:
+    if source.source_kind == "curation_action":
+        return "evaluations.run"
+    if source.source_kind == "diagnostic_momentum":
+        diagnostic_kind = _string_value(source.proposal.get("diagnostic_kind"))
+        if diagnostic_kind == "drift":
+            return "drift.check"
+        return "evaluations.run"
+    return "drift.check"
 
 
 async def _run_external_skill_scan(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:

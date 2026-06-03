@@ -1198,11 +1198,14 @@ CREATE TABLE IF NOT EXISTS autoskill.diagnostic_momentum (
   momentum_score double precision NOT NULL DEFAULT 0,
   risk_score double precision NOT NULL DEFAULT 0,
   status text NOT NULL CHECK (
-    status IN ('accumulating','ready_for_probe','ready_for_patch','patched','rejected','revoked')
+    status IN (
+      'accumulating','ready_for_probe','ready_for_patch','repairing',
+      'repair_queued','patched','rejected','revoked'
+    )
   ),
   first_seen_at timestamptz NOT NULL DEFAULT now(),
   last_seen_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (
+  UNIQUE NULLS NOT DISTINCT (
     workspace_id,
     skill_id,
     executor_profile_id,
@@ -1210,6 +1213,103 @@ CREATE TABLE IF NOT EXISTS autoskill.diagnostic_momentum (
     diagnostic_kind
   )
 );
+
+ALTER TABLE autoskill.diagnostic_momentum
+  DROP CONSTRAINT IF EXISTS diagnostic_momentum_status_check;
+ALTER TABLE autoskill.diagnostic_momentum
+  ADD CONSTRAINT diagnostic_momentum_status_check CHECK (
+    status IN (
+      'accumulating','ready_for_probe','ready_for_patch','repairing',
+      'repair_queued','patched','rejected','revoked'
+    )
+  );
+WITH ranked_diagnostic_momentum AS (
+  SELECT
+    diagnostic_momentum_id,
+    first_value(diagnostic_momentum_id) OVER (
+      PARTITION BY
+        workspace_id,
+        skill_id,
+        executor_profile_id,
+        issue_signature_hash,
+        diagnostic_kind
+      ORDER BY last_seen_at DESC, diagnostic_momentum_id
+    ) AS keep_id,
+    workspace_id,
+    skill_id,
+    executor_profile_id,
+    issue_signature_hash,
+    diagnostic_kind,
+    evidence_count,
+    contrastive_support_count,
+    counterevidence_count,
+    risk_score,
+    first_seen_at,
+    last_seen_at,
+    status
+  FROM autoskill.diagnostic_momentum
+),
+diagnostic_momentum_rollup AS (
+  SELECT
+    keep_id,
+    min(first_seen_at) AS first_seen_at,
+    max(last_seen_at) AS last_seen_at,
+    sum(evidence_count)::int AS evidence_count,
+    sum(contrastive_support_count)::int AS contrastive_support_count,
+    sum(counterevidence_count)::int AS counterevidence_count,
+    GREATEST(
+      sum(evidence_count) + (2 * sum(contrastive_support_count)) - sum(counterevidence_count),
+      0
+    )::double precision AS momentum_score,
+    max(risk_score) AS risk_score,
+    bool_or(status = 'revoked') AS has_revoked,
+    bool_or(status = 'rejected') AS has_rejected,
+    bool_or(status = 'patched') AS has_patched,
+    count(*) AS duplicate_count
+  FROM ranked_diagnostic_momentum
+  GROUP BY keep_id
+  HAVING count(*) > 1
+),
+updated_diagnostic_momentum AS (
+  UPDATE autoskill.diagnostic_momentum dm
+  SET
+    first_seen_at = rollup.first_seen_at,
+    last_seen_at = rollup.last_seen_at,
+    evidence_count = rollup.evidence_count,
+    contrastive_support_count = rollup.contrastive_support_count,
+    counterevidence_count = rollup.counterevidence_count,
+    momentum_score = rollup.momentum_score,
+    risk_score = rollup.risk_score,
+    status = CASE
+      WHEN rollup.has_revoked THEN 'revoked'
+      WHEN rollup.has_rejected THEN 'rejected'
+      WHEN rollup.has_patched THEN 'patched'
+      WHEN rollup.momentum_score >= 4 THEN 'ready_for_patch'
+      WHEN rollup.risk_score >= 0.8 OR rollup.momentum_score >= 2 THEN 'ready_for_probe'
+      ELSE 'accumulating'
+    END
+  FROM diagnostic_momentum_rollup rollup
+  WHERE dm.diagnostic_momentum_id = rollup.keep_id
+  RETURNING dm.diagnostic_momentum_id
+)
+DELETE FROM autoskill.diagnostic_momentum dm
+USING ranked_diagnostic_momentum ranked
+WHERE dm.diagnostic_momentum_id = ranked.diagnostic_momentum_id
+  AND ranked.diagnostic_momentum_id <> ranked.keep_id;
+ALTER TABLE autoskill.diagnostic_momentum
+  DROP CONSTRAINT IF EXISTS diagnostic_momentum_workspace_id_skill_id_executor_profile_id_issue_key;
+ALTER TABLE autoskill.diagnostic_momentum
+  DROP CONSTRAINT IF EXISTS diagnostic_momentum_workspace_id_skill_id_executor_profile__key;
+ALTER TABLE autoskill.diagnostic_momentum
+  DROP CONSTRAINT IF EXISTS diagnostic_momentum_scope_unique;
+ALTER TABLE autoskill.diagnostic_momentum
+  ADD CONSTRAINT diagnostic_momentum_scope_unique UNIQUE NULLS NOT DISTINCT (
+    workspace_id,
+    skill_id,
+    executor_profile_id,
+    issue_signature_hash,
+    diagnostic_kind
+  );
 
 CREATE TABLE IF NOT EXISTS autoskill.skill_graph_operations (
   skill_graph_operation_id uuid PRIMARY KEY,
