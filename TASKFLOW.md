@@ -695,6 +695,18 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `uv run python -m compileall -q sidecar`, `git diff --check`, `npm test
   --prefix plugin/autoskill` with 18 tests, and `npm run check --prefix
   plugin/autoskill`.
+- Scheduler ticks now implement the section 26.2/26.5 scheduler hardening:
+  schedule records carry a validated `misfire_policy`, API and worker tick
+  responses report skipped/coalesced/lock-acquired metadata, asyncpg ticks take
+  a transaction-scoped advisory lock before processing due schedules, and
+  interval misfires can coalesce, catch up one interval at a time, skip stale
+  expensive work, or run immediately. Validation passed with focused scheduler/
+  worker tests, focused ruff checks, full `uv run ruff check sidecar`, `uv run
+  pytest -q` with 278 tests, `uv run python -m compileall -q sidecar`, `git
+  diff --check`, `npm test --prefix plugin/autoskill` with 18 tests, `npm run
+  check --prefix plugin/autoskill`, `docker compose config --quiet`, and a
+  compose Postgres migration smoke verifying the `misfire_policy` column and
+  check constraint.
 
 ## Next Gates
 

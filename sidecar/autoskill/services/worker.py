@@ -613,6 +613,9 @@ async def _run_scheduler_tick(stores: WorkerStores, job: JobRecord) -> dict[str,
         "due": result.due,
         "enqueued": result.enqueued,
         "job_ids": [str(enqueued.job_id) for enqueued in result.jobs],
+        "skipped": result.skipped,
+        "misfires_coalesced": result.misfires_coalesced,
+        "lock_acquired": result.lock_acquired,
     }
 
 

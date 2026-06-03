@@ -4,7 +4,14 @@ from uuid import uuid4
 
 from autoskill.api.app import ScheduleUpsertRequest, create_app
 from autoskill.db.jobs import JobRecord
-from autoskill.db.scheduler import ScheduleRecord, SchedulerTickResult, ScheduleUpsertResult
+from autoskill.db.scheduler import (
+    ScheduleRecord,
+    SchedulerTickResult,
+    ScheduleUpsertResult,
+    _missed_run_count,
+    _next_run_after,
+    _should_enqueue_misfire,
+)
 
 
 class MemorySchedulerStore:
@@ -22,6 +29,7 @@ class MemorySchedulerStore:
         next_run_at: datetime,
         payload: dict[str, object] | None = None,
         enabled: bool = True,
+        misfire_policy: str = "coalesce",
     ) -> ScheduleUpsertResult:
         created = name not in self.schedules
         schedule = ScheduleRecord(
@@ -33,6 +41,7 @@ class MemorySchedulerStore:
             interval_seconds=interval_seconds,
             next_run_at=next_run_at,
             payload=payload or {},
+            misfire_policy=misfire_policy,
         )
         self.schedules[name] = schedule
         return ScheduleUpsertResult(schedule=schedule, created=created)
@@ -41,11 +50,28 @@ class MemorySchedulerStore:
         now = datetime.now(UTC)
         due = [schedule for schedule in self.schedules.values() if schedule.next_run_at <= now]
         jobs = []
+        skipped = 0
+        misfires_coalesced = 0
         for schedule in due[:limit]:
-            job = _job_for_schedule(schedule)
-            if job.idempotency_key not in {existing.idempotency_key for existing in self.jobs}:
-                self.jobs.append(job)
-                jobs.append(job)
+            missed_runs = _missed_run_count(
+                schedule.next_run_at,
+                schedule.interval_seconds,
+                now,
+            )
+            if _should_enqueue_misfire(
+                schedule.next_run_at,
+                schedule.misfire_policy,
+                missed_runs,
+            ):
+                job = _job_for_schedule(schedule)
+                if job.idempotency_key not in {
+                    existing.idempotency_key for existing in self.jobs
+                }:
+                    self.jobs.append(job)
+                    jobs.append(job)
+            else:
+                skipped += 1
+            misfires_coalesced += max(0, missed_runs - 1)
             self.schedules[schedule.name] = ScheduleRecord(
                 schedule_id=schedule.schedule_id,
                 workspace_key=schedule.workspace_key,
@@ -53,10 +79,22 @@ class MemorySchedulerStore:
                 job_kind=schedule.job_kind,
                 enabled=schedule.enabled,
                 interval_seconds=schedule.interval_seconds,
-                next_run_at=now + timedelta(seconds=schedule.interval_seconds),
+                next_run_at=_next_run_after(
+                    schedule.next_run_at,
+                    schedule.interval_seconds,
+                    now,
+                    schedule.misfire_policy,
+                ),
                 payload=schedule.payload,
+                misfire_policy=schedule.misfire_policy,
             )
-        return SchedulerTickResult(due=len(due[:limit]), enqueued=len(jobs), jobs=jobs)
+        return SchedulerTickResult(
+            due=len(due[:limit]),
+            enqueued=len(jobs),
+            jobs=jobs,
+            skipped=skipped,
+            misfires_coalesced=misfires_coalesced,
+        )
 
     async def list_schedules(self, *, limit: int = 50) -> list[ScheduleRecord]:
         return list(self.schedules.values())[:limit]
@@ -112,5 +150,40 @@ def test_scheduler_api_upserts_and_ticks_due_schedules() -> None:
     assert upserted.created is True
     assert ticked.due == 1
     assert ticked.enqueued == 1
+    assert ticked.lock_acquired is True
     assert ticked.jobs[0]["job_kind"] == "evidence_extraction"
+    assert listed["schedules"][0]["misfire_policy"] == "coalesce"
     assert listed["schedules"][0]["name"] == "evidence"
+
+
+def test_scheduler_api_skips_stale_schedule_by_misfire_policy() -> None:
+    scheduler = MemorySchedulerStore()
+    app = create_app(scheduler_store=scheduler)
+    upsert_route = next(route for route in app.routes if route.path == "/v1/schedules/upsert")
+    tick_route = next(route for route in app.routes if route.path == "/v1/scheduler/tick")
+    list_route = next(route for route in app.routes if route.path == "/v1/schedules")
+
+    async def run() -> tuple[object, object, dict[str, object]]:
+        upserted = await upsert_route.endpoint(
+            request=ScheduleUpsertRequest(
+                workspace_id="dev-01",
+                name="expensive-audit",
+                job_kind="retrieval.recall_audit",
+                interval_seconds=60,
+                next_run_at=(datetime.now(UTC) - timedelta(seconds=180)).isoformat(),
+                payload={"source": "test"},
+                misfire_policy="skip",
+            )
+        )
+        ticked = await tick_route.endpoint()
+        listed = await list_route.endpoint()
+        return upserted, ticked, listed
+
+    upserted, ticked, listed = asyncio.run(run())
+
+    assert upserted.schedule["misfire_policy"] == "skip"
+    assert ticked.due == 1
+    assert ticked.enqueued == 0
+    assert ticked.skipped == 1
+    assert ticked.misfires_coalesced >= 1
+    assert listed["schedules"][0]["misfire_policy"] == "skip"

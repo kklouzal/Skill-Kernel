@@ -23,6 +23,7 @@ class ScheduleRecord:
     interval_seconds: int
     next_run_at: datetime
     payload: dict[str, Any]
+    misfire_policy: str = "coalesce"
 
     @classmethod
     def from_row(cls, row: asyncpg.Record | dict[str, Any]) -> ScheduleRecord:
@@ -38,6 +39,7 @@ class ScheduleRecord:
             interval_seconds=row["interval_seconds"],
             next_run_at=row["next_run_at"],
             payload=payload,
+            misfire_policy=str(_row_get(row, "misfire_policy") or "coalesce"),
         )
 
     def to_json(self) -> dict[str, object]:
@@ -50,6 +52,7 @@ class ScheduleRecord:
             "interval_seconds": self.interval_seconds,
             "next_run_at": self.next_run_at.isoformat(),
             "payload": self.payload,
+            "misfire_policy": self.misfire_policy,
         }
 
 
@@ -64,6 +67,9 @@ class SchedulerTickResult:
     due: int
     enqueued: int
     jobs: list[JobRecord]
+    skipped: int = 0
+    misfires_coalesced: int = 0
+    lock_acquired: bool = True
 
 
 class SchedulerStore(Protocol):
@@ -77,6 +83,7 @@ class SchedulerStore(Protocol):
         next_run_at: datetime,
         payload: dict[str, Any] | None = None,
         enabled: bool = True,
+        misfire_policy: str = "coalesce",
     ) -> ScheduleUpsertResult:
         """Create or update a schedule."""
 
@@ -98,7 +105,9 @@ class NullSchedulerStore:
         next_run_at: datetime,
         payload: dict[str, Any] | None = None,
         enabled: bool = True,
+        misfire_policy: str = "coalesce",
     ) -> ScheduleUpsertResult:
+        misfire_policy = _validate_misfire_policy(misfire_policy)
         schedule = ScheduleRecord(
             schedule_id=UUID("00000000-0000-0000-0000-000000000000"),
             workspace_key=workspace_key,
@@ -108,6 +117,7 @@ class NullSchedulerStore:
             interval_seconds=interval_seconds,
             next_run_at=next_run_at,
             payload=payload or {},
+            misfire_policy=misfire_policy,
         )
         return ScheduleUpsertResult(schedule=schedule, created=True)
 
@@ -132,7 +142,9 @@ class AsyncpgSchedulerStore(AsyncpgPoolOwner):
         next_run_at: datetime,
         payload: dict[str, Any] | None = None,
         enabled: bool = True,
+        misfire_policy: str = "coalesce",
     ) -> ScheduleUpsertResult:
+        misfire_policy = _validate_misfire_policy(misfire_policy)
         pool = await self._get_pool()
         async with pool.acquire() as conn, conn.transaction():
             workspace_id = await ensure_workspace(conn, workspace_key)
@@ -146,15 +158,17 @@ class AsyncpgSchedulerStore(AsyncpgPoolOwner):
                   enabled,
                   interval_seconds,
                   next_run_at,
-                  payload
+                  payload,
+                  misfire_policy
                 )
-                VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7::jsonb)
+                VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7::jsonb, $8)
                 ON CONFLICT (workspace_id, name) DO UPDATE
                 SET job_kind = EXCLUDED.job_kind,
                     enabled = EXCLUDED.enabled,
                     interval_seconds = EXCLUDED.interval_seconds,
                     next_run_at = EXCLUDED.next_run_at,
-                    payload = EXCLUDED.payload
+                    payload = EXCLUDED.payload,
+                    misfire_policy = EXCLUDED.misfire_policy
                 RETURNING *, (xmax = 0) AS created
                 """,
                 workspace_id,
@@ -164,6 +178,7 @@ class AsyncpgSchedulerStore(AsyncpgPoolOwner):
                 interval_seconds,
                 next_run_at,
                 _json(payload or {}),
+                misfire_policy,
             )
             return ScheduleUpsertResult(
                 schedule=ScheduleRecord.from_row({**dict(row), "workspace_key": workspace_key}),
@@ -174,7 +189,15 @@ class AsyncpgSchedulerStore(AsyncpgPoolOwner):
         pool = await self._get_pool()
         jobs: list[JobRecord] = []
         due = 0
+        skipped = 0
+        misfires_coalesced = 0
         async with pool.acquire() as conn, conn.transaction():
+            lock_acquired = await conn.fetchval(
+                "SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))",
+                "autoskill.scheduler.tick",
+            )
+            if not lock_acquired:
+                return SchedulerTickResult(due=0, enqueued=0, jobs=[], lock_acquired=False)
             schedules = await conn.fetch(
                 """
                 SELECT s.*, w.external_key AS workspace_key
@@ -191,10 +214,20 @@ class AsyncpgSchedulerStore(AsyncpgPoolOwner):
             due = len(schedules)
             now = datetime.now(UTC)
             for schedule in schedules:
-                idempotency_key = _schedule_job_key(schedule)
-                job = await _enqueue_scheduled_job(conn, schedule, idempotency_key)
-                if job is not None:
-                    jobs.append(job)
+                policy = str(schedule["misfire_policy"] or "coalesce")
+                missed_runs = _missed_run_count(
+                    schedule["next_run_at"],
+                    schedule["interval_seconds"],
+                    now,
+                )
+                if _should_enqueue_misfire(schedule["next_run_at"], policy, missed_runs):
+                    idempotency_key = _schedule_job_key(schedule)
+                    job = await _enqueue_scheduled_job(conn, schedule, idempotency_key)
+                    if job is not None:
+                        jobs.append(job)
+                else:
+                    skipped += 1
+                misfires_coalesced += max(0, missed_runs - 1)
                 await conn.execute(
                     """
                     UPDATE autoskill.schedules
@@ -202,10 +235,21 @@ class AsyncpgSchedulerStore(AsyncpgPoolOwner):
                     WHERE schedule_id = $1
                     """,
                     schedule["schedule_id"],
-                    _next_run_after(schedule["next_run_at"], schedule["interval_seconds"], now),
+                    _next_run_after(
+                        schedule["next_run_at"],
+                        schedule["interval_seconds"],
+                        now,
+                        policy,
+                    ),
                 )
 
-        return SchedulerTickResult(due=due, enqueued=len(jobs), jobs=jobs)
+        return SchedulerTickResult(
+            due=due,
+            enqueued=len(jobs),
+            jobs=jobs,
+            skipped=skipped,
+            misfires_coalesced=misfires_coalesced,
+        )
 
     async def list_schedules(self, *, limit: int = 50) -> list[ScheduleRecord]:
         pool = await self._get_pool()
@@ -258,12 +302,40 @@ def _schedule_job_key(schedule: asyncpg.Record) -> str:
     return f"schedule:{schedule['schedule_id']}:{due_at}"
 
 
-def _next_run_after(previous: datetime, interval_seconds: int, now: datetime) -> datetime:
-    next_run = previous
+def _next_run_after(
+    previous: datetime,
+    interval_seconds: int,
+    now: datetime,
+    misfire_policy: str = "coalesce",
+) -> datetime:
+    misfire_policy = _validate_misfire_policy(misfire_policy)
     interval = timedelta(seconds=interval_seconds)
+    if misfire_policy == "catch_up_limited":
+        return previous + interval
+    next_run = previous
     while next_run <= now:
         next_run += interval
     return next_run
+
+
+def _missed_run_count(previous: datetime, interval_seconds: int, now: datetime) -> int:
+    if previous > now:
+        return 0
+    elapsed_seconds = max(0.0, (now - previous).total_seconds())
+    return int(elapsed_seconds // max(1, interval_seconds)) + 1
+
+
+def _should_enqueue_misfire(previous: datetime, misfire_policy: str, missed_runs: int) -> bool:
+    misfire_policy = _validate_misfire_policy(misfire_policy)
+    if misfire_policy == "skip" and missed_runs > 1:
+        return False
+    return previous <= datetime.now(UTC)
+
+
+def _validate_misfire_policy(value: str) -> str:
+    if value not in {"coalesce", "catch_up_limited", "skip", "immediate"}:
+        raise ValueError("unsupported scheduler misfire policy")
+    return value
 
 
 def _json(payload: dict[str, Any]) -> str:

@@ -645,9 +645,20 @@ CREATE TABLE IF NOT EXISTS autoskill.schedules (
   enabled boolean NOT NULL DEFAULT true,
   interval_seconds integer NOT NULL,
   next_run_at timestamptz NOT NULL,
+  misfire_policy text NOT NULL DEFAULT 'coalesce',
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,
   UNIQUE(workspace_id, name)
 );
+
+ALTER TABLE autoskill.schedules
+  ADD COLUMN IF NOT EXISTS misfire_policy text NOT NULL DEFAULT 'coalesce';
+
+ALTER TABLE autoskill.schedules
+  DROP CONSTRAINT IF EXISTS schedules_misfire_policy_check;
+
+ALTER TABLE autoskill.schedules
+  ADD CONSTRAINT schedules_misfire_policy_check
+  CHECK (misfire_policy IN ('coalesce','catch_up_limited','skip','immediate'));
 
 CREATE TABLE IF NOT EXISTS autoskill.jobs (
   job_id uuid PRIMARY KEY,

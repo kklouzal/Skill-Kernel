@@ -232,6 +232,7 @@ class ScheduleUpsertRequest(BaseModel):
     next_run_at: str
     payload: dict[str, object] = {}
     enabled: bool = True
+    misfire_policy: str = "coalesce"
 
 
 class ScheduleUpsertResponse(BaseModel):
@@ -243,6 +244,9 @@ class SchedulerTickResponse(BaseModel):
     due: int
     enqueued: int
     jobs: list[dict[str, object]]
+    skipped: int = 0
+    misfires_coalesced: int = 0
+    lock_acquired: bool = True
 
 
 class WorkerRunOnceRequest(BaseModel):
@@ -3811,6 +3815,7 @@ def create_app(
             next_run_at=datetime.fromisoformat(request.next_run_at),
             payload=request.payload,
             enabled=request.enabled,
+            misfire_policy=request.misfire_policy,
         )
         return ScheduleUpsertResponse(
             created=result.created,
@@ -3828,6 +3833,9 @@ def create_app(
             due=result.due,
             enqueued=result.enqueued,
             jobs=[job.to_json() for job in result.jobs],
+            skipped=result.skipped,
+            misfires_coalesced=result.misfires_coalesced,
+            lock_acquired=result.lock_acquired,
         )
 
     @app.post("/v1/workers/run-once", response_model=WorkerRunOnceResponse)
