@@ -800,6 +800,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   pytest -q` with 289 tests, `uv run python -m compileall -q sidecar scripts`,
   `git diff --check`, `npm test --prefix plugin/autoskill` with 18 tests, `npm
   run check --prefix plugin/autoskill`, and `docker compose config --quiet`.
+- Sections 32/33 now have an executable governance crosswalk:
+  `scripts/autoskill_handoff.py --json` emits a deterministic risk-register and
+  developer-handoff report mapping all 31 risk rows, 23 before-coding checklist
+  items, 18 during-implementation checklist items, and the final autonomous
+  apply ship gate to concrete repo evidence. The report fails closed on missing
+  evidence, missing mitigation, duplicate IDs, non-ready statuses, empty text,
+  or placeholder text, and its focused test locks the 73-item count.
+  Validation passed with focused handoff-report tests, focused ruff checks,
+  `python scripts/autoskill_handoff.py --json` reporting `ready=true`, full `uv
+  run ruff check sidecar scripts`, `uv run pytest -q` with 290 tests, `uv run
+  python -m compileall -q sidecar scripts`, `git diff --check`, `npm test
+  --prefix plugin/autoskill` with 18 tests, `npm run check --prefix
+  plugin/autoskill`, and `docker compose config --quiet`.
 
 ## Next Gates
 
