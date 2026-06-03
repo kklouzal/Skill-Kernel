@@ -813,6 +813,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   python -m compileall -q sidecar scripts`, `git diff --check`, `npm test
   --prefix plugin/autoskill` with 18 tests, `npm run check --prefix
   plugin/autoskill`, and `docker compose config --quiet`.
+- Section 34 research and design traceability now has an executable crosswalk:
+  `scripts/autoskill_traceability.py --json` parses the controlling handoff
+  spec's Section 34, validates the six anchor subsections, all 88 research
+  anchors, the 79 URL-backed anchors, and all 25 research-to-design matrix rows,
+  and maps every matrix row to concrete repo evidence. The report fails closed
+  on missing sections, anchor-count drift, missing evidence mappings, duplicate
+  findings, empty fields, or placeholder text. Validation passed with focused
+  traceability-report tests, focused ruff checks, `python
+  scripts/autoskill_traceability.py --json` reporting `ready=true`, full `uv
+  run ruff check sidecar scripts`, `uv run pytest -q` with 291 tests, `uv run
+  python -m compileall -q sidecar scripts`, `git diff --check`, `npm test
+  --prefix plugin/autoskill` with 18 tests, `npm run check --prefix
+  plugin/autoskill`, and `docker compose config --quiet`.
 
 ## Next Gates
 

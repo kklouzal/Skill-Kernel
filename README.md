@@ -112,6 +112,12 @@ Emit the Section 32/33 risk and developer handoff crosswalk:
 python scripts/autoskill_handoff.py --json
 ```
 
+Emit the Section 34 research traceability crosswalk:
+
+```bash
+python scripts/autoskill_traceability.py --json
+```
+
 List content-safe broker replay candidates from retrieval telemetry:
 
 ```bash
