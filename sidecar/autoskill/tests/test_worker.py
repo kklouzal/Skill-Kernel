@@ -553,6 +553,21 @@ class MemoryDiagnosticWorkerStore:
         self.completed.append({"operation": "complete", **kwargs})
 
 
+class MemoryAuditWorkerStore:
+    def __init__(self, *, chain_valid: bool = True) -> None:
+        self.chain_valid = chain_valid
+        self.calls: list[dict[str, object]] = []
+
+    async def verify_chain(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 1000,
+    ) -> bool:
+        self.calls.append({"workspace_key": workspace_key, "limit": limit})
+        return self.chain_valid
+
+
 @dataclass
 class WorkerTestStores:
     jobs: MemoryJobStore
@@ -562,6 +577,7 @@ class WorkerTestStores:
     evaluations: MemoryEvaluationWorkerStore | None = None
     observability: MemoryObservabilityStore | None = None
     profiles: MemoryEmbeddingProfileStore | None = None
+    audit: MemoryAuditWorkerStore | None = None
 
     def as_worker_stores(self) -> WorkerStores:
         return WorkerStores(
@@ -572,6 +588,7 @@ class WorkerTestStores:
             evaluations=self.evaluations,
             observability=self.observability,
             profiles=self.profiles,
+            audit=self.audit,
         )
 
 
@@ -601,6 +618,71 @@ def test_worker_run_once_dispatches_maintenance_job() -> None:
     assert result.status == "succeeded"
     assert result.output == {"scanned": 1, "created": 1, "duplicate": 0, "evidence_ids": []}
     assert stores.evidence.calls == [{"workspace_key": "dev-01", "limit": 7}]
+
+
+def test_worker_run_once_verifies_audit_hash_chain() -> None:
+    audit = MemoryAuditWorkerStore(chain_valid=True)
+    stores = WorkerTestStores(
+        jobs=MemoryJobStore(),
+        scheduler=MemorySchedulerWorkerStore(),
+        evidence=MemoryEvidenceWorkerStore(),
+        embeddings=MemoryPendingEmbeddingStore(),
+        audit=audit,
+    )
+
+    async def run():
+        await stores.jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="audit.verify",
+            idempotency_key="audit:verify",
+            payload={"workspace_id": "dev-01", "limit": 50},
+        )
+        return await run_worker_once(
+            stores.as_worker_stores(),
+            worker_id="worker-1",
+            pool="maintenance",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output == {
+        "workspace_id": "dev-01",
+        "chain_valid": True,
+        "limit": 50,
+        "status": "passed",
+    }
+    assert audit.calls == [{"workspace_key": "dev-01", "limit": 50}]
+
+
+def test_worker_run_once_fails_closed_on_invalid_audit_hash_chain() -> None:
+    audit = MemoryAuditWorkerStore(chain_valid=False)
+    stores = WorkerTestStores(
+        jobs=MemoryJobStore(),
+        scheduler=MemorySchedulerWorkerStore(),
+        evidence=MemoryEvidenceWorkerStore(),
+        embeddings=MemoryPendingEmbeddingStore(),
+        audit=audit,
+    )
+
+    async def run():
+        await stores.jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="audit.verify",
+            idempotency_key="audit:verify:invalid",
+            payload={"workspace_id": "dev-01"},
+        )
+        return await run_worker_once(
+            stores.as_worker_stores(),
+            worker_id="worker-1",
+            pool="maintenance",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "failed"
+    assert "audit hash chain verification failed" in result.error
+    assert audit.calls == [{"workspace_key": "dev-01", "limit": 1000}]
 
 
 def test_worker_run_once_records_trace_span_for_job_execution() -> None:

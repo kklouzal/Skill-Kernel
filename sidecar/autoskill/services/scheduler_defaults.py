@@ -25,6 +25,13 @@ CORE_DEFAULT_SCHEDULES = (
         payload={"limit": 100},
     ),
     DefaultSchedule(
+        name="audit.verify",
+        job_kind="audit.verify",
+        interval_seconds=24 * 60 * 60,
+        misfire_policy="coalesce",
+        payload={"limit": 1000},
+    ),
+    DefaultSchedule(
         name="embeddings.generate",
         job_kind="embeddings.generate",
         interval_seconds=5 * 60,

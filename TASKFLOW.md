@@ -748,6 +748,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   compose route smoke showing 24 metric keys, 10 dashboard views, valid audit
   chain, five storage rows, and explicit `plugin_diagnostics_required` spool
   status.
+- Section 28.3 daily audit-chain verification is now a handler-backed
+  maintenance job: `audit.verify` verifies the bounded audit hash chain,
+  returns fail-closed job output on success, raises on invalid chains so worker
+  completion records a failed job, and is registered in core schedules on a
+  daily cadence with a 1000-record verification limit. API single-worker runs
+  and `worker_main` now thread the audit store into worker execution.
+  Validation passed with focused scheduler/worker tests, focused ruff checks,
+  full `uv run ruff check sidecar`, `uv run pytest -q` with 286 tests, `uv
+  run python -m compileall -q sidecar`, `git diff --check`, `npm test --prefix
+  plugin/autoskill` with 18 tests, `npm run check --prefix plugin/autoskill`,
+  `docker compose config --quiet`, and a live compose worker smoke proving the
+  default `audit.verify` schedule, enqueued job, and maintenance worker result
+  `chain_valid=true`.
 
 ## Next Gates
 

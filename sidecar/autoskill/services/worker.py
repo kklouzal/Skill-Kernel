@@ -13,6 +13,7 @@ from autoskill.core.hashing import sha256_json
 from autoskill.core.skillir import SkillIR
 from autoskill.db.activation import ActivationGateStore
 from autoskill.db.attribution import AttributionStore
+from autoskill.db.audit import AuditStore
 from autoskill.db.candidates import CandidateStore
 from autoskill.db.context import ContextGovernanceStore
 from autoskill.db.contracts import ContractStore
@@ -158,6 +159,7 @@ class WorkerStores:
     topology: TopologyStore | None = None
     usage: UsageStore | None = None
     observability: ObservabilityStore | None = None
+    audit: AuditStore | None = None
     attribution: AttributionStore | None = None
     activation_gate: ActivationGateStore | None = None
     activation_window: object | None = None
@@ -630,6 +632,22 @@ async def _run_evidence_derive(stores: WorkerStores, job: JobRecord) -> dict[str
         "created": result.created,
         "duplicate": result.duplicate,
         "evidence_ids": [str(record.evidence_id) for record in result.evidence],
+    }
+
+
+async def _run_audit_verify(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
+    if stores.audit is None:
+        raise RuntimeError("audit store is required")
+    workspace = _payload_workspace(job) or job.workspace_key
+    limit = _payload_int(job.payload, "limit", default=1000, minimum=1, maximum=10_000)
+    chain_valid = await stores.audit.verify_chain(workspace_key=workspace, limit=limit)
+    if not chain_valid:
+        raise RuntimeError("audit hash chain verification failed")
+    return {
+        "workspace_id": workspace,
+        "chain_valid": True,
+        "limit": limit,
+        "status": "passed",
     }
 
 
@@ -2677,6 +2695,7 @@ def _proposal_evidence_ids(proposals: object) -> list[UUID]:
 JOB_DEFINITIONS: dict[str, JobDefinition] = {
     "scheduler.tick": JobDefinition("scheduler.tick", "scheduler", _run_scheduler_tick),
     "evidence.derive": JobDefinition("evidence.derive", "maintenance", _run_evidence_derive),
+    "audit.verify": JobDefinition("audit.verify", "maintenance", _run_audit_verify),
     "embeddings.generate": JobDefinition(
         "embeddings.generate",
         "maintenance",
