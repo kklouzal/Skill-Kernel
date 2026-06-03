@@ -1421,13 +1421,23 @@ def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path
 def test_mutation_worker_applies_topology_downstream_actions() -> None:
     jobs = MemoryJobStore()
     topology = NullTopologyStore()
+    governance = MemoryGovernanceStore()
     retrieval = MemoryRetrievalInvalidationStore()
     embeddings = MemoryInvalidationStore()
     context = MemoryInvalidationStore()
     subject_id = uuid4()
     successor_id = uuid4()
+    transaction_id = None
 
     async def run():
+        nonlocal transaction_id
+        transaction = await governance.start_transaction(
+            workspace_key="dev-01",
+            transaction_kind="topology_improve",
+            idempotency_key="topology-improve:downstream",
+            plan_hash="topology-improve-plan",
+        )
+        transaction_id = transaction.transaction.evolution_transaction_id
         operation = await topology.record_operation(
             workspace_key="dev-01",
             operation_kind="improve",
@@ -1455,6 +1465,7 @@ def test_mutation_worker_applies_topology_downstream_actions() -> None:
                     }
                 ],
             },
+            evolution_transaction_id=transaction.transaction.evolution_transaction_id,
             trial_summary={
                 "downstream_orchestration": {
                     "status": "planned",
@@ -1481,6 +1492,7 @@ def test_mutation_worker_applies_topology_downstream_actions() -> None:
                 retrieval=retrieval,
                 context_governance=context,
                 topology=topology,
+                governance=governance,
             ),
             worker_id="mutation-worker",
             pool="mutation",
@@ -1497,6 +1509,31 @@ def test_mutation_worker_applies_topology_downstream_actions() -> None:
         "retrieval_logs_invalidated": 3,
         "context_records_invalidated": 3,
         "embeddings_deleted": 3,
+    }
+    assert result.output["governance"]["recorded"] is True
+    assert result.output["governance"]["items_recorded"] == 3
+    assert result.output["governance"]["provenance_edges_recorded"] == 6
+    transaction = next(iter(governance.transactions.values()))
+    assert transaction.evolution_transaction_id == transaction_id
+    assert transaction.status == "active"
+    assert transaction.metrics == {
+        "topology_downstream_applied": True,
+        "skill_graph_operation_id": str(operation_id),
+        "lifecycle_updates": 2,
+        "edges_materialized": 1,
+        "governance_items_recorded": 3,
+        "provenance_edges_recorded": 6,
+    }
+    assert [item.item_kind for item in governance.items] == [
+        "topology_downstream_apply",
+        "topology_skill_lifecycle",
+        "topology_skill_lifecycle",
+    ]
+    assert {item.item_id for item in governance.items[1:]} == {subject_id, successor_id}
+    assert {edge.derived_kind for edge in governance.edges} == {
+        "skill",
+        "skill_graph_operation",
+        "transaction_item",
     }
     operation = topology.operations[0]
     orchestration = operation.trial_summary["downstream_orchestration"]

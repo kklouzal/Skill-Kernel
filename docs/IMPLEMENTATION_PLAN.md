@@ -487,7 +487,11 @@ Deliverables:
   and queue drift rechecks or evaluator gates unless a future policy-approved
   staged manifest exists;
 - localized repair;
-- skill graph maintenance;
+- skill graph maintenance; implemented for accepted topology operations with
+  mutation-worker downstream materialization that records transaction items,
+  provenance edges, active transaction status, lifecycle updates, graph-edge
+  materialization counts, and runtime invalidation evidence after deterministic
+  trial gates pass;
 - repeated shadowing events materialize deterministic `shadow` skill graph edges plus active contrastive shadowing probes;
 - audit and retrieval policy reviews; implemented as a control-authenticated
   broker-policy review surface that reports active policy status, bounded
@@ -513,6 +517,16 @@ Acceptance:
 - audit integrity verifies, and retrieval-policy review fails closed on missing
   active policy or invalid bounded audit hash-chain verification while warning
   on empty replay evidence.
+- accepted topology downstream materialization is tied back to the originating
+  evolution transaction through rollback-aware transaction items and provenance
+  edges for the operation plus touched skills; focused worker validation proved
+  active transaction status, three governance items, six provenance edges,
+  runtime invalidation, and lifecycle/edge execution for an `improve` operation;
+  full `uv run ruff check sidecar`, `uv run pytest` with 301 tests,
+  `uv run python -m compileall -q sidecar`, and `git diff --check` passed, and
+  a real compose Postgres smoke persisted the same transaction/provenance
+  evidence while archiving the subject skill, activating the successor skill,
+  and materializing one `supersedes` edge.
 
 ## Phase 9.5 - Memory Quarantine and Control-Flow Integrity
 

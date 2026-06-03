@@ -1780,6 +1780,13 @@ async def _run_topology_apply_downstream(
         raise ValueError("; ".join(result.blockers) or "topology downstream apply blocked")
 
     operation = result.operation
+    governance = {}
+    if stores.governance is not None and operation is not None:
+        governance = await _record_topology_downstream_governance(
+            stores.governance,
+            workspace_key=workspace,
+            result=result.to_json(),
+        )
     invalidation = await _invalidate_topology_runtime_objects(
         stores,
         workspace_key=workspace,
@@ -1792,7 +1799,128 @@ async def _run_topology_apply_downstream(
     )
     return {
         **result.to_json(),
+        "governance": governance,
         "runtime_invalidation": invalidation,
+    }
+
+
+async def _record_topology_downstream_governance(
+    governance: GovernanceStore,
+    *,
+    workspace_key: str,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    operation = result.get("operation")
+    if not isinstance(operation, dict):
+        return {"recorded": False, "reason": "missing_operation"}
+    transaction_id = _uuid_value(operation.get("evolution_transaction_id"))
+    operation_id = _uuid_value(operation.get("skill_graph_operation_id"))
+    if transaction_id is None or operation_id is None:
+        return {"recorded": False, "reason": "missing_transaction_or_operation"}
+
+    items_recorded = 0
+    edges_recorded = 0
+    effects_hash = sha256_json(
+        {
+            "skill_graph_operation_id": str(operation_id),
+            "operation_kind": operation.get("operation_kind"),
+            "lifecycle_updates": result.get("lifecycle_updates", 0),
+            "edges_materialized": result.get("edges_materialized", 0),
+            "actions": result.get("actions", []),
+        }
+    )
+    item = await governance.record_transaction_item(
+        evolution_transaction_id=transaction_id,
+        item_kind="topology_downstream_apply",
+        item_id=operation_id,
+        activation_state="applied",
+        after_hash=effects_hash,
+        rollback_action={
+            "operation": "rollback_topology_downstream_effects",
+            "skill_graph_operation_id": str(operation_id),
+        },
+    )
+    items_recorded += 1
+    edge = await governance.record_provenance_edge(
+        workspace_key=workspace_key,
+        source_kind="evolution_transaction",
+        source_id=transaction_id,
+        derived_kind="transaction_item",
+        derived_id=item.transaction_item_id,
+        relation="records_topology_downstream_apply",
+    )
+    edges_recorded += int(edge.created)
+    edge = await governance.record_provenance_edge(
+        workspace_key=workspace_key,
+        source_kind="evolution_transaction",
+        source_id=transaction_id,
+        derived_kind="skill_graph_operation",
+        derived_id=operation_id,
+        relation="applied_topology_downstream_effects",
+    )
+    edges_recorded += int(edge.created)
+
+    skill_ids = {
+        *_uuid_values(operation.get("subject_skill_ids", [])),
+        *_uuid_values(operation.get("output_skill_ids", [])),
+    }
+    for skill_id in sorted(skill_ids, key=str):
+        item = await governance.record_transaction_item(
+            evolution_transaction_id=transaction_id,
+            item_kind="topology_skill_lifecycle",
+            item_id=skill_id,
+            activation_state="materialized",
+            after_hash=sha256_json(
+                {
+                    "skill_graph_operation_id": str(operation_id),
+                    "skill_id": str(skill_id),
+                    "operation_kind": operation.get("operation_kind"),
+                    "downstream_status": "applied",
+                }
+            ),
+            rollback_action={
+                "operation": "revoke_topology_lifecycle_materialization",
+                "skill_graph_operation_id": str(operation_id),
+                "skill_id": str(skill_id),
+            },
+        )
+        items_recorded += 1
+        edge = await governance.record_provenance_edge(
+            workspace_key=workspace_key,
+            source_kind="evolution_transaction",
+            source_id=transaction_id,
+            derived_kind="transaction_item",
+            derived_id=item.transaction_item_id,
+            relation="records_topology_lifecycle_materialization",
+        )
+        edges_recorded += int(edge.created)
+        edge = await governance.record_provenance_edge(
+            workspace_key=workspace_key,
+            source_kind="evolution_transaction",
+            source_id=transaction_id,
+            derived_kind="skill",
+            derived_id=skill_id,
+            relation="materializes_topology_lifecycle",
+        )
+        edges_recorded += int(edge.created)
+
+    transaction = await governance.update_transaction_status(
+        evolution_transaction_id=transaction_id,
+        status="active",
+        metrics={
+            "topology_downstream_applied": True,
+            "skill_graph_operation_id": str(operation_id),
+            "lifecycle_updates": result.get("lifecycle_updates", 0),
+            "edges_materialized": result.get("edges_materialized", 0),
+            "governance_items_recorded": items_recorded,
+            "provenance_edges_recorded": edges_recorded,
+        },
+    )
+    return {
+        "recorded": True,
+        "transaction": transaction.to_json() if transaction is not None else None,
+        "items_recorded": items_recorded,
+        "provenance_edges_recorded": edges_recorded,
     }
 
 
@@ -2645,6 +2773,17 @@ def _uuid_value(value: object) -> UUID | None:
         return UUID(str(value))
     except ValueError:
         return None
+
+
+def _uuid_values(values: object) -> list[UUID]:
+    if not isinstance(values, list):
+        return []
+    parsed = []
+    for value in values:
+        uuid_value = _uuid_value(value)
+        if uuid_value is not None:
+            parsed.append(uuid_value)
+    return parsed
 
 
 def _json_object(value: object) -> dict[str, Any]:
