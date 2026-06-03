@@ -671,10 +671,9 @@ Acceptance:
 - focused Observatory API tests cover summary/search, bounded collection
   envelopes, readiness, admin auth, audited action receipts, and
   confirmation-required high-impact denial;
-- validation evidence for the route-map expansion passed: focused Observatory
-  tests `6 passed`, `uv run ruff check sidecar`, `uv run pytest` with 309
-  tests, `uv run python -m compileall -q sidecar`, `npm run build --prefix
-  sidecar/autoskill/observatory`, `git diff --check`, Docker Compose migration
-  image build with embedded Observatory UI, compose migration exit code 0, and a
-  Postgres-backed admin API smoke for bounded component envelopes, readiness,
-  audit-chain diagnostics, and rollback confirmation denial.
+- validation evidence for the route-map expansion passed on the final tree:
+  focused Observatory tests `8 passed`, `uv run ruff check sidecar scripts`,
+  `uv run pytest -q` with 311 tests, `uv run python -m compileall -q sidecar
+  scripts`, `npm test --prefix plugin/autoskill` with 18 tests, `npm run build
+  --prefix sidecar/autoskill/observatory`, `docker compose config --quiet`, and
+  `git diff --check`.

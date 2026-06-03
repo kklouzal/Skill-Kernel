@@ -949,15 +949,12 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   actions without confirmation. The React app now preserves deep-link state,
   falls back from WebSocket to SSE live updates, and adds cockpit tabs for
   records, metrics, traces, artifacts, config, audit, and help.
-- Observatory expansion validation passed: focused Observatory tests passed
-  `6 passed`; `uv run ruff check sidecar`, `uv run pytest` with 309 passing
-  tests, `uv run python -m compileall -q sidecar`, `npm run build --prefix
-  sidecar/autoskill/observatory`, and `git diff --check` passed. Compose
-  validation built the sidecar image including the Observatory UI, applied
-  migrations successfully, and a Postgres-backed admin API smoke verified
-  bounded component envelopes, readiness, audit-chain diagnostics, and
-  confirmation-required rollback denial. Compose was stopped with
-  `docker compose down` and the Postgres volume was preserved.
+- Observatory expansion validation passed on the final tree: focused
+  Observatory tests passed `8 passed`; `uv run ruff check sidecar scripts`,
+  `uv run pytest -q` with 311 passing tests, `uv run python -m compileall -q
+  sidecar scripts`, `npm test --prefix plugin/autoskill` with 18 passing tests,
+  `npm run build --prefix sidecar/autoskill/observatory`, `docker compose
+  config --quiet`, and `git diff --check` passed.
 
 ## Next Gates
 
