@@ -1056,6 +1056,11 @@ CREATE TABLE IF NOT EXISTS autoskill.historical_import_chunks (
     REFERENCES autoskill.historical_import_sources(historical_import_source_id),
   item_key text NOT NULL,
   chunk_index integer NOT NULL CHECK (chunk_index >= 0),
+  source_item_locator_hash text,
+  source_item_kind text,
+  item_key_hash text,
+  line_range_hash text,
+  record_index integer,
   chunk_kind text NOT NULL DEFAULT 'redacted_text',
   content_hash text NOT NULL,
   redacted_text text NOT NULL,
@@ -1072,8 +1077,52 @@ CREATE TABLE IF NOT EXISTS autoskill.historical_import_chunks (
   UNIQUE (workspace_id, historical_import_source_id, item_key, chunk_index, content_hash)
 );
 
+ALTER TABLE autoskill.historical_import_chunks
+  ADD COLUMN IF NOT EXISTS source_item_locator_hash text;
+ALTER TABLE autoskill.historical_import_chunks
+  ADD COLUMN IF NOT EXISTS source_item_kind text;
+ALTER TABLE autoskill.historical_import_chunks
+  ADD COLUMN IF NOT EXISTS item_key_hash text;
+ALTER TABLE autoskill.historical_import_chunks
+  ADD COLUMN IF NOT EXISTS line_range_hash text;
+ALTER TABLE autoskill.historical_import_chunks
+  ADD COLUMN IF NOT EXISTS record_index integer;
+
+UPDATE autoskill.historical_import_chunks
+SET source_item_locator_hash = COALESCE(
+      source_item_locator_hash,
+      metadata #>> '{source_item,locator_hash}',
+      metadata #>> '{lineage,source_item_locator_hash}'
+    ),
+    source_item_kind = COALESCE(
+      source_item_kind,
+      metadata #>> '{source_item,item_kind}'
+    ),
+    item_key_hash = COALESCE(
+      item_key_hash,
+      metadata #>> '{source_item,item_key_hash}',
+      metadata #>> '{lineage,item_key_hash}'
+    ),
+    line_range_hash = COALESCE(
+      line_range_hash,
+      metadata #>> '{source_item,line_range_hash}'
+    ),
+    record_index = COALESCE(
+      record_index,
+      NULLIF(metadata #>> '{source_item,record_index}', '')::integer
+    )
+WHERE source_item_locator_hash IS NULL
+   OR source_item_kind IS NULL
+   OR item_key_hash IS NULL
+   OR line_range_hash IS NULL
+   OR record_index IS NULL;
+
 CREATE INDEX IF NOT EXISTS idx_historical_import_sources_workspace_status
   ON autoskill.historical_import_sources(workspace_id, status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_historical_import_chunks_source_item_locator
+  ON autoskill.historical_import_chunks(workspace_id, source_item_locator_hash)
+  WHERE source_item_locator_hash IS NOT NULL;
 
 ALTER TABLE autoskill.historical_import_sources
   DROP CONSTRAINT IF EXISTS historical_import_sources_source_kind_check;

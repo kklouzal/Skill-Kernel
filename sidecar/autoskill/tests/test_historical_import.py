@@ -172,6 +172,12 @@ class MemoryHistoricalImportStore(HistoricalImportStore):
                 skipped += 1
                 continue
             created += 1
+            metadata = chunk.metadata or {}
+            source_item = metadata.get("source_item")
+            source_item = source_item if isinstance(source_item, dict) else {}
+            lineage = metadata.get("lineage")
+            lineage = lineage if isinstance(lineage, dict) else {}
+            record_index = source_item.get("record_index")
             record = HistoricalChunkRecord(
                 historical_import_chunk_id=uuid4(),
                 workspace_id=source.workspace_id,
@@ -179,6 +185,16 @@ class MemoryHistoricalImportStore(HistoricalImportStore):
                 historical_import_source_id=source.historical_import_source_id,
                 item_key=chunk.item_key,
                 chunk_index=chunk.chunk_index,
+                source_item_locator_hash=(
+                    source_item.get("locator_hash")
+                    or lineage.get("source_item_locator_hash")
+                ),
+                source_item_kind=source_item.get("item_kind"),
+                item_key_hash=(
+                    source_item.get("item_key_hash") or lineage.get("item_key_hash")
+                ),
+                line_range_hash=source_item.get("line_range_hash"),
+                record_index=record_index if isinstance(record_index, int) else None,
                 chunk_kind=chunk.chunk_kind,
                 content_hash=content_hash,
                 redacted_text=redacted_text,
@@ -187,7 +203,7 @@ class MemoryHistoricalImportStore(HistoricalImportStore):
                 redaction_policy_version=chunk.redaction_policy_version,
                 trust_level=chunk.trust_level,
                 taint=chunk.taint or {},
-                metadata=chunk.metadata or {},
+                metadata=metadata,
                 status="observed",
                 created_at=now,
             )
@@ -250,6 +266,11 @@ class MemoryHistoricalImportStore(HistoricalImportStore):
                     historical_import_source_id=chunk.historical_import_source_id,
                     item_key=chunk.item_key,
                     chunk_index=chunk.chunk_index,
+                    source_item_locator_hash=chunk.source_item_locator_hash,
+                    source_item_kind=chunk.source_item_kind,
+                    item_key_hash=chunk.item_key_hash,
+                    line_range_hash=chunk.line_range_hash,
+                    record_index=chunk.record_index,
                     chunk_kind=chunk.chunk_kind,
                     content_hash=chunk.content_hash,
                     redacted_text=chunk.redacted_text,
@@ -924,6 +945,15 @@ def test_historical_import_parses_transcripts_and_markdown_sections(tmp_path) ->
         == memory_chunk.metadata["lineage"]["source_item_locator_hash"]
     )
     assert memory_chunk.metadata["source_item"]["line_range_hash"]
+    assert (
+        memory_chunk.source_item_locator_hash
+        == memory_chunk.metadata["source_item"]["locator_hash"]
+    )
+    assert memory_chunk.source_item_kind == "markdown_section"
+    assert memory_chunk.item_key_hash == memory_chunk.metadata["source_item"]["item_key_hash"]
+    assert memory_chunk.line_range_hash == memory_chunk.metadata["source_item"][
+        "line_range_hash"
+    ]
 
 
 def test_historical_import_parses_taskflow_jsonl_as_metadata_only(
@@ -975,6 +1005,10 @@ def test_historical_import_parses_taskflow_jsonl_as_metadata_only(
     assert first.metadata["source_item"]["item_kind"] == "taskflow_record"
     assert first.metadata["source_item"]["record_index"] == 0
     assert first.metadata["source_item"]["locator_hash"]
+    assert first.source_item_locator_hash == first.metadata["source_item"]["locator_hash"]
+    assert first.source_item_kind == "taskflow_record"
+    assert first.item_key_hash == first.metadata["source_item"]["item_key_hash"]
+    assert first.record_index == 0
     assert first.metadata["source_path_stored"] is False
 
 

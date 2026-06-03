@@ -193,15 +193,20 @@ Acceptance:
 - imported chunks now carry compact source-item lineage metadata with source
   kind, source key, fingerprint, item key, chunk index, and relative path hash
   while continuing to avoid raw path storage;
+- source-item locator lineage is now schema-promoted for chunk rows: chunks
+  carry nullable content-safe locator hash, source-item kind, item-key hash,
+  line-range hash, and record-index columns, with idempotent migration backfill
+  from existing v2 metadata and an index for source-item lookup without raw path
+  storage;
 - bounded bootstrap consolidation is implemented as a historical-only,
   propose-only consolidation API and maintenance job that filters tainted
   historical observations/recurring clusters, reuses existing active/archive/
   external matching before proposal, and optionally persists inactive candidate
   rows through the normal governance transaction/probe path without writing
   runtime skill files;
-- remaining historical ingestion work is richer source-item lineage for future
+- remaining historical ingestion work is sustained validation of richer
   non-file ledgers and live source systems beyond the current hashed
-  file/item/chunk model.
+  file/item/chunk locator model.
 
 ## Phase 5 - Runtime Context Broker
 

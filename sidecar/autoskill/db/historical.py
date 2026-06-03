@@ -164,6 +164,11 @@ class HistoricalChunkRecord:
     historical_import_source_id: UUID
     item_key: str
     chunk_index: int
+    source_item_locator_hash: str | None
+    source_item_kind: str | None
+    item_key_hash: str | None
+    line_range_hash: str | None
+    record_index: int | None
     chunk_kind: str
     content_hash: str
     redacted_text: str
@@ -185,6 +190,11 @@ class HistoricalChunkRecord:
             historical_import_source_id=row["historical_import_source_id"],
             item_key=row["item_key"],
             chunk_index=row["chunk_index"],
+            source_item_locator_hash=_row_get(row, "source_item_locator_hash"),
+            source_item_kind=_row_get(row, "source_item_kind"),
+            item_key_hash=_row_get(row, "item_key_hash"),
+            line_range_hash=_row_get(row, "line_range_hash"),
+            record_index=_row_get(row, "record_index"),
             chunk_kind=row["chunk_kind"],
             content_hash=row["content_hash"],
             redacted_text=row["redacted_text"],
@@ -206,6 +216,11 @@ class HistoricalChunkRecord:
             "historical_import_source_id": str(self.historical_import_source_id),
             "item_key": self.item_key,
             "chunk_index": self.chunk_index,
+            "source_item_locator_hash": self.source_item_locator_hash,
+            "source_item_kind": self.source_item_kind,
+            "item_key_hash": self.item_key_hash,
+            "line_range_hash": self.line_range_hash,
+            "record_index": self.record_index,
             "chunk_kind": self.chunk_kind,
             "content_hash": self.content_hash,
             "redacted_text": self.redacted_text,
@@ -586,6 +601,7 @@ class AsyncpgHistoricalImportStore(AsyncpgPoolOwner):
                     raise ValueError("historical import chunk source is not registered")
                 redacted_text = redact_text(chunk.redacted_text)
                 content_hash = sha256_text(redacted_text)
+                source_item_columns = _chunk_source_item_columns(chunk)
                 row = await conn.fetchrow(
                     """
                     INSERT INTO autoskill.historical_import_chunks (
@@ -594,6 +610,11 @@ class AsyncpgHistoricalImportStore(AsyncpgPoolOwner):
                       historical_import_source_id,
                       item_key,
                       chunk_index,
+                      source_item_locator_hash,
+                      source_item_kind,
+                      item_key_hash,
+                      line_range_hash,
+                      record_index,
                       chunk_kind,
                       content_hash,
                       redacted_text,
@@ -604,7 +625,10 @@ class AsyncpgHistoricalImportStore(AsyncpgPoolOwner):
                       taint,
                       metadata
                     )
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb)
+                    VALUES (
+                      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+                      $11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19::jsonb
+                    )
                     ON CONFLICT (
                       workspace_id,
                       historical_import_source_id,
@@ -616,10 +640,15 @@ class AsyncpgHistoricalImportStore(AsyncpgPoolOwner):
                     RETURNING
                       historical_import_chunk_id,
                       workspace_id,
-                      $15::text AS workspace_key,
+                      $20::text AS workspace_key,
                       historical_import_source_id,
                       item_key,
                       chunk_index,
+                      source_item_locator_hash,
+                      source_item_kind,
+                      item_key_hash,
+                      line_range_hash,
+                      record_index,
                       chunk_kind,
                       content_hash,
                       redacted_text,
@@ -637,6 +666,11 @@ class AsyncpgHistoricalImportStore(AsyncpgPoolOwner):
                     source["historical_import_source_id"],
                     chunk.item_key,
                     chunk.chunk_index,
+                    source_item_columns["source_item_locator_hash"],
+                    source_item_columns["source_item_kind"],
+                    source_item_columns["item_key_hash"],
+                    source_item_columns["line_range_hash"],
+                    source_item_columns["record_index"],
                     chunk.chunk_kind,
                     content_hash,
                     redacted_text,
@@ -844,6 +878,22 @@ def _validate_chunk_input(chunk: HistoricalChunkInput) -> None:
         raise ValueError("token_estimate must be non-negative")
     if not chunk.redacted_text.strip():
         raise ValueError("redacted_text is required")
+
+
+def _chunk_source_item_columns(chunk: HistoricalChunkInput) -> dict[str, Any]:
+    metadata = _json_dict(chunk.metadata)
+    source_item = _json_dict(metadata.get("source_item"))
+    lineage = _json_dict(metadata.get("lineage"))
+    record_index = source_item.get("record_index")
+    return {
+        "source_item_locator_hash": (
+            source_item.get("locator_hash") or lineage.get("source_item_locator_hash")
+        ),
+        "source_item_kind": source_item.get("item_kind"),
+        "item_key_hash": source_item.get("item_key_hash") or lineage.get("item_key_hash"),
+        "line_range_hash": source_item.get("line_range_hash"),
+        "record_index": record_index if isinstance(record_index, int) else None,
+    }
 
 
 def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:

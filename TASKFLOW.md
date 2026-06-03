@@ -873,6 +873,21 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   tests, `npm run check --prefix plugin/autoskill`, `docker compose config
   --quiet`, `git diff --check`, and acceptance/readiness/handoff/traceability
   reports all `ready=true`.
+- Historical source-item locator lineage is now schema-backed instead of
+  metadata-only: `historical_import_chunks` stores content-safe
+  `source_item_locator_hash`, `source_item_kind`, `item_key_hash`,
+  `line_range_hash`, and `record_index` columns, idempotent migration backfill
+  hydrates them from existing v2 metadata, and chunk records/API JSON expose the
+  fields without storing raw paths or raw item keys. Focused validation passed
+  with `uv run pytest -q sidecar/autoskill/tests/test_historical_import.py` and
+  `uv run ruff check sidecar/autoskill/db/historical.py
+  sidecar/autoskill/tests/test_historical_import.py`; full validation passed
+  with `uv run ruff check sidecar scripts`, `uv run pytest -q` with 296 tests,
+  `uv run python -m compileall -q sidecar scripts`, `npm test --prefix
+  plugin/autoskill` with 18 tests, `npm run check --prefix plugin/autoskill`,
+  `docker compose config --quiet`, `git diff --check`, all four executable
+  crosswalk reports returning `ready=true`, and an idempotent compose Postgres
+  migration smoke verifying all five locator columns exist.
 
 ## Next Gates
 
@@ -884,8 +899,8 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
    non-smoke activation target.
 3. Keep historical bootstrap consolidation tainted, propose-only, and subject
    to normal evidence/evaluator gates while collecting enough imported-history
-   signal to decide whether the v2 source-item locator layer needs schema-level
-   promotion.
+   signal to validate the schema-backed v2 source-item locator layer under
+   non-file ledgers and live source systems.
 4. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
 
 ## Known Risks
@@ -910,9 +925,9 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   provenance, embedding-source discovery, transcript-corpus export parsing, and
   source-rooted revocation traversal/invalidation. Plugin manifests/hooks/source
   files, media artifacts, and observability exports now have metadata-only
-  source/chunk coverage. Historical chunks now also carry v2 source-item
-  locator metadata beyond file/section/line references; historical imports
-  still cannot activate candidates without the normal gates.
+  source/chunk coverage. Historical chunks now also carry schema-backed v2
+  source-item locator hashes beyond file/section/line references; historical
+  imports still cannot activate candidates without the normal gates.
 - Embedding generation defaults to deterministic local hash embeddings unless an active qualified embedding profile is configured; storage now supports profile-scoped variable dimensions, with the default 1536-dimensional path retaining the indexed HNSW fast path.
 - Runtime context broker is still conservative: vector fusion is available for local deterministic hash embeddings, policy artifact replay/canary primitives exist, and stored redacted replay episodes can drive policy replay; production replay quality still depends on deployment telemetry being populated.
 - Deployment readiness is a deterministic sidecar/state preflight, not a
