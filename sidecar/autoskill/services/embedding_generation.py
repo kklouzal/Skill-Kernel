@@ -63,7 +63,13 @@ class OpenAICompatibleTextEmbedder:
         self.timeout_seconds = timeout_seconds
 
     def embed(self, text: str) -> list[float]:
-        payload = json.dumps({"model": self.model, "input": text}).encode("utf-8")
+        payload = json.dumps(
+            {
+                "model": self.model,
+                "input": text,
+                "dimensions": self.embedding_dim,
+            }
+        ).encode("utf-8")
         http_request = request.Request(
             f"{self.base_url}/embeddings",
             data=payload,

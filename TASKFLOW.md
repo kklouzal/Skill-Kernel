@@ -841,6 +841,24 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   run python -m compileall -q sidecar scripts`, `git diff --check`, `npm test
   --prefix plugin/autoskill` with 18 tests, `npm run check --prefix
   plugin/autoskill`, and `docker compose config --quiet`.
+- 2026-06-03 interrupted-turn deployment continuation is closed: the sidecar
+  embedding request path now sends the configured embedding dimension to
+  OpenAI-compatible providers, the Dev-01 compose defaults now point at the
+  live qualified `Qwen3-Embedding-4B-Q8_0.gguf` 1536-dimensional profile, and
+  the refreshed `docker compose up -d --build` deployment recreated sidecar plus
+  worker containers while preserving the Postgres volume. The running sidecar
+  reports effective embedding config `model=Qwen3-Embedding-4B-Q8_0.gguf` and
+  `dimensions=1536`; live profile qualification run
+  `7dbc0f69-46ef-49d0-9d3e-8fb170246e6b` passed route, dimension, finite,
+  non-zero, stability, and negative-pair separation checks; deployment
+  readiness for `workspace_id=dev-01&replay_tag=production` reports
+  `ready=true` with no blockers or warnings and active embedding dimensions
+  `[1536]`. Validation passed with acceptance/readiness/handoff/traceability
+  reports all `ready=true`, red-team 9/9, focused operator/report/profile tests,
+  `uv run ruff check sidecar scripts`, `npm test --prefix plugin/autoskill`
+  with 18 tests, `uv run python -m compileall -q sidecar scripts`, `git diff
+  --check`, `docker compose config --quiet`, and full `uv run pytest -q` with
+  294 tests.
 
 ## Next Gates
 

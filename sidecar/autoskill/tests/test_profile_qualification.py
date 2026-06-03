@@ -220,6 +220,7 @@ def test_openai_compatible_embedding_profile_qualification_probes_provider(
         "http://127.0.0.1:9999/v1/embeddings",
         "http://127.0.0.1:9999/v1/embeddings",
     ]
+    assert [item["payload"]["dimensions"] for item in captured] == [4, 4, 4]
     assert {item["authorization"] for item in captured} == {"Bearer test-key"}
     assert qualifications.embedding_runs[0] == result.run
 

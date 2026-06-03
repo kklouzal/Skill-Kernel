@@ -194,7 +194,11 @@ def test_openai_compatible_embedder_posts_embedding_request(monkeypatch) -> None
         "url": "http://127.0.0.1:9999/v1/embeddings",
         "timeout": 12.5,
         "authorization": "Bearer test-key",
-        "payload": {"model": "text-embedding-3-small", "input": "redacted text"},
+        "payload": {
+            "model": "text-embedding-3-small",
+            "input": "redacted text",
+            "dimensions": 1536,
+        },
     }
 
 
