@@ -295,6 +295,14 @@ class TraceListResponse(BaseModel):
     spans: list[dict[str, object]]
 
 
+class ObservabilityMetricsResponse(BaseModel):
+    workspace_id: str | None
+    captured_at: str
+    window_minutes: int
+    metrics: dict[str, object]
+    dashboards: dict[str, object]
+
+
 class DiagnosticSignalRequest(BaseModel):
     workspace_id: str
     diagnostic_kind: str
@@ -3944,6 +3952,39 @@ def create_app(
             limit=max(1, min(limit, 500)),
         )
         return TraceListResponse(spans=[span.to_json() for span in spans])
+
+    @app.get("/v1/observability/metrics", response_model=ObservabilityMetricsResponse)
+    async def observability_metrics(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+        storage_limit: int = 25,
+        audit_limit: int = 1000,
+    ) -> ObservabilityMetricsResponse:
+        _require_control_auth(authorization)
+        bounded_window = max(1, min(window_minutes, 24 * 60))
+        bounded_storage = max(1, min(storage_limit, 100))
+        bounded_audit = max(1, min(audit_limit, 10_000))
+        snapshot = await observability.operator_metrics(
+            workspace_key=workspace_id,
+            window_minutes=bounded_window,
+            storage_limit=bounded_storage,
+        )
+        chain_valid = await audit.verify_chain(
+            workspace_key=workspace_id,
+            limit=bounded_audit,
+        )
+        dashboards = dict(snapshot["dashboards"])
+        audit_integrity = dict(dashboards.get("audit_integrity", {}))
+        audit_integrity.update({"chain_valid": chain_valid, "verify_limit": bounded_audit})
+        dashboards["audit_integrity"] = audit_integrity
+        return ObservabilityMetricsResponse(
+            workspace_id=snapshot["workspace_id"],  # type: ignore[arg-type]
+            captured_at=snapshot["captured_at"],  # type: ignore[arg-type]
+            window_minutes=snapshot["window_minutes"],  # type: ignore[arg-type]
+            metrics=snapshot["metrics"],  # type: ignore[arg-type]
+            dashboards=dashboards,
+        )
 
     @app.post("/v1/diagnostics/momentum", response_model=DiagnosticMomentumResponse)
     async def record_diagnostic_signal(

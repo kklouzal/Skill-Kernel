@@ -731,6 +731,23 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   tests, `npm run check --prefix plugin/autoskill`, `docker compose config
   --quiet`, and a compose Postgres migration smoke verifying the
   `attribution_events_outcome_check` constraint plus invalid-outcome rejection.
+- Section 28 operator observability now has a read-only
+  `/v1/observability/metrics` control endpoint backed by an asyncpg
+  observability snapshot: it reports ingest rate, redaction counts, trace-based
+  sidecar latency, explicit plugin-diagnostics-required spool status, job queue
+  depth and success/failure by type, embedding backlog, retrieval/context hint
+  counts and token cost, skill creation/improvement counts, scanner/evaluator
+  failure counts, active/archive/promote/rollback/freeze/drift/utility metrics,
+  audit counts plus chain verification, and bounded Postgres table/index size
+  rows. The response also materializes the ten minimum dashboard views from
+  section 28.2. Validation passed with focused observability/admin tests,
+  focused ruff checks, full `uv run ruff check sidecar`, `uv run pytest -q`
+  with 284 tests, `uv run python -m compileall -q sidecar`, `git diff
+  --check`, `npm test --prefix plugin/autoskill` with 18 tests, `npm run check
+  --prefix plugin/autoskill`, `docker compose config --quiet`, and a live
+  compose route smoke showing 24 metric keys, 10 dashboard views, valid audit
+  chain, five storage rows, and explicit `plugin_diagnostics_required` spool
+  status.
 
 ## Next Gates
 

@@ -503,6 +503,54 @@ def test_memory_quarantine_and_control_flow_surfaces_are_governed() -> None:
     assert listed_events.events[0]["decision"]["memory_status"] == "approved"
 
 
+def test_observability_metrics_endpoint_reports_section_28_dashboards() -> None:
+    app = create_app(audit_store=MemoryAuditStore())
+    route = next(route for route in app.routes if route.path == "/v1/observability/metrics")
+
+    async def run():
+        return await route.endpoint(workspace_id="dev-01", window_minutes=30)
+
+    response = asyncio.run(run())
+
+    assert response.workspace_id == "dev-01"
+    assert response.window_minutes == 30
+    assert {
+        "ingest",
+        "redaction_counts",
+        "sidecar_latency_ms",
+        "spool_backlog",
+        "job_queue_depth",
+        "job_success_failure_by_type",
+        "embedding_backlog",
+        "retrieval_recall_audit_score",
+        "context_hint_injection_count",
+        "context_hint_token_cost",
+        "skill_creation_improvement_counts",
+        "scanner_reject_counts",
+        "evaluation_pass_fail_counts",
+        "active_skill_count",
+        "archive_promote_counts",
+        "rollback_freeze_counts",
+        "drift_violation_counts",
+        "utility_deltas",
+        "postgres_table_index_growth",
+        "audit",
+    }.issubset(response.metrics)
+    assert set(response.dashboards) == {
+        "system_health",
+        "recent_autonomous_changes",
+        "active_skills_and_utility",
+        "archived_skills_and_promotion_candidates",
+        "scanner_evaluator_failures",
+        "retrieval_context_broker_performance",
+        "drift_violations",
+        "rollback_freeze_events",
+        "storage_growth",
+        "audit_integrity",
+    }
+    assert response.dashboards["audit_integrity"]["chain_valid"] is True
+
+
 def test_v14_trace_diagnostics_profiles_and_context_surfaces() -> None:
     app = create_app()
     routes = {
