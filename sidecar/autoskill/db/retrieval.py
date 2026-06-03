@@ -53,6 +53,65 @@ class RetrievalResult:
     candidates: list[RetrievalCandidate]
 
 
+@dataclass(frozen=True)
+class RetrievalLog:
+    retrieval_log_id: UUID
+    trace_id: UUID | None
+    span_id: UUID | None
+    parent_span_id: UUID | None
+    session_id: str | None
+    turn_id: str | None
+    broker_policy_version_id: UUID | None
+    decision: str
+    candidate_skill_ids: list[UUID]
+    rendered_skill_ids: list[UUID]
+    no_skill_control: bool
+    metadata: dict[str, Any]
+    created_at: Any
+
+    @classmethod
+    def from_row(cls, row: asyncpg.Record | dict[str, Any]) -> RetrievalLog:
+        metadata = row["metadata"]
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+        return cls(
+            retrieval_log_id=row["retrieval_log_id"],
+            trace_id=_row_get(row, "trace_id"),
+            span_id=_row_get(row, "span_id"),
+            parent_span_id=_row_get(row, "parent_span_id"),
+            session_id=_row_get(row, "session_id"),
+            turn_id=_row_get(row, "turn_id"),
+            broker_policy_version_id=_row_get(row, "broker_policy_version_id"),
+            decision=row["decision"],
+            candidate_skill_ids=list(row["candidate_skill_ids"] or []),
+            rendered_skill_ids=list(row["rendered_skill_ids"] or []),
+            no_skill_control=bool(row["no_skill_control"]),
+            metadata=metadata,
+            created_at=row["created_at"],
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "retrieval_log_id": str(self.retrieval_log_id),
+            "trace_id": str(self.trace_id) if self.trace_id else None,
+            "span_id": str(self.span_id) if self.span_id else None,
+            "parent_span_id": str(self.parent_span_id) if self.parent_span_id else None,
+            "session_id": self.session_id,
+            "turn_id": self.turn_id,
+            "broker_policy_version_id": (
+                str(self.broker_policy_version_id) if self.broker_policy_version_id else None
+            ),
+            "decision": self.decision,
+            "candidate_skill_ids": [str(skill_id) for skill_id in self.candidate_skill_ids],
+            "rendered_skill_ids": [str(skill_id) for skill_id in self.rendered_skill_ids],
+            "no_skill_control": self.no_skill_control,
+            "metadata": self.metadata,
+            "created_at": self.created_at.isoformat()
+            if hasattr(self.created_at, "isoformat")
+            else str(self.created_at),
+        }
+
+
 class RetrievalStore(Protocol):
     async def lexical_query(
         self,
@@ -122,6 +181,22 @@ class RetrievalStore(Protocol):
         objects: list[dict[str, str]],
     ) -> int:
         """Mark retrieval logs affected by revoked objects."""
+
+    async def list_recent_logs(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+    ) -> list[RetrievalLog]:
+        """Return content-safe retrieval/broker decisions for operator drill-down."""
+
+    async def get_log(
+        self,
+        *,
+        workspace_key: str | None = None,
+        retrieval_log_id: UUID,
+    ) -> RetrievalLog | None:
+        """Return one content-safe retrieval/broker decision for operator drill-down."""
 
 
 class NullRetrievalStore:
@@ -193,6 +268,22 @@ class NullRetrievalStore:
         objects: list[dict[str, str]],
     ) -> int:
         return 0
+
+    async def list_recent_logs(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+    ) -> list[RetrievalLog]:
+        return []
+
+    async def get_log(
+        self,
+        *,
+        workspace_key: str | None = None,
+        retrieval_log_id: UUID,
+    ) -> RetrievalLog | None:
+        return None
 
 
 class AsyncpgRetrievalStore(AsyncpgPoolOwner):
@@ -699,6 +790,76 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
                 source_ids,
             )
             return _command_count(result)
+
+    async def list_recent_logs(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+    ) -> list[RetrievalLog]:
+        pool = await self._get_pool()
+        bounded_limit = max(1, min(limit, 500))
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                  rl.retrieval_log_id,
+                  rl.trace_id,
+                  rl.span_id,
+                  rl.parent_span_id,
+                  rl.session_id,
+                  rl.turn_id,
+                  rl.broker_policy_version_id,
+                  rl.decision,
+                  rl.candidate_skill_ids,
+                  rl.rendered_skill_ids,
+                  rl.no_skill_control,
+                  rl.metadata,
+                  rl.created_at
+                FROM autoskill.retrieval_logs rl
+                JOIN autoskill.workspaces w ON w.workspace_id = rl.workspace_id
+                WHERE ($1::text IS NULL OR w.external_key = $1)
+                ORDER BY rl.created_at DESC, rl.retrieval_log_id DESC
+                LIMIT $2
+                """,
+                workspace_key,
+                bounded_limit,
+            )
+        return [RetrievalLog.from_row(row) for row in rows]
+
+    async def get_log(
+        self,
+        *,
+        workspace_key: str | None = None,
+        retrieval_log_id: UUID,
+    ) -> RetrievalLog | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                  rl.retrieval_log_id,
+                  rl.trace_id,
+                  rl.span_id,
+                  rl.parent_span_id,
+                  rl.session_id,
+                  rl.turn_id,
+                  rl.broker_policy_version_id,
+                  rl.decision,
+                  rl.candidate_skill_ids,
+                  rl.rendered_skill_ids,
+                  rl.no_skill_control,
+                  rl.metadata,
+                  rl.created_at
+                FROM autoskill.retrieval_logs rl
+                JOIN autoskill.workspaces w ON w.workspace_id = rl.workspace_id
+                WHERE rl.retrieval_log_id = $1
+                  AND ($2::text IS NULL OR w.external_key = $2)
+                """,
+                retrieval_log_id,
+                workspace_key,
+            )
+        return RetrievalLog.from_row(row) if row else None
 
 
 async def _insert_retrieval_log(

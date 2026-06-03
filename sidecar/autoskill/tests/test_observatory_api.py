@@ -1,10 +1,12 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from autoskill.api.app import ObservatoryActionRequest, create_app
 from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.core.config import get_settings
+from autoskill.db.retrieval import RetrievalLog
 from autoskill.services.observatory import build_observatory_snapshot
 from fastapi import HTTPException
 
@@ -29,6 +31,30 @@ class MemoryAuditStore:
 
     async def verify_chain(self, *, workspace_key: str | None = None, limit: int = 1000) -> bool:
         return verify_hash_chain(self.records[-limit:])
+
+
+class MemoryRetrievalLogStore:
+    def __init__(self, logs: list[RetrievalLog]) -> None:
+        self.logs = logs
+
+    async def list_recent_logs(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+    ) -> list[RetrievalLog]:
+        return self.logs[:limit]
+
+    async def get_log(
+        self,
+        *,
+        workspace_key: str | None = None,
+        retrieval_log_id,
+    ) -> RetrievalLog | None:
+        for log in self.logs:
+            if log.retrieval_log_id == retrieval_log_id:
+                return log
+        return None
 
 
 def _routes(app):
@@ -233,6 +259,70 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         "rollback-revokes-derived-data",
         "read-models-fresh",
     }.issubset(invariant_ids)
+
+
+def test_observatory_broker_decisions_use_content_safe_retrieval_logs() -> None:
+    retrieval_log_id = uuid4()
+    trace_id = uuid4()
+    rendered_skill_id = uuid4()
+    candidate_object_id = uuid4()
+    retrieval_store = MemoryRetrievalLogStore(
+        [
+            RetrievalLog(
+                retrieval_log_id=retrieval_log_id,
+                trace_id=trace_id,
+                span_id=uuid4(),
+                parent_span_id=None,
+                session_id="session-1",
+                turn_id="turn-1",
+                broker_policy_version_id=None,
+                decision="skill_hint",
+                candidate_skill_ids=[rendered_skill_id],
+                rendered_skill_ids=[rendered_skill_id],
+                no_skill_control=False,
+                metadata={
+                    "query_hash": "sha256:query",
+                    "candidate_count": 1,
+                    "candidate_objects": [
+                        {
+                            "object_type": "body_index_document",
+                            "object_id": str(candidate_object_id),
+                            "rank": 0.9,
+                        }
+                    ],
+                    "reason_codes": ["vector-fused"],
+                    "suppressed": [],
+                },
+                created_at=datetime.now(UTC),
+            )
+        ]
+    )
+    app = create_app(audit_store=MemoryAuditStore(), retrieval_store=retrieval_store)
+    routes = _routes(app)
+
+    async def run():
+        collection = await routes[("/admin/api/v1/broker/decisions", "GET")].endpoint(
+            workspace_id="dev-01",
+            limit=10,
+        )
+        detail = await routes[
+            ("/admin/api/v1/broker/decisions/{decision_id}", "GET")
+        ].endpoint(decision_id=str(retrieval_log_id), workspace_id="dev-01")
+        return collection, detail
+
+    collection, detail = asyncio.run(run())
+
+    assert collection.collection["source"] == "retrieval_store.list_recent_logs"
+    assert collection.collection["items"][0]["object_id"] == str(retrieval_log_id)
+    assert collection.collection["content_policy"]["raw_available"] is False
+    assert detail.object["object_type"] == "broker_decision"
+    assert detail.object["diagnostics"]["query_hash"] == "sha256:query"
+    assert detail.object["diagnostics"]["reason_codes"] == ["vector-fused"]
+    assert detail.object["content_policy"]["raw_query_stored"] is False
+    assert detail.object["provenance"]["candidate_objects"][0]["object_id"] == str(
+        candidate_object_id
+    )
+    assert detail.object["effects"]["rendered_skill_ids"] == [str(rendered_skill_id)]
 
 
 def test_observatory_stale_or_missing_telemetry_never_reports_healthy() -> None:

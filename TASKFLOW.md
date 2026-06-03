@@ -955,6 +955,22 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   sidecar scripts`, `npm test --prefix plugin/autoskill` with 18 passing tests,
   `npm run build --prefix sidecar/autoskill/observatory`, `docker compose
   config --quiet`, and `git diff --check` passed.
+- Observatory broker-decision drill-down now reads directly from the
+  content-safe `retrieval_logs` read model: `/admin/api/v1/broker/decisions`
+  lists recent retrieval/broker decisions, and
+  `/admin/api/v1/broker/decisions/{decision_id}` exposes query hashes,
+  candidate object IDs, rendered skill IDs, trace/span links, reason codes, and
+  suppression metadata without raw query text. This advances the Observatory
+  aggregate-to-evidence/object-microscope contract for runtime broker
+  diagnostics.
+- Validation passed for the Observatory broker-decision read model: focused
+  Observatory API tests passed `9 passed`, `uv run ruff check sidecar`, `uv run
+  pytest` passed with 312 tests, `uv run python -m compileall -q sidecar`, `git
+  diff --check`, and `docker compose config --quiet` passed; a compose
+  Postgres smoke migrated the schema, inserted a redacted retrieval-log row,
+  read it through the admin collection/detail routes with bearer auth, verified
+  `raw_query_stored=false`, deleted the smoke rows, and stopped Postgres without
+  removing the persistent volume.
 
 ## Next Gates
 

@@ -4970,6 +4970,7 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
         workspace_id: str | None = None,
+        window_minutes: int = 60,
         limit: int = 50,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
@@ -5468,27 +5469,37 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
         workspace_id: str | None = None,
-        window_minutes: int = 60,
         limit: int = 50,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
-        snapshot = await _observatory_snapshot(
-            workspace_id=workspace_id,
-            window_minutes=window_minutes,
-        )
-        broker = _find_by_id(
-            list(snapshot["pipeline"]["stations"]),  # type: ignore[index]
-            "broker_runtime",
-            ("component_id",),
+        logs = await retrieval.list_recent_logs(
+            workspace_key=workspace_id,
+            limit=max(1, min(limit, 500)),
         )
         return _observatory_collection(
             object_type="broker_decision",
             title="Broker decisions",
-            items=list(broker.get("records", [])) if broker else [],
+            items=[
+                {
+                    **log.to_json(),
+                    "object_id": str(log.retrieval_log_id),
+                    "object_type": "broker_decision",
+                    "title": f"Broker decision {log.retrieval_log_id}",
+                    "summary": (
+                        f"{log.decision}; rendered={len(log.rendered_skill_ids)}; "
+                        f"candidates={len(log.candidate_skill_ids)}"
+                    ),
+                    "details_url": f"/admin/broker/decisions/{log.retrieval_log_id}",
+                }
+                for log in logs
+            ],
             limit=limit,
-            source="observatory_snapshot.broker_runtime.records",
-            diagnostics=broker
-            or _missing_read_model("broker_decision", supporting_component="broker_runtime"),
+            source="retrieval_store.list_recent_logs",
+            diagnostics={
+                "supporting_component": "broker_runtime",
+                "raw_query_available": False,
+                "query_identity": "metadata.query_hash",
+            },
         )
 
     @app.get(
@@ -5499,23 +5510,90 @@ def create_app(
         decision_id: str,
         authorization: Annotated[str | None, Header()] = None,
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
     ) -> ObservatoryObjectResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
+        try:
+            retrieval_log_id = UUID(decision_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="broker decision not found",
+            ) from exc
+        log = await retrieval.get_log(
+            workspace_key=workspace_id,
+            retrieval_log_id=retrieval_log_id,
+        )
+        if log is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="broker decision not found",
+            )
+        payload = log.to_json()
+        candidate_objects = [
+            item
+            for item in log.metadata.get("candidate_objects", [])
+            if isinstance(item, dict)
+        ]
+        suppressed = [
+            item for item in log.metadata.get("suppressed", []) if isinstance(item, dict)
+        ]
         return ObservatoryObjectResponse(
             object={
                 "schema_version": "skillkernel.observatory.broker-decision.v1",
                 "object_type": "broker_decision",
-                "object_id": decision_id,
-                "title": f"Broker decision {decision_id}",
-                "summary": "Broker decision detail requires a bounded retrieval-log read model.",
-                "diagnostics": _missing_read_model(
-                    "broker_decision",
-                    supporting_component="broker_runtime",
+                "object_id": str(log.retrieval_log_id),
+                "title": f"Broker decision {log.retrieval_log_id}",
+                "summary": (
+                    f"{log.decision}; rendered={len(log.rendered_skill_ids)}; "
+                    f"candidates={len(log.candidate_skill_ids)}"
                 ),
+                "timeline": [
+                    {
+                        "at": payload["created_at"],
+                        "event": "retrieval_logged",
+                        "decision": log.decision,
+                    }
+                ],
+                "provenance": {
+                    "upstream": [
+                        {"object_type": "trace", "object_id": str(log.trace_id)}
+                    ]
+                    if log.trace_id
+                    else [],
+                    "downstream": [
+                        {"object_type": "skill", "object_id": skill_id}
+                        for skill_id in payload["rendered_skill_ids"]
+                    ],
+                    "candidate_objects": candidate_objects,
+                },
+                "effects": {
+                    "rendered_skill_ids": payload["rendered_skill_ids"],
+                    "candidate_skill_ids": payload["candidate_skill_ids"],
+                    "no_skill_control": log.no_skill_control,
+                    "suppressed": suppressed,
+                },
+                "diagnostics": {
+                    "decision": log.decision,
+                    "reason_codes": log.metadata.get("reason_codes", []),
+                    "query_hash": log.metadata.get("query_hash"),
+                    "candidate_count": log.metadata.get(
+                        "candidate_count",
+                        len(candidate_objects),
+                    ),
+                    "rendered_skill_count": len(log.rendered_skill_ids),
+                    "broker_policy_version_id": payload["broker_policy_version_id"],
+                    "trace_id": payload["trace_id"],
+                    "span_id": payload["span_id"],
+                    "metadata_keys": sorted(log.metadata.keys()),
+                },
                 "content_policy": {
                     "raw_available": False,
                     "raw_reason": "raw-content-disabled",
+                    "redaction_state": "redacted_or_not_applicable",
+                    "raw_query_stored": False,
                 },
+                "audit": {"links": [], "chain_visible": True},
             }
         )
 

@@ -647,7 +647,10 @@ Deliverables:
   codes, playbooks, jobs, schedules, skills, candidates, evaluations, scanner
   findings, historical imports, broker decisions, context artifacts,
   model/embedding profiles, storage, audit, comparisons, diagnostic bundles,
-  trace detail, and trace replay;
+  trace detail, and trace replay. Broker-decision collection/detail now reads
+  `retrieval_logs` directly and exposes content-safe query hashes, candidate
+  object IDs, rendered skill IDs, trace/span links, reason codes, and
+  suppression metadata without raw query text;
 - live updates; implemented with `/admin/live` WebSocket and `/admin/live-sse`
   fallback, plus frontend fallback logic and snapshot reload handling;
 - operator action gateway; implemented as audited, policy-checked action
@@ -671,9 +674,8 @@ Acceptance:
 - focused Observatory API tests cover summary/search, bounded collection
   envelopes, readiness, admin auth, audited action receipts, and
   confirmation-required high-impact denial;
-- validation evidence for the route-map expansion passed on the final tree:
-  focused Observatory tests `8 passed`, `uv run ruff check sidecar scripts`,
-  `uv run pytest -q` with 311 tests, `uv run python -m compileall -q sidecar
-  scripts`, `npm test --prefix plugin/autoskill` with 18 tests, `npm run build
-  --prefix sidecar/autoskill/observatory`, `docker compose config --quiet`, and
-  `git diff --check`.
+- validation evidence for the broker-decision drill-down slice passed on the
+  final tree: focused Observatory tests `9 passed`, `uv run ruff check sidecar`,
+  `uv run pytest` with 312 tests, `uv run python -m compileall -q sidecar`, a
+  compose/Postgres smoke of `/admin/api/v1/broker/decisions`, `docker compose
+  config --quiet`, and `git diff --check`.
