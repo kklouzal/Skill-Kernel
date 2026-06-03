@@ -914,8 +914,16 @@ def test_historical_import_parses_transcripts_and_markdown_sections(tmp_path) ->
         chunk for chunk in store.chunks.values() if chunk.chunk_kind == "workspace_memory_section"
     )
     assert memory_chunk.taint["memory_poisoning_suspected"] is True
+    assert memory_chunk.metadata["lineage_version"] == "historical-lineage.v2"
     assert memory_chunk.metadata["lineage"]["source_kind"] == "workspace_memory"
     assert memory_chunk.metadata["lineage"]["item_key"] == memory_chunk.item_key
+    assert memory_chunk.metadata["source_item"]["item_kind"] == "markdown_section"
+    assert memory_chunk.metadata["source_item"]["item_key_hash"]
+    assert (
+        memory_chunk.metadata["source_item"]["locator_hash"]
+        == memory_chunk.metadata["lineage"]["source_item_locator_hash"]
+    )
+    assert memory_chunk.metadata["source_item"]["line_range_hash"]
 
 
 def test_historical_import_parses_taskflow_jsonl_as_metadata_only(
@@ -963,6 +971,10 @@ def test_historical_import_parses_taskflow_jsonl_as_metadata_only(
     ]
     assert first.metadata["lineage"]["source_kind"] == "taskflow_record"
     assert first.metadata["lineage"]["item_key"] == first.item_key
+    assert first.metadata["lineage_version"] == "historical-lineage.v2"
+    assert first.metadata["source_item"]["item_kind"] == "taskflow_record"
+    assert first.metadata["source_item"]["record_index"] == 0
+    assert first.metadata["source_item"]["locator_hash"]
     assert first.metadata["source_path_stored"] is False
 
 
@@ -1024,6 +1036,12 @@ def test_historical_import_parses_transcript_corpus_exports(tmp_path) -> None:
     assert len(turn_chunks) == 2
     assert all(chunk.taint["transcript_corpus"] for chunk in turn_chunks)
     assert all("test@example.com" not in chunk.redacted_text for chunk in turn_chunks)
+    assert all(
+        chunk.metadata["lineage_version"] == "historical-lineage.v2"
+        for chunk in turn_chunks
+    )
+    assert all(chunk.metadata["source_item"]["item_kind"] == "line_record" for chunk in turn_chunks)
+    assert all(chunk.metadata["source_item"]["line_range_hash"] for chunk in turn_chunks)
 
 
 def test_historical_import_parses_plugin_and_media_sources_as_metadata_only(

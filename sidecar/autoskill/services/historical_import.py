@@ -21,6 +21,7 @@ from autoskill.services.historical_discovery import (
 )
 
 HISTORICAL_CHUNKING_VERSION = "historical-chunking.v1"
+HISTORICAL_LINEAGE_VERSION = "historical-lineage.v2"
 
 
 @dataclass(frozen=True)
@@ -645,7 +646,13 @@ def _chunk(
         taint={**item.taint, **taint_extra},
         metadata={
             **metadata,
-            **_lineage_metadata(item, item_key=item_key, chunk_index=chunk_index),
+            **_lineage_metadata(
+                item,
+                item_key=item_key,
+                chunk_index=chunk_index,
+                chunk_kind=chunk_kind,
+                metadata=metadata,
+            ),
         },
     )
 
@@ -791,15 +798,65 @@ def _lineage_metadata(
     *,
     item_key: str,
     chunk_index: int,
+    chunk_kind: str,
+    metadata: dict[str, Any],
 ) -> dict[str, Any]:
+    item_key_hash = sha256_text(item_key)
+    locator_hash = sha256_text(
+        "|".join(
+            [
+                item.source_kind,
+                item.source_key,
+                item.fingerprint,
+                item_key,
+                chunk_kind,
+                str(chunk_index),
+            ]
+        )
+    )
+    source_item: dict[str, Any] = {
+        "locator_hash": locator_hash,
+        "item_key_hash": item_key_hash,
+        "item_kind": _lineage_item_kind(item_key=item_key, chunk_kind=chunk_kind),
+        "chunk_kind": chunk_kind,
+        "chunk_index": chunk_index,
+    }
+    for key in ("line_start", "line_end", "record_index", "status"):
+        if metadata.get(key) is not None:
+            source_item[key] = metadata[key]
+    if metadata.get("line_start") is not None and metadata.get("line_end") is not None:
+        source_item["line_range_hash"] = sha256_text(
+            f"{item.source_key}:{metadata['line_start']}:{metadata['line_end']}"
+        )
     return {
         "source_path_stored": False,
+        "lineage_version": HISTORICAL_LINEAGE_VERSION,
+        "source_item": source_item,
         "lineage": {
             "source_kind": item.source_kind,
             "source_key": item.source_key,
             "fingerprint": item.fingerprint,
             "item_key": item_key,
+            "item_key_hash": item_key_hash,
+            "source_item_locator_hash": locator_hash,
             "chunk_index": chunk_index,
+            "chunk_kind": chunk_kind,
             "relative_path_hash": item.metadata.get("relative_path_hash"),
         },
     }
+
+
+def _lineage_item_kind(*, item_key: str, chunk_kind: str) -> str:
+    if "#line-" in item_key or chunk_kind.endswith("_turn"):
+        return "line_record"
+    if "#section-" in item_key or chunk_kind.endswith("_section"):
+        return "markdown_section"
+    if "#task-" in item_key or "taskflow" in chunk_kind:
+        return "taskflow_record"
+    if "#record-" in item_key or chunk_kind.endswith("_record"):
+        return "json_record"
+    if "#metadata" in item_key or chunk_kind.endswith("_metadata"):
+        return "metadata_record"
+    if "#manifest" in item_key:
+        return "manifest_record"
+    return "historical_chunk"
