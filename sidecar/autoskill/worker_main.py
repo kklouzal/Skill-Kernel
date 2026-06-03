@@ -119,6 +119,10 @@ async def run_worker(args: argparse.Namespace) -> int:
 
     try:
         workspace_root, archive_root = _writer_worker_roots(settings, args.workspace_root)
+        utility.set_writer_roots(
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+        )
         await ensure_external_skill_scan_schedule(
             scheduler,
             workspace_key=args.workspace_id,

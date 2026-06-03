@@ -1578,12 +1578,15 @@ def _build_evaluation_store() -> EvaluationStore:
     return NullEvaluationStore()
 
 
-def _build_utility_store() -> UtilityStore:
+def _build_utility_store(writer_workspace_root: Path | None = None) -> UtilityStore:
     settings = get_settings()
     if settings.database_url:
+        workspace_root, _staging_root, archive_root = _writer_roots(writer_workspace_root)
         return AsyncpgUtilityStore(
             settings.database_url,
             statement_timeout_ms=settings.statement_timeout_ms,
+            workspace_root=workspace_root,
+            archive_root=archive_root,
         )
     return NullUtilityStore()
 
@@ -2723,7 +2726,7 @@ def create_app(
     attribution = attribution_store or _build_attribution_store()
     candidates = candidate_store or _build_candidate_store()
     evaluations = evaluation_store or _build_evaluation_store()
-    utility = utility_store or _build_utility_store()
+    utility = utility_store or _build_utility_store(writer_workspace_root)
     usage = usage_store or _build_usage_store()
     contracts = contract_store or _build_contract_store()
     governance = governance_store or _build_governance_store()

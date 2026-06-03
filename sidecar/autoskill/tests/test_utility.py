@@ -4,8 +4,10 @@ from uuid import uuid4
 
 from autoskill.db.utility import (
     SkillUtilityRollupRecord,
+    _archive_active_files_for_curation,
     _merge_probe_plan,
     _plan_improvements_and_splits,
+    _restore_archived_files_for_promotion,
 )
 from autoskill.services.utility import SkillUtilityFeatures, compute_utility_score
 
@@ -134,6 +136,33 @@ def test_curation_plans_improvement_for_wasteful_context_value() -> None:
     assert "context_value" in proposal["planned_trials"]
     assert proposal["signals"]["context_value_per_token"] == -0.03
     assert proposal["acceptance_gate"]["context_value_per_token_non_negative"] is True
+
+
+def test_curation_archive_helpers_move_active_files_to_archive(tmp_path) -> None:
+    workspace_root = tmp_path / "workspace"
+    archive_root = workspace_root / ".autoskill" / "archive"
+    active_path = workspace_root / "skills" / "autoskill" / "old-skill"
+    active_path.mkdir(parents=True)
+    (active_path / "SKILL.md").write_text("# Old\n\n## WHEN\n- Old.\n", encoding="utf-8")
+
+    archived = _archive_active_files_for_curation(
+        workspace_root=workspace_root,
+        archive_root=archive_root,
+        slug="old-skill",
+    )
+
+    assert archived["status"] == "archived"
+    assert archived["archive_manifest_relative_path"]
+    assert not active_path.exists()
+
+    restored = _restore_archived_files_for_promotion(
+        workspace_root=workspace_root,
+        archive_root=archive_root,
+        slug="old-skill",
+    )
+
+    assert restored["status"] == "restored"
+    assert (active_path / "SKILL.md").read_text(encoding="utf-8").startswith("# Old")
 
 
 def test_duplicate_merge_probe_plan_has_deterministic_trials() -> None:

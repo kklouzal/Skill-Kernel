@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import asyncpg
 
@@ -12,6 +13,11 @@ from autoskill.core.hashing import sha256_json
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 from autoskill.services.utility import SkillUtilityFeatures, compute_utility_score
+from autoskill.services.writer import (
+    archive_active_skill_and_remove,
+    latest_archive_manifest_for_slug,
+    rollback_active_skill,
+)
 
 
 @dataclass(frozen=True)
@@ -205,8 +211,21 @@ class NullUtilityStore:
 
 
 class AsyncpgUtilityStore(AsyncpgPoolOwner):
-    def __init__(self, database_url: str, *, statement_timeout_ms: int = 30_000) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        statement_timeout_ms: int = 30_000,
+        workspace_root: Path | None = None,
+        archive_root: Path | None = None,
+    ) -> None:
         super().__init__(database_url, statement_timeout_ms=statement_timeout_ms)
+        self.workspace_root = workspace_root
+        self.archive_root = archive_root
+
+    def set_writer_roots(self, *, workspace_root: Path, archive_root: Path) -> None:
+        self.workspace_root = workspace_root
+        self.archive_root = archive_root
 
     async def run_utility_rollup(
         self,
@@ -286,6 +305,29 @@ class AsyncpgUtilityStore(AsyncpgPoolOwner):
                         )
                     )
                     continue
+                filesystem_promotion = _restore_archived_files_for_promotion(
+                    workspace_root=self.workspace_root,
+                    archive_root=self.archive_root,
+                    slug=rollup.slug or "",
+                )
+                if filesystem_promotion["status"] == "blocked":
+                    actions.append(
+                        await _insert_curation_action(
+                            conn,
+                            workspace_id=workspace_id,
+                            skill_id=rollup.skill_id,
+                            action="promote_archive",
+                            status="blocked",
+                            reason="archived promotion requires restorable archive snapshot",
+                            features={
+                                **rollup.features.to_json(),
+                                "utility_score": rollup.utility_score,
+                                "promotion_min_retrieval": promotion_min_retrieval,
+                                "filesystem_promotion": filesystem_promotion,
+                            },
+                        )
+                    )
+                    continue
                 if await _set_lifecycle_state(
                     conn,
                     workspace_id,
@@ -305,16 +347,25 @@ class AsyncpgUtilityStore(AsyncpgPoolOwner):
                                 **rollup.features.to_json(),
                                 "utility_score": rollup.utility_score,
                                 "promotion_min_retrieval": promotion_min_retrieval,
+                                "filesystem_promotion": filesystem_promotion,
                             },
                         )
                     )
                     promoted += 1
+                elif filesystem_promotion["status"] == "restored":
+                    _archive_active_files_for_curation(
+                        workspace_root=self.workspace_root,
+                        archive_root=self.archive_root,
+                        slug=rollup.slug or "",
+                    )
 
             duplicate_actions = await _archive_duplicate_edges(
                 conn,
                 workspace_id=workspace_id,
                 rollup_by_skill=rollup_by_skill,
                 max_merge=min(max_merge, max_archive),
+                workspace_root=self.workspace_root,
+                archive_root=self.archive_root,
             )
             actions.extend(duplicate_actions)
             archived += len(duplicate_actions)
@@ -326,6 +377,8 @@ class AsyncpgUtilityStore(AsyncpgPoolOwner):
                 rollups=rollups.rollups,
                 archive_threshold=archive_threshold,
                 max_archive=max(0, max_archive - archived),
+                workspace_root=self.workspace_root,
+                archive_root=self.archive_root,
             )
             actions.extend(archive_actions)
             archived += len(archive_actions)
@@ -337,6 +390,8 @@ class AsyncpgUtilityStore(AsyncpgPoolOwner):
                     rollup_by_skill=rollup_by_skill,
                     active_budget=active_budget,
                     max_archive=max(0, max_archive - archived),
+                    workspace_root=self.workspace_root,
+                    archive_root=self.archive_root,
                 )
                 actions.extend(budget_actions)
                 archived += len(budget_actions)
@@ -442,6 +497,8 @@ async def _archive_low_utility(
     rollups: list[SkillUtilityRollupRecord],
     archive_threshold: float,
     max_archive: int,
+    workspace_root: Path | None,
+    archive_root: Path | None,
 ) -> list[CurationActionRecord]:
     actions: list[CurationActionRecord] = []
     for rollup in sorted(rollups, key=lambda item: (item.utility_score, item.slug or "")):
@@ -451,6 +508,29 @@ async def _archive_low_utility(
             continue
         if rollup.utility_score > archive_threshold:
             continue
+        filesystem_archive = _archive_active_files_for_curation(
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            slug=rollup.slug or "",
+        )
+        if filesystem_archive["status"] == "blocked":
+            actions.append(
+                await _insert_curation_action(
+                    conn,
+                    workspace_id=workspace_id,
+                    skill_id=rollup.skill_id,
+                    action="archive",
+                    status="blocked",
+                    reason="utility archive requires filesystem archive snapshot",
+                    features={
+                        **rollup.features.to_json(),
+                        "utility_score": rollup.utility_score,
+                        "archive_threshold": archive_threshold,
+                        "filesystem_archive": filesystem_archive,
+                    },
+                )
+            )
+            continue
         if not await _set_lifecycle_state(
             conn,
             workspace_id,
@@ -458,6 +538,11 @@ async def _archive_low_utility(
             from_state="active",
             to_state="archived",
         ):
+            _restore_files_after_failed_archive(
+                workspace_root=workspace_root,
+                archive_root=archive_root,
+                filesystem_archive=filesystem_archive,
+            )
             continue
         actions.append(
             await _insert_curation_action(
@@ -471,6 +556,7 @@ async def _archive_low_utility(
                     **rollup.features.to_json(),
                     "utility_score": rollup.utility_score,
                     "archive_threshold": archive_threshold,
+                    "filesystem_archive": filesystem_archive,
                 },
             )
         )
@@ -483,6 +569,8 @@ async def _archive_duplicate_edges(
     workspace_id: UUID,
     rollup_by_skill: dict[UUID, SkillUtilityRollupRecord],
     max_merge: int,
+    workspace_root: Path | None,
+    archive_root: Path | None,
 ) -> list[CurationActionRecord]:
     if max_merge <= 0:
         return []
@@ -557,6 +645,35 @@ async def _archive_duplicate_edges(
         else:
             keep_id, keep_slug = right, row["to_slug"]
             archive_id, archive_slug, archive_rollup = left, row["from_slug"], left_rollup
+        filesystem_archive = _archive_active_files_for_curation(
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            slug=archive_slug,
+        )
+        if filesystem_archive["status"] == "blocked":
+            actions.append(
+                await _insert_curation_action(
+                    conn,
+                    workspace_id=workspace_id,
+                    skill_id=archive_id,
+                    action="merge_duplicate",
+                    status="blocked",
+                    reason="duplicate merge archive requires filesystem archive snapshot",
+                    features={
+                        "archived_slug": archive_slug,
+                        "kept_skill_id": str(keep_id),
+                        "kept_slug": keep_slug,
+                        "filesystem_archive": filesystem_archive,
+                        "merge_probe_plan": _merge_probe_plan(
+                            from_skill_id=left,
+                            to_skill_id=right,
+                            from_slug=row["from_slug"],
+                            to_slug=row["to_slug"],
+                        ),
+                    },
+                )
+            )
+            continue
         if not await _set_lifecycle_state(
             conn,
             workspace_id,
@@ -564,6 +681,11 @@ async def _archive_duplicate_edges(
             from_state="active",
             to_state="archived",
         ):
+            _restore_files_after_failed_archive(
+                workspace_root=workspace_root,
+                archive_root=archive_root,
+                filesystem_archive=filesystem_archive,
+            )
             continue
         archived_skill_ids.add(archive_id)
         features = archive_rollup.features.to_json() if archive_rollup else {}
@@ -581,6 +703,7 @@ async def _archive_duplicate_edges(
                     "archived_slug": archive_slug,
                     "kept_skill_id": str(keep_id),
                     "kept_slug": keep_slug,
+                    "filesystem_archive": filesystem_archive,
                     "merge_probe_plan": _merge_probe_plan(
                         from_skill_id=left,
                         to_skill_id=right,
@@ -725,6 +848,8 @@ async def _enforce_active_budget(
     rollup_by_skill: dict[UUID, SkillUtilityRollupRecord],
     active_budget: int,
     max_archive: int,
+    workspace_root: Path | None,
+    archive_root: Path | None,
 ) -> list[CurationActionRecord]:
     rows = await conn.fetch(
         """
@@ -747,6 +872,29 @@ async def _enforce_active_budget(
     for row in rows:
         skill_id = row["skill_id"]
         rollup = rollup_by_skill.get(skill_id)
+        filesystem_archive = _archive_active_files_for_curation(
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            slug=row["slug"],
+        )
+        if filesystem_archive["status"] == "blocked":
+            actions.append(
+                await _insert_curation_action(
+                    conn,
+                    workspace_id=workspace_id,
+                    skill_id=skill_id,
+                    action="enforce_active_budget",
+                    status="blocked",
+                    reason="active budget archive requires filesystem archive snapshot",
+                    features={
+                        **(rollup.features.to_json() if rollup else {}),
+                        "utility_score": rollup.utility_score if rollup else row["utility_score"],
+                        "active_budget": active_budget,
+                        "filesystem_archive": filesystem_archive,
+                    },
+                )
+            )
+            continue
         if not await _set_lifecycle_state(
             conn,
             workspace_id,
@@ -754,6 +902,11 @@ async def _enforce_active_budget(
             from_state="active",
             to_state="archived",
         ):
+            _restore_files_after_failed_archive(
+                workspace_root=workspace_root,
+                archive_root=archive_root,
+                filesystem_archive=filesystem_archive,
+            )
             continue
         features = rollup.features.to_json() if rollup else {}
         actions.append(
@@ -768,6 +921,7 @@ async def _enforce_active_budget(
                     **features,
                     "utility_score": rollup.utility_score if rollup else row["utility_score"],
                     "active_budget": active_budget,
+                    "filesystem_archive": filesystem_archive,
                 },
             )
         )
@@ -918,6 +1072,108 @@ def _repair_objectives(action: str) -> list[str]:
             "prove positive marginal utility and context value before activation",
         ]
     return ["review curation signal before mutation"]
+
+
+def _archive_active_files_for_curation(
+    *,
+    workspace_root: Path | None,
+    archive_root: Path | None,
+    slug: str,
+) -> dict[str, Any]:
+    if not slug:
+        return {"status": "blocked", "reason": "missing_slug"}
+    if "/" in slug or "\\" in slug or ".." in slug:
+        return {"status": "blocked", "reason": "unsafe_slug"}
+    if workspace_root is None or archive_root is None:
+        return {"status": "blocked", "reason": "writer_roots_not_configured"}
+    active_path = workspace_root / "skills" / "autoskill" / slug
+    if not active_path.exists():
+        return {"status": "already_absent", "active_relative_path": f"skills/autoskill/{slug}"}
+    try:
+        snapshot = archive_active_skill_and_remove(
+            workspace_root,
+            archive_root,
+            slug=slug,
+            snapshot_id=f"curation-{uuid4()}",
+        )
+    except (FileExistsError, OSError, ValueError) as error:
+        return {
+            "status": "blocked",
+            "reason": f"{type(error).__name__}: {error}",
+            "active_relative_path": f"skills/autoskill/{slug}",
+        }
+    if snapshot is None:
+        return {"status": "already_absent", "active_relative_path": f"skills/autoskill/{slug}"}
+    return {
+        "status": "archived",
+        "active_relative_path": f"skills/autoskill/{slug}",
+        "archive_manifest_relative_path": snapshot.manifest_relative_path,
+        "archive_manifest_sha256": snapshot.manifest_sha256,
+        "archive_relative_path": snapshot.archive_relative_path,
+    }
+
+
+def _restore_files_after_failed_archive(
+    *,
+    workspace_root: Path | None,
+    archive_root: Path | None,
+    filesystem_archive: dict[str, Any],
+) -> None:
+    manifest_path = filesystem_archive.get("archive_manifest_relative_path")
+    if workspace_root is None or archive_root is None or not isinstance(manifest_path, str):
+        return
+    try:
+        rollback_active_skill(
+            workspace_root,
+            archive_root,
+            archive_manifest_relative_path=manifest_path,
+        )
+    except (FileExistsError, OSError, ValueError):
+        return
+
+
+def _restore_archived_files_for_promotion(
+    *,
+    workspace_root: Path | None,
+    archive_root: Path | None,
+    slug: str,
+) -> dict[str, Any]:
+    if not slug:
+        return {"status": "blocked", "reason": "missing_slug"}
+    if "/" in slug or "\\" in slug or ".." in slug:
+        return {"status": "blocked", "reason": "unsafe_slug"}
+    if workspace_root is None or archive_root is None:
+        return {"status": "blocked", "reason": "writer_roots_not_configured"}
+    active_path = workspace_root / "skills" / "autoskill" / slug
+    if active_path.exists():
+        return {
+            "status": "active_path_already_present",
+            "active_relative_path": f"skills/autoskill/{slug}",
+        }
+    try:
+        manifest_path = latest_archive_manifest_for_slug(archive_root, slug=slug)
+    except (OSError, ValueError) as error:
+        return {"status": "blocked", "reason": f"{type(error).__name__}: {error}"}
+    if manifest_path is None:
+        return {"status": "blocked", "reason": "archive_manifest_not_found"}
+    try:
+        restored = rollback_active_skill(
+            workspace_root,
+            archive_root,
+            archive_manifest_relative_path=manifest_path,
+        )
+    except (FileExistsError, OSError, ValueError) as error:
+        return {
+            "status": "blocked",
+            "reason": f"{type(error).__name__}: {error}",
+            "archive_manifest_relative_path": manifest_path,
+        }
+    return {
+        "status": "restored",
+        "archive_manifest_relative_path": manifest_path,
+        "active_relative_path": restored.active_relative_path,
+        "manifest_sha256": restored.manifest_sha256,
+    }
 
 
 async def _set_lifecycle_state(

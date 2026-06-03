@@ -16,6 +16,8 @@ from autoskill.services.writer import (
     WriterPolicyError,
     apply_staged_manifest,
     apply_staged_manifest_with_governance,
+    archive_active_skill_and_remove,
+    latest_archive_manifest_for_slug,
     resolve_contained,
     rollback_active_skill,
     rollback_active_skill_with_governance,
@@ -330,6 +332,39 @@ def test_writer_applies_staged_manifest_and_snapshots_previous_active(
     assert archived_manifest["schema"] == "autoskill.archive-manifest.v1"
     archived_skill = archive_root / applied.previous_snapshot.archive_relative_path / "SKILL.md"
     assert archived_skill.read_text(encoding="utf-8").startswith("# Old")
+
+
+def test_writer_archives_active_skill_and_removes_runtime_root(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    archive_root = workspace_root / ".autoskill" / "archive"
+    active_path = workspace_root / "skills" / "autoskill" / "autoskill-example"
+    active_path.mkdir(parents=True)
+    (active_path / "SKILL.md").write_text("# Old\n\n## WHEN\n- Old.\n", encoding="utf-8")
+
+    snapshot = archive_active_skill_and_remove(
+        workspace_root,
+        archive_root,
+        slug="autoskill-example",
+        snapshot_id="curation-archive",
+    )
+
+    assert snapshot is not None
+    assert not active_path.exists()
+    assert latest_archive_manifest_for_slug(
+        archive_root,
+        slug="autoskill-example",
+    ) == snapshot.manifest_relative_path
+    archived_manifest = verify_archive_manifest(archive_root, snapshot.manifest_relative_path)
+    assert archived_manifest["schema"] == "autoskill.archive-manifest.v1"
+
+    restored = rollback_active_skill(
+        workspace_root,
+        archive_root,
+        archive_manifest_relative_path=snapshot.manifest_relative_path,
+    )
+
+    assert restored.active_relative_path == "skills/autoskill/autoskill-example"
+    assert (active_path / "SKILL.md").read_text(encoding="utf-8").startswith("# Old")
 
 
 def test_writer_applies_and_rolls_back_support_artifacts_with_governance(

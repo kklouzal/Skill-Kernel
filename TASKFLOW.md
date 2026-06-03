@@ -631,6 +631,17 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   sidecar`, `uv run pytest -q` with 268 tests, `uv run python -m compileall -q
   sidecar`, `git diff --check`, `npm test --prefix plugin/autoskill` with 18
   tests, and `npm run check --prefix plugin/autoskill`.
+- Utility curation archive/promotion now keeps filesystem state aligned with DB
+  lifecycle: archive, active-budget archive, and duplicate-merge archive actions
+  snapshot active skill directories into `.autoskill/archive` and remove them
+  from `skills/autoskill`, promotion restores the latest archive manifest before
+  moving DB state back to active, and curation records filesystem archive or
+  restore metadata on each action for rollback evidence. Validation passed with
+  focused utility/writer/worker/admin tests, focused ruff checks, full `uv run
+  ruff check sidecar`, `uv run pytest -q` with 270 tests, `uv run python -m
+  compileall -q sidecar`, `git diff --check`, `npm test --prefix
+  plugin/autoskill` with 18 tests, and `npm run check --prefix
+  plugin/autoskill`.
 
 ## Next Gates
 

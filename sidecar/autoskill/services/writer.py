@@ -411,6 +411,43 @@ def archive_active_skill(
     )
 
 
+def archive_active_skill_and_remove(
+    workspace_root: Path,
+    archive_root: Path,
+    *,
+    slug: str,
+    snapshot_id: str,
+) -> ArchiveSnapshot | None:
+    """Snapshot an active autoskill directory, then remove it from the active root."""
+
+    snapshot = archive_active_skill(
+        workspace_root,
+        archive_root,
+        slug=slug,
+        snapshot_id=snapshot_id,
+    )
+    if snapshot is None:
+        return None
+    _remove_path(resolve_contained(workspace_root, f"skills/autoskill/{slug}"))
+    return snapshot
+
+
+def latest_archive_manifest_for_slug(archive_root: Path, *, slug: str) -> str | None:
+    if not SAFE_SKILL_SLUG.fullmatch(slug):
+        raise WriterPolicyError("skill slug is not a safe autoskill slug")
+    slug_archive_root = resolve_contained(archive_root, slug)
+    if not slug_archive_root.exists():
+        return None
+    manifests = sorted(
+        slug_archive_root.glob("*/autoskill.archive-manifest.json"),
+        key=lambda path: (path.stat().st_mtime_ns, path.parent.name),
+        reverse=True,
+    )
+    if not manifests:
+        return None
+    return manifests[0].relative_to(archive_root).as_posix()
+
+
 def rollback_active_skill(
     workspace_root: Path,
     archive_root: Path,
