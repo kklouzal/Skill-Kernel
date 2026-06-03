@@ -611,6 +611,15 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   -q` with 265 tests, `uv run python -m compileall -q sidecar`, `git diff
   --check`, `npm test --prefix plugin/autoskill` with 18 tests, and `npm run
   check --prefix plugin/autoskill`.
+- External import materialization now emits canonical SkillIR candidates instead
+  of ad-hoc manifest dictionaries: imported external skills get deterministic
+  `external-*` slugs/names, compliant bounded descriptions, complete SkillIR
+  sections, read-only/no-activation boundaries, evidence links, and separate
+  content-safe external-source metadata. Validation passed with focused external
+  import/worker tests, focused ruff checks, full `uv run ruff check sidecar`,
+  `uv run pytest -q` with 265 tests, `uv run python -m compileall -q sidecar`,
+  `git diff --check`, `npm test --prefix plugin/autoskill` with 18 tests, and
+  `npm run check --prefix plugin/autoskill`.
 
 ## Next Gates
 

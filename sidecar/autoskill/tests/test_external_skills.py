@@ -320,7 +320,17 @@ def test_external_skill_import_materialization_requires_operator_approval() -> N
     assert allowed.allowed is True
     assert allowed.candidate["mode"] == "stage_only"
     assert allowed.candidate["mutates_external_root"] is False
+    assert allowed.candidate["skill_ir"]["schema"] == "skillir.v1"
     assert allowed.candidate["skill_ir"]["slug"] == "external-pdf-table-cleanup"
+    assert allowed.candidate["skill_ir"]["name"] == "external-pdf-table-cleanup"
+    assert "use when" in allowed.candidate["skill_ir"]["description"]
+    assert "not for" in allowed.candidate["skill_ir"]["description"]
+    assert allowed.candidate["skill_ir"]["steps"]
+    assert allowed.candidate["skill_ir"]["never"]
+    assert allowed.candidate["external_source"]["external_skill_id"] == str(
+        store.records[0].external_skill_id
+    )
+    assert allowed.candidate["external_source"]["root_path_hash"] == "root-hash"
     assert store.review_actions[-1].status == "completed"
 
 
