@@ -119,6 +119,14 @@ class EventStore(Protocol):
     ) -> list[EventRecord]:
         """Return a bounded, content-safe event history read model."""
 
+    async def get_event(
+        self,
+        *,
+        event_id: UUID,
+        workspace_key: str | None = None,
+    ) -> EventRecord | None:
+        """Fetch one content-safe event microscope record."""
+
 
 class NullEventStore:
     def __init__(self) -> None:
@@ -149,6 +157,19 @@ class NullEventStore:
             if len(records) >= bounded_limit:
                 break
         return records
+
+    async def get_event(
+        self,
+        *,
+        event_id: UUID,
+        workspace_key: str | None = None,
+    ) -> EventRecord | None:
+        for event in reversed(self.events):
+            if event.event_id == event_id and (
+                workspace_key is None or event.workspace_id == workspace_key
+            ):
+                return _record_from_envelope(event)
+        return None
 
 
 class AsyncpgEventStore(AsyncpgPoolOwner):
@@ -209,6 +230,29 @@ class AsyncpgEventStore(AsyncpgPoolOwner):
                 bounded_limit,
             )
         return [EventRecord.from_row(row) for row in rows]
+
+    async def get_event(
+        self,
+        *,
+        event_id: UUID,
+        workspace_key: str | None = None,
+    ) -> EventRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                  re.*,
+                  w.external_key AS workspace_key
+                FROM autoskill.raw_events re
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE re.event_id = $1
+                  AND ($2::text IS NULL OR w.external_key = $2)
+                """,
+                event_id,
+                workspace_key,
+            )
+        return EventRecord.from_row(row) if row else None
 
 
 async def _insert_event(conn: asyncpg.Connection, workspace_id: UUID, event: EventEnvelope) -> bool:

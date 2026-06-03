@@ -143,6 +143,14 @@ class ObservatoryAdminStore(Protocol):
     ) -> AdminComparisonRecord:
         """Persist one read-only comparison result."""
 
+    async def get_comparison(
+        self,
+        *,
+        comparison_id: UUID,
+        workspace_key: str | None = None,
+    ) -> AdminComparisonRecord | None:
+        """Fetch one saved baseline comparison."""
+
     async def create_diagnostic_bundle(
         self,
         *,
@@ -203,6 +211,19 @@ class NullObservatoryAdminStore:
         )
         self.comparisons.append(record)
         return record
+
+    async def get_comparison(
+        self,
+        *,
+        comparison_id: UUID,
+        workspace_key: str | None = None,
+    ) -> AdminComparisonRecord | None:
+        for record in reversed(self.comparisons):
+            if record.comparison_id == comparison_id and (
+                workspace_key is None or record.workspace_key == workspace_key
+            ):
+                return record
+        return None
 
     async def create_diagnostic_bundle(
         self,
@@ -303,6 +324,27 @@ class AsyncpgObservatoryAdminStore(AsyncpgPoolOwner):
                 workspace_key,
             )
         return AdminComparisonRecord.from_row(row)
+
+    async def get_comparison(
+        self,
+        *,
+        comparison_id: UUID,
+        workspace_key: str | None = None,
+    ) -> AdminComparisonRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT acr.*, w.external_key AS workspace_key
+                FROM autoskill.admin_comparison_runs acr
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE acr.comparison_id = $1
+                  AND ($2::text IS NULL OR w.external_key = $2)
+                """,
+                comparison_id,
+                workspace_key,
+            )
+        return AdminComparisonRecord.from_row(row) if row else None
 
     async def create_diagnostic_bundle(
         self,

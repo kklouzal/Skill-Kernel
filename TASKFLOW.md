@@ -983,6 +983,22 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   read models: `uv run pytest -q sidecar/autoskill/tests/test_observatory_api.py`
   passed with `11 passed`, and focused `uv run ruff check` passed for the edited
   API, DB, and Observatory test files.
+- Observatory object-microscope remediation is implemented for the generic
+  `/admin/api/v1/objects/{object_type}/{object_id}` route: captured events,
+  saved baseline comparisons, and diagnostic bundles now resolve from persisted
+  read-model stores before falling back to snapshot-derived placeholder
+  diagnostics.
+- Validation passed for the Observatory object-microscope remediation:
+  focused Observatory API tests passed `11 passed`, focused ruff passed for the
+  edited API/DB/test files, `uv run ruff check sidecar scripts`, `uv run
+  pytest -q` with 314 passing tests, `uv run python -m compileall -q sidecar
+  scripts`, `npm test --prefix plugin/autoskill` with 18 passing tests,
+  `npm run build --prefix sidecar/autoskill/observatory`, `docker compose
+  config --quiet`, and `git diff --check` passed. A compose/Postgres smoke
+  migrated the schema, inserted a redacted event, created a saved comparison and
+  diagnostic bundle, verified all three through `/admin/api/v1/objects/...`,
+  confirmed `raw_available=false`, deleted the smoke workspace, and stopped
+  Postgres without removing the persistent volume.
 
 ## Next Gates
 

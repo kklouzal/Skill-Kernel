@@ -654,7 +654,9 @@ Deliverables:
   now reads bounded redacted `raw_events` metadata, trace search reads bounded
   `trace_spans` summaries, saved comparisons persist in
   `admin_comparison_runs`, and diagnostic bundles persist redacted descriptors
-  in `admin_diagnostic_bundles`;
+  in `admin_diagnostic_bundles`. The generic object microscope route now
+  resolves captured events, saved baseline comparisons, and diagnostic bundles
+  from those stores instead of falling back to placeholder snapshot objects;
 - live updates; implemented with `/admin/live` WebSocket and `/admin/live-sse`
   fallback, plus frontend fallback logic and snapshot reload handling;
 - operator action gateway; implemented as audited, policy-checked action
@@ -678,9 +680,18 @@ Acceptance:
 - focused Observatory API tests cover summary/search, bounded collection
   envelopes, readiness, admin auth, audited action receipts, and
   confirmation-required high-impact denial, plus event/trace read models,
-  persisted comparisons, and persisted diagnostic bundle retrieval;
+  persisted comparisons, persisted diagnostic bundle retrieval, and generic
+  object microscope routing for persisted captured-event/comparison/bundle
+  records;
 - validation evidence for the broker-decision drill-down slice passed on the
   final tree: focused Observatory tests `9 passed`, `uv run ruff check sidecar`,
   `uv run pytest` with 312 tests, `uv run python -m compileall -q sidecar`, a
   compose/Postgres smoke of `/admin/api/v1/broker/decisions`, `docker compose
   config --quiet`, and `git diff --check`.
+- validation evidence for the persisted object-microscope slice passed on the
+  final tree: focused Observatory tests `11 passed`, `uv run ruff check sidecar
+  scripts`, `uv run pytest -q` with 314 tests, `uv run python -m compileall -q
+  sidecar scripts`, `npm test --prefix plugin/autoskill` with 18 tests,
+  `npm run build --prefix sidecar/autoskill/observatory`, a compose/Postgres
+  smoke of persisted captured-event/comparison/bundle object routes, `docker
+  compose config --quiet`, and `git diff --check`.

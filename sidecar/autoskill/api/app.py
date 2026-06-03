@@ -4417,6 +4417,111 @@ def create_app(
                 return item
         return None
 
+    def _uuid_or_404(value: str, object_label: str) -> UUID:
+        try:
+            return UUID(value)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail=f"{object_label} not found",
+            ) from exc
+
+    def _event_microscope(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        upstream = []
+        if payload.get("trace_id"):
+            upstream.append({"object_type": "trace", "object_id": payload["trace_id"]})
+        if payload.get("parent_span_id"):
+            upstream.append({"object_type": "span", "object_id": payload["parent_span_id"]})
+        downstream = []
+        if payload.get("span_id"):
+            downstream.append({"object_type": "span", "object_id": payload["span_id"]})
+        return {
+            **payload,
+            "timeline": [
+                {
+                    "at": payload["occurred_at"],
+                    "event": payload["event_type"],
+                    "source": payload["source"],
+                }
+            ],
+            "provenance": {
+                "upstream": upstream,
+                "downstream": downstream,
+            },
+            "effects": {
+                "payload_hash": payload["payload_hash"],
+                "payload_keys": payload["payload_keys"],
+                "redaction_state": payload["redaction_state"],
+            },
+            "diagnostics": {
+                "trust": payload["trust"],
+                "taint": payload["taint"],
+                "session_id": payload["session_id"],
+                "turn_id": payload["turn_id"],
+                "plugin_version": payload["plugin_version"],
+                "openclaw_version": payload["openclaw_version"],
+            },
+            "audit": {"links": [], "chain_visible": False},
+        }
+
+    def _comparison_microscope(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        return {
+            **payload,
+            "timeline": [
+                {
+                    "at": payload["created_at"],
+                    "event": "comparison_saved",
+                    "comparison_kind": payload["comparison_kind"],
+                }
+            ],
+            "provenance": {
+                "upstream": [payload["left"], payload["right"]],
+                "downstream": [],
+            },
+            "effects": {
+                "differences": payload["differences"],
+                "mutates_policy": False,
+            },
+            "diagnostics": {
+                "actor_id": payload["actor_id"],
+                "result_summary": payload["result_summary"],
+            },
+            "audit": {"links": [], "chain_visible": True},
+        }
+
+    def _diagnostic_bundle_microscope(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        return {
+            **payload,
+            "timeline": [
+                {
+                    "at": payload["created_at"],
+                    "event": "diagnostic_bundle_created",
+                    "redaction_level": payload["redaction_level"],
+                }
+            ],
+            "provenance": {
+                "upstream": [payload["scope"]],
+                "downstream": [
+                    {
+                        "object_type": "storage_uri",
+                        "object_id": payload["storage_uri"],
+                    }
+                ],
+            },
+            "effects": {
+                "manifest": payload["manifest"],
+                "storage_uri": payload["storage_uri"],
+            },
+            "diagnostics": {
+                "actor_id": payload["actor_id"],
+                "expires_at": payload["expires_at"],
+            },
+            "audit": {"links": [], "chain_visible": True},
+        }
+
     async def _record_observatory_action(
         request: ObservatoryActionRequest,
         authorization: str | None,
@@ -4970,6 +5075,27 @@ def create_app(
         window_minutes: int = 60,
     ) -> ObservatoryObjectResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
+        if object_type in {"captured_event", "event"}:
+            event_id = _uuid_or_404(object_id, "captured event")
+            event = await store.get_event(event_id=event_id, workspace_key=workspace_id)
+            if event is not None:
+                return ObservatoryObjectResponse(object=_event_microscope(event))
+        if object_type in {"baseline_comparison", "comparison"}:
+            comparison_id = _uuid_or_404(object_id, "baseline comparison")
+            comparison = await observatory_admin.get_comparison(
+                comparison_id=comparison_id,
+                workspace_key=workspace_id,
+            )
+            if comparison is not None:
+                return ObservatoryObjectResponse(object=_comparison_microscope(comparison))
+        if object_type in {"diagnostic_bundle", "bundle"}:
+            bundle_id = _uuid_or_404(object_id, "diagnostic bundle")
+            bundle = await observatory_admin.get_diagnostic_bundle(
+                bundle_id=bundle_id,
+                workspace_key=workspace_id,
+            )
+            if bundle is not None:
+                return ObservatoryObjectResponse(object=_diagnostic_bundle_microscope(bundle))
         snapshot = await _observatory_snapshot(
             workspace_id=workspace_id,
             window_minutes=window_minutes,
