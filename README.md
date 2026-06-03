@@ -100,6 +100,12 @@ Run the deterministic scanner red-team smoke:
 python scripts/autoskill_red_team.py --output /tmp/autoskill-red-team.json
 ```
 
+Emit the production acceptance crosswalk:
+
+```bash
+python scripts/autoskill_acceptance.py --json
+```
+
 List content-safe broker replay candidates from retrieval telemetry:
 
 ```bash

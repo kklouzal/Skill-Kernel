@@ -787,6 +787,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   check --prefix plugin/autoskill`, `docker compose config --quiet`, and a
   compose Postgres smoke proving the review route reads one real candidate
   revision, one topology proposal, and one planned proposal-gate evaluation.
+- Section 31 production acceptance criteria now have an executable crosswalk:
+  `scripts/autoskill_acceptance.py --json` emits a deterministic acceptance
+  report mapping every concrete production bullet from the duplicated-number
+  criteria list plus the seven context-management criteria to repo evidence,
+  validation commands, tests, or control surfaces. The report fails closed if a
+  criterion has missing evidence, duplicate IDs, empty text, or placeholder
+  evidence, and its focused test locks the current 44 production criteria plus
+  seven context criteria. Validation passed with focused acceptance-report
+  tests, focused ruff checks, `python scripts/autoskill_acceptance.py --json`
+  reporting `ready=true`, full `uv run ruff check sidecar scripts`, `uv run
+  pytest -q` with 289 tests, `uv run python -m compileall -q sidecar scripts`,
+  `git diff --check`, `npm test --prefix plugin/autoskill` with 18 tests, `npm
+  run check --prefix plugin/autoskill`, and `docker compose config --quiet`.
 
 ## Next Gates
 
