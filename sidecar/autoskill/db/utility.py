@@ -305,6 +305,25 @@ class AsyncpgUtilityStore(AsyncpgPoolOwner):
                         )
                     )
                     continue
+                contract_gate = await _latest_contract_gate(conn, rollup.skill_id)
+                if contract_gate["status"] != "passed":
+                    actions.append(
+                        await _insert_curation_action(
+                            conn,
+                            workspace_id=workspace_id,
+                            skill_id=rollup.skill_id,
+                            action="promote_archive",
+                            status="blocked",
+                            reason="archived promotion requires current contracts valid",
+                            features={
+                                **rollup.features.to_json(),
+                                "utility_score": rollup.utility_score,
+                                "promotion_min_retrieval": promotion_min_retrieval,
+                                "contract_gate": contract_gate,
+                            },
+                        )
+                    )
+                    continue
                 filesystem_promotion = _restore_archived_files_for_promotion(
                     workspace_root=self.workspace_root,
                     archive_root=self.archive_root,
@@ -1213,6 +1232,42 @@ async def _latest_evaluator_passed(conn: asyncpg.Connection, skill_id: UUID) -> 
         skill_id,
     )
     return status == "passed"
+
+
+async def _latest_contract_gate(conn: asyncpg.Connection, skill_id: UUID) -> dict[str, Any]:
+    row = await conn.fetchrow(
+        """
+        WITH latest AS (
+          SELECT skill_version_id
+          FROM autoskill.skill_versions
+          WHERE skill_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        )
+        SELECT
+          count(ec.environment_contract_id)::int AS total,
+          count(ec.environment_contract_id) FILTER (
+            WHERE ec.last_checked_at IS NULL
+          )::int AS stale,
+          count(ec.environment_contract_id) FILTER (
+            WHERE ec.status NOT IN ('valid', 'false_positive')
+          )::int AS blocking
+        FROM latest
+        LEFT JOIN autoskill.environment_contracts ec
+          ON ec.skill_version_id = latest.skill_version_id
+        """,
+        skill_id,
+    )
+    total = int(row["total"] or 0) if row is not None else 0
+    stale = int(row["stale"] or 0) if row is not None else 0
+    blocking = int(row["blocking"] or 0) if row is not None else 0
+    status = "passed" if stale == 0 and blocking == 0 else "blocked"
+    return {
+        "status": status,
+        "total": total,
+        "stale": stale,
+        "blocking": blocking,
+    }
 
 
 async def _load_skill_feature_rows(

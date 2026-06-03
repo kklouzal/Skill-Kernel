@@ -1914,6 +1914,7 @@ def test_worker_health_api_uses_configured_pool_concurrency(monkeypatch) -> None
 def test_worker_dispatches_utility_and_curation_jobs() -> None:
     jobs = MemoryJobStore()
     utility = MemoryUtilityWorkerStore()
+    contracts = MemoryContractWorkerStore()
 
     async def run():
         await jobs.enqueue_job(
@@ -1942,6 +1943,7 @@ def test_worker_dispatches_utility_and_curation_jobs() -> None:
             evidence=MemoryEvidenceWorkerStore(),
             embeddings=MemoryPendingEmbeddingStore(),
             utility=utility,
+            contracts=contracts,
         )
         first = await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
         second = await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
@@ -1954,7 +1956,9 @@ def test_worker_dispatches_utility_and_curation_jobs() -> None:
     assert second.status == "succeeded"
     assert second.output["archived"] == 1
     assert second.output["promoted"] == 1
+    assert second.output["contract_preflight"]["violated"] == 1
     assert utility.rollup_calls == [{"workspace_key": "dev-01", "limit": 17}]
+    assert contracts.drift_calls == [{"workspace_key": "dev-01", "limit": 250}]
     assert utility.curation_calls == [
         {
             "workspace_key": "dev-01",

@@ -868,6 +868,8 @@ class CurationRunRequest(BaseModel):
     max_promote: int = 3
     active_budget: int | None = None
     max_merge: int = 5
+    contract_preflight: bool = True
+    contract_preflight_limit: int = 250
 
 
 class CurationRunResponse(BaseModel):
@@ -877,6 +879,7 @@ class CurationRunResponse(BaseModel):
     merged: int
     planned: int = 0
     actions: list[dict[str, object]]
+    contract_preflight: dict[str, object] | None = None
 
 
 class ContractExtractRequest(BaseModel):
@@ -4590,6 +4593,13 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
     ) -> CurationRunResponse:
         _require_control_auth(authorization)
+        contract_preflight = None
+        if request.contract_preflight:
+            preflight = await contracts.run_drift_checks(
+                workspace_key=request.workspace_id,
+                limit=max(1, min(request.contract_preflight_limit, 1000)),
+            )
+            contract_preflight = preflight.to_json()
         result = await utility.run_curation(
             workspace_key=request.workspace_id,
             archive_threshold=request.archive_threshold,
@@ -4601,7 +4611,9 @@ def create_app(
             ),
             max_merge=max(0, min(request.max_merge, 100)),
         )
-        return CurationRunResponse(**result.to_json())
+        payload = result.to_json()
+        payload["contract_preflight"] = contract_preflight
+        return CurationRunResponse(**payload)
 
     @app.post("/v1/contracts/extract", response_model=ContractExtractResponse)
     async def extract_contracts(

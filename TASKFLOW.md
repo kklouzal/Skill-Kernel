@@ -642,6 +642,15 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   compileall -q sidecar`, `git diff --check`, `npm test --prefix
   plugin/autoskill` with 18 tests, and `npm run check --prefix
   plugin/autoskill`.
+- Active-bank curation now performs drift preflight through the contract store
+  before curation runs from the API or worker, surfaces the preflight result in
+  curation output, and blocks archived promotion when the latest SkillIR
+  contracts are stale or not valid/false-positive. Validation passed with
+  focused utility/worker/admin/contracts tests, focused ruff checks, full `uv
+  run ruff check sidecar`, `uv run pytest -q` with 271 tests, `uv run python -m
+  compileall -q sidecar`, `git diff --check`, `npm test --prefix
+  plugin/autoskill` with 18 tests, and `npm run check --prefix
+  plugin/autoskill`.
 
 ## Next Gates
 

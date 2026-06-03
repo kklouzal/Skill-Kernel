@@ -5,6 +5,7 @@ from uuid import uuid4
 from autoskill.db.utility import (
     SkillUtilityRollupRecord,
     _archive_active_files_for_curation,
+    _latest_contract_gate,
     _merge_probe_plan,
     _plan_improvements_and_splits,
     _restore_archived_files_for_promotion,
@@ -163,6 +164,21 @@ def test_curation_archive_helpers_move_active_files_to_archive(tmp_path) -> None
 
     assert restored["status"] == "restored"
     assert (active_path / "SKILL.md").read_text(encoding="utf-8").startswith("# Old")
+
+
+def test_promotion_contract_gate_blocks_stale_or_violated_contracts() -> None:
+    class FakeConn:
+        async def fetchrow(self, _query, *_args):
+            return {"total": 3, "stale": 1, "blocking": 1}
+
+    gate = asyncio.run(_latest_contract_gate(FakeConn(), uuid4()))
+
+    assert gate == {
+        "status": "blocked",
+        "total": 3,
+        "stale": 1,
+        "blocking": 1,
+    }
 
 
 def test_duplicate_merge_probe_plan_has_deterministic_trials() -> None:

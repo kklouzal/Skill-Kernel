@@ -785,6 +785,19 @@ async def _run_curation(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
     if workspace is None:
         raise ValueError("curation requires workspace_id")
     payload = _payload_dict(job.payload)
+    contract_preflight = None
+    if bool(payload.get("contract_preflight", True)) and stores.contracts is not None:
+        contract_preflight_result = await stores.contracts.run_drift_checks(
+            workspace_key=workspace,
+            limit=_payload_int(
+                job.payload,
+                "contract_preflight_limit",
+                default=250,
+                minimum=1,
+                maximum=1000,
+            ),
+        )
+        contract_preflight = contract_preflight_result.to_json()
     result = await stores.utility.run_curation(
         workspace_key=workspace,
         archive_threshold=float(payload.get("archive_threshold", -1.0)),
@@ -804,7 +817,9 @@ async def _run_curation(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
         ),
         max_merge=_payload_int(job.payload, "max_merge", default=5, minimum=0, maximum=100),
     )
-    return result.to_json()
+    payload = result.to_json()
+    payload["contract_preflight"] = contract_preflight
+    return payload
 
 
 async def _run_usage_aggregate(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
