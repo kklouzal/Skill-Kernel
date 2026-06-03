@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -54,6 +55,62 @@ class EvaluationRunResult:
         }
 
 
+@dataclass(frozen=True)
+class EvaluationReviewRecord:
+    workspace_id: UUID | None
+    workspace_key: str | None
+    evaluation_id: UUID
+    skill_version_id: UUID | None
+    skill_slug: str | None
+    skill_version: int | None
+    executor_profile_id: UUID | None
+    category: str
+    status: str
+    result_summary: dict[str, Any]
+    created_at: datetime
+
+    @classmethod
+    def from_row(cls, row: asyncpg.Record | dict[str, Any]) -> EvaluationReviewRecord:
+        result = _json_dict(row["result"])
+        return cls(
+            workspace_id=_row_get(row, "workspace_id"),
+            workspace_key=_row_get(row, "workspace_key"),
+            evaluation_id=row["evaluation_id"],
+            skill_version_id=_row_get(row, "skill_version_id"),
+            skill_slug=_row_get(row, "skill_slug"),
+            skill_version=_row_get(row, "skill_version"),
+            executor_profile_id=_row_get(row, "executor_profile_id"),
+            category=row["category"],
+            status=row["status"],
+            result_summary={
+                "candidate_slug": result.get("candidate_slug"),
+                "required_gates": result.get("required_gates"),
+                "status": result.get("status"),
+                "summary": result.get("summary"),
+            },
+            created_at=row["created_at"],
+        )
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "workspace_id": str(self.workspace_id) if self.workspace_id else None,
+            "workspace_key": self.workspace_key,
+            "evaluation_id": str(self.evaluation_id),
+            "skill_version_id": (
+                str(self.skill_version_id) if self.skill_version_id else None
+            ),
+            "skill_slug": self.skill_slug,
+            "skill_version": self.skill_version,
+            "executor_profile_id": (
+                str(self.executor_profile_id) if self.executor_profile_id else None
+            ),
+            "category": self.category,
+            "status": self.status,
+            "result_summary": self.result_summary,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
 class EvaluationStore(Protocol):
     async def run_pending_proposal_gates(
         self,
@@ -66,6 +123,15 @@ class EvaluationStore(Protocol):
     ) -> EvaluationRunResult:
         """Execute deterministic proposal-gate evaluations."""
 
+    async def list_evaluation_reviews(
+        self,
+        *,
+        workspace_key: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[EvaluationReviewRecord]:
+        """List proposal evaluation statuses for operator review."""
+
     async def invalidate_objects(
         self,
         *,
@@ -76,6 +142,9 @@ class EvaluationStore(Protocol):
 
 
 class NullEvaluationStore:
+    def __init__(self) -> None:
+        self.reviews: list[EvaluationReviewRecord] = []
+
     async def run_pending_proposal_gates(
         self,
         *,
@@ -94,6 +163,20 @@ class NullEvaluationStore:
             passed=0,
             evaluations=[],
         )
+
+    async def list_evaluation_reviews(
+        self,
+        *,
+        workspace_key: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[EvaluationReviewRecord]:
+        reviews = self.reviews
+        if workspace_key is not None:
+            reviews = [review for review in reviews if review.workspace_key == workspace_key]
+        if status is not None:
+            reviews = [review for review in reviews if review.status == status]
+        return reviews[: max(1, min(limit, 250))]
 
     async def invalidate_objects(
         self,
@@ -179,6 +262,45 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
             passed=sum(1 for item in items if item.status == "passed"),
             evaluations=items,
         )
+
+    async def list_evaluation_reviews(
+        self,
+        *,
+        workspace_key: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[EvaluationReviewRecord]:
+        pool = await self._get_pool()
+        rows = await pool.fetch(
+            """
+            SELECT
+              w.workspace_id,
+              w.external_key AS workspace_key,
+              ev.evaluation_id,
+              ev.skill_version_id,
+              s.slug AS skill_slug,
+              sv.version AS skill_version,
+              ev.executor_profile_id,
+              ev.category,
+              ev.status,
+              ev.result,
+              ev.created_at
+            FROM autoskill.evaluations ev
+            JOIN autoskill.workspaces w USING (workspace_id)
+            LEFT JOIN autoskill.skill_versions sv
+              ON sv.skill_version_id = ev.skill_version_id
+            LEFT JOIN autoskill.skills s
+              ON s.skill_id = sv.skill_id
+            WHERE ($1::text IS NULL OR w.external_key = $1)
+              AND ($2::text IS NULL OR ev.status = $2)
+            ORDER BY ev.created_at DESC, ev.evaluation_id DESC
+            LIMIT $3
+            """,
+            workspace_key,
+            status,
+            max(1, min(limit, 250)),
+        )
+        return [EvaluationReviewRecord.from_row(row) for row in rows]
 
     async def invalidate_objects(
         self,
@@ -614,6 +736,15 @@ def _json_dict(value: object) -> dict[str, Any]:
     if isinstance(value, str):
         return json.loads(value)
     return {}
+
+
+def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:
+    if isinstance(row, dict):
+        return row.get(key)
+    try:
+        return row[key]
+    except KeyError:
+        return None
 
 
 def _probe_evidence_ids(probes: list[dict[str, Any]]) -> list[str]:

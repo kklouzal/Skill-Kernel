@@ -276,6 +276,15 @@ class TopologyStore(Protocol):
     ) -> TopologyBrokerTrialScoreResult:
         """Record deterministic broker replay/canary trial pass/fail results."""
 
+    async def list_operations(
+        self,
+        *,
+        workspace_key: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[SkillGraphOperationRecord]:
+        """List topology proposals and operations for operator review."""
+
     async def metrics(
         self,
         *,
@@ -592,6 +601,25 @@ class NullTopologyStore:
             updated_trials=updated_trials,
         )
 
+    async def list_operations(
+        self,
+        *,
+        workspace_key: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[SkillGraphOperationRecord]:
+        operations = [
+            operation
+            for operation in self.operations
+            if (workspace_key is None or operation.workspace_key == workspace_key)
+            and (status is None or operation.status == status)
+        ]
+        return sorted(
+            operations,
+            key=lambda item: (item.updated_at, item.created_at),
+            reverse=True,
+        )[: max(1, min(limit, 250))]
+
     async def metrics(
         self,
         *,
@@ -651,6 +679,30 @@ class NullTopologyStore:
 
 
 class AsyncpgTopologyStore(AsyncpgPoolOwner):
+    async def list_operations(
+        self,
+        *,
+        workspace_key: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[SkillGraphOperationRecord]:
+        pool = await self._get_pool()
+        rows = await pool.fetch(
+            """
+            SELECT o.*, w.external_key AS workspace_key
+            FROM autoskill.skill_graph_operations o
+            JOIN autoskill.workspaces w USING (workspace_id)
+            WHERE ($1::text IS NULL OR w.external_key = $1)
+              AND ($2::text IS NULL OR o.status = $2)
+            ORDER BY o.updated_at DESC, o.created_at DESC, o.skill_graph_operation_id DESC
+            LIMIT $3
+            """,
+            workspace_key,
+            status,
+            max(1, min(limit, 250)),
+        )
+        return [SkillGraphOperationRecord.from_row(row) for row in rows]
+
     async def record_operation(
         self,
         *,

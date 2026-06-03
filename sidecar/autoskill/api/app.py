@@ -866,6 +866,14 @@ class EvaluationRunResponse(BaseModel):
     evaluations: list[dict[str, object]]
 
 
+class ProposalReviewResponse(BaseModel):
+    workspace_id: str | None
+    candidate_revisions: list[dict[str, object]]
+    topology_operations: list[dict[str, object]]
+    evaluations: list[dict[str, object]]
+    summary: dict[str, object]
+
+
 class UtilityRollupRequest(BaseModel):
     workspace_id: str
     limit: int = 250
@@ -1785,6 +1793,15 @@ def _require_control_auth(authorization: str | None) -> None:
             status_code=http_status.HTTP_401_UNAUTHORIZED,
             detail="invalid control authorization",
         )
+
+
+def _count_by(items: list[dict[str, object]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = item.get(key)
+        label = str(value) if value is not None else "none"
+        counts[label] = counts.get(label, 0) + 1
+    return counts
 
 
 def _resolve_workspace_child(workspace_root: Path, configured_path: Path) -> Path:
@@ -4643,6 +4660,66 @@ def create_app(
                 persistence_payload["transaction"] = transaction.to_json()
             payload["persistence"] = persistence_payload
         return CandidateProposalResponse(**payload)
+
+    @app.get("/v1/proposals/review", response_model=ProposalReviewResponse)
+    async def review_proposals(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str | None = None,
+        candidate_lifecycle_state: str | None = "candidate",
+        topology_status: str | None = None,
+        evaluation_status: str | None = None,
+        limit: int = 100,
+    ) -> ProposalReviewResponse:
+        _require_control_auth(authorization)
+        bounded_limit = max(1, min(limit, 250))
+        candidate_rows = await candidates.list_candidate_reviews(
+            workspace_key=workspace_id,
+            lifecycle_state=candidate_lifecycle_state,
+            limit=bounded_limit,
+        )
+        topology_rows = await topology.list_operations(
+            workspace_key=workspace_id,
+            status=topology_status,
+            limit=bounded_limit,
+        )
+        evaluation_rows = await evaluations.list_evaluation_reviews(
+            workspace_key=workspace_id,
+            status=evaluation_status,
+            limit=bounded_limit,
+        )
+        candidate_payload = [row.to_json() for row in candidate_rows]
+        topology_payload = [row.to_json() for row in topology_rows]
+        evaluation_payload = [row.to_json() for row in evaluation_rows]
+        return ProposalReviewResponse(
+            workspace_id=workspace_id,
+            candidate_revisions=candidate_payload,
+            topology_operations=topology_payload,
+            evaluations=evaluation_payload,
+            summary={
+                "candidate_revision_count": len(candidate_payload),
+                "candidate_lifecycle_states": _count_by(
+                    candidate_payload,
+                    "lifecycle_state",
+                ),
+                "candidate_scanner_statuses": _count_by(
+                    candidate_payload,
+                    "scanner_status",
+                ),
+                "candidate_evaluator_statuses": _count_by(
+                    candidate_payload,
+                    "evaluator_status",
+                ),
+                "topology_operation_count": len(topology_payload),
+                "topology_operation_kinds": _count_by(
+                    topology_payload,
+                    "operation_kind",
+                ),
+                "topology_statuses": _count_by(topology_payload, "status"),
+                "evaluation_count": len(evaluation_payload),
+                "evaluation_statuses": _count_by(evaluation_payload, "status"),
+                "review_surface": "section_30_phase_12",
+            },
+        )
 
     @app.post(
         "/v1/skillir/migrations/propose",

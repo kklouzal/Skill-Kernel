@@ -37,6 +37,8 @@ Implemented now:
 - staged writer apply/rollback, provenance traversal, revocation invalidation, canary freeze, and mutation-worker rollback paths;
 - topology proposal, trial, apply, downstream action, and invalidation primitives;
 - topology-specific broker replay/canary trial scoring for compose/decompose apply gates;
+- read-only proposal review/status surface for candidate revisions, topology
+  operations, and proposal-gate evaluations;
 - curation, utility, duplicate-merge probe planning, repair proposal planning, guarded repair materialization, drift probes, false-positive controls, and HTTP-status contract probes;
 - external-skill operator review plus stage-only import materialization that never mutates external-owned roots;
 - runtime action-attribution check recording for blocked high-risk tool-boundary decisions;

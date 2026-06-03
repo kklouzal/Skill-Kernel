@@ -26,6 +26,8 @@ from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.core.config import get_settings
 from autoskill.core.skillir import SkillIR
 from autoskill.db.broker_policy import NullBrokerPolicyStore
+from autoskill.db.candidates import CandidateReviewRecord, NullCandidateStore
+from autoskill.db.evaluations import EvaluationReviewRecord, NullEvaluationStore
 from autoskill.db.jobs import JobQueueSummary, NullJobStore
 from autoskill.db.profiles import ExecutorProfileRecord, ModelProfileRecord
 from autoskill.db.skills import SkillRecord
@@ -609,6 +611,86 @@ def test_effective_config_endpoint_reports_section_29_shape(monkeypatch) -> None
     assert config["scheduler"]["tick_seconds"] == 30
 
     get_settings.cache_clear()
+
+
+def test_proposal_review_endpoint_lists_phase_12_status_surface() -> None:
+    now = datetime.now(UTC)
+    workspace_id = uuid4()
+    skill_id = uuid4()
+    skill_version_id = uuid4()
+    transaction_id = uuid4()
+    candidate_store = NullCandidateStore()
+    candidate_store.reviews = [
+        CandidateReviewRecord(
+            workspace_id=workspace_id,
+            workspace_key="dev-01",
+            skill_id=skill_id,
+            skill_version_id=skill_version_id,
+            slug="compose-workflow",
+            name="compose-workflow",
+            lifecycle_state="candidate",
+            version=1,
+            scanner_status="passed",
+            evaluator_status="pending",
+            latest_evaluation_status="planned",
+            created_by_transaction_id=transaction_id,
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    evaluation_store = NullEvaluationStore()
+    evaluation_store.reviews = [
+        EvaluationReviewRecord(
+            workspace_id=workspace_id,
+            workspace_key="dev-01",
+            evaluation_id=uuid4(),
+            skill_version_id=skill_version_id,
+            skill_slug="compose-workflow",
+            skill_version=1,
+            executor_profile_id=None,
+            category="proposal_gate",
+            status="planned",
+            result_summary={
+                "candidate_slug": "compose-workflow",
+                "required_gates": ["target", "regression", "adversarial"],
+            },
+            created_at=now,
+        )
+    ]
+    topology_store = NullTopologyStore()
+
+    async def seed_topology() -> None:
+        await topology_store.record_operation(
+            workspace_key="dev-01",
+            operation_kind="compose",
+            status="candidate",
+            subject_skill_ids=[uuid4()],
+            output_skill_ids=[skill_id],
+            effect_coverage={"coverage": "planned"},
+            trial_summary={"trials": ["component_vs_composed"]},
+            evolution_transaction_id=transaction_id,
+        )
+
+    asyncio.run(seed_topology())
+    app = create_app(
+        candidate_store=candidate_store,
+        evaluation_store=evaluation_store,
+        topology_store=topology_store,
+    )
+    route = next(route for route in app.routes if route.path == "/v1/proposals/review")
+
+    async def run():
+        return await route.endpoint(workspace_id="dev-01", limit=10)
+
+    response = asyncio.run(run())
+
+    assert response.candidate_revisions[0]["slug"] == "compose-workflow"
+    assert response.topology_operations[0]["operation_kind"] == "compose"
+    assert response.evaluations[0]["status"] == "planned"
+    assert response.summary["candidate_revision_count"] == 1
+    assert response.summary["topology_operation_kinds"] == {"compose": 1}
+    assert response.summary["evaluation_statuses"] == {"planned": 1}
+    assert response.summary["review_surface"] == "section_30_phase_12"
 
 
 def test_v14_trace_diagnostics_profiles_and_context_surfaces() -> None:

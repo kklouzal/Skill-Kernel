@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from math import ceil
 from typing import Any, Protocol
 from uuid import UUID
@@ -64,6 +65,65 @@ class CandidatePersistResult:
         }
 
 
+@dataclass(frozen=True)
+class CandidateReviewRecord:
+    workspace_id: UUID | None
+    workspace_key: str | None
+    skill_id: UUID
+    skill_version_id: UUID
+    slug: str
+    name: str
+    lifecycle_state: str
+    version: int
+    scanner_status: str
+    evaluator_status: str
+    latest_evaluation_status: str | None
+    created_by_transaction_id: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_row(cls, row: asyncpg.Record | dict[str, Any]) -> CandidateReviewRecord:
+        return cls(
+            workspace_id=_row_get(row, "workspace_id"),
+            workspace_key=_row_get(row, "workspace_key"),
+            skill_id=row["skill_id"],
+            skill_version_id=row["skill_version_id"],
+            slug=row["slug"],
+            name=row["name"],
+            lifecycle_state=row["lifecycle_state"],
+            version=int(row["version"]),
+            scanner_status=row["scanner_status"],
+            evaluator_status=row["evaluator_status"],
+            latest_evaluation_status=_row_get(row, "latest_evaluation_status"),
+            created_by_transaction_id=_row_get(row, "created_by_transaction_id"),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "workspace_id": str(self.workspace_id) if self.workspace_id else None,
+            "workspace_key": self.workspace_key,
+            "skill_id": str(self.skill_id),
+            "skill_version_id": str(self.skill_version_id),
+            "slug": self.slug,
+            "name": self.name,
+            "lifecycle_state": self.lifecycle_state,
+            "version": self.version,
+            "scanner_status": self.scanner_status,
+            "evaluator_status": self.evaluator_status,
+            "latest_evaluation_status": self.latest_evaluation_status,
+            "created_by_transaction_id": (
+                str(self.created_by_transaction_id)
+                if self.created_by_transaction_id
+                else None
+            ),
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+        }
+
+
 class CandidateStore(Protocol):
     async def persist_candidate_proposals(
         self,
@@ -74,8 +134,20 @@ class CandidateStore(Protocol):
     ) -> CandidatePersistResult:
         """Persist inactive candidate SkillIR revisions and planned probes."""
 
+    async def list_candidate_reviews(
+        self,
+        *,
+        workspace_key: str | None = None,
+        lifecycle_state: str | None = "candidate",
+        limit: int = 100,
+    ) -> list[CandidateReviewRecord]:
+        """List proposal candidate revisions for operator review."""
+
 
 class NullCandidateStore:
+    def __init__(self) -> None:
+        self.reviews: list[CandidateReviewRecord] = []
+
     async def persist_candidate_proposals(
         self,
         *,
@@ -89,6 +161,22 @@ class NullCandidateStore:
             candidates=[],
             evolution_transaction_id=evolution_transaction_id,
         )
+
+    async def list_candidate_reviews(
+        self,
+        *,
+        workspace_key: str | None = None,
+        lifecycle_state: str | None = "candidate",
+        limit: int = 100,
+    ) -> list[CandidateReviewRecord]:
+        reviews = self.reviews
+        if workspace_key is not None:
+            reviews = [review for review in reviews if review.workspace_key == workspace_key]
+        if lifecycle_state is not None:
+            reviews = [
+                review for review in reviews if review.lifecycle_state == lifecycle_state
+            ]
+        return reviews[: max(1, min(limit, 250))]
 
 
 class AsyncpgCandidateStore(AsyncpgPoolOwner):
@@ -126,6 +214,52 @@ class AsyncpgCandidateStore(AsyncpgPoolOwner):
             candidates=persisted,
             evolution_transaction_id=evolution_transaction_id,
         )
+
+    async def list_candidate_reviews(
+        self,
+        *,
+        workspace_key: str | None = None,
+        lifecycle_state: str | None = "candidate",
+        limit: int = 100,
+    ) -> list[CandidateReviewRecord]:
+        pool = await self._get_pool()
+        rows = await pool.fetch(
+            """
+            SELECT
+              w.workspace_id,
+              w.external_key AS workspace_key,
+              s.skill_id,
+              sv.skill_version_id,
+              s.slug,
+              s.name,
+              s.lifecycle_state,
+              sv.version,
+              sv.scanner_status,
+              sv.evaluator_status,
+              latest_ev.status AS latest_evaluation_status,
+              sv.created_by_transaction_id,
+              sv.created_at,
+              s.updated_at
+            FROM autoskill.skill_versions sv
+            JOIN autoskill.skills s USING (skill_id)
+            JOIN autoskill.workspaces w USING (workspace_id)
+            LEFT JOIN LATERAL (
+              SELECT ev.status
+              FROM autoskill.evaluations ev
+              WHERE ev.skill_version_id = sv.skill_version_id
+              ORDER BY ev.created_at DESC, ev.evaluation_id DESC
+              LIMIT 1
+            ) latest_ev ON true
+            WHERE ($1::text IS NULL OR w.external_key = $1)
+              AND ($2::text IS NULL OR s.lifecycle_state = $2)
+            ORDER BY s.updated_at DESC, sv.created_at DESC, sv.skill_version_id DESC
+            LIMIT $3
+            """,
+            workspace_key,
+            lifecycle_state,
+            max(1, min(limit, 250)),
+        )
+        return [CandidateReviewRecord.from_row(row) for row in rows]
 
 
 async def _persist_candidate(
@@ -645,6 +779,15 @@ def _scanner_status(proposal: CandidateSkillProposal) -> str:
 
 def _json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:
+    if isinstance(row, dict):
+        return row.get(key)
+    try:
+        return row[key]
+    except KeyError:
+        return None
 
 
 def _estimate_tokens(text: str) -> int:

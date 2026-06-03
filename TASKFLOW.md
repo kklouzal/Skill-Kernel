@@ -776,6 +776,17 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   a temporary local sidecar showing the expected block list, `dsn_env=
   SKILLKERNEL_DATABASE_URL`, configured database/LLM flags, embedding dimension
   768, and sidecar URL projection.
+- Section 30 Phase 12 now has the required proposal reviewer/status control
+  surface: `/v1/proposals/review` returns bounded, read-only candidate revision
+  summaries, topology operation summaries, proposal-gate evaluation statuses,
+  and status counts for operator review without exposing SkillIR/runtime text
+  bodies. Validation passed with focused candidate/evaluation/topology/admin
+  tests, focused ruff checks, full `uv run ruff check sidecar`, `uv run
+  pytest -q` with 288 tests, `uv run python -m compileall -q sidecar`, `git
+  diff --check`, `npm test --prefix plugin/autoskill` with 18 tests, `npm run
+  check --prefix plugin/autoskill`, `docker compose config --quiet`, and a
+  compose Postgres smoke proving the review route reads one real candidate
+  revision, one topology proposal, and one planned proposal-gate evaluation.
 
 ## Next Gates
 
