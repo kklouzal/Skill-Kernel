@@ -97,20 +97,55 @@ export function postAction(
   );
 }
 
-export function liveUrl(session: ApiSession, workspaceId: string, lastSeq?: number) {
-  const url = new URL("/admin/live", window.location.origin.replace(/^http/, "ws"));
-  if (session.token) url.searchParams.set("token", session.token);
-  if (workspaceId) url.searchParams.set("workspace_id", workspaceId);
-  if (lastSeq) url.searchParams.set("last_seq", String(lastSeq));
-  return url.toString();
-}
-
-export function liveSseUrl(session: ApiSession, workspaceId: string, lastSeq?: number) {
+export async function streamLive(
+  session: ApiSession,
+  workspaceId: string,
+  lastSeq: number | undefined,
+  {
+    onEnvelope,
+    onOpen,
+    signal
+  }: {
+    onEnvelope: (envelope: LiveEnvelope) => void;
+    onOpen: () => void;
+    signal: AbortSignal;
+  }
+) {
   const url = new URL("/admin/live-sse", window.location.origin);
-  if (session.token) url.searchParams.set("token", session.token);
   if (workspaceId) url.searchParams.set("workspace_id", workspaceId);
   if (lastSeq) url.searchParams.set("last_seq", String(lastSeq));
-  return url.toString();
+  const response = await fetch(url, {
+    headers: headers(session),
+    signal
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`${response.status} ${response.statusText}: ${message}`);
+  }
+  if (!response.body) {
+    throw new Error("Live stream response did not include a readable body");
+  }
+  onOpen();
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (!signal.aborted) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      const frame = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const data = frame
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice("data:".length).trimStart())
+        .join("\n");
+      if (data) onEnvelope(JSON.parse(data) as LiveEnvelope);
+      boundary = buffer.indexOf("\n\n");
+    }
+  }
 }
 
 export function isSnapshotPayload(payload: LiveEnvelope["payload"]): payload is SnapshotResponse["snapshot"] {

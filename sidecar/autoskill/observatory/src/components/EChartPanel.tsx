@@ -26,17 +26,26 @@ type Props = {
 
 export function EChartPanel({ title, option }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<ReturnType<typeof init> | null>(null);
 
   useEffect(() => {
     if (!ref.current) return;
     const chart = init(ref.current, "dark", { renderer: "canvas" });
-    chart.setOption(option);
+    chartRef.current = chart;
     const resize = () => chart.resize();
     window.addEventListener("resize", resize);
     return () => {
       window.removeEventListener("resize", resize);
       chart.dispose();
+      chartRef.current = null;
     };
+  }, []);
+
+  useEffect(() => {
+    chartRef.current?.setOption(option, {
+      lazyUpdate: true,
+      notMerge: false
+    });
   }, [option]);
 
   return (

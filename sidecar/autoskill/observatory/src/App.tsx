@@ -22,10 +22,9 @@ import {
   fetchObject,
   fetchSummary,
   isSnapshotPayload,
-  liveSseUrl,
-  liveUrl,
   postAction,
-  search
+  search,
+  streamLive
 } from "./api";
 import type { ApiSession } from "./api";
 import type { Issue, LiveEnvelope, ObservatorySnapshot, Station, Subsystem } from "./types";
@@ -72,6 +71,7 @@ function App() {
     window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
   const lastSeq = useRef<number | undefined>(undefined);
+  const liveSnapshotSignature = useRef<string | undefined>(undefined);
   const hasAdminToken = session.token.trim().length > 0;
 
   const summary = useQuery({
@@ -115,8 +115,15 @@ function App() {
     sessionStorage.setItem("skillkernel.admin.token", session.token);
   }, [session.token]);
 
+  useEffect(() => {
+    if (summary.data?.snapshot) {
+      liveSnapshotSignature.current = snapshotContentSignature(summary.data.snapshot);
+    }
+  }, [summary.data?.snapshot]);
+
   function updateToken(token: string) {
     lastSeq.current = undefined;
+    liveSnapshotSignature.current = undefined;
     setLiveSnapshot(null);
     queryClient.removeQueries({ queryKey: ["summary"] });
     queryClient.removeQueries({ queryKey: ["object"] });
@@ -141,56 +148,37 @@ function App() {
       return;
     }
     let closed = false;
-    let eventSource: EventSource | undefined;
+    const controller = new AbortController();
     const applyEnvelope = (envelope: LiveEnvelope) => {
       lastSeq.current = envelope.seq;
       if (envelope.requires_snapshot_reload) {
         void queryClient.invalidateQueries({ queryKey: ["summary"] });
       }
       if (isSnapshotPayload(envelope.payload)) {
+        const nextSignature = snapshotContentSignature(envelope.payload);
+        if (nextSignature === liveSnapshotSignature.current) return;
+        liveSnapshotSignature.current = nextSignature;
         setLiveSnapshot(envelope.payload);
         queryClient.setQueryData(["summary", session.token, session.roles, workspaceId, windowMinutes], {
           snapshot: envelope.payload
         });
       }
     };
-    const openSseFallback = () => {
-      if (closed || eventSource) return;
-      eventSource = new EventSource(liveSseUrl(session, workspaceId, lastSeq.current));
-      eventSource.addEventListener("open", () => {
-        if (!closed) setLiveState("live");
-      });
-      eventSource.addEventListener("message", (event) => {
-        applyEnvelope(JSON.parse(event.data) as LiveEnvelope);
-      });
-      eventSource.addEventListener("snapshot", (event) => {
-        applyEnvelope(JSON.parse((event as MessageEvent).data) as LiveEnvelope);
-      });
-      eventSource.addEventListener("heartbeat", (event) => {
-        applyEnvelope(JSON.parse((event as MessageEvent).data) as LiveEnvelope);
-      });
-      eventSource.addEventListener("error", () => {
-        if (!closed) setLiveState("offline");
-      });
-    };
     setLiveState("connecting");
-    const socket = new WebSocket(liveUrl(session, workspaceId, lastSeq.current));
-    socket.addEventListener("open", () => {
-      if (!closed) setLiveState("live");
-    });
-    socket.addEventListener("message", (event) => {
-      applyEnvelope(JSON.parse(event.data) as LiveEnvelope);
-    });
-    socket.addEventListener("close", () => {
-      if (!closed) openSseFallback();
-    });
-    socket.addEventListener("error", () => {
-      if (!closed) openSseFallback();
+    void streamLive(session, workspaceId, lastSeq.current, {
+      signal: controller.signal,
+      onEnvelope: applyEnvelope,
+      onOpen: () => {
+        if (!closed) setLiveState("live");
+      }
+    }).catch((error: unknown) => {
+      if (!closed && !(error instanceof DOMException && error.name === "AbortError")) {
+        setLiveState("offline");
+      }
     });
     return () => {
       closed = true;
-      socket.close();
-      eventSource?.close();
+      controller.abort();
     };
   }, [hasAdminToken, queryClient, session.roles, session.token, windowMinutes, workspaceId]);
 
@@ -399,6 +387,25 @@ function App() {
       )}
     </main>
   );
+}
+
+function snapshotContentSignature(snapshot: ObservatorySnapshot) {
+  return JSON.stringify(stableSnapshotContent(snapshot));
+}
+
+function stableSnapshotContent(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableSnapshotContent);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !["captured_at", "snapshot_seq"].includes(key))
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, stableSnapshotContent(item)])
+    );
+  }
+  return value;
 }
 
 function Tab({

@@ -9,6 +9,11 @@ type Props = {
 
 export function ParticleLayer({ edges, reducedMotion }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const edgesRef = useRef(edges);
+
+  useEffect(() => {
+    edgesRef.current = edges;
+  }, [edges]);
 
   useEffect(() => {
     if (!hostRef.current || reducedMotion) return;
@@ -33,8 +38,9 @@ export function ParticleLayer({ edges, reducedMotion }: Props) {
         graphics.clear();
         const width = hostRef.current?.clientWidth ?? 1;
         const height = hostRef.current?.clientHeight ?? 1;
-        edges.slice(0, 24).forEach((edge, index) => {
-          const y = ((index + 1) / (edges.length + 1)) * height;
+        const currentEdges = edgesRef.current;
+        currentEdges.slice(0, 24).forEach((edge, index) => {
+          const y = ((index + 1) / (currentEdges.length + 1)) * height;
           const pressure = Math.max(0.08, edge.backpressure);
           const x = ((t * (40 + edge.event_rate_1m * 6) + index * 53) % (width + 80)) - 40;
           graphics.circle(x, y, 2.5 + pressure * 8).fill({
@@ -51,7 +57,7 @@ export function ParticleLayer({ edges, reducedMotion }: Props) {
       destroyed = true;
       app?.destroy(true);
     };
-  }, [edges, reducedMotion]);
+  }, [reducedMotion]);
 
   return <div className="particle-layer" ref={hostRef} aria-hidden="true" />;
 }

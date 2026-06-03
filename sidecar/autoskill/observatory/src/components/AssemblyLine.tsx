@@ -37,6 +37,18 @@ function healthColor(health: string) {
 
 export function AssemblyLine({ stations, edges, selectedId, onSelect }: Props) {
   const [nodes, setNodes] = useState<Node[]>([]);
+  const stationById = useMemo(
+    () => new Map(stations.map((station) => [station.component_id, station])),
+    [stations]
+  );
+  const structuralKey = useMemo(
+    () =>
+      JSON.stringify({
+        stations: stations.map((station) => station.component_id),
+        edges: edges.map((edge) => [edge.edge_id, edge.from, edge.to])
+      }),
+    [edges, stations]
+  );
   const flowEdges = useMemo<Edge[]>(
     () =>
       edges.map((edge) => ({
@@ -106,7 +118,26 @@ export function AssemblyLine({ stations, edges, selectedId, onSelect }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [edges, selectedId, stations]);
+  }, [structuralKey]);
+
+  useEffect(() => {
+    setNodes((current) =>
+      current.map((node) => {
+        const station = stationById.get(node.id);
+        if (!station) return node;
+        return {
+          ...node,
+          data: {
+            station,
+            label: <StationCard station={station} />
+          },
+          className: `station-node health-${station.health} ${
+            selectedId === station.component_id ? "is-selected" : ""
+          }`
+        };
+      })
+    );
+  }, [selectedId, stationById]);
 
   const handleNodeClick: NodeMouseHandler = (_, node) => {
     const station = stations.find((item) => item.component_id === node.id);
