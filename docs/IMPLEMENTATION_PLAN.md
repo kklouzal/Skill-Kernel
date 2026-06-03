@@ -666,7 +666,11 @@ Deliverables:
   receipts plus guarded aliases for retry/cancel jobs, pause/resume schedules,
   historical import actions, candidate quarantine, freeze/unfreeze/rollback,
   evaluator/scanner/broker/profile/storage/audit/Observatory actions, and source
-  revocation. High-impact actions fail closed without explicit confirmation;
+  revocation. High-impact actions fail closed without explicit confirmation.
+  Action receipts now also persist dedicated `admin_action_audit` rows linked to
+  the generic audit hash-chain record, preserving actor roles, target identity,
+  idempotency key, result, request ID, metadata-key summary, and confirmation
+  hashes without storing raw confirmation text;
 - frontend overview and cockpits; implemented with assembly-line/workcell
   views, issue board, global search, object inspector, admin actions,
   deep-link state, reduced-motion support, and station cockpit tabs for records,
@@ -718,3 +722,14 @@ Acceptance:
   --prefix plugin/autoskill` with 18 tests,
   `npm run build --prefix sidecar/autoskill/observatory`, `docker compose
   config --quiet`, and `git diff --check` passed.
+- validation evidence for the dedicated Observatory action-audit slice passed on
+  the final tree: Observatory API tests `12 passed`, `uv run ruff check sidecar`
+  passed, `uv run pytest` passed with 315 tests, `uv run python -m compileall -q
+  sidecar` passed, `npm test --prefix plugin/autoskill` passed with 18 tests,
+  `npm run build --prefix sidecar/autoskill/observatory` passed,
+  `docker compose config --quiet` passed, and `git diff --check` passed. A
+  compose/Postgres smoke applied migrations, recorded one
+  `verify_audit_chain` action through the admin API, verified the
+  `admin_action_audit` row links to `audit_records` and contains only redacted
+  request metadata, deleted the smoke rows, and stopped Postgres while
+  preserving the dev volume.

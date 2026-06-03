@@ -4649,6 +4649,27 @@ def create_app(
         ):
             accepted = False
             reason_codes = ["confirmation-required"]
+        response_meta = _admin_response_meta()
+        target_type, target_id = _observatory_action_target(
+            request.action,
+            request.target,
+        )
+        confirmation_hash = (
+            f"sha256:{sha256_text(request.confirmation)}"
+            if request.confirmation
+            else None
+        )
+        action_request_payload = {
+            "schema_version": "skillkernel.observatory.admin-action-request.v1",
+            "request_id": response_meta["request_id"],
+            "workspace_id": request.workspace_id,
+            "target": request.target,
+            "dry_run": request.dry_run,
+            "metadata_keys": sorted(request.metadata.keys()),
+            "confirmation_present": request.confirmation is not None,
+            "confirmation_hash": confirmation_hash,
+            "source": {"ip": None, "proxy": None},
+        }
         audit_record = await audit.append_record(
             AuditRecord(
                 action=f"observatory.{request.action}",
@@ -4662,10 +4683,27 @@ def create_app(
                     "accepted": accepted,
                     "reason_codes": reason_codes,
                     "metadata": request.metadata,
+                    "request_id": response_meta["request_id"],
+                    "target_type": target_type,
+                    "target_id": target_id,
+                    "actor_roles": principal["roles"],
+                    "confirmation_hash": confirmation_hash,
                     "confirmation_required": confirmation_required,
                 },
             ),
             workspace_key=request.workspace_id,
+        )
+        action_audit = await observatory_admin.record_action_audit(
+            actor_id=str(principal["subject"]),
+            actor_roles=[str(role) for role in principal["roles"]],
+            action_kind=request.action,
+            target_type=target_type,
+            target_id=target_id,
+            idempotency_key=request.idempotency_key,
+            request_payload_redacted=action_request_payload,
+            reason=request.reason,
+            result="accepted" if accepted else "rejected",
+            linked_audit_id=audit_record.audit_id,
         )
         return ObservatoryActionResponse(
             receipt=action_receipt(
@@ -4675,8 +4713,46 @@ def create_app(
                 accepted=accepted,
                 reason_codes=reason_codes,
                 audit=audit_record.model_dump(mode="json"),
-            )
+                action_audit=action_audit.to_json(),
+            ),
+            meta=response_meta,
         )
+
+    def _observatory_action_target(
+        action: str,
+        target: dict[str, object],
+    ) -> tuple[str, str]:
+        target_type = str(
+            target.get("object_type")
+            or target.get("type")
+            or _observatory_action_target_type(action)
+        )
+        target_id = str(
+            target.get("object_id")
+            or target.get("id")
+            or target.get("target_id")
+            or action
+        )
+        return target_type[:128], target_id[:512]
+
+    def _observatory_action_target_type(action: str) -> str:
+        if action.endswith("_job"):
+            return "job"
+        if action.endswith("_schedule"):
+            return "schedule"
+        if action.endswith("_skill"):
+            return "skill"
+        if action.endswith("_evaluation"):
+            return "evaluation"
+        if action in {"qualify_model_profile", "qualify_embedding_profile"}:
+            return "profile"
+        if action in {"storage_health_check", "storage_retention_dry_run"}:
+            return "storage"
+        if action in {"verify_audit_chain"}:
+            return "audit"
+        if action in {"revoke_source"}:
+            return "source"
+        return "observatory_action"
 
     def _register_observatory_action_route(path: str, action: str) -> None:
         @app.post(path, response_model=ObservatoryActionResponse)

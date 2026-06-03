@@ -1021,6 +1021,21 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   python -m compileall -q sidecar scripts`, `npm test --prefix plugin/autoskill`
   with 18 passing tests, `npm run build --prefix sidecar/autoskill/observatory`,
   `docker compose config --quiet`, and `git diff --check`.
+- Observatory dedicated operator-action audit persistence is implemented for
+  the Phase 4.3/12.1/16.3 action-audit gap: accepted and rejected admin actions
+  now write the existing `autoskill.admin_action_audit` table with actor roles,
+  target identity, idempotency key, linked generic audit-chain record, result,
+  request ID, metadata-key summary, and confirmation hash without storing raw
+  confirmation text. Focused Observatory API tests passed `12 passed`; final
+  validation passed with `uv run ruff check sidecar`, `uv run pytest` with 315
+  tests, `uv run python -m compileall -q sidecar`, `npm test --prefix
+  plugin/autoskill` with 18 tests, `npm run build --prefix
+  sidecar/autoskill/observatory`, `docker compose config --quiet`, and `git diff
+  --check`. A compose/Postgres smoke migrated the schema, recorded one
+  `verify_audit_chain` action through the admin API into
+  `admin_action_audit`, verified the linked `audit_records` row and redacted
+  payload shape, deleted the smoke rows, and stopped Postgres without removing
+  the persistent volume.
 
 ## Next Gates
 

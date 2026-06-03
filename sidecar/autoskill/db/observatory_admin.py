@@ -13,6 +13,66 @@ from autoskill.db.workspaces import ensure_workspace
 
 
 @dataclass(frozen=True)
+class AdminActionAuditRecord:
+    action_id: UUID
+    actor_id: str
+    actor_roles: list[str]
+    action_kind: str
+    target_type: str
+    target_id: str
+    idempotency_key: str
+    request_payload_redacted: dict[str, Any]
+    reason: str
+    result: str
+    linked_job_id: UUID | None
+    linked_audit_id: UUID | None
+    created_at: datetime
+
+    @classmethod
+    def from_row(cls, row: asyncpg.Record | dict[str, Any]) -> AdminActionAuditRecord:
+        return cls(
+            action_id=row["action_id"],
+            actor_id=row["actor_id"],
+            actor_roles=list(row["actor_roles"]),
+            action_kind=row["action_kind"],
+            target_type=row["target_type"],
+            target_id=row["target_id"],
+            idempotency_key=row["idempotency_key"],
+            request_payload_redacted=_json_dict(row["request_payload_redacted"]),
+            reason=row["reason"],
+            result=row["result"],
+            linked_job_id=_row_get(row, "linked_job_id"),
+            linked_audit_id=_row_get(row, "linked_audit_id"),
+            created_at=row["created_at"],
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "schema_version": "skillkernel.observatory.admin-action-audit.v1",
+            "object_type": "admin_action",
+            "object_id": str(self.action_id),
+            "action_id": str(self.action_id),
+            "actor_id": self.actor_id,
+            "actor_roles": self.actor_roles,
+            "action_kind": self.action_kind,
+            "target_type": self.target_type,
+            "target_id": self.target_id,
+            "idempotency_key": self.idempotency_key,
+            "request_payload_redacted": self.request_payload_redacted,
+            "reason": self.reason,
+            "result": self.result,
+            "linked_job_id": str(self.linked_job_id) if self.linked_job_id else None,
+            "linked_audit_id": str(self.linked_audit_id) if self.linked_audit_id else None,
+            "created_at": self.created_at.isoformat(),
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "redacted_or_not_applicable",
+            },
+        }
+
+
+@dataclass(frozen=True)
 class AdminComparisonRecord:
     comparison_id: UUID
     workspace_id: UUID | None
@@ -123,6 +183,23 @@ class AdminDiagnosticBundleRecord:
 
 
 class ObservatoryAdminStore(Protocol):
+    async def record_action_audit(
+        self,
+        *,
+        actor_id: str,
+        actor_roles: list[str],
+        action_kind: str,
+        target_type: str,
+        target_id: str,
+        idempotency_key: str,
+        request_payload_redacted: dict[str, Any],
+        reason: str,
+        result: str,
+        linked_audit_id: UUID | None = None,
+        linked_job_id: UUID | None = None,
+    ) -> AdminActionAuditRecord:
+        """Persist a content-safe Observatory operator action audit row."""
+
     async def list_comparisons(
         self,
         *,
@@ -174,8 +251,51 @@ class ObservatoryAdminStore(Protocol):
 
 class NullObservatoryAdminStore:
     def __init__(self) -> None:
+        self.actions: list[AdminActionAuditRecord] = []
         self.comparisons: list[AdminComparisonRecord] = []
         self.bundles: list[AdminDiagnosticBundleRecord] = []
+
+    async def record_action_audit(
+        self,
+        *,
+        actor_id: str,
+        actor_roles: list[str],
+        action_kind: str,
+        target_type: str,
+        target_id: str,
+        idempotency_key: str,
+        request_payload_redacted: dict[str, Any],
+        reason: str,
+        result: str,
+        linked_audit_id: UUID | None = None,
+        linked_job_id: UUID | None = None,
+    ) -> AdminActionAuditRecord:
+        for record in self.actions:
+            if (
+                record.actor_id == actor_id
+                and record.action_kind == action_kind
+                and record.target_type == target_type
+                and record.target_id == target_id
+                and record.idempotency_key == idempotency_key
+            ):
+                return record
+        record = AdminActionAuditRecord(
+            action_id=uuid4(),
+            actor_id=actor_id,
+            actor_roles=sorted(set(actor_roles)),
+            action_kind=action_kind,
+            target_type=target_type,
+            target_id=target_id,
+            idempotency_key=idempotency_key,
+            request_payload_redacted=request_payload_redacted,
+            reason=reason,
+            result=result,
+            linked_job_id=linked_job_id,
+            linked_audit_id=linked_audit_id,
+            created_at=datetime.now(UTC),
+        )
+        self.actions.append(record)
+        return record
 
     async def list_comparisons(
         self,
@@ -266,6 +386,83 @@ class NullObservatoryAdminStore:
 
 
 class AsyncpgObservatoryAdminStore(AsyncpgPoolOwner):
+    async def record_action_audit(
+        self,
+        *,
+        actor_id: str,
+        actor_roles: list[str],
+        action_kind: str,
+        target_type: str,
+        target_id: str,
+        idempotency_key: str,
+        request_payload_redacted: dict[str, Any],
+        reason: str,
+        result: str,
+        linked_audit_id: UUID | None = None,
+        linked_job_id: UUID | None = None,
+    ) -> AdminActionAuditRecord:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO autoskill.admin_action_audit (
+                  actor_id,
+                  actor_roles,
+                  action_kind,
+                  target_type,
+                  target_id,
+                  idempotency_key,
+                  request_payload_redacted,
+                  reason,
+                  result,
+                  linked_job_id,
+                  linked_audit_id
+                )
+                VALUES (
+                  $1,
+                  $2::text[],
+                  $3,
+                  $4,
+                  $5,
+                  $6,
+                  $7::jsonb,
+                  $8,
+                  $9,
+                  $10,
+                  $11
+                )
+                ON CONFLICT (
+                  actor_id,
+                  action_kind,
+                  target_type,
+                  target_id,
+                  idempotency_key
+                )
+                DO UPDATE SET
+                  linked_audit_id = COALESCE(
+                    autoskill.admin_action_audit.linked_audit_id,
+                    EXCLUDED.linked_audit_id
+                  ),
+                  linked_job_id = COALESCE(
+                    autoskill.admin_action_audit.linked_job_id,
+                    EXCLUDED.linked_job_id
+                  )
+                RETURNING *
+                """,
+                actor_id,
+                sorted(set(actor_roles)),
+                action_kind,
+                target_type,
+                target_id,
+                idempotency_key,
+                _json(request_payload_redacted),
+                reason,
+                result,
+                linked_job_id,
+                linked_audit_id,
+            )
+        return AdminActionAuditRecord.from_row(row)
+
     async def list_comparisons(
         self,
         *,

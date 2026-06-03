@@ -777,6 +777,7 @@ def action_receipt(
     reason_codes: list[str],
     linked_job: dict[str, Any] | None = None,
     audit: dict[str, Any] | None = None,
+    action_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "action": action,
@@ -801,6 +802,7 @@ def action_receipt(
         },
         "linked_job": linked_job,
         "audit": audit,
+        "action_audit": action_audit,
     }
 
 

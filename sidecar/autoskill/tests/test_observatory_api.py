@@ -10,6 +10,7 @@ from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope
 from autoskill.db.events import NullEventStore
 from autoskill.db.observability import TraceSpanRecord, TraceSummaryRecord
+from autoskill.db.observatory_admin import NullObservatoryAdminStore
 from autoskill.db.retrieval import RetrievalLog
 from autoskill.services.observatory import build_observatory_snapshot
 from fastapi import HTTPException
@@ -598,7 +599,8 @@ def test_observatory_stale_or_missing_telemetry_never_reports_healthy() -> None:
 
 def test_observatory_action_records_audited_policy_receipt() -> None:
     audit_store = MemoryAuditStore()
-    app = create_app(audit_store=audit_store)
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(audit_store=audit_store, observatory_admin_store=observatory_admin)
     route = _routes(app)[("/admin/api/v1/actions", "POST")]
 
     async def run():
@@ -616,12 +618,26 @@ def test_observatory_action_records_audited_policy_receipt() -> None:
     assert response.receipt["accepted"] is True
     assert response.receipt["policy"]["allowed"] is True
     assert response.receipt["audit"]["subject_id"] == "obs-test-1"
+    assert response.receipt["action_audit"]["action_kind"] == "verify_audit_chain"
+    assert response.receipt["action_audit"]["target_type"] == "audit"
+    assert response.receipt["action_audit"]["target_id"] == "verify_audit_chain"
+    assert response.receipt["action_audit"]["linked_audit_id"] == str(
+        audit_store.records[0].audit_id
+    )
+    assert response.receipt["action_audit"]["request_payload_redacted"]["request_id"] == (
+        response.meta["request_id"]
+    )
+    assert response.receipt["action_audit"]["content_policy"]["raw_available"] is False
+    assert observatory_admin.actions[0].action_id.hex == (
+        response.receipt["action_audit"]["action_id"].replace("-", "")
+    )
     assert audit_store.records[0].action == "observatory.verify_audit_chain"
 
 
 def test_observatory_high_impact_action_requires_confirmation() -> None:
     audit_store = MemoryAuditStore()
-    app = create_app(audit_store=audit_store)
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(audit_store=audit_store, observatory_admin_store=observatory_admin)
     route = _routes(app)[("/admin/api/v1/actions", "POST")]
 
     async def run():
@@ -630,7 +646,9 @@ def test_observatory_high_impact_action_requires_confirmation() -> None:
                 workspace_id="dev-01",
                 action="rollback_skill",
                 idempotency_key="obs-test-rollback-1",
+                target={"id": "skill-123"},
                 reason="operator requested rollback",
+                confirmation="skill-123",
                 dry_run=False,
             )
         )
@@ -641,6 +659,19 @@ def test_observatory_high_impact_action_requires_confirmation() -> None:
     assert response.receipt["policy"]["allowed"] is False
     assert response.receipt["policy"]["confirmation_required"] is True
     assert response.receipt["policy"]["reason_codes"] == ["confirmation-required"]
+    assert response.receipt["action_audit"]["target_type"] == "skill"
+    assert response.receipt["action_audit"]["target_id"] == "skill-123"
+    assert response.receipt["action_audit"]["result"] == "rejected"
+    assert response.receipt["action_audit"]["request_payload_redacted"][
+        "confirmation_present"
+    ] is True
+    assert response.receipt["action_audit"]["request_payload_redacted"][
+        "confirmation_hash"
+    ].startswith("sha256:")
+    assert "skill-123" not in str(
+        response.receipt["action_audit"]["request_payload_redacted"]["confirmation_hash"]
+    )
+    assert observatory_admin.actions[0].linked_audit_id == audit_store.records[0].audit_id
     assert audit_store.records[0].details["confirmation_required"] is True
 
 
