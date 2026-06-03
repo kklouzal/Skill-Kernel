@@ -37,6 +37,41 @@ class MemorySkillMatchRetrievalStore:
         return None
 
 
+class QuerySensitiveSkillMatchRetrievalStore:
+    def __init__(
+        self,
+        candidates_by_query: dict[str, list[RetrievalCandidate]],
+    ) -> None:
+        self.candidates_by_query = candidates_by_query
+        self.queries: list[str] = []
+
+    async def lexical_query(
+        self,
+        *,
+        workspace_key: str,
+        query: str,
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
+        session_id: str | None = None,
+        turn_id: str | None = None,
+        limit: int = 10,
+    ) -> RetrievalResult:
+        self.queries.append(query)
+        candidates = self.candidates_by_query.get(query, [])
+        return RetrievalResult(
+            retrieval_log_id=uuid4(),
+            decision="candidates_found" if candidates else "no_candidates",
+            candidates=candidates[:limit],
+        )
+
+    async def expand_skill_graph(self, **_kwargs):
+        return []
+
+    async def record_context_hint(self, **_kwargs) -> None:
+        return None
+
+
 def test_skill_match_prefers_existing_active_skill() -> None:
     active_skill_id = uuid4()
     store = MemorySkillMatchRetrievalStore(
@@ -67,6 +102,116 @@ def test_skill_match_prefers_existing_active_skill() -> None:
     assert result.decision == "reuse_active"
     assert result.active_matches[0].skill_id == str(active_skill_id)
     assert result.archived_matches == []
+
+
+def test_skill_match_retries_runtime_text_when_broad_paraphrase_is_too_strict() -> None:
+    active_skill_id = uuid4()
+    store = QuerySensitiveSkillMatchRetrievalStore(
+        {
+            "repair diagrams unreadable labels accessibility annotations": [
+                RetrievalCandidate(
+                    object_type="body_index_document",
+                    object_id=uuid4(),
+                    skill_id=active_skill_id,
+                    summary=(
+                        "WHEN diagrams have unreadable labels, repair accessibility "
+                        "annotations."
+                    ),
+                    rank=0.5,
+                    metadata={
+                        "lifecycle_state": "active",
+                        "slug": "diagram-accessibility-9b03d262",
+                    },
+                )
+            ]
+        }
+    )
+
+    async def run():
+        return await match_existing_skills(
+            store,
+            SkillMatchRequest(
+                workspace_key="dev-01",
+                candidate_slug="diagram-accessibility-probe",
+                candidate_description=(
+                    "Fix unreadable diagram labels and add accessibility annotations."
+                ),
+                candidate_runtime_text=(
+                    "Repair diagrams with unreadable labels and add accessibility "
+                    "annotations."
+                ),
+            ),
+        )
+
+    result = asyncio.run(run())
+
+    assert result.decision == "reuse_active"
+    assert result.active_matches[0].skill_id == str(active_skill_id)
+    assert store.queries == [
+        "unreadable diagram labels accessibility annotations repair",
+        "repair diagrams unreadable labels accessibility annotations",
+        "unreadable diagram labels accessibility annotations",
+        "diagram accessibility probe",
+    ]
+
+
+def test_skill_match_keeps_stronger_runtime_match_after_weak_broad_hit() -> None:
+    weak_skill_id = uuid4()
+    active_skill_id = uuid4()
+    store = QuerySensitiveSkillMatchRetrievalStore(
+        {
+            "unreadable diagram labels accessibility annotations repair": [
+                RetrievalCandidate(
+                    object_type="body_index_document",
+                    object_id=uuid4(),
+                    skill_id=weak_skill_id,
+                    summary="Diagram export metadata normalization.",
+                    rank=0.05,
+                    metadata={
+                        "lifecycle_state": "active",
+                        "slug": "diagram-export-metadata",
+                    },
+                )
+            ],
+            "repair diagrams unreadable labels accessibility annotations": [
+                RetrievalCandidate(
+                    object_type="body_index_document",
+                    object_id=uuid4(),
+                    skill_id=active_skill_id,
+                    summary=(
+                        "WHEN diagrams have unreadable labels, repair accessibility "
+                        "annotations."
+                    ),
+                    rank=0.5,
+                    metadata={
+                        "lifecycle_state": "active",
+                        "slug": "diagram-accessibility-9b03d262",
+                    },
+                )
+            ],
+        }
+    )
+
+    async def run():
+        return await match_existing_skills(
+            store,
+            SkillMatchRequest(
+                workspace_key="dev-01",
+                candidate_slug="diagram-accessibility-probe",
+                candidate_description=(
+                    "Fix unreadable diagram labels and add accessibility annotations."
+                ),
+                candidate_runtime_text=(
+                    "Repair diagrams with unreadable labels and add accessibility "
+                    "annotations."
+                ),
+            ),
+        )
+
+    result = asyncio.run(run())
+
+    assert result.decision == "reuse_active"
+    assert result.active_matches[0].skill_id == str(active_skill_id)
 
 
 def test_skill_match_surfaces_archived_promotion_candidate() -> None:

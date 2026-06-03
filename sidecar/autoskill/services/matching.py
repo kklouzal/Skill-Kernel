@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from autoskill.db.retrieval import RetrievalCandidate, RetrievalStore
+from autoskill.db.retrieval import RetrievalCandidate, RetrievalResult, RetrievalStore
 
 MATCH_STOP_WORDS = {
     "active",
+    "add",
     "and",
     "are",
     "archived",
@@ -13,6 +14,7 @@ MATCH_STOP_WORDS = {
     "candidate",
     "derive",
     "evidence",
+    "fix",
     "guarded",
     "insufficient",
     "matches",
@@ -22,6 +24,7 @@ MATCH_STOP_WORDS = {
     "repeated",
     "skill",
     "times",
+    "with",
     "workflow",
 }
 
@@ -163,47 +166,72 @@ async def match_existing_skills(
     retrieval: RetrievalStore,
     request: SkillMatchRequest,
 ) -> SkillMatchResult:
-    query = _query_text(request)
-    result = await retrieval.lexical_query(
-        workspace_key=request.workspace_key,
-        query=query,
-        limit=max(1, min(request.limit, 50)),
-    )
-    active: list[SkillMatch] = []
-    archived: list[SkillMatch] = []
-    external: list[ExternalSkillMatch] = []
-    seen: set[str] = set()
-    query_terms = _terms(query)
-    for candidate in result.candidates:
-        if candidate.object_type == "external_skill":
-            external.append(
-                ExternalSkillMatch.from_candidate(
+    query_results: list[tuple[str, RetrievalResult]] = []
+    bounded_limit = max(1, min(request.limit, 50))
+    for query in _query_variants(request):
+        result = await retrieval.lexical_query(
+            workspace_key=request.workspace_key,
+            query=query,
+            limit=bounded_limit,
+        )
+        query_results.append((query, result))
+    if not query_results:
+        query_results.append(
+            (
+                "",
+                RetrievalResult(
+                    retrieval_log_id=None,
+                    decision="empty_query",
+                    candidates=[],
+                ),
+            )
+        )
+    active_by_skill: dict[str, SkillMatch] = {}
+    archived_by_skill: dict[str, SkillMatch] = {}
+    external_by_id: dict[str, ExternalSkillMatch] = {}
+    selected_retrieval_log_id: str | None = None
+    fallback_retrieval_log_id: str | None = None
+    for query, result in query_results:
+        if result.retrieval_log_id:
+            fallback_retrieval_log_id = str(result.retrieval_log_id)
+            if result.candidates and selected_retrieval_log_id is None:
+                selected_retrieval_log_id = str(result.retrieval_log_id)
+        query_terms = _terms(query)
+        for candidate in result.candidates:
+            if candidate.object_type == "external_skill":
+                external_match = ExternalSkillMatch.from_candidate(
                     candidate,
                     _score(candidate, query_terms, request.candidate_slug),
                     request.candidate_slug,
                 )
-            )
-            continue
-        if candidate.object_type != "body_index_document" or candidate.skill_id is None:
-            continue
-        skill_key = str(candidate.skill_id)
-        if skill_key in seen:
-            continue
-        seen.add(skill_key)
-        score = _score(candidate, query_terms, request.candidate_slug)
-        match = SkillMatch.from_candidate(candidate, score)
-        if match.lifecycle_state == "archived":
-            archived.append(match)
-        elif match.lifecycle_state in {"active", "candidate"}:
-            active.append(match)
+                existing = external_by_id.get(external_match.external_skill_id)
+                if existing is None or external_match.score > existing.score:
+                    external_by_id[external_match.external_skill_id] = external_match
+                continue
+            if candidate.object_type != "body_index_document" or candidate.skill_id is None:
+                continue
+            skill_key = str(candidate.skill_id)
+            score = _score(candidate, query_terms, request.candidate_slug)
+            match = SkillMatch.from_candidate(candidate, score)
+            if match.lifecycle_state == "archived":
+                existing = archived_by_skill.get(skill_key)
+                if existing is None or match.score > existing.score:
+                    archived_by_skill[skill_key] = match
+            elif match.lifecycle_state in {"active", "candidate"}:
+                existing = active_by_skill.get(skill_key)
+                if existing is None or match.score > existing.score:
+                    active_by_skill[skill_key] = match
 
+    active = list(active_by_skill.values())
+    archived = list(archived_by_skill.values())
+    external = list(external_by_id.values())
     active.sort(key=lambda match: match.score, reverse=True)
     archived.sort(key=lambda match: match.score, reverse=True)
     external.sort(key=lambda match: match.score, reverse=True)
     decision = _decision(active, archived, external)
     return SkillMatchResult(
         decision=decision,
-        retrieval_log_id=str(result.retrieval_log_id) if result.retrieval_log_id else None,
+        retrieval_log_id=selected_retrieval_log_id or fallback_retrieval_log_id,
         active_matches=active,
         archived_matches=archived,
         external_matches=external,
@@ -211,14 +239,29 @@ async def match_existing_skills(
 
 
 def _query_text(request: SkillMatchRequest) -> str:
-    raw_query = " ".join(
-        part.strip()
-        for part in (
-            request.candidate_description,
-            request.candidate_runtime_text,
-        )
-        if part.strip()
+    return _query_from_parts(
+        request,
+        request.candidate_description,
+        request.candidate_runtime_text,
     )
+
+
+def _query_variants(request: SkillMatchRequest) -> list[str]:
+    variants = [
+        _query_text(request),
+        _query_from_parts(request, request.candidate_runtime_text),
+        _query_from_parts(request, request.candidate_description),
+        _query_from_parts(request, request.candidate_slug.replace("-", " ")),
+    ]
+    deduped: list[str] = []
+    for variant in variants:
+        if variant and variant not in deduped:
+            deduped.append(variant)
+    return deduped
+
+
+def _query_from_parts(request: SkillMatchRequest, *parts: str) -> str:
+    raw_query = " ".join(part.strip() for part in parts if part.strip())
     terms = [
         term
         for term in _ordered_terms(raw_query)
