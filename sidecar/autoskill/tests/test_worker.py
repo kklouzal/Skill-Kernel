@@ -1425,6 +1425,9 @@ def test_mutation_worker_applies_topology_downstream_actions() -> None:
     retrieval = MemoryRetrievalInvalidationStore()
     embeddings = MemoryInvalidationStore()
     context = MemoryInvalidationStore()
+    observability = MemoryObservabilityStore()
+    trace_id = uuid4()
+    span_id = uuid4()
     subject_id = uuid4()
     successor_id = uuid4()
     transaction_id = None
@@ -1482,6 +1485,8 @@ def test_mutation_worker_applies_topology_downstream_actions() -> None:
                 "workspace_id": "dev-01",
                 "skill_graph_operation_id": str(operation.skill_graph_operation_id),
             },
+            trace_id=trace_id,
+            span_id=span_id,
         )
         result = await run_worker_once(
             WorkerStores(
@@ -1493,6 +1498,7 @@ def test_mutation_worker_applies_topology_downstream_actions() -> None:
                 context_governance=context,
                 topology=topology,
                 governance=governance,
+                observability=observability,
             ),
             worker_id="mutation-worker",
             pool="mutation",
@@ -1513,6 +1519,33 @@ def test_mutation_worker_applies_topology_downstream_actions() -> None:
     assert result.output["governance"]["recorded"] is True
     assert result.output["governance"]["items_recorded"] == 3
     assert result.output["governance"]["provenance_edges_recorded"] == 6
+    assert [span.operation_kind for span in observability.started] == ["job", "topology"]
+    topology_span = observability.started[1]
+    assert topology_span.trace_id == trace_id
+    assert topology_span.parent_span_id == span_id
+    assert topology_span.operation_name == "topology.apply_downstream"
+    assert topology_span.safe_attributes == {
+        "source": "worker",
+        "job_id": str(result.job.job_id),
+        "job_kind": "topology.apply_downstream",
+        "skill_graph_operation_id": str(operation_id),
+    }
+    assert topology_span.object_refs == [
+        {"object_type": "job", "object_id": str(result.job.job_id)},
+        {"object_type": "skill_graph_operation", "object_id": str(operation_id)},
+    ]
+    assert observability.finished[0]["status"] == "ok"
+    assert observability.finished[0]["safe_attributes"] == {
+        "lifecycle_updates": 2,
+        "edges_materialized": 1,
+        "governance_items_recorded": 3,
+        "provenance_edges_recorded": 6,
+        "runtime_objects_invalidated": 3,
+    }
+    assert observability.finished[0]["object_refs"] == [
+        {"object_type": "job", "object_id": str(result.job.job_id)},
+        {"object_type": "skill_graph_operation", "object_id": str(operation_id)},
+    ]
     transaction = next(iter(governance.transactions.values()))
     assert transaction.evolution_transaction_id == transaction_id
     assert transaction.status == "active"

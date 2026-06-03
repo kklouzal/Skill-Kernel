@@ -1771,37 +1771,99 @@ async def _run_topology_apply_downstream(
     if operation_id is None:
         raise ValueError("topology downstream apply requires skill_graph_operation_id")
 
-    result = await stores.topology.apply_downstream_actions(
+    observability = stores.observability or NullObservabilityStore()
+    span = await observability.start_span(
         workspace_key=workspace,
-        skill_graph_operation_id=operation_id,
-        applied_by=job.lease_owner or "autoskill-worker",
+        trace_id=job.trace_id,
+        parent_span_id=job.span_id or job.parent_span_id,
+        operation_name="topology.apply_downstream",
+        operation_kind="topology",
+        safe_attributes={
+            "source": "worker",
+            "job_id": str(job.job_id),
+            "job_kind": job.job_kind,
+            "skill_graph_operation_id": str(operation_id),
+        },
+        object_refs=[
+            {"object_type": "job", "object_id": str(job.job_id)},
+            {
+                "object_type": "skill_graph_operation",
+                "object_id": str(operation_id),
+            },
+        ],
     )
-    if not result.allowed:
-        raise ValueError("; ".join(result.blockers) or "topology downstream apply blocked")
-
-    operation = result.operation
-    governance = {}
-    if stores.governance is not None and operation is not None:
-        governance = await _record_topology_downstream_governance(
-            stores.governance,
+    try:
+        result = await stores.topology.apply_downstream_actions(
             workspace_key=workspace,
-            result=result.to_json(),
+            skill_graph_operation_id=operation_id,
+            applied_by=job.lease_owner or "autoskill-worker",
         )
-    invalidation = await _invalidate_topology_runtime_objects(
-        stores,
-        workspace_key=workspace,
-        operation_id=operation_id,
-        skill_ids=(
-            [*operation.subject_skill_ids, *operation.output_skill_ids]
-            if operation is not None
-            else []
-        ),
+        if not result.allowed:
+            raise ValueError(
+                "; ".join(result.blockers) or "topology downstream apply blocked"
+            )
+
+        operation = result.operation
+        governance = {}
+        if stores.governance is not None and operation is not None:
+            governance = await _record_topology_downstream_governance(
+                stores.governance,
+                workspace_key=workspace,
+                result=result.to_json(),
+            )
+        invalidation = await _invalidate_topology_runtime_objects(
+            stores,
+            workspace_key=workspace,
+            operation_id=operation_id,
+            skill_ids=(
+                [*operation.subject_skill_ids, *operation.output_skill_ids]
+                if operation is not None
+                else []
+            ),
+        )
+        output = {
+            **result.to_json(),
+            "governance": governance,
+            "runtime_invalidation": invalidation,
+        }
+    except Exception as error:
+        await observability.finish_span(
+            span_id=span.span_id,
+            status="error",
+            safe_attributes={"error": f"{type(error).__name__}: {error}"[:500]},
+        )
+        raise
+    await observability.finish_span(
+        span_id=span.span_id,
+        status="ok",
+        safe_attributes={
+            "lifecycle_updates": output.get("lifecycle_updates", 0),
+            "edges_materialized": output.get("edges_materialized", 0),
+            "governance_items_recorded": (
+                output.get("governance", {}).get("items_recorded", 0)
+                if isinstance(output.get("governance"), dict)
+                else 0
+            ),
+            "provenance_edges_recorded": (
+                output.get("governance", {}).get("provenance_edges_recorded", 0)
+                if isinstance(output.get("governance"), dict)
+                else 0
+            ),
+            "runtime_objects_invalidated": (
+                output.get("runtime_invalidation", {}).get("objects", 0)
+                if isinstance(output.get("runtime_invalidation"), dict)
+                else 0
+            ),
+        },
+        object_refs=[
+            {"object_type": "job", "object_id": str(job.job_id)},
+            {
+                "object_type": "skill_graph_operation",
+                "object_id": str(operation_id),
+            },
+        ],
     )
-    return {
-        **result.to_json(),
-        "governance": governance,
-        "runtime_invalidation": invalidation,
-    }
+    return output
 
 
 async def _record_topology_downstream_governance(

@@ -337,6 +337,10 @@ Deliverables:
   derived state revoked or rolled back, revoking matching attribution records, marking
   impacted active skills `revoked`, revoking connected skill graph edges, and revoking
   matching evidence-maturity rows during mutation-worker rollback completion.
+- topology downstream apply trace spans; implemented as content-safe mutation-worker
+  `topology.apply_downstream` operation spans that preserve the queued job trace/span
+  root and close with bounded lifecycle, graph-edge, governance, provenance, and
+  runtime-invalidation counts plus job/operation object refs.
 
 Acceptance:
 
@@ -357,6 +361,10 @@ Acceptance:
 - writer apply/rollback transaction items are discoverable by provenance traversal from their evolution transaction root; implemented and validated with focused writer/governance tests plus compose/Postgres smoke coverage;
 - canary critical failures record canary evidence, mark the skill `frozen`, store the freeze reason, record a transaction item, and queue a rollback revocation request when the canary is transaction-scoped; implemented and validated with focused tests plus compose/Postgres smoke coverage;
 - mutation-pool `revocations.rollback` jobs claim queued rollback revocation requests, start an idempotent `rollback_skill` transaction, restore the recorded archive manifest through the transaction-aware writer rollback path, complete the revocation request with rollback artifact evidence, and persist a content-safe `rollback` trace span for the worker operation; implemented and validated with focused worker tests plus compose/Postgres smoke coverage;
+- mutation-pool `topology.apply_downstream` jobs persist content-safe `topology`
+  child spans for lifecycle/graph materialization, preserving trace roots and
+  recording only bounded counts and object refs; implemented and validated with
+  focused worker tests plus full sidecar validation.
 - accepted SkillGraphIR topology operations record deterministic downstream orchestration actions in `trial_summary.downstream_orchestration`, and mutation-pool `topology.apply_downstream` jobs can consume applied operations to materialize graph edges, activate successor/composed skills, archive superseded/decomposed subjects, record applied action results, and invalidate runtime-derived retrieval/context/embedding records where stores expose invalidation hooks;
 - valid skill appears under active root;
 - invalid paths are rejected;
