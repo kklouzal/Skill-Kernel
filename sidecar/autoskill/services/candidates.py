@@ -166,6 +166,12 @@ def _proposal_from_opportunity(candidate: OpportunityCandidate) -> CandidateSkil
 
 def _compact_description(description: str) -> str:
     compact = " ".join(description.split())
-    if len(compact) <= 180:
-        return compact
-    return compact[:177].rstrip() + "..."
+    lowered = compact.lower()
+    if "use when " in lowered and "not for " in lowered:
+        return compact if len(compact) <= 180 else compact[:177].rstrip() + "..."
+    trigger = compact[:88].rstrip(" .;")
+    shaped = (
+        f"Create reusable procedure; use when {trigger}; not for one-off tasks "
+        "or active-skill duplicates."
+    )
+    return shaped if len(shaped) <= 180 else shaped[:177].rstrip() + "..."

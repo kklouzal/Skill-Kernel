@@ -1393,7 +1393,8 @@ def _repair_skillir(
         slug=slug,
         name=slug,
         description=(
-            f"Stage approved {proposal_kind} repair; use for SkillKernel guarded repair."
+            f"Stage approved {proposal_kind} repair; use when a policy-approved "
+            "SkillKernel repair has gated evidence; not for ungated runtime mutation."
         ),
         applicability=[
             f"A SkillKernel repair proposal of type `{proposal_kind}` is approved."

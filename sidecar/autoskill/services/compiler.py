@@ -233,6 +233,7 @@ async def compile_skill_with_context_governance(
     added_unsupported_requirements = 0
     semantic_equivalence_score = 1.0 if requirements and lost_requirements == 0 else 0.0
     description_over_budget = len(skill.description) > max(1, description_max_chars)
+    description_style_errors = _description_style_errors(skill.description)
     blocking_scanner = has_blocking_findings(compiled.scanner_findings)
     probe_reject_reason = _probe_reject_reason(
         require_probe_evidence=require_probe_evidence,
@@ -242,6 +243,7 @@ async def compile_skill_with_context_governance(
     reject_reason = _context_reject_reason(
         blocking_scanner=blocking_scanner,
         description_over_budget=description_over_budget,
+        description_style_invalid=bool(description_style_errors),
         token_over_budget=compiled.token_over_budget,
         lost_requirements=lost_requirements,
         probe_reject_reason=probe_reject_reason,
@@ -270,6 +272,10 @@ async def compile_skill_with_context_governance(
             "skill_slug": skill.slug,
             "description_char_count": len(skill.description),
             "description_max_chars": max(1, description_max_chars),
+            "description_style_status": (
+                "failed" if description_style_errors else "passed"
+            ),
+            "description_style_errors": description_style_errors,
             "required_requirements": len(requirements),
             "preserved_requirements": len(preserved),
             "lost_requirements": lost_requirements,
@@ -337,6 +343,10 @@ async def compile_skill_with_context_governance(
             "safety_status": safety_status,
             "equivalence_status": equivalence_status,
             "description_over_budget": description_over_budget,
+            "description_style_status": (
+                "failed" if description_style_errors else "passed"
+            ),
+            "description_style_errors": description_style_errors,
             "model_assist_used": False,
             "probe_evidence_required": require_probe_evidence,
             "probe_reject_reason": probe_reject_reason,
@@ -383,6 +393,10 @@ async def compile_skill_with_context_governance(
             "skill_slug": skill.slug,
             "method": "deterministic_exact_requirement_render",
             "probe_evidence_required": require_probe_evidence,
+            "description_style_status": (
+                "failed" if description_style_errors else "passed"
+            ),
+            "description_style_errors": description_style_errors,
             "routing_equivalence_evidence": _safe_gate_evidence(
                 routing_equivalence_evidence
             ),
@@ -499,6 +513,7 @@ def _context_reject_reason(
     *,
     blocking_scanner: bool,
     description_over_budget: bool,
+    description_style_invalid: bool,
     token_over_budget: bool,
     lost_requirements: int,
     probe_reject_reason: str | None = None,
@@ -507,6 +522,8 @@ def _context_reject_reason(
         return "scanner_blocked"
     if description_over_budget:
         return "description_over_budget"
+    if description_style_invalid:
+        return "description_style_invalid"
     if token_over_budget:
         return "over_context_budget"
     if lost_requirements:
@@ -514,6 +531,39 @@ def _context_reject_reason(
     if probe_reject_reason:
         return probe_reject_reason
     return None
+
+
+def _description_style_errors(description: str) -> list[str]:
+    text = " ".join(description.strip().split())
+    lowered = text.lower()
+    clauses = [clause.strip() for clause in lowered.split(";") if clause.strip()]
+    errors: list[str] = []
+    if len(clauses) < 3:
+        errors.append("description_requires_action_use_when_not_for_clauses")
+    first_clause = clauses[0] if clauses else ""
+    if (
+        len(first_clause.split()) < 2
+        or first_clause.startswith("use when ")
+        or first_clause.startswith("not for ")
+    ):
+        errors.append("description_action_clause_missing")
+    use_when = next(
+        (clause for clause in clauses if clause.startswith("use when ")),
+        None,
+    )
+    if use_when is None:
+        errors.append("description_use_when_clause_missing")
+    elif len(use_when.removeprefix("use when ").split()) < 3:
+        errors.append("description_use_when_clause_too_broad")
+    not_for = next(
+        (clause for clause in clauses if clause.startswith("not for ")),
+        None,
+    )
+    if not_for is None:
+        errors.append("description_not_for_clause_missing")
+    elif len(not_for.removeprefix("not for ").split()) < 3:
+        errors.append("description_not_for_clause_too_broad")
+    return errors
 
 
 def _probe_reject_reason(

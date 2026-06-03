@@ -681,7 +681,10 @@ def test_context_compile_skillir_endpoint_records_deterministic_gate() -> None:
     skill = SkillIR(
         slug="autoskill-example",
         name="autoskill-example",
-        description="Handle repeated workflow checks.",
+        description=(
+            "Handle repeated workflow checks; use when validated evidence "
+            "recurs; not for one-off unguided automation."
+        ),
         applicability=["A repeated workflow has validated evidence."],
         inputs=["User goal and cited evidence IDs."],
         preconditions=["Evidence is mature enough for proposal."],

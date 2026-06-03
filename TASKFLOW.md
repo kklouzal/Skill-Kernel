@@ -601,6 +601,16 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   compileall -q sidecar`, `git diff --check`, `npm test --prefix
   plugin/autoskill` with 18 tests, and `npm run check --prefix
   plugin/autoskill`.
+- Description minimization is now enforced as an activation-grade context gate:
+  context-governed SkillIR compilation rejects broad descriptions that lack the
+  required action, `use when`, and `not for` clauses, records deterministic
+  style metadata on context artifacts/compile runs/compression trials, and the
+  candidate and repair fallback generators now emit compliant compact
+  descriptions. Validation passed with focused compiler/candidate/admin/worker
+  tests, focused ruff checks, full `uv run ruff check sidecar`, `uv run pytest
+  -q` with 265 tests, `uv run python -m compileall -q sidecar`, `git diff
+  --check`, `npm test --prefix plugin/autoskill` with 18 tests, and `npm run
+  check --prefix plugin/autoskill`.
 
 ## Next Gates
 

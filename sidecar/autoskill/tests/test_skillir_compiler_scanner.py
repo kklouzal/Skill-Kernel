@@ -12,7 +12,10 @@ def valid_skill() -> SkillIR:
     return SkillIR(
         slug="autoskill-example",
         name="autoskill-example",
-        description="Handle a repeated OpenClaw workflow with deterministic checks.",
+        description=(
+            "Handle repeated OpenClaw workflow checks; use when validated "
+            "evidence recurs; not for one-off unguided automation."
+        ),
         applicability=["A repeated workflow has validated evidence."],
         inputs=["User goal and relevant redacted evidence IDs."],
         preconditions=["Evidence maturity is intervention_validated or better."],
@@ -235,6 +238,25 @@ def test_context_compiler_requires_probe_evidence_when_activation_grade() -> Non
     safe_evidence = passed.context_artifact["metadata"]["routing_equivalence_evidence"]
     assert safe_evidence["positive_routing_passed"] is True
     assert "raw_prompt" not in safe_evidence
+
+
+def test_context_compiler_rejects_broad_description_without_boundary() -> None:
+    result = asyncio.run(
+        compile_skill_with_context_governance(
+            valid_skill().model_copy(
+                update={"description": "Handle repeated workflow checks."}
+            ),
+            NullContextGovernanceStore(),
+            workspace_key="dev-01",
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.reject_reason == "description_style_invalid"
+    metadata = result.context_artifact["metadata"]
+    assert metadata["description_style_status"] == "failed"
+    assert "description_use_when_clause_missing" in metadata["description_style_errors"]
+    assert "description_not_for_clause_missing" in metadata["description_style_errors"]
 
 
 def test_context_compiler_manifest_hash_is_deterministic() -> None:
