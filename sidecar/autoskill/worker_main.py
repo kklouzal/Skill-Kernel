@@ -8,6 +8,7 @@ from pathlib import Path
 from autoskill.core.config import Settings, get_settings
 from autoskill.db.activation import AsyncpgActivationGateStore
 from autoskill.db.attribution import AsyncpgAttributionStore
+from autoskill.db.candidates import AsyncpgCandidateStore
 from autoskill.db.context import AsyncpgContextGovernanceStore
 from autoskill.db.contracts import AsyncpgContractStore
 from autoskill.db.embeddings import AsyncpgEmbeddingStore
@@ -67,6 +68,10 @@ async def run_worker(args: argparse.Namespace) -> int:
         statement_timeout_ms=settings.statement_timeout_ms,
     )
     governance = AsyncpgGovernanceStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
+    candidates = AsyncpgCandidateStore(
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
     )
@@ -130,6 +135,7 @@ async def run_worker(args: argparse.Namespace) -> int:
                 scheduler=scheduler,
                 evidence=evidence,
                 external_skills=external_skills,
+                candidates=candidates,
                 historical_import=historical_import,
                 embeddings=embeddings,
                 evaluations=evaluations,

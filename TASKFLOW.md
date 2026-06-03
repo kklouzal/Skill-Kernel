@@ -548,6 +548,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   Validation passed with `uv run ruff check sidecar`, `uv run pytest` (256
   tests), `uv run python -m compileall -q sidecar`, `npm test --prefix
   plugin/autoskill` (18 tests), and `git diff --check`.
+- Broker policy/audit review is now implemented as the remaining Phase 9
+  operator review surface: `/v1/broker/policies/review` summarizes active
+  policy state, replay-corpus coverage, production-tagged replay coverage,
+  latest critical feedback, and bounded audit-chain verification without
+  mutating retrieval or runtime context state. Focused validation passed with
+  broker-policy API tests and focused ruff checks.
+- Historical bootstrap consolidation is now implemented for the Phase 4.75/Next
+  Gate 3 gap: `/v1/historical-bootstrap/consolidate` and maintenance job
+  `historical_bootstrap.consolidate` filter to historical chunk observations and
+  historical-tainted recurring clusters, run existing active/archive/external
+  duplicate matching before candidate proposal, return propose-only candidates
+  with cited historical evidence IDs, and optionally persist inactive candidate
+  rows through the existing governance/candidate/probe path without writing
+  runtime skill files.
 
 ## Next Gates
 
@@ -557,9 +571,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 2. Promote or replace the operator smoke runtime skill with the first genuinely
    useful SkillKernel-owned runtime skill once replay/probe evidence supports a
    non-smoke activation target.
-3. Build bounded bootstrap consolidation over the historical import substrate,
-   keeping imported history tainted and subject to normal evidence/evaluator
-   gates before any candidate proposal is activated.
+3. Continue richer historical source-item lineage work beyond the current
+   hashed file/item/chunk model. Bounded bootstrap consolidation over the
+   historical import substrate now exists and keeps imported history tainted,
+   propose-only, and subject to normal evidence/evaluator gates.
 4. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
 
 ## Known Risks
@@ -604,6 +619,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Operator visibility for SkillGraphIR topology now includes separate
   create/improve/compose/decompose metrics through `/v1/topology/metrics`;
   richer UI dashboards can build on this read-only sidecar surface.
+- Operator visibility for retrieval policy now includes a read-only
+  `/v1/broker/policies/review` endpoint that fails closed on missing active
+  policy or invalid audit-chain verification and warns on missing replay
+  evidence.
 - Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded or induced redacted intervention replay from explicit replay, attribution, canary, or broker outcome evidence.
 - Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints; mutation-worker apply exists but fails closed unless the queued job is explicitly policy-approved.
 - Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, invalidates body-index/embedding/context/retrieval/topology/evaluator/attribution/governance objects from traversal summaries, and freeze/critical-canary paths evict affected broker cache entries.

@@ -193,9 +193,15 @@ Acceptance:
 - imported chunks now carry compact source-item lineage metadata with source
   kind, source key, fingerprint, item key, chunk index, and relative path hash
   while continuing to avoid raw path storage;
-- remaining historical ingestion work is bounded bootstrap consolidation plus
-  richer source-item lineage for future non-file ledgers and live source
-  systems beyond the current hashed file/item/chunk model.
+- bounded bootstrap consolidation is implemented as a historical-only,
+  propose-only consolidation API and maintenance job that filters tainted
+  historical observations/recurring clusters, reuses existing active/archive/
+  external matching before proposal, and optionally persists inactive candidate
+  rows through the normal governance transaction/probe path without writing
+  runtime skill files;
+- remaining historical ingestion work is richer source-item lineage for future
+  non-file ledgers and live source systems beyond the current hashed
+  file/item/chunk model.
 
 ## Phase 5 - Runtime Context Broker
 
@@ -454,14 +460,20 @@ Deliverables:
 - localized repair;
 - skill graph maintenance;
 - repeated shadowing events materialize deterministic `shadow` skill graph edges plus active contrastive shadowing probes;
-- audit and retrieval policy reviews;
+- audit and retrieval policy reviews; implemented as a control-authenticated
+  broker-policy review surface that reports active policy status, bounded
+  replay-corpus coverage, production-tagged replay coverage, latest critical
+  policy feedback, and bounded audit-chain verification without mutating
+  routing state;
 - evidence maturity, action-attribution check, control-flow event, and revocation request storage; implemented as v9 governance schema foundations, with passed recorded or contrastively induced intervention-replay proposal gates recording `intervention_validated` maturity for cited evidence and skill versions.
 
 Acceptance:
 
 - drift violations trigger targeted repair; implemented as drift-event repair-candidate metadata with localized repair plans and active drift probes that retire when contracts return valid or when an operator marks a known-noisy contract false-positive; conservative repair execution now queues drift rechecks or policy-approved staged writer applies rather than inventing broad autonomous mutations from incomplete source data;
 - curation logs features/actions/outcomes;
-- audit integrity verifies.
+- audit integrity verifies, and retrieval-policy review fails closed on missing
+  active policy or invalid bounded audit hash-chain verification while warning
+  on empty replay evidence.
 
 ## Phase 9.5 - Memory Quarantine and Control-Flow Integrity
 

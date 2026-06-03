@@ -175,3 +175,57 @@ def test_broker_policy_canary_rolls_back_critical_policy() -> None:
     assert response.feedback.status == "critical"
     assert response.feedback.rollback_recommended is True
     assert response.policy_version["status"] == "rolled_back"
+
+
+def test_broker_policy_review_reports_active_policy_replay_and_audit_state() -> None:
+    policy_store = NullBrokerPolicyStore()
+    app = create_app(broker_policy_store=policy_store)
+    upsert = next(route for route in app.routes if route.path == "/v1/broker/policies")
+    record = next(
+        route for route in app.routes if route.path == "/v1/broker/replay-episodes"
+    )
+    review = next(route for route in app.routes if route.path == "/v1/broker/policies/review")
+
+    async def run():
+        await upsert.endpoint(
+            request=BrokerPolicyUpsertRequest(
+                workspace_id="dev-01",
+                version="broker-policy-review.v1",
+                policy={"runtime_context_broker": {"lexical_limit": 4}},
+                status="active",
+            )
+        )
+        await record.endpoint(
+            request=BrokerReplayEpisodeRecordRequest(
+                workspace_id="dev-01",
+                episode_key="prod-review-1",
+                redacted_user_intent="redacted runtime intent",
+                expected_decision="no_skill",
+                tags=["production", "operator-reviewed"],
+            )
+        )
+        return await review.endpoint(workspace_id="dev-01")
+
+    response = asyncio.run(run())
+
+    assert response.review_status == "pass"
+    assert response.blockers == []
+    assert response.warnings == []
+    assert response.active_policy["version"] == "broker-policy-review.v1"
+    assert response.replay_corpus["sampled_total"] == 1
+    assert response.replay_corpus["sampled_production"] == 1
+    assert response.audit["chain_valid"] is True
+
+
+def test_broker_policy_review_blocks_missing_active_policy_and_warns_empty_replay() -> None:
+    app = create_app(broker_policy_store=NullBrokerPolicyStore())
+    review = next(route for route in app.routes if route.path == "/v1/broker/policies/review")
+
+    response = asyncio.run(review.endpoint(workspace_id="dev-01"))
+
+    assert response.review_status == "blocked"
+    assert response.blockers == ["active broker policy is missing"]
+    assert response.warnings == [
+        "broker replay corpus is empty",
+        "production-tagged broker replay corpus is empty",
+    ]

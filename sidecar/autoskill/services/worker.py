@@ -13,6 +13,7 @@ from autoskill.core.hashing import sha256_json
 from autoskill.core.skillir import SkillIR
 from autoskill.db.activation import ActivationGateStore
 from autoskill.db.attribution import AttributionStore
+from autoskill.db.candidates import CandidateStore
 from autoskill.db.context import ContextGovernanceStore
 from autoskill.db.contracts import ContractStore
 from autoskill.db.embeddings import EmbeddingStore
@@ -42,6 +43,7 @@ from autoskill.services.embedding_generation import (
 from autoskill.services.evaluation_runner import run_pending_proposal_gates_with_trace
 from autoskill.services.external_import import materialize_external_skill_import
 from autoskill.services.external_inventory import scan_external_skill_roots
+from autoskill.services.historical_bootstrap import consolidate_historical_bootstrap
 from autoskill.services.historical_discovery import discover_historical_sources
 from autoskill.services.historical_import import import_historical_sources
 from autoskill.services.opportunity import mine_opportunities
@@ -143,6 +145,7 @@ class WorkerStores:
     evidence: EvidenceStore
     embeddings: EmbeddingStore
     external_skills: ExternalSkillStore | None = None
+    candidates: CandidateStore | None = None
     historical_import: HistoricalImportStore | None = None
     retrieval: RetrievalStore | None = None
     evaluations: EvaluationStore | None = None
@@ -1480,6 +1483,82 @@ async def _run_historical_import_parse(
     return result.to_json()
 
 
+async def _run_historical_bootstrap_consolidate(
+    stores: WorkerStores,
+    job: JobRecord,
+) -> dict[str, Any]:
+    if stores.retrieval is None:
+        raise ValueError("retrieval store is required for historical bootstrap consolidation")
+    workspace = _payload_workspace(job)
+    if workspace is None:
+        raise ValueError("historical bootstrap consolidation requires workspace_id")
+    result = await consolidate_historical_bootstrap(
+        stores.evidence,
+        stores.retrieval,
+        workspace_key=workspace,
+        limit=_payload_int(job.payload, "limit", default=250, minimum=1, maximum=1000),
+        min_support=_payload_int(job.payload, "min_support", default=2, minimum=2, maximum=25),
+    )
+    output = result.to_json()
+    if not bool(_payload_dict(job.payload).get("persist", False)):
+        return output
+    if stores.candidates is None:
+        raise ValueError("candidate store is required to persist historical bootstrap proposals")
+    if stores.governance is None:
+        raise ValueError("governance store is required to persist historical bootstrap proposals")
+    proposal_payload = output["proposals"]
+    proposal_rows = proposal_payload.get("proposals", [])
+    transaction = None
+    transaction_id = _uuid_value(job.payload.get("evolution_transaction_id"))
+    if result.proposals.proposed > 0 and transaction_id is None:
+        started = await stores.governance.start_transaction(
+            workspace_key=workspace,
+            transaction_kind="historical_bootstrap_consolidation",
+            idempotency_key=f"historical-bootstrap:{sha256_json(proposal_rows)}",
+            plan_hash=sha256_json(
+                {
+                    "workspace_key": workspace,
+                    "job_id": str(job.job_id),
+                    "proposals": proposal_rows,
+                }
+            ),
+            actor="autoskill-maintenance-worker",
+            cause={
+                "job_kind": job.job_kind,
+                "job_id": str(job.job_id),
+                "mode": "propose_only",
+            },
+            source_evidence_ids=_proposal_evidence_ids(proposal_rows),
+            policy_snapshot={
+                "historical_evidence_only": True,
+                "activation_allowed": False,
+                "runtime_file_writes": "forbidden",
+                "candidate_state": "inactive",
+            },
+        )
+        transaction = started.transaction
+        transaction_id = transaction.evolution_transaction_id
+    persistence = await stores.candidates.persist_candidate_proposals(
+        workspace_key=workspace,
+        proposals=result.proposals.proposals,
+        evolution_transaction_id=transaction_id,
+    )
+    persistence_payload = persistence.to_json()
+    if transaction_id is not None and persistence.persisted > 0:
+        transaction = await stores.governance.update_transaction_status(
+            evolution_transaction_id=transaction_id,
+            status="staged",
+            metrics={
+                "persisted_candidates": persistence.persisted,
+                "skipped_candidates": persistence.skipped,
+            },
+        )
+    if transaction is not None:
+        persistence_payload["transaction"] = transaction.to_json()
+    output["persistence"] = persistence_payload
+    return output
+
+
 async def _run_external_skill_materialize_import(
     stores: WorkerStores,
     job: JobRecord,
@@ -2320,6 +2399,26 @@ def _string_value(value: object) -> str | None:
     return text or None
 
 
+def _proposal_evidence_ids(proposals: object) -> list[UUID]:
+    if not isinstance(proposals, list):
+        return []
+    seen: set[UUID] = set()
+    ordered: list[UUID] = []
+    for proposal in proposals:
+        if not isinstance(proposal, dict):
+            continue
+        evidence_ids = proposal.get("evidence_ids", [])
+        if not isinstance(evidence_ids, list):
+            continue
+        for evidence_id in evidence_ids:
+            parsed = _uuid_value(evidence_id)
+            if parsed is None or parsed in seen:
+                continue
+            seen.add(parsed)
+            ordered.append(parsed)
+    return ordered
+
+
 JOB_DEFINITIONS: dict[str, JobDefinition] = {
     "scheduler.tick": JobDefinition("scheduler.tick", "scheduler", _run_scheduler_tick),
     "evidence.derive": JobDefinition("evidence.derive", "maintenance", _run_evidence_derive),
@@ -2387,6 +2486,11 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "historical_import.parse",
         "maintenance",
         _run_historical_import_parse,
+    ),
+    "historical_bootstrap.consolidate": JobDefinition(
+        "historical_bootstrap.consolidate",
+        "maintenance",
+        _run_historical_bootstrap_consolidate,
     ),
     "topology.apply_downstream": JobDefinition(
         "topology.apply_downstream",

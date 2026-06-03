@@ -121,6 +121,7 @@ from autoskill.services.embedding_generation import (
     generate_pending_embeddings,
 )
 from autoskill.services.evaluation_runner import run_pending_proposal_gates_with_trace
+from autoskill.services.historical_bootstrap import consolidate_historical_bootstrap
 from autoskill.services.historical_discovery import discover_historical_sources
 from autoskill.services.historical_import import import_historical_sources
 from autoskill.services.llm import LLMClient
@@ -795,6 +796,23 @@ class CandidateProposalResponse(BaseModel):
     persistence: dict[str, object] | None = None
 
 
+class HistoricalBootstrapConsolidateRequest(BaseModel):
+    workspace_id: str
+    limit: int = 250
+    min_support: int = 2
+    persist: bool = False
+    evolution_transaction_id: UUID | None = None
+
+
+class HistoricalBootstrapConsolidateResponse(BaseModel):
+    scanned: int
+    historical_scanned: int
+    opportunities: dict[str, object]
+    proposals: dict[str, object]
+    activation_allowed: bool
+    persistence: dict[str, object] | None = None
+
+
 class EvaluationRunRequest(BaseModel):
     workspace_id: str | None = None
     trace_id: UUID | None = None
@@ -1050,6 +1068,16 @@ class BrokerPolicyCanaryResponse(BaseModel):
     policy_version: dict[str, object] | None
 
 
+class BrokerPolicyReviewResponse(BaseModel):
+    workspace_id: str
+    review_status: str
+    blockers: list[str]
+    warnings: list[str]
+    active_policy: dict[str, object] | None
+    replay_corpus: dict[str, object]
+    audit: dict[str, object]
+
+
 class ActionAttributionCheckRequest(BaseModel):
     workspace_id: str
     session_id: str | None = None
@@ -1249,6 +1277,71 @@ def _candidate_source_evidence_ids(
             seen.add(parsed)
             ordered.append(parsed)
     return ordered
+
+
+async def _persist_candidate_proposal_payload(
+    candidates: CandidateStore,
+    governance: GovernanceStore,
+    *,
+    workspace_key: str,
+    proposals: list[object],
+    proposal_payload: dict[str, object],
+    transaction_kind: str,
+    endpoint: str,
+    evolution_transaction_id: UUID | None = None,
+    policy_snapshot: dict[str, object] | None = None,
+) -> dict[str, object]:
+    proposal_rows = proposal_payload.get("proposals", [])
+    if not isinstance(proposal_rows, list):
+        proposal_rows = []
+    transaction = None
+    transaction_id = evolution_transaction_id
+    proposed_count = int(proposal_payload.get("proposed", 0) or 0)
+    if proposed_count > 0 and transaction_id is None:
+        started = await governance.start_transaction(
+            workspace_key=workspace_key,
+            transaction_kind=transaction_kind,
+            idempotency_key=_candidate_transaction_idempotency_key(
+                workspace_key=workspace_key,
+                proposals=proposal_rows,
+            ),
+            plan_hash=_candidate_transaction_plan_hash(
+                workspace_key=workspace_key,
+                proposals=proposal_rows,
+            ),
+            actor="autoskill-sidecar",
+            cause={
+                "endpoint": endpoint,
+                "mode": "propose_only",
+            },
+            source_evidence_ids=_candidate_source_evidence_ids(proposal_rows),
+            policy_snapshot=policy_snapshot
+            or {
+                "runtime_file_writes": "forbidden",
+                "candidate_state": "inactive",
+                "activation_gate": "disabled",
+            },
+        )
+        transaction = started.transaction
+        transaction_id = started.transaction.evolution_transaction_id
+    persistence = await candidates.persist_candidate_proposals(
+        workspace_key=workspace_key,
+        proposals=proposals,  # type: ignore[arg-type]
+        evolution_transaction_id=transaction_id,
+    )
+    persistence_payload = persistence.to_json()
+    if transaction_id is not None and persistence.persisted > 0:
+        transaction = await governance.update_transaction_status(
+            evolution_transaction_id=transaction_id,
+            status="staged",
+            metrics={
+                "persisted_candidates": persistence.persisted,
+                "skipped_candidates": persistence.skipped,
+            },
+        )
+    if transaction is not None:
+        persistence_payload["transaction"] = transaction.to_json()
+    return persistence_payload
 
 
 class EmbeddingUpsertRequest(BaseModel):
@@ -1924,6 +2017,7 @@ def _worker_stores(
     scheduler: SchedulerStore,
     evidence: EvidenceStore,
     external_skills: ExternalSkillStore,
+    candidates: CandidateStore,
     embeddings: EmbeddingStore,
     retrieval: RetrievalStore,
     evaluations: EvaluationStore,
@@ -1950,6 +2044,7 @@ def _worker_stores(
         scheduler=scheduler,
         evidence=evidence,
         external_skills=external_skills,
+        candidates=candidates,
         historical_import=historical_import,
         embeddings=embeddings,
         retrieval=retrieval,
@@ -3059,6 +3154,82 @@ def create_app(
             policy_version=record.to_json(),
         )
 
+    @app.get(
+        "/v1/broker/policies/review",
+        response_model=BrokerPolicyReviewResponse,
+    )
+    async def review_broker_policy(
+        authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str = "default",
+        replay_limit: int = 100,
+        audit_limit: int = 100,
+    ) -> BrokerPolicyReviewResponse:
+        _require_control_auth(authorization)
+        bounded_replay_limit = max(1, min(replay_limit, 500))
+        bounded_audit_limit = max(1, min(audit_limit, 1000))
+        active_policy = await broker_policies.get_active_policy(workspace_key=workspace_id)
+        replay_episodes = await broker_policies.list_replay_episodes(
+            workspace_key=workspace_id,
+            tags=[],
+            limit=bounded_replay_limit,
+        )
+        production_replay_episodes = await broker_policies.list_replay_episodes(
+            workspace_key=workspace_id,
+            tags=["production"],
+            limit=bounded_replay_limit,
+        )
+        audit_records = await audit.list_recent(
+            workspace_key=workspace_id,
+            limit=bounded_audit_limit,
+        )
+        audit_chain_valid = await audit.verify_chain(
+            workspace_key=workspace_id,
+            limit=bounded_audit_limit,
+        )
+
+        blockers: list[str] = []
+        warnings: list[str] = []
+        if active_policy is None:
+            blockers.append("active broker policy is missing")
+        elif active_policy.status != "active":
+            blockers.append("active broker policy is not active")
+        policy_feedback = (
+            active_policy.policy.get("runtime_feedback", {}) if active_policy else {}
+        )
+        last_canary = (
+            policy_feedback.get("last_canary", {})
+            if isinstance(policy_feedback, dict)
+            else {}
+        )
+        if isinstance(last_canary, dict) and last_canary.get("status") == "critical":
+            blockers.append("latest broker policy canary is critical")
+        if not replay_episodes:
+            warnings.append("broker replay corpus is empty")
+        if not production_replay_episodes:
+            warnings.append("production-tagged broker replay corpus is empty")
+        if not audit_chain_valid:
+            blockers.append("audit hash chain failed bounded verification")
+
+        review_status = "blocked" if blockers else "warning" if warnings else "pass"
+        return BrokerPolicyReviewResponse(
+            workspace_id=workspace_id,
+            review_status=review_status,
+            blockers=blockers,
+            warnings=warnings,
+            active_policy=active_policy.to_json() if active_policy else None,
+            replay_corpus={
+                "sampled_total": len(replay_episodes),
+                "sampled_production": len(production_replay_episodes),
+                "limit": bounded_replay_limit,
+                "episode_keys": [episode.episode_key for episode in replay_episodes[:25]],
+            },
+            audit={
+                "sampled_records": len(audit_records),
+                "limit": bounded_audit_limit,
+                "chain_valid": audit_chain_valid,
+            },
+        )
+
     @app.post(
         "/v1/runtime/context-hint/cache/invalidate",
         response_model=ContextCacheInvalidateResponse,
@@ -3546,6 +3717,7 @@ def create_app(
                 scheduler=scheduler,
                 evidence=evidence,
                 external_skills=external_skills,
+                candidates=candidates,
                 embeddings=embeddings,
                 retrieval=retrieval,
                 evaluations=evaluations,
@@ -4277,6 +4449,43 @@ def create_app(
                 persistence_payload["transaction"] = transaction.to_json()
             payload["persistence"] = persistence_payload
         return CandidateProposalResponse(**payload)
+
+    @app.post(
+        "/v1/historical-bootstrap/consolidate",
+        response_model=HistoricalBootstrapConsolidateResponse,
+    )
+    async def consolidate_historical_bootstrap_route(
+        request: HistoricalBootstrapConsolidateRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> HistoricalBootstrapConsolidateResponse:
+        _require_control_auth(authorization)
+        result = await consolidate_historical_bootstrap(
+            evidence,
+            retrieval,
+            workspace_key=request.workspace_id,
+            limit=max(1, min(request.limit, 1000)),
+            min_support=max(2, min(request.min_support, 25)),
+        )
+        payload = result.to_json()
+        if request.persist:
+            persistence = await _persist_candidate_proposal_payload(
+                candidates,
+                governance,
+                workspace_key=request.workspace_id,
+                proposals=result.proposals.proposals,
+                proposal_payload=payload["proposals"],
+                transaction_kind="historical_bootstrap_consolidation",
+                endpoint="/v1/historical-bootstrap/consolidate",
+                evolution_transaction_id=request.evolution_transaction_id,
+                policy_snapshot={
+                    "historical_evidence_only": True,
+                    "activation_allowed": False,
+                    "runtime_file_writes": "forbidden",
+                    "candidate_state": "inactive",
+                },
+            )
+            payload["persistence"] = persistence
+        return HistoricalBootstrapConsolidateResponse(**payload)
 
     @app.post("/v1/evaluations/run", response_model=EvaluationRunResponse)
     async def run_evaluations(
