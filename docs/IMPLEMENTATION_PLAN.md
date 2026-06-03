@@ -586,7 +586,8 @@ Deliverables:
 - Dev-01 deployment alignment is implemented separately from the sidecar
   preflight: compose workers, plugin config, and gateway env fallback all target
   `dev-01`, runtime context hints are enabled fail-soft, raw capture remains off,
-  and runtime tool-boundary blocking remains off.
+  runtime broker semantic retrieval uses the active qualified embedding profile
+  when present, and runtime tool-boundary blocking remains off.
 
 Acceptance:
 
@@ -596,8 +597,9 @@ Acceptance:
   broker policy, and production replay records can make the readiness report pass
   through the real asyncpg stores after compose migrations;
 - readiness reporting is an operator preflight; the current Dev-01 deployment
-  also passed live gateway capture/hint validation, stored broker replay,
-  production embedding validation, red-team smoke, and backup/restore dry-run.
+  also passed live gateway capture/hint validation, active-profile semantic
+  broker paraphrase validation, stored broker replay, production embedding
+  validation, red-team smoke, and backup/restore dry-run.
 - telemetry-derived replay episode creation does not persist or reconstruct raw
   prompts; operators must supply redacted replay intent text when promoting a
   retrieval log into the replay corpus.

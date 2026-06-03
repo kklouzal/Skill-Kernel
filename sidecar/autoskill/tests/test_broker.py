@@ -1,8 +1,12 @@
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
+from autoskill.api.app import create_app
+from autoskill.core.config import get_settings
 from autoskill.db.memory import NullMemoryGovernanceStore
+from autoskill.db.profiles import ModelProfileRecord
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalResult
 from autoskill.services.broker import (
     BrokerPolicy,
@@ -186,6 +190,39 @@ class MemoryCompatibilityStore:
             )
             is not None
         }
+
+
+class MemoryBrokerProfileStore:
+    def __init__(self, active_embedding_profile=None) -> None:
+        self.active_embedding_profile = active_embedding_profile
+        self.calls: list[dict[str, object]] = []
+
+    async def get_active_embedding_profile(self, *, workspace_key: str):
+        self.calls.append({"workspace_key": workspace_key})
+        return self.active_embedding_profile
+
+
+def _embedding_profile(*, embedding_dim: int = 8) -> ModelProfileRecord:
+    now = datetime.now(UTC)
+    return ModelProfileRecord(
+        profile_id=uuid4(),
+        workspace_id=uuid4(),
+        workspace_key="dev-01",
+        profile_key="runtime-hash",
+        provider="test-provider",
+        model="runtime-hash-model",
+        route_kind="hash",
+        endpoint_ref=None,
+        timeout_seconds=30.0,
+        status="active",
+        qualification={"verdict": "qualified"},
+        kind="embedding",
+        embedding_dim=embedding_dim,
+        thinking_level="off",
+        thinking_fallback_policy="omit",
+        created_at=now,
+        updated_at=now,
+    )
 
 
 def test_context_broker_renders_scanned_skill_candidates() -> None:
@@ -455,6 +492,58 @@ def test_context_broker_can_render_vector_fused_candidates_when_lexical_is_empty
     assert store.calls[0]["query"] == "fix unreadable figure labels"
     assert store.semantic_calls[0]["embedding_model"] == "test-hash"
     assert len(store.semantic_calls[0]["embedding"]) == 8
+
+
+def test_context_hint_route_uses_active_embedding_profile_for_semantic_retrieval(
+    monkeypatch,
+) -> None:
+    skill_id = uuid4()
+    profile = _embedding_profile()
+    store = MemoryBrokerRetrievalStore(
+        [],
+        semantic_candidates=[
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=skill_id,
+                summary="WHEN diagrams have unreadable labels, repair accessibility annotations.",
+                rank=0.91,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "diagram-accessibility",
+                    "retrieval_mode": "vector",
+                },
+            )
+        ],
+    )
+    profiles = MemoryBrokerProfileStore(active_embedding_profile=profile)
+    monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
+    monkeypatch.setenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", "true")
+    get_settings.cache_clear()
+    app = create_app(retrieval_store=store, profile_store=profiles)
+    route = next(route for route in app.routes if route.path == "/v1/runtime/context-hint")
+
+    async def run():
+        return await route.endpoint(
+            request=ContextHintRequest(
+                workspace_id="dev-01",
+                user_intent="fix unreadable labels in a generated diagram",
+                max_tokens=120,
+            )
+        )
+
+    try:
+        response = asyncio.run(run())
+    finally:
+        get_settings.cache_clear()
+
+    assert response.decision == "skill_hint"
+    assert response.skill_ids == [str(skill_id)]
+    assert "vector-fused" in response.reason_codes
+    assert profiles.calls == [{"workspace_key": "dev-01"}]
+    assert store.semantic_calls[0]["embedding_model"] == "runtime-hash-model"
+    assert store.semantic_calls[0]["embedding_profile_id"] == profile.profile_id
 
 
 def test_context_broker_suppresses_executor_blocked_skill_version() -> None:

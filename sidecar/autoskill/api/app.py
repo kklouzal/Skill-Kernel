@@ -2093,6 +2093,20 @@ def _embedder_from_profile(profile: object, settings: object):
         ) from error
 
 
+async def _broker_semantic_embedder(
+    profiles: ProfileStore,
+    settings: object,
+    *,
+    workspace_id: str,
+):
+    active_profile = await profiles.get_active_embedding_profile(workspace_key=workspace_id)
+    if active_profile is not None:
+        return _embedder_from_profile(active_profile, settings), active_profile.profile_id
+    if getattr(settings, "embedding_provider", "hash") == "hash":
+        return build_text_embedder_from_settings(settings), None
+    return None, None
+
+
 def _worker_stores(
     *,
     jobs: JobStore,
@@ -3238,17 +3252,19 @@ def create_app(
         if not settings.runtime_context_broker_enabled:
             return bootstrap_context_hint(request)
         policy = await _active_broker_policy(broker_policies, request.workspace_id)
+        semantic_embedder, semantic_profile_id = await _broker_semantic_embedder(
+            profiles,
+            settings,
+            workspace_id=request.workspace_id,
+        )
         return await build_context_hint(
             retrieval,
             request,
             cache=broker_cache,
             context_governance=context_governance,
             compatibility=compatibility,
-            semantic_embedder=(
-                build_text_embedder_from_settings(settings)
-                if settings.embedding_provider == "hash"
-                else None
-            ),
+            semantic_embedder=semantic_embedder,
+            semantic_embedding_profile_id=semantic_profile_id,
             policy=policy,
             memory_governance=memory_governance,
         )
@@ -3324,6 +3340,11 @@ def create_app(
         policy = await _request_broker_policy(broker_policies, request)
         episodes = await _broker_replay_episodes(broker_policies, request)
         settings = get_settings()
+        semantic_embedder, semantic_profile_id = await _broker_semantic_embedder(
+            profiles,
+            settings,
+            workspace_id=request.workspace_id,
+        )
         replay = await replay_broker_policy(
             retrieval,
             ContextHintRequest(
@@ -3334,11 +3355,8 @@ def create_app(
             episodes=episodes,
             policy=policy,
             compatibility=compatibility,
-            semantic_embedder=(
-                build_text_embedder_from_settings(settings)
-                if settings.embedding_provider == "hash"
-                else None
-            ),
+            semantic_embedder=semantic_embedder,
+            semantic_embedding_profile_id=semantic_profile_id,
         )
         return BrokerPolicyReplayResponse(replay=replay)
 
