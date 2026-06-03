@@ -118,8 +118,13 @@ def test_create_topology_proposal_is_first_class_operation() -> None:
         "target_creation",
         "no_skill_control",
         "nearest_active_collision",
+        "broker_replay",
+        "broker_canary",
         "rollback_readiness",
     }
+    broker_replay = next(trial for trial in proposal.trial_plan if trial.kind == "broker_replay")
+    assert broker_replay.expected["operation_kind"] == "create"
+    assert broker_replay.expected["block_on_shadowing"] is True
     assert proposal.transaction.transaction_kind == "topology_create"
     assert proposal.transaction.rollback_actions[0]["operation"] == "remove_created_skill"
 
@@ -151,6 +156,16 @@ def test_improvement_proposal_preserves_effects_and_plans_rollback() -> None:
     assert result.skill_graph_ir is not None
     assert result.skill_graph_ir.operation_kind == "improve"
     assert result.skill_graph_ir.edges[0].edge_kind == "supersedes"
+    assert {trial.kind for trial in result.trial_plan} == {
+        "target_improvement",
+        "regression",
+        "broker_replay",
+        "broker_canary",
+        "rollback_readiness",
+    }
+    broker_replay = next(trial for trial in result.trial_plan if trial.kind == "broker_replay")
+    assert broker_replay.expected["operation_kind"] == "improve"
+    assert broker_replay.expected["block_on_shadowing"] is True
     assert result.transaction.transaction_kind == "topology_improve"
     assert result.transaction.rollback_actions[0]["operation"] == "restore_subject_skill"
     assert result.transaction.writes == [

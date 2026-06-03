@@ -591,6 +591,16 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   the first component. Validation passed with focused topology tests, focused
   ruff checks, full `uv run ruff check sidecar`, `uv run pytest -q` with 264
   tests, `uv run python -m compileall -q sidecar`, and `git diff --check`.
+- Create/improve topology proposals now carry the required broker/routing gates
+  for broker-visible or active-routing changes: both operation classes plan
+  broker replay plus broker canary trials in addition to target/regression and
+  rollback checks, and topology plan hashes now include trial and rollback
+  shapes so changed gates cannot reuse stale idempotency keys. Validation passed
+  with focused topology/admin tests, focused ruff checks, full `uv run ruff
+  check sidecar`, `uv run pytest -q` with 264 tests, `uv run python -m
+  compileall -q sidecar`, `git diff --check`, `npm test --prefix
+  plugin/autoskill` with 18 tests, and `npm run check --prefix
+  plugin/autoskill`.
 
 ## Next Gates
 

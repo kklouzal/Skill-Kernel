@@ -786,13 +786,15 @@ def test_topology_proposal_endpoint_persists_create_operation() -> None:
         "target_creation",
         "no_skill_control",
         "nearest_active_collision",
+        "broker_replay",
+        "broker_canary",
         "rollback_readiness",
     }
     assert topology.operations[0].evolution_transaction_id is not None
     assert audit.records[-1].action == "topology.propose"
     assert audit.records[-1].subject_type == "skill_graph_operation"
     assert audit.records[-1].details["operation_kind"] == "create"
-    assert audit.records[-1].details["trial_count"] == 4
+    assert audit.records[-1].details["trial_count"] == 6
 
 
 def test_topology_metrics_endpoint_reports_operation_kinds_separately() -> None:
@@ -856,6 +858,8 @@ def test_topology_metrics_endpoint_reports_operation_kinds_separately() -> None:
     assert response.operations_by_kind["improve"]["total"] == 0
     assert response.operations_by_kind["decompose"]["total"] == 0
     assert response.trials_by_operation_kind["create"]["target_creation"]["planned"] == 1
+    assert response.trials_by_operation_kind["create"]["broker_replay"]["planned"] == 1
+    assert response.trials_by_operation_kind["create"]["broker_canary"]["planned"] == 1
     assert response.trials_by_operation_kind["compose"]["broker_replay"]["planned"] == 1
     assert len(response.recent_operations) == 1
 

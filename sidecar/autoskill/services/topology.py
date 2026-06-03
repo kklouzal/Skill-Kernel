@@ -320,6 +320,41 @@ def propose_creation(request: CreateTopologyRequest) -> TopologyProposalResult:
                 expected={"no_active_duplicate": True},
             ),
             TopologyTrialPlan(
+                kind="broker_replay",
+                objective=(
+                    "Replay missing-workflow, nearest-active, and no-skill controls "
+                    "before create activation."
+                ),
+                expected={
+                    "operation_kind": "create",
+                    "proposed_skill_id": (
+                        str(request.proposed.skill_id)
+                        if request.proposed.skill_id
+                        else None
+                    ),
+                    "required_decisions": [
+                        "target_creation",
+                        "nearest_active_collision",
+                        "no_skill_control",
+                    ],
+                    "block_on_shadowing": True,
+                    "block_on_mismatch": True,
+                },
+            ),
+            TopologyTrialPlan(
+                kind="broker_canary",
+                objective=(
+                    "Canary new-skill routing and roll back if shadowing or "
+                    "harmful routing appears."
+                ),
+                expected={
+                    "operation_kind": "create",
+                    "max_harmful_rate": 0.0,
+                    "max_shadowed_rate": 0.2,
+                    "max_ignored_rate": 0.5,
+                },
+            ),
+            TopologyTrialPlan(
                 kind="rollback_readiness",
                 objective="Keep first activation reversible until canaries pass.",
                 expected={"rollback_actions_planned": True},
@@ -394,6 +429,48 @@ def propose_improvement(request: ImproveTopologyRequest) -> TopologyProposalResu
                 kind="regression",
                 objective="Reject the improvement if preserved subject effects regress.",
                 expected={"preserved_effects": sorted(subject_terms)},
+            ),
+            TopologyTrialPlan(
+                kind="broker_replay",
+                objective=(
+                    "Replay subject, successor, and no-skill control episodes "
+                    "before improve activation."
+                ),
+                expected={
+                    "operation_kind": "improve",
+                    "subject_skill_id": (
+                        str(request.subject.skill_id)
+                        if request.subject.skill_id
+                        else None
+                    ),
+                    "proposed_skill_id": (
+                        str(request.proposed.skill_id)
+                        if request.proposed.skill_id
+                        else None
+                    ),
+                    "reasons": list(request.improvement_reasons),
+                    "required_decisions": [
+                        "target_improvement",
+                        "regression",
+                        "current_skill_control",
+                        "no_skill_control",
+                    ],
+                    "block_on_shadowing": True,
+                    "block_on_mismatch": True,
+                },
+            ),
+            TopologyTrialPlan(
+                kind="broker_canary",
+                objective=(
+                    "Canary improved routing and roll back if shadowing or "
+                    "harmful routing appears."
+                ),
+                expected={
+                    "operation_kind": "improve",
+                    "max_harmful_rate": 0.0,
+                    "max_shadowed_rate": 0.2,
+                    "max_ignored_rate": 0.5,
+                },
             ),
             TopologyTrialPlan(
                 kind="rollback_readiness",
@@ -677,7 +754,13 @@ def _result(
     trial_plan: list[TopologyTrialPlan],
     rollback_actions: list[dict[str, Any]],
 ) -> TopologyProposalResult:
-    plan_hash = sha256_json(payload)
+    plan_hash = sha256_json(
+        {
+            **payload,
+            "trial_plan": [trial.to_json() for trial in trial_plan],
+            "rollback_actions": rollback_actions,
+        }
+    )
     status: Literal["candidate", "blocked"] = "blocked" if blockers else "candidate"
     transaction = TopologyTransactionPlan(
         transaction_kind=f"topology_{operation_kind}",
