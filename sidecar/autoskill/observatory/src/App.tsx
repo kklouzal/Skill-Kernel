@@ -72,10 +72,13 @@ function App() {
     window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
   const lastSeq = useRef<number | undefined>(undefined);
+  const hasAdminToken = session.token.trim().length > 0;
 
   const summary = useQuery({
     queryKey: ["summary", session.token, session.roles, workspaceId, windowMinutes],
-    queryFn: () => fetchSummary(session, workspaceId, windowMinutes)
+    queryFn: () => fetchSummary(session, workspaceId, windowMinutes),
+    enabled: hasAdminToken,
+    retry: false
   });
 
   const snapshot = liveSnapshot ?? summary.data?.snapshot;
@@ -88,13 +91,13 @@ function App() {
 
   const objectQuery = useQuery({
     queryKey: ["object", session.token, workspaceId, selectedStation?.component_id],
-    enabled: Boolean(selectedStation),
+    enabled: hasAdminToken && Boolean(selectedStation),
     queryFn: () => fetchObject(session, "component", selectedStation!.component_id, workspaceId)
   });
 
   const searchQuery = useQuery({
     queryKey: ["search", session.token, workspaceId, query],
-    enabled: query.trim().length > 1,
+    enabled: hasAdminToken && query.trim().length > 1,
     queryFn: () => search(session, query, workspaceId)
   });
 
@@ -112,6 +115,15 @@ function App() {
     sessionStorage.setItem("skillkernel.admin.token", session.token);
   }, [session.token]);
 
+  function updateToken(token: string) {
+    lastSeq.current = undefined;
+    setLiveSnapshot(null);
+    queryClient.removeQueries({ queryKey: ["summary"] });
+    queryClient.removeQueries({ queryKey: ["object"] });
+    queryClient.removeQueries({ queryKey: ["search"] });
+    setSession({ ...session, token });
+  }
+
   useEffect(() => {
     const params = new URLSearchParams();
     params.set("view", view);
@@ -124,6 +136,10 @@ function App() {
   }, [query, selectedStationId, selectedSubsystemId, view, windowMinutes, workspaceId]);
 
   useEffect(() => {
+    if (!hasAdminToken) {
+      setLiveState("offline");
+      return;
+    }
     let closed = false;
     let eventSource: EventSource | undefined;
     const applyEnvelope = (envelope: LiveEnvelope) => {
@@ -176,7 +192,7 @@ function App() {
       socket.close();
       eventSource?.close();
     };
-  }, [queryClient, session.roles, session.token, windowMinutes, workspaceId]);
+  }, [hasAdminToken, queryClient, session.roles, session.token, windowMinutes, workspaceId]);
 
   const healthChart = useMemo<EChartsOption>(() => {
     const counts = snapshot?.fitness.component_health_counts ?? {};
@@ -216,19 +232,24 @@ function App() {
     setView("cockpit");
   }
 
-  if (summary.isError && !session.token) {
+  if (!hasAdminToken || summary.isError || !summary.isSuccess || !snapshot) {
+    const gateMessage = summary.isError
+      ? "The admin token was rejected or the sidecar could not verify it."
+      : hasAdminToken
+        ? "Verifying the configured admin token."
+        : "Enter the configured admin token to open the operating console.";
     return (
       <main className="login-shell">
         <section className="login-panel">
           <KeyRound aria-hidden="true" />
           <h1>SkillKernel Observatory</h1>
-          <p>Enter the configured admin token to open the operating console.</p>
+          <p>{gateMessage}</p>
           <input
             type="password"
             aria-label="Admin token"
             placeholder="SKILLKERNEL_ADMIN_TOKEN"
             value={session.token}
-            onChange={(event) => setSession({ ...session, token: event.target.value })}
+            onChange={(event) => updateToken(event.target.value)}
           />
         </section>
       </main>
@@ -265,7 +286,7 @@ function App() {
             <input
               type="password"
               value={session.token}
-              onChange={(event) => setSession({ ...session, token: event.target.value })}
+              onChange={(event) => updateToken(event.target.value)}
             />
           </label>
           <button
