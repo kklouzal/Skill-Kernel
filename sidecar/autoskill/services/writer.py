@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from math import ceil
 from pathlib import Path
 from typing import Any
@@ -230,10 +231,10 @@ def stage_compiled_skill(
         target_relative_path=target_relative_path,
         sha256=sha256_text(compiled_skill_md),
         bytes=len(compiled_skill_md.encode("utf-8")),
-        metadata={
-            "loadability_class": "runtime_skill_body",
-            "artifact_kind": "skill_md",
-        },
+        metadata=_runtime_skill_metadata(
+            skill_version_id=skill_version_id,
+            context_gate=context_gate,
+        ),
     )
     files = [staged_file, *staged_support_files]
     manifest = _writer_manifest(
@@ -546,6 +547,12 @@ async def apply_staged_manifest_with_governance(
         manifest_relative_path,
     )
     try:
+        applied = _write_active_artifact_manifest(
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            evolution_transaction_id=evolution_transaction_id,
+            applied=applied,
+        )
         items = await _record_apply_transaction_items(
             governance,
             evolution_transaction_id=evolution_transaction_id,
@@ -579,6 +586,249 @@ async def apply_staged_manifest_with_governance(
         )
         raise
     return applied
+
+
+def _write_active_artifact_manifest(
+    *,
+    workspace_root: Path,
+    archive_root: Path,
+    evolution_transaction_id: UUID,
+    applied: AppliedSkillArtifact,
+) -> AppliedSkillArtifact:
+    manifest = _active_artifact_manifest(
+        evolution_transaction_id=evolution_transaction_id,
+        applied=applied,
+    )
+    manifest_text = json.dumps(manifest, sort_keys=True, indent=2) + "\n"
+    relative_path = f"{applied.active_relative_path}/.autoskill-manifest.json"
+    stage_text(workspace_root, relative_path, manifest_text, overwrite=True)
+    manifest_file = StagedFile(
+        role="artifact_manifest",
+        relative_path=".autoskill-manifest.json",
+        target_relative_path=relative_path,
+        sha256=sha256_text(manifest_text),
+        bytes=len(manifest_text.encode("utf-8")),
+        metadata={
+            "artifact_kind": "provenance_manifest",
+            "loadability_class": "operator_only",
+            "schema": "skillkernel-artifact-manifest.v1",
+        },
+    )
+    updated = AppliedSkillArtifact(
+        slug=applied.slug,
+        active_relative_path=applied.active_relative_path,
+        manifest_sha256=applied.manifest_sha256,
+        files=[*applied.files, manifest_file],
+        previous_snapshot=applied.previous_snapshot,
+    )
+    _verify_active_artifact_manifest(
+        workspace_root=workspace_root,
+        archive_root=archive_root,
+        applied=updated,
+    )
+    return updated
+
+
+def _active_artifact_manifest(
+    *,
+    evolution_transaction_id: UUID,
+    applied: AppliedSkillArtifact,
+) -> dict[str, object]:
+    return {
+        "schema": "skillkernel-artifact-manifest.v1",
+        "skill_id": None,
+        "skill_version_id": _skill_version_id_from_files(applied.files),
+        "skill_ir_revision_id": _skill_version_id_from_files(applied.files),
+        "evolution_transaction_id": str(evolution_transaction_id),
+        "generator": {
+            "skillkernel_version": "0.1.0",
+            "compiler_version": "skillkernel-compiler.v1",
+            "model_profile": _first_metadata_string(applied.files, "model_profile"),
+            "model_qualification_run_id": _first_metadata_string(
+                applied.files,
+                "model_qualification_run_id",
+            ),
+            "embedding_profile": _first_metadata_string(applied.files, "embedding_profile"),
+        },
+        "artifacts": [
+            _active_artifact_entry(applied.slug, file)
+            for file in applied.files
+            if file.role != "archive_snapshot"
+        ],
+        "capabilities": sorted(
+            {
+                capability
+                for file in applied.files
+                for capability in _metadata_list(file.metadata.get("capabilities"))
+            }
+        ),
+        "scanner_run_ids": _metadata_ids(applied.files, "scanner_run_ids", "scanner_run_id"),
+        "evaluation_run_ids": _metadata_ids(
+            applied.files,
+            "evaluation_run_ids",
+            "evaluation_run_id",
+        ),
+        "token_budget_record_id": _first_metadata_string(
+            applied.files,
+            "token_budget_record_id",
+        ),
+        "rollback_pointer": (
+            {
+                "archive_path": (
+                    f".autoskill/archive/{applied.previous_snapshot.manifest_relative_path}"
+                ),
+                "archive_manifest_sha256": applied.previous_snapshot.manifest_sha256,
+            }
+            if applied.previous_snapshot is not None
+            else None
+        ),
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def _active_artifact_entry(slug: str, file: StagedFile) -> dict[str, object]:
+    path = _target_path_inside_skill(slug, file.target_relative_path)
+    artifact_kind = _artifact_kind(file)
+    loadability = _artifact_loadability(file)
+    entry: dict[str, object] = {
+        "path": path,
+        "sha256": file.sha256,
+        "kind": artifact_kind,
+        "loadability": loadability,
+        "context_loadable": loadability in {
+            "runtime_skill_body",
+            "agent_may_read",
+            "broker_excerpt_only",
+        },
+    }
+    for key in (
+        "text_hash",
+        "content_hash",
+        "token_count",
+        "max_tokens",
+        "safety_status",
+        "equivalence_status",
+        "budget_status",
+        "context_compile_run_id",
+        "context_artifact_id",
+        "context_output_manifest_hash",
+        "purpose",
+        "test_command",
+    ):
+        if key in file.metadata:
+            entry[key] = file.metadata[key]
+    for key in ("capabilities", "scanner_codes"):
+        values = _metadata_list(file.metadata.get(key))
+        if values:
+            entry[key] = values
+    return entry
+
+
+def _artifact_kind(file: StagedFile) -> str:
+    if file.role == "support_artifact":
+        return str(file.metadata.get("support_kind") or "support_artifact")
+    return str(file.metadata.get("artifact_kind") or file.role)
+
+
+def _artifact_loadability(file: StagedFile) -> str:
+    if file.role == "runtime_skill":
+        return "agent_may_read"
+    if file.role == "support_artifact":
+        return str(file.metadata.get("load_policy") or "never_loaded")
+    return str(file.metadata.get("loadability_class") or "operator_only")
+
+
+def _skill_version_id_from_files(files: list[StagedFile]) -> str | None:
+    for file in files:
+        value = file.metadata.get("skill_version_id")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _metadata_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _first_metadata_string(files: list[StagedFile], key: str) -> str | None:
+    for file in files:
+        value = file.metadata.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _metadata_ids(files: list[StagedFile], list_key: str, scalar_key: str) -> list[str]:
+    values: list[str] = []
+    for file in files:
+        values.extend(_metadata_list(file.metadata.get(list_key)))
+        scalar = file.metadata.get(scalar_key)
+        if isinstance(scalar, str) and scalar:
+            values.append(scalar)
+    return sorted(set(values))
+
+
+def _verify_active_artifact_manifest(
+    *,
+    workspace_root: Path,
+    archive_root: Path,
+    applied: AppliedSkillArtifact,
+) -> None:
+    active_path = resolve_contained(workspace_root, applied.active_relative_path)
+    manifest_path = resolve_contained(
+        workspace_root,
+        f"{applied.active_relative_path}/.autoskill-manifest.json",
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema") != "skillkernel-artifact-manifest.v1":
+        raise WriterPolicyError("active artifact manifest schema is invalid")
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        raise WriterPolicyError("active artifact manifest must declare files")
+    manifested_paths: set[str] = set()
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            raise WriterPolicyError("active artifact manifest entry is invalid")
+        relative_path = validate_active_skill_relative_path(str(artifact.get("path") or ""))
+        file_path = resolve_contained(active_path, relative_path)
+        if not file_path.is_file():
+            raise WriterPolicyError(f"manifested active artifact missing: {relative_path}")
+        digest = sha256_bytes(file_path.read_bytes())
+        if digest != artifact.get("sha256"):
+            raise WriterPolicyError(f"manifested active artifact hash mismatch: {relative_path}")
+        manifested_paths.add(relative_path)
+
+    for path in sorted(active_path.rglob("*")):
+        if path.is_symlink():
+            raise PathContainmentError("active skill manifests cannot contain symlinks")
+        if not path.is_file():
+            continue
+        relative_path = path.relative_to(active_path).as_posix()
+        validate_active_skill_relative_path(relative_path)
+        if relative_path == ".autoskill-manifest.json":
+            continue
+        if relative_path not in manifested_paths:
+            raise WriterPolicyError(
+                f"active skill contains unmanifested file: {relative_path}"
+            )
+
+    rollback_pointer = manifest.get("rollback_pointer")
+    if applied.previous_snapshot is None:
+        if rollback_pointer is not None:
+            raise WriterPolicyError("initial active manifest cannot declare rollback pointer")
+        return
+    if not isinstance(rollback_pointer, dict):
+        raise WriterPolicyError("active artifact manifest lacks rollback pointer")
+    archive_path = str(rollback_pointer.get("archive_path") or "")
+    prefix = ".autoskill/archive/"
+    if not archive_path.startswith(prefix):
+        raise WriterPolicyError("active artifact manifest rollback path is invalid")
+    archive_manifest_relative_path = archive_path.removeprefix(prefix)
+    archive_manifest = verify_archive_manifest(archive_root, archive_manifest_relative_path)
+    if sha256_json(archive_manifest) != rollback_pointer.get("archive_manifest_sha256"):
+        raise WriterPolicyError("active artifact manifest rollback hash mismatch")
 
 
 async def rollback_active_skill_with_governance(
@@ -622,17 +872,22 @@ async def rollback_active_skill_with_governance(
         )
         if relative_inside_skill == "SKILL.md":
             continue
+        item_kind = (
+            "artifact_manifest"
+            if relative_inside_skill == ".autoskill-manifest.json"
+            else "support_artifact"
+        )
         support_items.append(
             await governance.record_transaction_item(
                 evolution_transaction_id=evolution_transaction_id,
-                item_kind="support_artifact",
+                item_kind=item_kind,
                 activation_state="rolled_back",
                 relative_path=file.target_relative_path,
                 before_hash=None,
                 after_hash=file.sha256,
                 rollback_action={
                     "operation": "operator_review",
-                    "reason": "rollback transaction restored this support artifact",
+                    "reason": f"rollback transaction restored this {item_kind}",
                 },
             )
         )
@@ -721,7 +976,7 @@ def verify_archive_manifest(root: Path, manifest_relative_path: str) -> dict[str
 
 
 def validate_active_skill_relative_path(relative_path: str) -> str:
-    if relative_path == "SKILL.md":
+    if relative_path in {"SKILL.md", ".autoskill-manifest.json"}:
         return relative_path
     return validate_support_artifact_path(relative_path)
 
@@ -847,11 +1102,44 @@ def _support_artifact_metadata(
     }
 
 
+def _runtime_skill_metadata(
+    *,
+    skill_version_id: UUID,
+    context_gate: dict[str, object],
+) -> dict[str, object]:
+    metadata: dict[str, object] = {
+        "loadability_class": "runtime_skill_body",
+        "artifact_kind": "skill_md",
+        "skill_version_id": str(skill_version_id),
+    }
+    for key in (
+        "text_hash",
+        "token_count",
+        "max_tokens",
+        "safety_status",
+        "equivalence_status",
+        "budget_status",
+        "scanner_codes",
+        "context_compile_run_id",
+        "context_artifact_id",
+        "context_output_manifest_hash",
+    ):
+        if key in context_gate:
+            metadata[key] = context_gate[key]
+    return metadata
+
+
 def _archive_file_metadata(relative_inside_skill: str) -> dict[str, object]:
     if relative_inside_skill == "SKILL.md":
         return {
             "artifact_kind": "skill_md",
             "loadability_class": "runtime_skill_body",
+        }
+    if relative_inside_skill == ".autoskill-manifest.json":
+        return {
+            "artifact_kind": "provenance_manifest",
+            "loadability_class": "operator_only",
+            "schema": "skillkernel-artifact-manifest.v1",
         }
     return {
         "artifact_kind": "support_artifact",
@@ -1045,6 +1333,18 @@ async def _record_apply_transaction_items(
     )
     items.append(active_item)
     for file in applied.files:
+        if file.role == "artifact_manifest":
+            manifest_item = await governance.record_transaction_item(
+                evolution_transaction_id=evolution_transaction_id,
+                item_kind="artifact_manifest",
+                activation_state="active",
+                relative_path=file.target_relative_path,
+                before_hash=None,
+                after_hash=file.sha256,
+                rollback_action=_apply_rollback_action(applied),
+            )
+            items.append(manifest_item)
+            continue
         relative_inside_skill = _target_path_inside_skill(applied.slug, file.target_relative_path)
         if relative_inside_skill == "SKILL.md":
             continue

@@ -407,6 +407,9 @@ def test_writer_applies_and_rolls_back_support_artifacts_with_governance(
             archive_root=archive_root,
             manifest_relative_path=staged.manifest_relative_path,
         )
+        manifest_path = active_path / ".autoskill-manifest.json"
+        assert manifest_path.exists()
+        artifact_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         rolled_back = await rollback_active_skill_with_governance(
             governance,
             evolution_transaction_id=uuid4(),
@@ -414,19 +417,53 @@ def test_writer_applies_and_rolls_back_support_artifacts_with_governance(
             archive_root=archive_root,
             archive_manifest_relative_path=applied.previous_snapshot.manifest_relative_path,
         )
-        return applied, rolled_back
+        return applied, rolled_back, artifact_manifest
 
-    applied, rolled_back = asyncio.run(run())
+    applied, rolled_back, artifact_manifest = asyncio.run(run())
 
-    assert [file.role for file in applied.files] == ["runtime_skill", "support_artifact"]
+    assert [file.role for file in applied.files] == [
+        "runtime_skill",
+        "support_artifact",
+        "artifact_manifest",
+    ]
+    assert artifact_manifest["schema"] == "skillkernel-artifact-manifest.v1"
+    assert artifact_manifest["skill_version_id"] == str(staged.skill_version_id)
+    assert artifact_manifest["evolution_transaction_id"] == str(transaction_id)
+    assert artifact_manifest["generator"]["compiler_version"] == "skillkernel-compiler.v1"
+    assert artifact_manifest["token_budget_record_id"] is None
+    artifacts_by_path = {
+        artifact["path"]: artifact for artifact in artifact_manifest["artifacts"]
+    }
+    assert set(artifacts_by_path) == {
+        "SKILL.md",
+        "references/procedure.md",
+    }
+    assert artifacts_by_path["SKILL.md"]["sha256"] == applied.files[0].sha256
+    assert artifacts_by_path["SKILL.md"]["loadability"] == "agent_may_read"
+    assert artifacts_by_path["SKILL.md"]["context_loadable"] is True
+    assert artifacts_by_path["SKILL.md"]["safety_status"] == "passed"
+    assert artifacts_by_path["SKILL.md"]["equivalence_status"] == "passed"
+    assert artifacts_by_path["SKILL.md"]["budget_status"] == "passed"
+    assert artifacts_by_path["references/procedure.md"]["sha256"] == applied.files[1].sha256
+    assert artifacts_by_path["references/procedure.md"]["kind"] == "template"
+    assert artifacts_by_path["references/procedure.md"]["loadability"] == "agent_may_read"
+    assert artifacts_by_path["references/procedure.md"]["context_loadable"] is True
+    assert artifacts_by_path["references/procedure.md"]["safety_status"] == "passed"
+    assert artifacts_by_path["references/procedure.md"]["budget_status"] == "passed"
+    assert artifact_manifest["rollback_pointer"] == {
+        "archive_path": f".autoskill/archive/{applied.previous_snapshot.manifest_relative_path}",
+        "archive_manifest_sha256": applied.previous_snapshot.manifest_sha256,
+    }
     assert [item["item_kind"] for item in governance.items] == [
         "compiled_skill_file",
         "support_artifact",
+        "artifact_manifest",
         "archive_snapshot",
         "compiled_skill_file",
         "support_artifact",
     ]
     assert [edge["relation"] for edge in governance.edges] == [
+        "derived_from",
         "derived_from",
         "derived_from",
         "derived_from",
@@ -507,19 +544,25 @@ def test_writer_apply_records_governance_items(tmp_path: Path) -> None:
     )
     assert [item["item_kind"] for item in governance.items] == [
         "compiled_skill_file",
+        "artifact_manifest",
         "archive_snapshot",
     ]
     assert governance.items[0]["activation_state"] == "active"
     assert governance.items[0]["relative_path"] == "skills/autoskill/autoskill-example"
     assert governance.items[0]["rollback_action"]["operation"] == "restore_archive_manifest"
-    assert governance.items[1]["activation_state"] == "archived"
+    assert governance.items[1]["activation_state"] == "active"
+    assert governance.items[1]["item_kind"] == "artifact_manifest"
+    assert governance.items[1]["relative_path"].endswith("/.autoskill-manifest.json")
+    assert governance.items[2]["activation_state"] == "archived"
     assert [edge["relation"] for edge in governance.edges] == [
+        "derived_from",
         "derived_from",
         "derived_from",
     ]
     assert {edge["derived_id"] for edge in governance.edges} == {
         governance.items[0]["transaction_item_id"],
         governance.items[1]["transaction_item_id"],
+        governance.items[2]["transaction_item_id"],
     }
 
 
@@ -610,6 +653,83 @@ def test_writer_rollback_records_governance_item(tmp_path: Path) -> None:
     ]
 
 
+def test_writer_rollback_records_archived_manifest_item(tmp_path: Path) -> None:
+    staging_root = tmp_path / "staging"
+    workspace_root = tmp_path / "workspace"
+    archive_root = workspace_root / ".autoskill" / "archive"
+    active_path = workspace_root / "skills" / "autoskill" / "autoskill-example"
+    first = stage_compiled_skill(
+        staging_root,
+        staging_id=uuid4(),
+        skill_version_id=uuid4(),
+        slug="autoskill-example",
+        compiled_skill_md="# First\n\n## WHEN\n- First.\n",
+    )
+    first_governance = MemoryWriterGovernance()
+
+    async def apply_first():
+        return await apply_staged_manifest_with_governance(
+            first_governance,
+            evolution_transaction_id=uuid4(),
+            staging_root=staging_root,
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            manifest_relative_path=first.manifest_relative_path,
+        )
+
+    asyncio.run(apply_first())
+    assert (active_path / ".autoskill-manifest.json").exists()
+    second = stage_compiled_skill(
+        staging_root,
+        staging_id=uuid4(),
+        skill_version_id=uuid4(),
+        slug="autoskill-example",
+        compiled_skill_md="# Second\n\n## WHEN\n- Second.\n",
+    )
+    second_governance = MemoryWriterGovernance()
+
+    async def apply_second():
+        return await apply_staged_manifest_with_governance(
+            second_governance,
+            evolution_transaction_id=uuid4(),
+            staging_root=staging_root,
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            manifest_relative_path=second.manifest_relative_path,
+        )
+
+    applied_second = asyncio.run(apply_second())
+    assert applied_second.previous_snapshot is not None
+    assert any(
+        file.relative_path == ".autoskill-manifest.json"
+        for file in applied_second.previous_snapshot.files
+    )
+    rollback_governance = MemoryWriterGovernance()
+
+    async def rollback_second():
+        return await rollback_active_skill_with_governance(
+            rollback_governance,
+            evolution_transaction_id=uuid4(),
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            archive_manifest_relative_path=(
+                applied_second.previous_snapshot.manifest_relative_path
+            ),
+        )
+
+    rolled_back = asyncio.run(rollback_second())
+
+    assert rolled_back.slug == "autoskill-example"
+    assert [item["item_kind"] for item in rollback_governance.items] == [
+        "compiled_skill_file",
+        "artifact_manifest",
+    ]
+    assert [edge["relation"] for edge in rollback_governance.edges] == [
+        "rolled_back_by",
+        "rolled_back_by",
+    ]
+
+
 def test_writer_api_applies_and_rolls_back_with_workspace_roots(tmp_path: Path) -> None:
     workspace_root = tmp_path / "workspace"
     staging_root = workspace_root / ".autoskill" / "staging"
@@ -674,10 +794,12 @@ def test_writer_api_applies_and_rolls_back_with_workspace_roots(tmp_path: Path) 
     ]
     assert [item["activation_state"] for item in governance.items] == [
         "active",
+        "active",
         "archived",
         "rolled_back",
     ]
     assert [edge["relation"] for edge in governance.edges] == [
+        "derived_from",
         "derived_from",
         "derived_from",
         "rolled_back_by",

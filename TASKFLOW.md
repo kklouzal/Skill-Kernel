@@ -661,6 +661,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   compileall -q sidecar`, `git diff --check`, `npm test --prefix
   plugin/autoskill` with 18 tests, and `npm run check --prefix
   plugin/autoskill`.
+- Activated SkillKernel runtime artifacts now get an active
+  `.autoskill-manifest.json` provenance manifest as required by section 24.8:
+  writer governance apply emits the manifest with artifact hashes, generator
+  metadata, SkillIR/version/transaction identifiers, gate statuses,
+  loadability/capability fields, token-budget slot, and rollback pointer, then
+  verifies schema, file presence, hashes, rollback archive hash, and absence of
+  unmanifested active files before recording governance items. The manifest is
+  recorded as its own active `artifact_manifest` transaction item. Validation
+  passed with focused writer/worker/admin tests, focused ruff checks, full `uv
+  run ruff check sidecar`, `uv run pytest -q` with 273 tests, `uv run python -m
+  compileall -q sidecar`, `git diff --check`, `npm test --prefix
+  plugin/autoskill` with 18 tests, and `npm run check --prefix
+  plugin/autoskill`.
 
 ## Next Gates
 
