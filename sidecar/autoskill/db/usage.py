@@ -8,16 +8,18 @@ from uuid import UUID
 import asyncpg
 
 from autoskill.core.hashing import sha256_json
+from autoskill.db.attribution import SKILL_NEGATIVE_OUTCOMES, SKILL_POSITIVE_OUTCOMES
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 
-SUCCESS_OUTCOMES = {"skill_helped", "helped", "success", "useful", "passed"}
-FAILURE_OUTCOMES = {"skill_hurt", "hurt", "failed", "failure", "wrong_skill"}
+SUCCESS_OUTCOMES = SKILL_POSITIVE_OUTCOMES | {"helped", "success", "useful", "passed"}
+FAILURE_OUTCOMES = SKILL_NEGATIVE_OUTCOMES | {"hurt", "failed", "failure", "wrong_skill"}
 CONTEXT_WASTE_OUTCOMES = {
     "false_positive",
     "false_positive_load",
     "ignored",
     "ignored_load",
+    "skill_ignored",
     "unused",
 }
 

@@ -1303,21 +1303,21 @@ async def _load_skill_feature_rows(
           FROM autoskill.attribution_events ae
           WHERE ae.workspace_id = s.workspace_id
             AND s.skill_id = ANY(ae.skill_ids)
-            AND ae.outcome IN ('skill_helped', 'helped', 'success')
+            AND ae.outcome = 'skill_helped'
         ) helped ON true
         LEFT JOIN LATERAL (
           SELECT count(*)::int AS count
           FROM autoskill.attribution_events ae
           WHERE ae.workspace_id = s.workspace_id
             AND s.skill_id = ANY(ae.skill_ids)
-            AND ae.outcome IN ('skill_hurt', 'hurt', 'failed')
+            AND ae.outcome = 'skill_hurt'
         ) hurt ON true
         LEFT JOIN LATERAL (
           SELECT count(*)::int AS count
           FROM autoskill.attribution_events ae
           WHERE ae.workspace_id = s.workspace_id
             AND s.skill_id = ANY(ae.skill_ids)
-            AND ae.outcome IN ('skill_shadowed', 'shadowed', 'wrong_skill')
+            AND ae.outcome = 'skill_shadowed'
         ) shadow ON true
         LEFT JOIN LATERAL (
           SELECT count(*)::int AS count

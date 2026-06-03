@@ -908,10 +908,115 @@ CREATE TABLE IF NOT EXISTS autoskill.attribution_events (
   memory_ids uuid[] NOT NULL DEFAULT '{}',
   retrieved_artifact_ids uuid[] NOT NULL DEFAULT '{}',
   broker_policy_version_id uuid REFERENCES autoskill.broker_policy_versions(broker_policy_version_id),
-  outcome text,
+  outcome text CHECK (
+    outcome IS NULL OR outcome IN (
+      'skill_helped',
+      'skill_hurt',
+      'skill_ignored',
+      'skill_missing',
+      'skill_shadowed',
+      'agent_solved_independently',
+      'tool_failed_independent',
+      'environment_drifted',
+      'user_correction_changed_requirements',
+      'unknown'
+    )
+  ),
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+UPDATE autoskill.attribution_events
+SET metadata = metadata || jsonb_build_object('legacy_outcome', outcome),
+    outcome = CASE replace(replace(lower(trim(outcome)), '-', '_'), ' ', '_')
+      WHEN 'skill_helped' THEN 'skill_helped'
+      WHEN 'helped' THEN 'skill_helped'
+      WHEN 'success' THEN 'skill_helped'
+      WHEN 'succeeded' THEN 'skill_helped'
+      WHEN 'useful' THEN 'skill_helped'
+      WHEN 'passed' THEN 'skill_helped'
+      WHEN 'skill_was_helpful' THEN 'skill_helped'
+      WHEN 'skill_was_used' THEN 'skill_helped'
+      WHEN 'skill_hurt' THEN 'skill_hurt'
+      WHEN 'hurt' THEN 'skill_hurt'
+      WHEN 'failed' THEN 'skill_hurt'
+      WHEN 'failure' THEN 'skill_hurt'
+      WHEN 'harmful' THEN 'skill_hurt'
+      WHEN 'skill_was_harmful' THEN 'skill_hurt'
+      WHEN 'skill_ignored' THEN 'skill_ignored'
+      WHEN 'ignored' THEN 'skill_ignored'
+      WHEN 'unused' THEN 'skill_ignored'
+      WHEN 'ignored_load' THEN 'skill_ignored'
+      WHEN 'false_positive_load' THEN 'skill_ignored'
+      WHEN 'skill_was_ignored' THEN 'skill_ignored'
+      WHEN 'skill_missing' THEN 'skill_missing'
+      WHEN 'missing' THEN 'skill_missing'
+      WHEN 'missing_skill' THEN 'skill_missing'
+      WHEN 'skill_was_missing' THEN 'skill_missing'
+      WHEN 'skill_shadowed' THEN 'skill_shadowed'
+      WHEN 'shadowed' THEN 'skill_shadowed'
+      WHEN 'wrong_skill' THEN 'skill_shadowed'
+      WHEN 'skill_shadowed_another_skill' THEN 'skill_shadowed'
+      WHEN 'agent_solved_independently' THEN 'agent_solved_independently'
+      WHEN 'agent_solved' THEN 'agent_solved_independently'
+      WHEN 'solved_independently' THEN 'agent_solved_independently'
+      WHEN 'no_skill_helped' THEN 'agent_solved_independently'
+      WHEN 'no_skill_success' THEN 'agent_solved_independently'
+      WHEN 'tool_failed_independent' THEN 'tool_failed_independent'
+      WHEN 'tool_failed' THEN 'tool_failed_independent'
+      WHEN 'tool_failure' THEN 'tool_failed_independent'
+      WHEN 'tool_failed_independent_of_skill' THEN 'tool_failed_independent'
+      WHEN 'environment_drifted' THEN 'environment_drifted'
+      WHEN 'environment_drift' THEN 'environment_drifted'
+      WHEN 'env_drifted' THEN 'environment_drifted'
+      WHEN 'drift' THEN 'environment_drifted'
+      WHEN 'user_correction_changed_requirements' THEN 'user_correction_changed_requirements'
+      WHEN 'requirement_changed' THEN 'user_correction_changed_requirements'
+      WHEN 'requirements_changed' THEN 'user_correction_changed_requirements'
+      WHEN 'user_correction' THEN 'user_correction_changed_requirements'
+      WHEN 'user_correction_changed_requirement' THEN 'user_correction_changed_requirements'
+      WHEN 'unknown' THEN 'unknown'
+      ELSE 'unknown'
+    END
+WHERE outcome IS NOT NULL
+  AND outcome NOT IN (
+    'skill_helped',
+    'skill_hurt',
+    'skill_ignored',
+    'skill_missing',
+    'skill_shadowed',
+    'agent_solved_independently',
+    'tool_failed_independent',
+    'environment_drifted',
+    'user_correction_changed_requirements',
+    'unknown'
+  );
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'autoskill.attribution_events'::regclass
+      AND conname = 'attribution_events_outcome_check'
+  ) THEN
+    ALTER TABLE autoskill.attribution_events
+      ADD CONSTRAINT attribution_events_outcome_check CHECK (
+        outcome IS NULL OR outcome IN (
+          'skill_helped',
+          'skill_hurt',
+          'skill_ignored',
+          'skill_missing',
+          'skill_shadowed',
+          'agent_solved_independently',
+          'tool_failed_independent',
+          'environment_drifted',
+          'user_correction_changed_requirements',
+          'unknown'
+        )
+      );
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS autoskill.historical_import_sources (
   historical_import_source_id uuid PRIMARY KEY,

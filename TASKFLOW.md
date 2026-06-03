@@ -718,6 +718,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   tests, `uv run python -m compileall -q sidecar`, `git diff --check`, `npm
   test --prefix plugin/autoskill` with 18 tests, and `npm run check --prefix
   plugin/autoskill`.
+- Attribution outcomes now implement the section 27 taxonomy at the store and
+  schema boundary: attribution events normalize legacy/spoken aliases into the
+  canonical helped/hurt/ignored/missing/shadowed/independent-tool-drift/
+  user-correction/unknown slugs, reject unsupported strings, preserve raw
+  legacy outcomes in metadata, and enforce the canonical vocabulary with an
+  idempotent Postgres check constraint. Usage and utility consumers now score
+  normalized attribution outcomes. Validation passed with focused attribution/
+  shadowing/usage/utility tests, focused ruff checks, full `uv run ruff check
+  sidecar`, `uv run pytest -q` with 283 tests, `uv run python -m compileall -q
+  sidecar`, `git diff --check`, `npm test --prefix plugin/autoskill` with 18
+  tests, `npm run check --prefix plugin/autoskill`, `docker compose config
+  --quiet`, and a compose Postgres migration smoke verifying the
+  `attribution_events_outcome_check` constraint plus invalid-outcome rejection.
 
 ## Next Gates
 

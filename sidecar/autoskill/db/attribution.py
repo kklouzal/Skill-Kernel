@@ -12,6 +12,65 @@ from autoskill.core.hashing import sha256_json
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 
+ATTRIBUTION_OUTCOMES = frozenset(
+    {
+        "skill_helped",
+        "skill_hurt",
+        "skill_ignored",
+        "skill_missing",
+        "skill_shadowed",
+        "agent_solved_independently",
+        "tool_failed_independent",
+        "environment_drifted",
+        "user_correction_changed_requirements",
+        "unknown",
+    }
+)
+
+SKILL_POSITIVE_OUTCOMES = frozenset({"skill_helped"})
+SKILL_NEGATIVE_OUTCOMES = frozenset({"skill_hurt", "skill_missing", "skill_shadowed"})
+SKILL_NEUTRAL_OUTCOMES = ATTRIBUTION_OUTCOMES - SKILL_POSITIVE_OUTCOMES - SKILL_NEGATIVE_OUTCOMES
+
+_ATTRIBUTION_OUTCOME_ALIASES = {
+    "helped": "skill_helped",
+    "success": "skill_helped",
+    "succeeded": "skill_helped",
+    "useful": "skill_helped",
+    "passed": "skill_helped",
+    "skill_was_helpful": "skill_helped",
+    "skill_was_used": "skill_helped",
+    "hurt": "skill_hurt",
+    "failed": "skill_hurt",
+    "failure": "skill_hurt",
+    "harmful": "skill_hurt",
+    "skill_was_harmful": "skill_hurt",
+    "ignored": "skill_ignored",
+    "unused": "skill_ignored",
+    "ignored_load": "skill_ignored",
+    "false_positive_load": "skill_ignored",
+    "skill_was_ignored": "skill_ignored",
+    "missing": "skill_missing",
+    "missing_skill": "skill_missing",
+    "skill_was_missing": "skill_missing",
+    "shadowed": "skill_shadowed",
+    "wrong_skill": "skill_shadowed",
+    "skill_shadowed_another_skill": "skill_shadowed",
+    "agent_solved": "agent_solved_independently",
+    "solved_independently": "agent_solved_independently",
+    "no_skill_helped": "agent_solved_independently",
+    "no_skill_success": "agent_solved_independently",
+    "tool_failed": "tool_failed_independent",
+    "tool_failure": "tool_failed_independent",
+    "tool_failed_independent_of_skill": "tool_failed_independent",
+    "environment_drift": "environment_drifted",
+    "env_drifted": "environment_drifted",
+    "drift": "environment_drifted",
+    "requirement_changed": "user_correction_changed_requirements",
+    "requirements_changed": "user_correction_changed_requirements",
+    "user_correction": "user_correction_changed_requirements",
+    "user_correction_changed_requirement": "user_correction_changed_requirements",
+}
+
 
 @dataclass(frozen=True)
 class AttributionEventRecord:
@@ -186,6 +245,34 @@ class AttributionStore(Protocol):
         """Record a deterministic risky-action attribution check."""
 
 
+def normalize_attribution_outcome(outcome: str | None) -> str | None:
+    """Return a section-27 canonical outcome slug for attribution events."""
+
+    if outcome is None:
+        return None
+    normalized = "_".join(outcome.strip().lower().replace("-", "_").split())
+    if not normalized:
+        return None
+    if normalized in ATTRIBUTION_OUTCOMES:
+        return normalized
+    alias = _ATTRIBUTION_OUTCOME_ALIASES.get(normalized)
+    if alias is not None:
+        return alias
+    raise ValueError(f"unsupported attribution outcome: {outcome}")
+
+
+def _normalize_event_payload(
+    outcome: str | None,
+    metadata: dict[str, Any],
+) -> tuple[str | None, dict[str, Any]]:
+    normalized = normalize_attribution_outcome(outcome)
+    if outcome is None or outcome == normalized:
+        return normalized, metadata
+    event_metadata = dict(metadata)
+    event_metadata.setdefault("raw_outcome", outcome)
+    return normalized, event_metadata
+
+
 class NullAttributionStore:
     def __init__(self) -> None:
         self.checks: list[ActionAttributionCheckRecord] = []
@@ -202,6 +289,7 @@ class NullAttributionStore:
         outcome: str | None,
         metadata: dict[str, Any],
     ) -> AttributionEventRecord:
+        outcome, metadata = _normalize_event_payload(outcome, metadata)
         return AttributionEventRecord(
             attribution_event_id=UUID("00000000-0000-0000-0000-000000000000"),
             workspace_id=None,
@@ -281,6 +369,7 @@ class AsyncpgAttributionStore(AsyncpgPoolOwner):
         outcome: str | None,
         metadata: dict[str, Any],
     ) -> AttributionEventRecord:
+        outcome, metadata = _normalize_event_payload(outcome, metadata)
         pool = await self._get_pool()
         async with pool.acquire() as conn, conn.transaction():
             workspace_id = await ensure_workspace(conn, workspace_key)
