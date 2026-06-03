@@ -563,6 +563,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   rows through the existing governance/candidate/probe path without writing
   runtime skill files.
 
+## Latest Validated Increment
+
+- Phase 9 drift-governance hardening: `drift.check` worker jobs now convert
+  deterministic drift events into content-safe diagnostic momentum signals
+  keyed by contract/probe identifiers and scoped to skill/version when
+  available. Validation passed with
+  `uv run pytest sidecar/autoskill/tests/test_worker.py::test_worker_dispatches_contract_and_drift_jobs -q`
+  and focused ruff checks, then `uv run ruff check sidecar`,
+  `uv run pytest` with 262 tests, `uv run python -m compileall -q sidecar`,
+  and `git diff --check`. A real Compose/Postgres smoke seeded one violated
+  environment contract, ran one maintenance `drift.check` worker job, and
+  verified one skill/version-scoped `diagnostic_momentum` row with
+  `diagnostic_kind='drift'`, `evidence_count=1`, and `status='accumulating'`.
+
 ## Next Gates
 
 1. Continue collecting sustained Dev-01 telemetry and add only distinct,
@@ -638,3 +652,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   projection. Remaining support work is sustained operational validation of
   retrieval policy boundaries.
 - Contract/drift checks are deterministic v1 path/command/env/package/schema/TCP/HTTP-status probes only; drift probe creation/retirement, localized repair metadata, live API status probes, operator false-positive suppression, and conservative repair execution/recheck queueing are implemented.
+- Drift checks now feed the diagnostic momentum store from worker execution, but
+  momentum consumers are still conservative; future repair planners should use
+  ready-for-probe/ready-for-patch records as an additional gate rather than
+  bypassing scanner/evaluator/context proof.

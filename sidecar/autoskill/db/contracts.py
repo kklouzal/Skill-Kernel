@@ -406,6 +406,7 @@ class AsyncpgContractStore(AsyncpgPoolOwner):
                             "drift_event_id": str(event["drift_event_id"]),
                             "environment_contract_id": str(row["environment_contract_id"]),
                             "skill_id": str(row["skill_id"]),
+                            "skill_version_id": str(row["skill_version_id"]),
                             "reason": reason,
                             "drift_probe_hash": probe_hash,
                             "probe_created": probe_created,

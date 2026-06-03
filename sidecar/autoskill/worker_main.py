@@ -11,6 +11,7 @@ from autoskill.db.attribution import AsyncpgAttributionStore
 from autoskill.db.candidates import AsyncpgCandidateStore
 from autoskill.db.context import AsyncpgContextGovernanceStore
 from autoskill.db.contracts import AsyncpgContractStore
+from autoskill.db.diagnostics import AsyncpgDiagnosticMomentumStore
 from autoskill.db.embeddings import AsyncpgEmbeddingStore
 from autoskill.db.evaluations import AsyncpgEvaluationStore
 from autoskill.db.evidence import AsyncpgEvidenceStore
@@ -83,6 +84,10 @@ async def run_worker(args: argparse.Namespace) -> int:
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
     )
+    diagnostics = AsyncpgDiagnosticMomentumStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
     context_governance = AsyncpgContextGovernanceStore(
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
@@ -143,6 +148,7 @@ async def run_worker(args: argparse.Namespace) -> int:
                 governance=governance,
                 utility=utility,
                 contracts=contracts,
+                diagnostics=diagnostics,
                 context_governance=context_governance,
                 topology=topology,
                 attribution=attribution,
@@ -178,6 +184,7 @@ async def run_worker(args: argparse.Namespace) -> int:
         await governance.close()
         await utility.close()
         await contracts.close()
+        await diagnostics.close()
         await context_governance.close()
         await observability.close()
         await topology.close()

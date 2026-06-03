@@ -441,7 +441,23 @@ class MemoryContractWorkerStore:
         limit: int = 250,
     ) -> DriftCheckResult:
         self.drift_calls.append({"workspace_key": workspace_key, "limit": limit})
-        return DriftCheckResult(scanned=2, valid=1, violated=1, unknown=0, events=[])
+        return DriftCheckResult(
+            scanned=2,
+            valid=1,
+            violated=1,
+            unknown=0,
+            events=[
+                {
+                    "drift_event_id": str(uuid4()),
+                    "environment_contract_id": str(uuid4()),
+                    "skill_id": str(uuid4()),
+                    "skill_version_id": str(uuid4()),
+                    "drift_probe_hash": "probe-hash",
+                    "reason": "violated",
+                    "probe_created": True,
+                }
+            ],
+        )
 
     async def claim_open_drift_repair_events(
         self,
@@ -482,6 +498,18 @@ class MemoryContractWorkerStore:
             }
         )
         return None
+
+
+class MemoryDiagnosticWorkerStore:
+    def __init__(self) -> None:
+        self.signals: list[dict[str, object]] = []
+
+    async def record_signal(self, **kwargs):
+        self.signals.append(kwargs)
+        return SimpleNamespace()
+
+    async def list_ready(self, **_kwargs):
+        return []
 
 
 @dataclass
@@ -1983,6 +2011,7 @@ def test_worker_dispatches_usage_aggregation_job() -> None:
 def test_worker_dispatches_contract_and_drift_jobs() -> None:
     jobs = MemoryJobStore()
     contracts = MemoryContractWorkerStore()
+    diagnostics = MemoryDiagnosticWorkerStore()
 
     async def run():
         await jobs.enqueue_job(
@@ -2003,6 +2032,7 @@ def test_worker_dispatches_contract_and_drift_jobs() -> None:
             evidence=MemoryEvidenceWorkerStore(),
             embeddings=MemoryPendingEmbeddingStore(),
             contracts=contracts,
+            diagnostics=diagnostics,
         )
         first = await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
         second = await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
@@ -2016,6 +2046,17 @@ def test_worker_dispatches_contract_and_drift_jobs() -> None:
     assert second.output["violated"] == 1
     assert contracts.extract_calls == [{"workspace_key": "dev-01", "limit": 11}]
     assert contracts.drift_calls == [{"workspace_key": "dev-01", "limit": 13}]
+    assert len(diagnostics.signals) == 1
+    signal = diagnostics.signals[0]
+    assert signal["workspace_key"] == "dev-01"
+    assert signal["diagnostic_kind"] == "drift"
+    assert signal["evidence_delta"] == 1
+    assert signal["risk_score"] == 0.6
+    assert signal["root_cause_hypothesis"] == (
+        "deterministic drift check violated an environment contract"
+    )
+    assert signal["issue_signature"]["source"] == "drift.check"
+    assert signal["issue_signature"]["drift_probe_hash"] == "probe-hash"
 
 
 def test_repair_execute_queues_evaluator_when_curation_source_lacks_staged_manifest() -> None:

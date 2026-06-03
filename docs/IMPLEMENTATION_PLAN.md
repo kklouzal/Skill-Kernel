@@ -457,6 +457,10 @@ Deliverables:
 - contract extraction; implemented for SkillIR `environment_contracts` into DB-backed environment contract rows;
 - drift checks; implemented as a deterministic first pass for static path-existence, bare-command availability, and required-env probes with drift event creation;
 - package/schema/service/API drift checks; implemented as deterministic Python package, JSON schema, bounded TCP reachability, and bounded HTTP status probes without arbitrary shell execution or request bodies;
+- diagnostic momentum accumulation; implemented so maintenance-worker
+  `drift.check` jobs record one content-safe diagnostic signal per drift event
+  into the existing momentum store, scoped to skill/version when available and
+  keyed by hashed contract/probe identifiers;
 - localized repair;
 - skill graph maintenance;
 - repeated shadowing events materialize deterministic `shadow` skill graph edges plus active contrastive shadowing probes;
@@ -470,6 +474,15 @@ Deliverables:
 Acceptance:
 
 - drift violations trigger targeted repair; implemented as drift-event repair-candidate metadata with localized repair plans and active drift probes that retire when contracts return valid or when an operator marks a known-noisy contract false-positive; conservative repair execution now queues drift rechecks or policy-approved staged writer applies rather than inventing broad autonomous mutations from incomplete source data;
+- drift violations also accumulate diagnostic momentum before repair execution,
+  preserving the spec rule that recurring drift evidence should guide probe or
+  patch readiness instead of one-off reflection;
+- validation evidence for drift diagnostic momentum: focused worker tests and
+  focused ruff checks passed, full `uv run ruff check sidecar`, `uv run pytest`
+  with 262 tests, `uv run python -m compileall -q sidecar`, and `git diff
+  --check` passed, and a real Compose/Postgres smoke persisted a
+  skill/version-scoped `drift` momentum row from a worker-executed violated
+  environment contract;
 - curation logs features/actions/outcomes;
 - audit integrity verifies, and retrieval-policy review fails closed on missing
   active policy or invalid bounded audit hash-chain verification while warning

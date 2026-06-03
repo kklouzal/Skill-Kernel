@@ -16,6 +16,7 @@ from autoskill.db.attribution import AttributionStore
 from autoskill.db.candidates import CandidateStore
 from autoskill.db.context import ContextGovernanceStore
 from autoskill.db.contracts import ContractStore
+from autoskill.db.diagnostics import DiagnosticMomentumStore
 from autoskill.db.embeddings import EmbeddingStore
 from autoskill.db.evaluations import EvaluationStore
 from autoskill.db.evidence import EvidenceStore
@@ -152,6 +153,7 @@ class WorkerStores:
     governance: GovernanceStore | None = None
     utility: UtilityStore | None = None
     contracts: ContractStore | None = None
+    diagnostics: DiagnosticMomentumStore | None = None
     context_governance: ContextGovernanceStore | None = None
     topology: TopologyStore | None = None
     usage: UsageStore | None = None
@@ -885,7 +887,37 @@ async def _run_drift_checks(stores: WorkerStores, job: JobRecord) -> dict[str, A
         workspace_key=workspace,
         limit=_payload_int(job.payload, "limit", default=250, minimum=1, maximum=1000),
     )
+    if stores.diagnostics is not None and result.events:
+        await _record_drift_diagnostic_momentum(stores, workspace, result.events)
     return result.to_json()
+
+
+async def _record_drift_diagnostic_momentum(
+    stores: WorkerStores,
+    workspace_key: str,
+    events: list[dict[str, Any]],
+) -> None:
+    if stores.diagnostics is None:
+        return
+    for event in events:
+        await stores.diagnostics.record_signal(
+            workspace_key=workspace_key,
+            diagnostic_kind="drift",
+            skill_id=_uuid_value(event.get("skill_id")),
+            skill_version_id=_uuid_value(event.get("skill_version_id")),
+            root_cause_hypothesis="deterministic drift check violated an environment contract",
+            suggested_change_direction=(
+                "run drift repair probes and normal scanner/evaluator/context gates "
+                "before accepting any patch"
+            ),
+            evidence_delta=1,
+            risk_score=0.6,
+            issue_signature={
+                "source": "drift.check",
+                "environment_contract_id": event.get("environment_contract_id"),
+                "drift_probe_hash": event.get("drift_probe_hash"),
+            },
+        )
 
 
 async def _run_repair_execute(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
