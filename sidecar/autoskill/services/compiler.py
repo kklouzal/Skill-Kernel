@@ -233,7 +233,7 @@ async def compile_skill_with_context_governance(
     added_unsupported_requirements = 0
     semantic_equivalence_score = 1.0 if requirements and lost_requirements == 0 else 0.0
     description_over_budget = len(skill.description) > max(1, description_max_chars)
-    description_style_errors = _description_style_errors(skill.description)
+    description_style_errors = description_style_errors_for(skill.description)
     blocking_scanner = has_blocking_findings(compiled.scanner_findings)
     probe_reject_reason = _probe_reject_reason(
         require_probe_evidence=require_probe_evidence,
@@ -533,7 +533,7 @@ def _context_reject_reason(
     return None
 
 
-def _description_style_errors(description: str) -> list[str]:
+def description_style_errors_for(description: str) -> list[str]:
     text = " ".join(description.strip().split())
     lowered = text.lower()
     clauses = [clause.strip() for clause in lowered.split(";") if clause.strip()]

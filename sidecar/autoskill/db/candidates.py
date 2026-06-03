@@ -213,6 +213,7 @@ async def _persist_candidate(
                         "recommendation": proposal.recommendation,
                         "evidence_ids": proposal.evidence_ids,
                         "scanner_findings": proposal.scanner_findings,
+                        "metadata": proposal.metadata,
                     }
                 }
             ),
@@ -280,6 +281,8 @@ async def _persist_transaction_items(
         "delete_inactive_candidate_version": str(skill_version_id),
         "delete_compiled_file_path": skill_path,
     }
+    if proposal.metadata.get("rollback_action"):
+        rollback_action["proposal_rollback_action"] = proposal.metadata["rollback_action"]
     await _insert_transaction_item_once(
         conn,
         evolution_transaction_id=evolution_transaction_id,
@@ -507,6 +510,7 @@ async def _persist_context_artifact(
                 "compiler": "autoskill-compiler.v1",
                 "candidate_slug": proposal.candidate_slug,
                 "scanner_status": scanner_status,
+                "proposal_metadata": proposal.metadata,
                 "source": "candidate_persistence",
             }
         ),
@@ -624,6 +628,7 @@ async def _persist_evaluation_gate(
                 "required_gates": ["target", "no_skill_control", "regression"],
                 "probe_hashes": probe_hashes,
                 "scanner_status": scanner_status,
+                "proposal_metadata": proposal.metadata,
             }
         ),
     )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from autoskill.core.skillir import SkillIR
@@ -20,6 +20,7 @@ class CandidateSkillProposal:
     compiled_sha256: str | None
     scanner_findings: list[dict[str, str]]
     probe_plan: list[ProbePlan]
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         skillir = self.skillir.model_dump(by_alias=True, mode="json") if self.skillir else None
@@ -32,6 +33,7 @@ class CandidateSkillProposal:
             "compiled_sha256": self.compiled_sha256,
             "scanner_findings": self.scanner_findings,
             "probe_plan": [probe.to_json() for probe in self.probe_plan],
+            "metadata": self.metadata,
         }
 
 

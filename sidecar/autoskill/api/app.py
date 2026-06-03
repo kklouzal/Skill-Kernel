@@ -133,6 +133,7 @@ from autoskill.services.profile_qualification import (
     qualify_text_profile,
 )
 from autoskill.services.shadowing import detect_shadowing_events
+from autoskill.services.skillir_migration import propose_skill_ir_migration
 from autoskill.services.topology import (
     ComposeTopologyRequest,
     CreateTopologyRequest,
@@ -796,6 +797,24 @@ class CandidateProposalResponse(BaseModel):
     persistence: dict[str, object] | None = None
 
 
+class SkillIRMigrationProposalRequest(BaseModel):
+    workspace_id: str
+    source_revision_id: UUID
+    source_skill_ir: dict[str, object]
+    migration_reason: str
+    compiler_version: str = "autoskill-compiler.v1.migration"
+    persist: bool = True
+    evolution_transaction_id: UUID | None = None
+
+
+class SkillIRMigrationProposalResponse(BaseModel):
+    scanned: int
+    proposed: int
+    skipped: int
+    proposals: list[dict[str, object]]
+    persistence: dict[str, object] | None = None
+
+
 class HistoricalBootstrapConsolidateRequest(BaseModel):
     workspace_id: str
     limit: int = 250
@@ -1226,27 +1245,31 @@ def _candidate_transaction_idempotency_key(
     *,
     workspace_key: str,
     proposals: list[dict[str, object]],
+    transaction_kind: str = "candidate_proposal",
 ) -> str:
     plan_hash = _candidate_transaction_plan_hash(
         workspace_key=workspace_key,
         proposals=proposals,
+        transaction_kind=transaction_kind,
     )
-    return f"candidate-proposal:{plan_hash}"
+    return f"{transaction_kind}:{plan_hash}"
 
 
 def _candidate_transaction_plan_hash(
     *,
     workspace_key: str,
     proposals: list[dict[str, object]],
+    transaction_kind: str = "candidate_proposal",
 ) -> str:
     payload = {
         "workspace_key": workspace_key,
-        "transaction_kind": "candidate_proposal",
+        "transaction_kind": transaction_kind,
         "proposals": [
             {
                 "candidate_slug": proposal.get("candidate_slug"),
                 "compiled_sha256": proposal.get("compiled_sha256"),
                 "evidence_ids": proposal.get("evidence_ids", []),
+                "metadata": proposal.get("metadata", {}),
                 "recommendation": proposal.get("recommendation"),
             }
             for proposal in proposals
@@ -1304,10 +1327,12 @@ async def _persist_candidate_proposal_payload(
             idempotency_key=_candidate_transaction_idempotency_key(
                 workspace_key=workspace_key,
                 proposals=proposal_rows,
+                transaction_kind=transaction_kind,
             ),
             plan_hash=_candidate_transaction_plan_hash(
                 workspace_key=workspace_key,
                 proposals=proposal_rows,
+                transaction_kind=transaction_kind,
             ),
             actor="autoskill-sidecar",
             cause={
@@ -4452,6 +4477,43 @@ def create_app(
                 persistence_payload["transaction"] = transaction.to_json()
             payload["persistence"] = persistence_payload
         return CandidateProposalResponse(**payload)
+
+    @app.post(
+        "/v1/skillir/migrations/propose",
+        response_model=SkillIRMigrationProposalResponse,
+    )
+    async def propose_skillir_migration(
+        request: SkillIRMigrationProposalRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> SkillIRMigrationProposalResponse:
+        _require_control_auth(authorization)
+        result = propose_skill_ir_migration(
+            source_skill_ir=request.source_skill_ir,
+            source_revision_id=request.source_revision_id,
+            migration_reason=request.migration_reason,
+            compiler_version=request.compiler_version,
+        )
+        payload = result.to_json()
+        if request.persist:
+            persistence = await _persist_candidate_proposal_payload(
+                candidates,
+                governance,
+                workspace_key=request.workspace_id,
+                proposals=result.proposals,
+                proposal_payload=payload,
+                transaction_kind="skill_ir_migration",
+                endpoint="/v1/skillir/migrations/propose",
+                evolution_transaction_id=request.evolution_transaction_id,
+                policy_snapshot={
+                    "runtime_file_writes": "forbidden",
+                    "candidate_state": "inactive",
+                    "activation_allowed": False,
+                    "source_revision_preserved": True,
+                    "rollback_required": True,
+                },
+            )
+            payload["persistence"] = persistence
+        return SkillIRMigrationProposalResponse(**payload)
 
     @app.post(
         "/v1/historical-bootstrap/consolidate",

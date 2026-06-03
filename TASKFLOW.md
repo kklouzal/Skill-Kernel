@@ -620,6 +620,17 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `uv run pytest -q` with 265 tests, `uv run python -m compileall -q sidecar`,
   `git diff --check`, `npm test --prefix plugin/autoskill` with 18 tests, and
   `npm run check --prefix plugin/autoskill`.
+- SkillIR migration now has an executable guarded proposal path: the new
+  migration planner validates existing SkillIR payloads, rejects invalid
+  runtime descriptions fail-closed, preserves semantic fields exactly, records
+  source revision/compiler/reason/rollback metadata, recompiles into a new
+  inactive candidate revision, and exposes `/v1/skillir/migrations/propose`
+  through the same transaction, probe, evaluation, and rollback persistence
+  path used by other candidate revisions. Validation passed with focused
+  migration/candidate tests, focused ruff checks, full `uv run ruff check
+  sidecar`, `uv run pytest -q` with 268 tests, `uv run python -m compileall -q
+  sidecar`, `git diff --check`, `npm test --prefix plugin/autoskill` with 18
+  tests, and `npm run check --prefix plugin/autoskill`.
 
 ## Next Gates
 
