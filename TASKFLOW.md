@@ -999,6 +999,18 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   diagnostic bundle, verified all three through `/admin/api/v1/objects/...`,
   confirmed `raw_available=false`, deleted the smoke workspace, and stopped
   Postgres without removing the persistent volume.
+- Observatory additive response-envelope remediation is implemented for the
+  remaining Phase 1/12.2 API-envelope gap: admin response models now include
+  `ok`, `data`, and `meta` with request IDs, generation timestamps, redaction
+  level, and warning slots while preserving existing `snapshot`, `collection`,
+  `object`, `receipt`, and search payload fields for current clients. Focused
+  validation passed with Observatory API tests `11 passed`, focused ruff, and
+  the Observatory frontend build. Final-tree validation also passed with `uv run
+  ruff check sidecar scripts`, `uv run pytest -q` with 314 passing tests, `uv
+  run python -m compileall -q sidecar scripts`, `npm test --prefix
+  plugin/autoskill` with 18 passing tests, `npm run build --prefix
+  sidecar/autoskill/observatory`, `docker compose config --quiet`, and `git
+  diff --check`.
 
 ## Next Gates
 

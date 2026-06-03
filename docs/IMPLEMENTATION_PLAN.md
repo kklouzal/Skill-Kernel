@@ -642,7 +642,10 @@ Deliverables:
   sidecar admin routes rather than a second control plane;
 - role-aware admin configuration and content-safe API envelopes; implemented for
   `/admin/api/v1/config`, `/summary`, `/pipeline`, `/subsystems`, `/components`,
-  `/issues`, `/search`, `/objects`, `/health/live`, and `/health/ready`;
+  `/issues`, `/search`, `/objects`, `/health/live`, and `/health/ready`.
+  Observatory response models now expose additive `ok`, `data`, and `meta`
+  fields with request IDs, generation timestamps, redaction level, and warning
+  slots while preserving existing top-level payload keys for current clients;
 - bounded drill-down/read-model surfaces; implemented for components, reason
   codes, playbooks, jobs, schedules, skills, candidates, evaluations, scanner
   findings, historical imports, broker decisions, context artifacts,
@@ -695,3 +698,10 @@ Acceptance:
   `npm run build --prefix sidecar/autoskill/observatory`, a compose/Postgres
   smoke of persisted captured-event/comparison/bundle object routes, `docker
   compose config --quiet`, and `git diff --check`.
+- validation evidence for the additive Observatory envelope slice passed on the
+  final tree: Observatory API tests `11 passed`, focused `uv run ruff check`
+  passed for the edited API/test files, `uv run ruff check sidecar scripts`,
+  `uv run pytest -q` with 314 tests, `uv run python -m compileall -q sidecar
+  scripts`, `npm test --prefix plugin/autoskill` with 18 tests,
+  `npm run build --prefix sidecar/autoskill/observatory`, `docker compose
+  config --quiet`, and `git diff --check` passed.

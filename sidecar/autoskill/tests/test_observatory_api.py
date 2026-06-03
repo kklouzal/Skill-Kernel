@@ -118,6 +118,10 @@ def test_observatory_summary_exposes_all_pipeline_stations_and_truth_states() ->
     response = asyncio.run(run())
     snapshot = response.snapshot
 
+    assert response.ok is True
+    assert response.data["snapshot"]["schema_version"] == "skillkernel.observatory.v1"
+    assert str(response.meta["request_id"]).startswith("req_")
+    assert response.meta["redaction_level"] == "default"
     assert snapshot["schema_version"] == "skillkernel.observatory.v1"
     assert snapshot["workspace_id"] == "dev-01"
     assert len(snapshot["pipeline"]["stations"]) == 24
@@ -161,8 +165,12 @@ def test_observatory_pipeline_component_and_search_routes_are_bounded() -> None:
     assert component.object["object_type"] == "component"
     assert component.object["object_id"] == "scheduler_jobs"
     assert component.object["content_policy"]["raw_available"] is False
+    assert component.ok is True
+    assert component.data["object"]["object_id"] == "scheduler_jobs"
     assert search.results
     assert len(search.results) <= 5
+    assert search.ok is True
+    assert search.data["query"] == "scheduler"
     assert all(
         "scheduler"
         in " ".join(
@@ -209,6 +217,8 @@ def test_observatory_collection_routes_return_bounded_content_safe_envelopes() -
     assert components.collection["count"] == 2
     assert components.collection["has_more"] is True
     assert components.collection["content_policy"]["raw_available"] is False
+    assert components.ok is True
+    assert components.data["collection"]["object_type"] == "component"
     assert len(reason_codes.collection["items"]) == 3
     assert reason_codes.collection["source"] == "observatory_snapshot.reason_code_catalog"
     assert playbooks.collection["items"]
@@ -601,6 +611,8 @@ def test_observatory_admin_token_is_enforced(monkeypatch) -> None:
     assert exc.value.status_code == 401
 
     response = asyncio.run(authorized())
+    assert response.ok is True
+    assert response.data["config"]["principal"]["auth_configured"] is True
     assert response.config["principal"]["auth_configured"] is True
 
     get_settings.cache_clear()

@@ -113,7 +113,20 @@ export type ObservatorySnapshot = {
   reason_code_catalog: Array<Record<string, string>>;
 };
 
-export type SnapshotResponse = {
+export type AdminMeta = {
+  request_id: string;
+  generated_at: string;
+  redaction_level: string;
+  warnings: string[];
+};
+
+export type AdminEnvelope<TData extends Record<string, unknown>> = {
+  ok: boolean;
+  data: TData;
+  meta: AdminMeta;
+};
+
+export type SnapshotResponse = AdminEnvelope<{ snapshot: ObservatorySnapshot }> & {
   snapshot: ObservatorySnapshot;
 };
 
@@ -126,13 +139,17 @@ export type SearchResult = {
   reason_codes: string[];
 };
 
-export type SearchResponse = {
+export type SearchResponse = AdminEnvelope<{
+  query: string;
+  limit: number;
+  results: SearchResult[];
+}> & {
   query: string;
   limit: number;
   results: SearchResult[];
 };
 
-export type ObjectResponse = {
+export type ObjectResponse = AdminEnvelope<{ object: Record<string, unknown> }> & {
   object: Record<string, unknown>;
 };
 

@@ -4,11 +4,11 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from hmac import compare_digest
 from pathlib import Path
 from typing import Annotated, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from autoskill import __version__
 from autoskill.core.audit import AuditRecord
@@ -174,7 +174,46 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket, W
 from fastapi import status as http_status
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+
+def _admin_response_meta() -> dict[str, object]:
+    return {
+        "request_id": f"req_{uuid4().hex}",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "redaction_level": "default",
+        "warnings": [],
+    }
+
+
+class AdminResponseEnvelope(BaseModel):
+    ok: bool = True
+    data: dict[str, object] = Field(default_factory=dict)
+    meta: dict[str, object] = Field(default_factory=_admin_response_meta)
+
+    @model_validator(mode="after")
+    def populate_data(self) -> AdminResponseEnvelope:
+        if self.data:
+            return self
+        for key in (
+            "config",
+            "skillkernel",
+            "snapshot",
+            "collection",
+            "object",
+            "receipt",
+        ):
+            if hasattr(self, key):
+                self.data = {key: getattr(self, key)}
+                return self
+        model_data = self.__dict__
+        if {"query", "limit", "results"}.issubset(model_data):
+            self.data = {
+                "query": model_data["query"],
+                "limit": model_data["limit"],
+                "results": model_data["results"],
+            }
+        return self
 
 
 class HealthResponse(BaseModel):
@@ -201,7 +240,7 @@ class DeploymentReadinessResponse(BaseModel):
     checks: dict[str, object]
 
 
-class EffectiveConfigResponse(BaseModel):
+class EffectiveConfigResponse(AdminResponseEnvelope):
     skillkernel: dict[str, object]
 
 
@@ -322,21 +361,21 @@ class ObservabilityMetricsResponse(BaseModel):
     dashboards: dict[str, object]
 
 
-class ObservatoryConfigResponse(BaseModel):
+class ObservatoryConfigResponse(AdminResponseEnvelope):
     config: dict[str, object]
 
 
-class ObservatorySnapshotResponse(BaseModel):
+class ObservatorySnapshotResponse(AdminResponseEnvelope):
     snapshot: dict[str, object]
 
 
-class ObservatorySearchResponse(BaseModel):
+class ObservatorySearchResponse(AdminResponseEnvelope):
     query: str
     limit: int
     results: list[dict[str, object]]
 
 
-class ObservatoryObjectResponse(BaseModel):
+class ObservatoryObjectResponse(AdminResponseEnvelope):
     object: dict[str, object]
 
 
@@ -351,11 +390,11 @@ class ObservatoryActionRequest(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
-class ObservatoryActionResponse(BaseModel):
+class ObservatoryActionResponse(AdminResponseEnvelope):
     receipt: dict[str, object]
 
 
-class ObservatoryCollectionResponse(BaseModel):
+class ObservatoryCollectionResponse(AdminResponseEnvelope):
     collection: dict[str, object]
 
 
