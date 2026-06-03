@@ -939,6 +939,25 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Local Observatory preview is running at `http://127.0.0.1:8757/admin/` from
   PID file `/tmp/skillkernel-observatory-8757.pid`; verified `/v1/health`,
   `/admin/api/v1/summary?workspace_id=dev-01`, and `/admin/` all return 200.
+- Observatory route-map expansion and cockpit stabilization are implemented:
+  `/admin/api/v1` now exposes bounded collection/detail/readiness surfaces for
+  components, reason codes, playbooks, jobs, schedules, skills, candidates,
+  evaluations, scanner findings, historical imports, broker decisions, context
+  artifacts, model/embedding profiles, storage, audit, comparisons, diagnostic
+  bundles, trace detail, and trace replay without raw content exposure. Guarded
+  operator action aliases record audit receipts and fail closed on high-impact
+  actions without confirmation. The React app now preserves deep-link state,
+  falls back from WebSocket to SSE live updates, and adds cockpit tabs for
+  records, metrics, traces, artifacts, config, audit, and help.
+- Observatory expansion validation passed: focused Observatory tests passed
+  `6 passed`; `uv run ruff check sidecar`, `uv run pytest` with 309 passing
+  tests, `uv run python -m compileall -q sidecar`, `npm run build --prefix
+  sidecar/autoskill/observatory`, and `git diff --check` passed. Compose
+  validation built the sidecar image including the Observatory UI, applied
+  migrations successfully, and a Postgres-backed admin API smoke verified
+  bounded component envelopes, readiness, audit-chain diagnostics, and
+  confirmation-required rollback denial. Compose was stopped with
+  `docker compose down` and the Postgres volume was preserved.
 
 ## Next Gates
 

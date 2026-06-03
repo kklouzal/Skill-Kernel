@@ -87,6 +87,14 @@ export function liveUrl(session: ApiSession, workspaceId: string, lastSeq?: numb
   return url.toString();
 }
 
+export function liveSseUrl(session: ApiSession, workspaceId: string, lastSeq?: number) {
+  const url = new URL("/admin/live-sse", window.location.origin);
+  if (session.token) url.searchParams.set("token", session.token);
+  if (workspaceId) url.searchParams.set("workspace_id", workspaceId);
+  if (lastSeq) url.searchParams.set("last_seq", String(lastSeq));
+  return url.toString();
+}
+
 export function isSnapshotPayload(payload: LiveEnvelope["payload"]): payload is SnapshotResponse["snapshot"] {
   return typeof payload === "object" && payload !== null && "pipeline" in payload;
 }

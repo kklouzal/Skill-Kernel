@@ -18,6 +18,31 @@ HEALTH_ORDER = {
     "offline": 5,
 }
 
+REQUIRED_METRICS_BY_FAMILY: dict[str, tuple[str, ...]] = {
+    "ingest": ("ingest",),
+    "historical": ("ingest",),
+    "redaction": ("redaction_counts",),
+    "spool": ("spool_backlog",),
+    "evidence": ("ingest",),
+    "retrieval": ("retrieval_decisions", "embedding_backlog"),
+    "broker": ("retrieval_decisions", "context_hint_injection_count"),
+    "topology": ("skill_creation_improvement_counts",),
+    "skills": ("skill_lifecycle_counts",),
+    "artifact": ("skill_creation_improvement_counts",),
+    "context": ("context_hint_token_cost", "context_hint_token_ledger_count"),
+    "scanner": ("scanner_reject_counts",),
+    "evaluator": ("evaluation_pass_fail_counts",),
+    "writer": ("skill_creation_improvement_counts",),
+    "lifecycle": ("skill_lifecycle_counts",),
+    "rollback": ("rollback_freeze_counts",),
+    "jobs": ("job_queue_depth",),
+    "profiles": ("embedding_backlog",),
+    "storage": ("postgres_table_index_growth",),
+    "audit": ("audit",),
+    "actions": ("audit",),
+    "observatory": ("sidecar_latency_ms",),
+}
+
 
 @dataclass(frozen=True)
 class StationDefinition:
@@ -422,6 +447,7 @@ def build_observatory_snapshot(
     snapshot_seq = _snapshot_seq(captured_at)
     metrics = _dict(operator_metrics.get("metrics"))
     dashboards = _dict(operator_metrics.get("dashboards"))
+    read_model_age_seconds = _read_model_age_seconds(operator_metrics, captured_at)
     components = [
         _component_snapshot(
             station,
@@ -432,6 +458,7 @@ def build_observatory_snapshot(
             audit_chain_valid=audit_chain_valid,
             static_available=static_available,
             captured_at=captured_at,
+            read_model_age_seconds=read_model_age_seconds,
         )
         for station in STATIONS
     ]
@@ -476,7 +503,10 @@ def build_observatory_snapshot(
         "fitness": _system_fitness(components=components, issues=issues, metrics=metrics),
         "kpis": _kpis(metrics=metrics, status=status, components=components),
         "data_quality": _global_data_quality(
-            settings=settings, metrics=metrics, static_available=static_available
+            settings=settings,
+            metrics=metrics,
+            static_available=static_available,
+            read_model_age_seconds=read_model_age_seconds,
         ),
         "pipeline": {
             "stations": components,
@@ -553,6 +583,42 @@ def search_observatory(snapshot: dict[str, Any], query: str, *, limit: int = 25)
             url=issue["deep_link"],
             reason_codes=issue["reason_codes"],
         )
+    for invariant in snapshot["pipeline"]["invariants"]:
+        _append_match(
+            results,
+            needle=needle,
+            object_type="pipeline_invariant",
+            object_id=str(invariant["invariant_id"]),
+            title=str(invariant["invariant_id"]).replace("-", " ").title(),
+            summary=str(invariant["description"]),
+            url=str(invariant["deep_link"]),
+            reason_codes=list(invariant.get("reason_codes", [])),
+        )
+    for subsystem in snapshot["subsystems"]:
+        for playbook in subsystem.get("playbooks", []):
+            playbook_id = str(playbook["playbook_id"])
+            _append_match(
+                results,
+                needle=needle,
+                object_type="playbook",
+                object_id=playbook_id,
+                title=playbook_id.replace("-", " ").title(),
+                summary=str(playbook["summary"]),
+                url=f"/admin/playbooks/{playbook_id}",
+                reason_codes=list(subsystem.get("reason_codes", [])),
+            )
+    for command in snapshot.get("command_palette", []):
+        command_id = str(command["command"])
+        _append_match(
+            results,
+            needle=needle,
+            object_type="command",
+            object_id=command_id,
+            title=str(command["label"]),
+            summary=str(command["target"]),
+            url=str(command["target"]),
+            reason_codes=[],
+        )
     for reason_code, description in REASON_CODES.items():
         _append_match(
             results,
@@ -613,6 +679,80 @@ def object_microscope(
                 upstream=issue.get("evidence_refs", []),
                 downstream=issue.get("safe_next_actions", []),
             )
+    for invariant in snapshot["pipeline"]["invariants"]:
+        if object_type in {"pipeline_invariant", "invariant"} and str(
+            invariant["invariant_id"]
+        ) == object_id:
+            return _microscope_payload(
+                object_type="pipeline_invariant",
+                object_id=object_id,
+                title=str(invariant["invariant_id"]).replace("-", " ").title(),
+                summary=str(invariant["description"]),
+                diagnostics=invariant,
+                upstream=[{"object_type": "component", "object_id": invariant["component_id"]}],
+                downstream=[{"object_type": "issue", "object_id": invariant["deep_link"]}],
+            )
+    for reason_code, description in REASON_CODES.items():
+        if object_type == "reason_code" and reason_code == object_id:
+            supporting_components = [
+                component
+                for component in snapshot["pipeline"]["stations"]
+                if reason_code in component.get("reason_codes", [])
+            ]
+            return _microscope_payload(
+                object_type=object_type,
+                object_id=object_id,
+                title=reason_code,
+                summary=description,
+                diagnostics={
+                    "reason_code": reason_code,
+                    "description": description,
+                    "supporting_component_ids": [
+                        component["component_id"] for component in supporting_components
+                    ],
+                },
+                upstream=[
+                    {"object_type": "component", "object_id": component["component_id"]}
+                    for component in supporting_components
+                ],
+                downstream=[
+                    {"object_type": "issue", "object_id": issue["issue_id"]}
+                    for issue in snapshot["issue_board"]
+                    if reason_code in issue.get("reason_codes", [])
+                ],
+            )
+    for subsystem in snapshot["subsystems"]:
+        for playbook in subsystem.get("playbooks", []):
+            if object_type == "playbook" and playbook["playbook_id"] == object_id:
+                return _microscope_payload(
+                    object_type=object_type,
+                    object_id=object_id,
+                    title=str(playbook["playbook_id"]).replace("-", " ").title(),
+                    summary=str(playbook["summary"]),
+                    diagnostics={
+                        **playbook,
+                        "subsystem_id": subsystem["subsystem_id"],
+                        "current_reason_codes": subsystem.get("reason_codes", []),
+                    },
+                    upstream=[
+                        {"object_type": "subsystem", "object_id": subsystem["subsystem_id"]}
+                    ],
+                    downstream=[
+                        {"object_type": "issue", "object_id": issue_id}
+                        for issue_id in subsystem.get("issue_ids", [])
+                    ],
+                )
+    for command in snapshot.get("command_palette", []):
+        if object_type == "command" and command["command"] == object_id:
+            return _microscope_payload(
+                object_type=object_type,
+                object_id=object_id,
+                title=str(command["label"]),
+                summary=str(command["target"]),
+                diagnostics=command,
+                upstream=[],
+                downstream=[{"object_type": "route", "object_id": str(command["target"])}],
+            )
     return _microscope_payload(
         object_type=object_type,
         object_id=object_id,
@@ -649,6 +789,10 @@ def action_receipt(
             "confirmation_required": action
             in {
                 "freeze_skill",
+                "historical_import",
+                "quarantine_candidate",
+                "revoke_source",
+                "rollback_skill",
                 "unfreeze_skill",
                 "rollback_transaction",
                 "start_historical_import",
@@ -670,6 +814,7 @@ def _component_snapshot(
     audit_chain_valid: bool,
     static_available: bool,
     captured_at: datetime,
+    read_model_age_seconds: int,
 ) -> dict[str, Any]:
     reason_codes: list[str] = []
     health = "healthy"
@@ -809,9 +954,23 @@ def _component_snapshot(
             health = _worse(health, "degraded")
             reason_codes.append("admin-token-not-configured")
 
+    if read_model_age_seconds > settings.web_admin_telemetry_staleness_warning_seconds:
+        reason_codes.append("telemetry-stale")
+        coverage = "partial"
+        health = _worse(
+            health,
+            "degraded"
+            if read_model_age_seconds
+            > settings.web_admin_telemetry_staleness_degraded_seconds
+            else "unknown",
+        )
+
     missing_signals = _missing_signal_classes(station.metric_family, metrics, status)
     if missing_signals and health == "healthy":
         health = "unknown"
+        coverage = "partial"
+        reason_codes.append("missing-required-signal")
+    elif missing_signals:
         coverage = "partial"
         reason_codes.append("missing-required-signal")
 
@@ -860,14 +1019,14 @@ def _component_snapshot(
             "quality": {
                 "data_completeness": 1.0 if coverage == "complete" else 0.4,
                 "coverage": coverage,
-                "freshness_seconds": 0,
+                "freshness_seconds": read_model_age_seconds,
             },
             "control": {"mode": mode, "freeze_state": "frozen" if health == "frozen" else "none"},
             "evidence": {"trace_sample_ids": [], "issue_links": [], "audit_links": []},
         },
         "data_quality": {
             "component_id": station.component_id,
-            "telemetry_freshness_seconds": 0,
+            "telemetry_freshness_seconds": read_model_age_seconds,
             "expected_input_rate_1m": 0.0,
             "observed_input_rate_1m": round(input_rate, 4),
             "output_conversion_rate_15m": 1.0
@@ -876,7 +1035,7 @@ def _component_snapshot(
             "sampling_rate": 1.0,
             "redaction_level": "default",
             "raw_content_available": False,
-            "read_model_age_seconds": 0,
+            "read_model_age_seconds": read_model_age_seconds,
             "coverage_state": coverage,
             "missing_signals": missing_signals,
         },
@@ -1008,6 +1167,8 @@ def _issue_board(
         if component["health"] == "unknown" and component.get("reason_codes"):
             code = str(component["reason_codes"][0])
             issues.append(_issue(code, "low", str(component["component_id"])))
+        if "telemetry-stale" in component.get("reason_codes", []):
+            issues.append(_issue("telemetry-stale", "high", str(component["component_id"])))
     return _dedupe_issues(issues)
 
 
@@ -1038,14 +1199,57 @@ def _pipeline_invariants(
             "Captured events eventually reach ingest, quarantine, or explicit drop records.",
         ),
         _invariant(
+            "historical-sources-terminal-state",
+            component_by_id["historical_ingestion"],
+            (
+                "Historical source items eventually reach parsed, skipped, quarantined, "
+                "or revoked state."
+            ),
+        ),
+        _invariant(
             "evidence-preserves-provenance",
             component_by_id["evidence_memory"],
             "Evidence clusters feeding candidates preserve provenance to source records.",
         ),
         _invariant(
+            "candidate-decisions-explicit",
+            component_by_id["opportunity_mining"],
+            "Candidate decisions have explicit accept, reject, quarantine, or watch reasons.",
+        ),
+        _invariant(
+            "llm-proposals-structured",
+            component_by_id["model_embedding"],
+            "LLM-backed proposals have structured-output validation records.",
+        ),
+        _invariant(
+            "context-compiler-covered",
+            component_by_id["context_compiler"],
+            "Context compiler outputs have token counts and semantic-equivalence results.",
+        ),
+        _invariant(
+            "gates-cover-writer-activation",
+            component_by_id["scanner_security"],
+            "Scanner and evaluator gates have complete coverage before writer activation.",
+        ),
+        _invariant(
             "writer-transactions-audited",
             component_by_id["deterministic_writer"],
             "Writer transactions have rollback metadata and audit links.",
+        ),
+        _invariant(
+            "activated-versions-runtime-visible",
+            component_by_id["activation_curation"],
+            "Activated versions have broker and canary visibility.",
+        ),
+        _invariant(
+            "rollback-revokes-derived-data",
+            component_by_id["canary_rollback"],
+            "Rollback and revocation traverse derived memories, embeddings, artifacts, and caches.",
+        ),
+        _invariant(
+            "read-models-fresh",
+            component_by_id["observatory_admin"],
+            "Dashboard read models are fresher than their configured staleness budget.",
         ),
         _invariant(
             "audit-chain-verifiable",
@@ -1131,22 +1335,44 @@ def _system_fitness(
 
 
 def _global_data_quality(
-    *, settings: Settings, metrics: dict[str, Any], static_available: bool
+    *,
+    settings: Settings,
+    metrics: dict[str, Any],
+    static_available: bool,
+    read_model_age_seconds: int,
 ) -> dict[str, Any]:
     missing = []
     if not settings.database_url:
         missing.append("database_read_models")
     if not static_available:
         missing.append("static_frontend")
+    stale = read_model_age_seconds > settings.web_admin_telemetry_staleness_warning_seconds
     return {
-        "telemetry_freshness_seconds": 0,
-        "read_model_age_seconds": 0,
-        "coverage_state": "complete" if not missing else "partial",
+        "telemetry_freshness_seconds": read_model_age_seconds,
+        "read_model_age_seconds": read_model_age_seconds,
+        "coverage_state": "partial" if missing or stale else "complete",
         "missing_signals": missing,
         "raw_content_available": False,
         "raw_content_reason": "raw-content-disabled",
         "sampling_rate": 1.0,
+        "stale": stale,
     }
+
+
+def _read_model_age_seconds(
+    operator_metrics: dict[str, Any],
+    captured_at: datetime,
+) -> int:
+    metrics_captured_at = operator_metrics.get("captured_at")
+    if not isinstance(metrics_captured_at, str) or not metrics_captured_at:
+        return 0
+    try:
+        parsed = datetime.fromisoformat(metrics_captured_at.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return max(0, int((captured_at - parsed.astimezone(UTC)).total_seconds()))
 
 
 def _station_records(
@@ -1332,14 +1558,52 @@ def _missing_signal_classes(
 ) -> list[str]:
     if not status.get("database_configured"):
         return ["input", "processing", "output", "quality", "evidence"]
-    missing = []
-    if metric_family in {"ingest", "evidence"} and not metrics.get("ingest"):
-        missing.append("input")
-    if metric_family == "spool":
-        missing.append("evidence")
-    if metric_family == "profiles" and not metrics.get("embedding_backlog"):
-        missing.append("quality")
-    return missing
+    missing_keys = [
+        key
+        for key in REQUIRED_METRICS_BY_FAMILY.get(metric_family, ())
+        if not _metric_present(metrics, key)
+    ]
+    if not missing_keys:
+        return []
+    signal_map = {
+        "ingest": "input",
+        "historical": "input",
+        "redaction": "quality",
+        "spool": "evidence",
+        "evidence": "evidence",
+        "retrieval": "processing",
+        "broker": "output",
+        "topology": "processing",
+        "skills": "output",
+        "artifact": "output",
+        "context": "quality",
+        "scanner": "quality",
+        "evaluator": "quality",
+        "writer": "control",
+        "lifecycle": "control",
+        "rollback": "control",
+        "jobs": "processing",
+        "profiles": "quality",
+        "storage": "processing",
+        "audit": "evidence",
+        "actions": "control",
+        "observatory": "processing",
+    }
+    primary = signal_map.get(metric_family, "evidence")
+    return sorted({primary, "evidence"})
+
+
+def _metric_present(metrics: dict[str, Any], key: str) -> bool:
+    if key not in metrics:
+        return False
+    value = metrics[key]
+    if value is None:
+        return False
+    if isinstance(value, dict):
+        return bool(value)
+    if isinstance(value, list):
+        return bool(value)
+    return True
 
 
 def _append_match(
@@ -1495,6 +1759,19 @@ def _fitness_summary(score: int, *, critical: int, high: int) -> str:
 
 def _snapshot_seq(captured_at: datetime) -> int:
     return int(captured_at.timestamp() * 1000)
+
+
+def _read_model_age_seconds(operator_metrics: dict[str, Any], captured_at: datetime) -> int:
+    captured_value = operator_metrics.get("captured_at")
+    if not isinstance(captured_value, str):
+        return 0
+    try:
+        metric_time = datetime.fromisoformat(captured_value.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    if metric_time.tzinfo is None:
+        metric_time = metric_time.replace(tzinfo=UTC)
+    return max(0, int((captured_at - metric_time.astimezone(UTC)).total_seconds()))
 
 
 def _normalized_base_path(value: str) -> str:

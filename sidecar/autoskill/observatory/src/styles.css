@@ -561,6 +561,28 @@ h3 {
   margin-top: 14px;
 }
 
+.cockpit-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.cockpit-tabs button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--panel-2);
+  cursor: pointer;
+}
+
+.cockpit-tabs button.is-active {
+  border-color: var(--green);
+  background: rgba(104, 211, 145, 0.16);
+}
+
 .reason-panel code,
 .command-row code {
   display: inline-block;

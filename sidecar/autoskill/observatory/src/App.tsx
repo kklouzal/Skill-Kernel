@@ -18,7 +18,15 @@ import {
   Workflow
 } from "lucide-react";
 import type { EChartsOption } from "echarts";
-import { fetchObject, fetchSummary, isSnapshotPayload, liveUrl, postAction, search } from "./api";
+import {
+  fetchObject,
+  fetchSummary,
+  isSnapshotPayload,
+  liveSseUrl,
+  liveUrl,
+  postAction,
+  search
+} from "./api";
 import type { ApiSession } from "./api";
 import type { Issue, LiveEnvelope, ObservatorySnapshot, Station, Subsystem } from "./types";
 import { AssemblyLine } from "./components/AssemblyLine";
@@ -27,8 +35,20 @@ import { Inspector } from "./components/Inspector";
 import { ParticleLayer } from "./components/ParticleLayer";
 
 type View = "overview" | "workcells" | "cockpit" | "skills" | "trace" | "admin";
+type CockpitTab = "records" | "metrics" | "traces" | "artifacts" | "config" | "audit" | "help";
 
 const storedToken = sessionStorage.getItem("skillkernel.admin.token") ?? "";
+const initialParams = new URLSearchParams(window.location.search);
+const initialView = ((): View => {
+  const value = initialParams.get("view");
+  return value && ["overview", "workcells", "cockpit", "skills", "trace", "admin"].includes(value)
+    ? (value as View)
+    : "overview";
+})();
+const initialWindowMinutes = (() => {
+  const value = Number(initialParams.get("window") ?? 60);
+  return Number.isFinite(value) && value > 0 ? value : 60;
+})();
 
 function App() {
   const queryClient = useQueryClient();
@@ -36,12 +56,16 @@ function App() {
     token: storedToken,
     roles: "admin,operator,auditor,viewer"
   });
-  const [workspaceId, setWorkspaceId] = useState("dev-01");
-  const [windowMinutes, setWindowMinutes] = useState(60);
-  const [view, setView] = useState<View>("overview");
-  const [selectedStationId, setSelectedStationId] = useState<string | undefined>();
-  const [selectedSubsystemId, setSelectedSubsystemId] = useState<string | undefined>();
-  const [query, setQuery] = useState("");
+  const [workspaceId, setWorkspaceId] = useState(initialParams.get("workspace") ?? "dev-01");
+  const [windowMinutes, setWindowMinutes] = useState(initialWindowMinutes);
+  const [view, setView] = useState<View>(initialView);
+  const [selectedStationId, setSelectedStationId] = useState<string | undefined>(
+    initialParams.get("station") ?? undefined
+  );
+  const [selectedSubsystemId, setSelectedSubsystemId] = useState<string | undefined>(
+    initialParams.get("subsystem") ?? undefined
+  );
+  const [query, setQuery] = useState(initialParams.get("q") ?? "");
   const [liveState, setLiveState] = useState<"offline" | "connecting" | "live">("offline");
   const [liveSnapshot, setLiveSnapshot] = useState<ObservatorySnapshot | null>(null);
   const [reducedMotion, setReducedMotion] = useState(
@@ -89,31 +113,68 @@ function App() {
   }, [session.token]);
 
   useEffect(() => {
+    const params = new URLSearchParams();
+    params.set("view", view);
+    params.set("workspace", workspaceId);
+    params.set("window", String(windowMinutes));
+    if (selectedStationId) params.set("station", selectedStationId);
+    if (selectedSubsystemId) params.set("subsystem", selectedSubsystemId);
+    if (query.trim()) params.set("q", query.trim());
+    window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+  }, [query, selectedStationId, selectedSubsystemId, view, windowMinutes, workspaceId]);
+
+  useEffect(() => {
     let closed = false;
-    setLiveState("connecting");
-    const socket = new WebSocket(liveUrl(session, workspaceId, lastSeq.current));
-    socket.addEventListener("open", () => {
-      if (!closed) setLiveState("live");
-    });
-    socket.addEventListener("message", (event) => {
-      const envelope = JSON.parse(event.data) as LiveEnvelope;
+    let eventSource: EventSource | undefined;
+    const applyEnvelope = (envelope: LiveEnvelope) => {
       lastSeq.current = envelope.seq;
+      if (envelope.requires_snapshot_reload) {
+        void queryClient.invalidateQueries({ queryKey: ["summary"] });
+      }
       if (isSnapshotPayload(envelope.payload)) {
         setLiveSnapshot(envelope.payload);
         queryClient.setQueryData(["summary", session.token, session.roles, workspaceId, windowMinutes], {
           snapshot: envelope.payload
         });
       }
+    };
+    const openSseFallback = () => {
+      if (closed || eventSource) return;
+      eventSource = new EventSource(liveSseUrl(session, workspaceId, lastSeq.current));
+      eventSource.addEventListener("open", () => {
+        if (!closed) setLiveState("live");
+      });
+      eventSource.addEventListener("message", (event) => {
+        applyEnvelope(JSON.parse(event.data) as LiveEnvelope);
+      });
+      eventSource.addEventListener("snapshot", (event) => {
+        applyEnvelope(JSON.parse((event as MessageEvent).data) as LiveEnvelope);
+      });
+      eventSource.addEventListener("heartbeat", (event) => {
+        applyEnvelope(JSON.parse((event as MessageEvent).data) as LiveEnvelope);
+      });
+      eventSource.addEventListener("error", () => {
+        if (!closed) setLiveState("offline");
+      });
+    };
+    setLiveState("connecting");
+    const socket = new WebSocket(liveUrl(session, workspaceId, lastSeq.current));
+    socket.addEventListener("open", () => {
+      if (!closed) setLiveState("live");
+    });
+    socket.addEventListener("message", (event) => {
+      applyEnvelope(JSON.parse(event.data) as LiveEnvelope);
     });
     socket.addEventListener("close", () => {
-      if (!closed) setLiveState("offline");
+      if (!closed) openSseFallback();
     });
     socket.addEventListener("error", () => {
-      if (!closed) setLiveState("offline");
+      if (!closed) openSseFallback();
     });
     return () => {
       closed = true;
       socket.close();
+      eventSource?.close();
     };
   }, [queryClient, session.roles, session.token, windowMinutes, workspaceId]);
 
@@ -452,6 +513,36 @@ function Cockpit({
   issues: Issue[];
   object?: Record<string, unknown>;
 }) {
+  const [activeTab, setActiveTab] = useState<CockpitTab>("records");
+  const tabs: Array<{ id: CockpitTab; label: string }> = [
+    { id: "records", label: "Records" },
+    { id: "metrics", label: "Metrics" },
+    { id: "traces", label: "Traces" },
+    { id: "artifacts", label: "Artifacts" },
+    { id: "config", label: "Config" },
+    { id: "audit", label: "Audit" },
+    { id: "help", label: "Help" }
+  ];
+  const tabPayload: Record<CockpitTab, unknown> = {
+    records: station.records,
+    metrics: station.signal_contract,
+    traces: object?.timeline ?? [],
+    artifacts: {
+      object_kinds: station.object_kinds,
+      content_policy: object?.content_policy ?? { raw_available: false }
+    },
+    config: {
+      mode: station.mode,
+      freeze_state: station.freeze_state,
+      data_quality: station.data_quality
+    },
+    audit: object?.audit ?? { links: [] },
+    help: {
+      purpose: station.purpose,
+      reason_codes: station.reason_codes,
+      safe_next_actions: issues.flatMap((issue) => issue.safe_next_actions)
+    }
+  };
   return (
     <section className="cockpit-layout">
       <div className="cockpit-main">
@@ -471,11 +562,23 @@ function Cockpit({
             <code>no-active-reason-codes</code>
           )}
         </section>
-        <section className="records-panel">
-          <h3>Records</h3>
-          {station.records.map((record, index) => (
-            <pre key={index}>{JSON.stringify(record, null, 2)}</pre>
+        <div className="cockpit-tabs" role="tablist" aria-label="Station cockpit panels">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={activeTab === tab.id ? "is-active" : ""}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
           ))}
+        </div>
+        <section className="records-panel">
+          <h3>{tabs.find((tab) => tab.id === activeTab)?.label}</h3>
+          <Inspector value={tabPayload[activeTab]} />
         </section>
       </div>
       <aside className="cockpit-side">

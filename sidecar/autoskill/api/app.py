@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from hmac import compare_digest
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from autoskill import __version__
@@ -165,7 +165,7 @@ from autoskill.services.writer import (
     resolve_contained,
     rollback_active_skill_with_governance,
 )
-from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi import status as http_status
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -348,6 +348,10 @@ class ObservatoryActionRequest(BaseModel):
 
 class ObservatoryActionResponse(BaseModel):
     receipt: dict[str, object]
+
+
+class ObservatoryCollectionResponse(BaseModel):
+    collection: dict[str, object]
 
 
 class DiagnosticSignalRequest(BaseModel):
@@ -4342,6 +4346,184 @@ def create_app(
             window_minutes=bounded_window,
         )
 
+    def _missing_read_model(
+        object_type: str,
+        *,
+        supporting_component: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "health": "unknown",
+            "reason_codes": ["missing-required-signal"],
+            "supporting_component": supporting_component,
+            "summary": (
+                "No bounded Observatory read model exists for this object class yet."
+            ),
+        }
+
+    def _observatory_collection(
+        *,
+        object_type: str,
+        title: str,
+        items: list[dict[str, Any]],
+        limit: int,
+        source: str,
+        diagnostics: dict[str, Any] | None = None,
+    ) -> ObservatoryCollectionResponse:
+        bounded_limit = max(1, min(limit, 500))
+        visible_items = items[:bounded_limit]
+        return ObservatoryCollectionResponse(
+            collection={
+                "schema_version": "skillkernel.observatory.collection.v1",
+                "object_type": object_type,
+                "title": title,
+                "items": visible_items,
+                "count": len(visible_items),
+                "limit": bounded_limit,
+                "has_more": len(items) > bounded_limit,
+                "source": source,
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                    "redaction_state": "redacted_or_not_applicable",
+                },
+                "diagnostics": diagnostics or {},
+            }
+        )
+
+    def _find_by_id(
+        items: list[dict[str, Any]],
+        object_id: str,
+        keys: tuple[str, ...],
+    ) -> dict[str, Any] | None:
+        for item in items:
+            if any(str(item.get(key)) == object_id for key in keys):
+                return item
+        return None
+
+    async def _record_observatory_action(
+        request: ObservatoryActionRequest,
+        authorization: str | None,
+        roles_header: str | None,
+    ) -> ObservatoryActionResponse:
+        principal = _require_admin_auth(
+            authorization,
+            roles_header,
+            required_roles={"operator", "admin"},
+        )
+        allowed_actions = {
+            "noop.audit",
+            "refresh_snapshot",
+            "verify_audit_chain",
+            "retry_job",
+            "cancel_job",
+            "pause_schedule",
+            "resume_schedule",
+            "historical_discover_dry_run",
+            "historical_import",
+            "quarantine_candidate",
+            "freeze_skill",
+            "unfreeze_skill",
+            "rollback_skill",
+            "rollback_transaction",
+            "rerun_evaluation",
+            "rescan_scanner",
+            "calibrate_broker",
+            "qualify_model_profile",
+            "qualify_embedding_profile",
+            "storage_health_check",
+            "storage_retention_dry_run",
+            "refresh_read_models",
+            "verify_live_stream",
+            "revoke_source",
+        }
+        high_impact_actions = {
+            "historical_import",
+            "quarantine_candidate",
+            "freeze_skill",
+            "unfreeze_skill",
+            "rollback_skill",
+            "rollback_transaction",
+            "revoke_source",
+        }
+        accepted = request.action in allowed_actions
+        reason_codes: list[str] = [] if accepted else ["unsupported-observatory-action"]
+        if (
+            request.action == "reveal_raw_content"
+            and not get_settings().web_admin_raw_content_enabled
+        ):
+            accepted = False
+            reason_codes = ["raw-content-disabled"]
+        confirmation_required = request.action in high_impact_actions
+        if (
+            accepted
+            and confirmation_required
+            and not request.dry_run
+            and request.confirmation != "confirm"
+        ):
+            accepted = False
+            reason_codes = ["confirmation-required"]
+        audit_record = await audit.append_record(
+            AuditRecord(
+                action=f"observatory.{request.action}",
+                actor=str(principal["subject"]),
+                subject_type="observatory_action",
+                subject_id=request.idempotency_key,
+                details={
+                    "target": request.target,
+                    "reason": request.reason,
+                    "dry_run": request.dry_run,
+                    "accepted": accepted,
+                    "reason_codes": reason_codes,
+                    "metadata": request.metadata,
+                    "confirmation_required": confirmation_required,
+                },
+            ),
+            workspace_key=request.workspace_id,
+        )
+        return ObservatoryActionResponse(
+            receipt=action_receipt(
+                action=request.action,
+                role=str(principal["role"]),
+                idempotency_key=request.idempotency_key,
+                accepted=accepted,
+                reason_codes=reason_codes,
+                audit=audit_record.model_dump(mode="json"),
+            )
+        )
+
+    def _register_observatory_action_route(path: str, action: str) -> None:
+        @app.post(path, response_model=ObservatoryActionResponse)
+        async def observatory_action_alias(
+            request: Request,
+            authorization: Annotated[str | None, Header()] = None,
+            x_skillkernel_roles: Annotated[
+                str | None, Header(alias="X-SkillKernel-Roles")
+            ] = None,
+            workspace_id: str = "dev-01",
+            idempotency_key: str | None = None,
+            reason: str | None = None,
+            confirmation: str | None = None,
+            dry_run: bool = True,
+        ) -> ObservatoryActionResponse:
+            if not idempotency_key:
+                raise HTTPException(
+                    status_code=http_status.HTTP_400_BAD_REQUEST,
+                    detail="idempotency_key is required",
+                )
+            return await _record_observatory_action(
+                ObservatoryActionRequest(
+                    workspace_id=workspace_id,
+                    action=action,
+                    idempotency_key=idempotency_key,
+                    target=dict(request.path_params),
+                    reason=reason,
+                    confirmation=confirmation,
+                    dry_run=dry_run,
+                ),
+                authorization,
+                x_skillkernel_roles,
+            )
+
     @app.get("/admin/api/v1/config", response_model=ObservatoryConfigResponse)
     async def observatory_config(
         authorization: Annotated[str | None, Header()] = None,
@@ -4373,6 +4555,45 @@ def create_app(
                 },
             }
         )
+
+    @app.get("/admin/api/v1/health/live", response_model=HealthResponse)
+    async def observatory_health_live() -> HealthResponse:
+        return HealthResponse(ok=True, service="skillkernel-observatory", version=__version__)
+
+    @app.get("/admin/api/v1/health/ready", response_model=ObservatoryObjectResponse)
+    async def observatory_health_ready(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.ready.v1",
+                "ready": snapshot["global_health"] not in {"blocked", "offline"},
+                "global_health": snapshot["global_health"],
+                "data_quality": snapshot["data_quality"],
+                "issues": snapshot["issue_board"],
+                "self_health": object_microscope(
+                    snapshot,
+                    object_type="component",
+                    object_id="observatory_admin",
+                ),
+            }
+        )
+
+    @app.get("/admin/api/v1/config/effective", response_model=EffectiveConfigResponse)
+    async def observatory_effective_config(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+    ) -> EffectiveConfigResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        return EffectiveConfigResponse(skillkernel=effective_skillkernel_config())
 
     @app.get("/admin/api/v1/summary", response_model=ObservatorySnapshotResponse)
     async def observatory_summary(
@@ -4411,6 +4632,28 @@ def create_app(
                 "data_quality": snapshot["data_quality"],
                 "issue_board": snapshot["issue_board"],
             }
+        )
+
+    @app.get("/admin/api/v1/components", response_model=ObservatoryCollectionResponse)
+    async def observatory_components(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+        limit: int = 100,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        stations = list(snapshot["pipeline"]["stations"])  # type: ignore[index]
+        return _observatory_collection(
+            object_type="component",
+            title="Observatory components",
+            items=stations,
+            limit=limit,
+            source="observatory_snapshot.pipeline.stations",
         )
 
     @app.get("/admin/api/v1/subsystems", response_model=ObservatorySnapshotResponse)
@@ -4478,6 +4721,43 @@ def create_app(
             )
         )
 
+    @app.get(
+        "/admin/api/v1/components/{component_id}/metrics",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_component_metrics(
+        component_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        component = _find_by_id(
+            list(snapshot["pipeline"]["stations"]),  # type: ignore[index]
+            component_id,
+            ("component_id",),
+        )
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.component-metrics.v1",
+                "object_type": "component_metrics",
+                "object_id": component_id,
+                "metrics": component.get("signal_contract", {}) if component else {},
+                "records": component.get("records", []) if component else [],
+                "diagnostics": component
+                or _missing_read_model("component_metrics", supporting_component=component_id),
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+            }
+        )
+
     @app.get("/admin/api/v1/issues", response_model=ObservatorySnapshotResponse)
     async def observatory_issues(
         authorization: Annotated[str | None, Header()] = None,
@@ -4499,6 +4779,152 @@ def create_app(
                 "issue_board": snapshot["issue_board"],
                 "reason_code_catalog": snapshot["reason_code_catalog"],
             }
+        )
+
+    @app.get("/admin/api/v1/issues/{issue_id}", response_model=ObservatoryObjectResponse)
+    async def observatory_issue_detail(
+        issue_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        return ObservatoryObjectResponse(
+            object=object_microscope(snapshot, object_type="issue", object_id=issue_id)
+        )
+
+    @app.get("/admin/api/v1/reason-codes", response_model=ObservatoryCollectionResponse)
+    async def observatory_reason_codes(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+        limit: int = 100,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        return _observatory_collection(
+            object_type="reason_code",
+            title="Diagnostic reason-code catalog",
+            items=list(snapshot["reason_code_catalog"]),  # type: ignore[arg-type]
+            limit=limit,
+            source="observatory_snapshot.reason_code_catalog",
+        )
+
+    @app.get("/admin/api/v1/playbooks", response_model=ObservatoryCollectionResponse)
+    async def observatory_playbooks(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+        limit: int = 100,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        playbooks = [
+            {**playbook, "subsystem_id": subsystem["subsystem_id"]}
+            for subsystem in snapshot["subsystems"]  # type: ignore[index]
+            for playbook in subsystem.get("playbooks", [])
+        ]
+        return _observatory_collection(
+            object_type="playbook",
+            title="Guided diagnostic playbooks",
+            items=playbooks,
+            limit=limit,
+            source="observatory_snapshot.subsystems.playbooks",
+        )
+
+    @app.get("/admin/api/v1/playbooks/{playbook_id}", response_model=ObservatoryObjectResponse)
+    async def observatory_playbook_detail(
+        playbook_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        playbooks = [
+            {**playbook, "subsystem_id": subsystem["subsystem_id"]}
+            for subsystem in snapshot["subsystems"]  # type: ignore[index]
+            for playbook in subsystem.get("playbooks", [])
+        ]
+        playbook = _find_by_id(playbooks, playbook_id, ("playbook_id",))
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.playbook.v1",
+                "object_type": "playbook",
+                "object_id": playbook_id,
+                "title": playbook.get("playbook_id", playbook_id) if playbook else playbook_id,
+                "summary": playbook.get("summary") if playbook else "No playbook read model found.",
+                "current_signal_state": playbook
+                or _missing_read_model("playbook", supporting_component="observatory_admin"),
+                "supporting_records": [
+                    issue
+                    for issue in snapshot["issue_board"]  # type: ignore[index]
+                    if playbook
+                    and issue.get("subsystem_id") == playbook.get("subsystem_id")
+                ],
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+            }
+        )
+
+    @app.get("/admin/api/v1/invariants", response_model=ObservatoryCollectionResponse)
+    async def observatory_invariants(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+        limit: int = 100,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        return _observatory_collection(
+            object_type="pipeline_invariant",
+            title="Pipeline invariant status",
+            items=list(snapshot["pipeline"]["invariants"]),  # type: ignore[index]
+            limit=limit,
+            source="observatory_snapshot.pipeline.invariants",
+        )
+
+    @app.get("/admin/api/v1/observatory", response_model=ObservatoryObjectResponse)
+    async def observatory_self_health(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        return ObservatoryObjectResponse(
+            object=object_microscope(
+                snapshot,
+                object_type="component",
+                object_id="observatory_admin",
+            )
         )
 
     @app.get("/admin/api/v1/search", response_model=ObservatorySearchResponse)
@@ -4537,6 +4963,810 @@ def create_app(
                 object_type=object_type,
                 object_id=object_id,
             )
+        )
+
+    @app.get("/admin/api/v1/events", response_model=ObservatoryCollectionResponse)
+    async def observatory_events(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        limit: int = 50,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        return _observatory_collection(
+            object_type="captured_event",
+            title="Redacted captured events",
+            items=[],
+            limit=limit,
+            source="missing_bounded_event_read_model",
+            diagnostics=_missing_read_model("captured_event", supporting_component="spool_ingest"),
+        )
+
+    @app.get("/admin/api/v1/traces", response_model=ObservatoryCollectionResponse)
+    async def observatory_traces(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        limit: int = 50,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        return _observatory_collection(
+            object_type="trace",
+            title="Trace search",
+            items=[],
+            limit=limit,
+            source="missing_trace_search_read_model",
+            diagnostics=_missing_read_model("trace", supporting_component="audit_trace"),
+        )
+
+    @app.get("/admin/api/v1/traces/{trace_id}", response_model=ObservatoryObjectResponse)
+    async def observatory_trace_detail(
+        trace_id: UUID,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str = "dev-01",
+        limit: int = 100,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        spans = await observability.list_trace(
+            workspace_key=workspace_id,
+            trace_id=trace_id,
+            limit=max(1, min(limit, 500)),
+        )
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.trace-detail.v1",
+                "object_type": "trace",
+                "object_id": str(trace_id),
+                "title": f"Trace {trace_id}",
+                "summary": "Content-safe trace detail assembled from recorded spans.",
+                "timeline": [span.to_json() for span in spans],
+                "provenance": {
+                    "upstream": [],
+                    "downstream": [
+                        ref
+                        for span in spans
+                        for ref in span.to_json().get("object_refs", [])
+                        if isinstance(ref, dict)
+                    ],
+                },
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+                "diagnostics": {
+                    "span_count": len(spans),
+                    "replay_reexecutes_work": False,
+                },
+                "audit": {"links": []},
+            }
+        )
+
+    @app.get("/admin/api/v1/jobs", response_model=ObservatoryCollectionResponse)
+    async def observatory_jobs(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        status_filter: Annotated[str | None, Query(alias="status")] = None,
+        limit: int = 50,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        listed = await jobs.list_jobs(status=status_filter, limit=max(1, min(limit, 250)))
+        return _observatory_collection(
+            object_type="job",
+            title="Sidecar jobs",
+            items=[job.to_json() for job in listed],
+            limit=limit,
+            source="job_store.list_jobs",
+        )
+
+    @app.get("/admin/api/v1/jobs/{job_id}", response_model=ObservatoryObjectResponse)
+    async def observatory_job_detail(
+        job_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        limit: int = 500,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        listed = [job.to_json() for job in await jobs.list_jobs(limit=max(1, min(limit, 500)))]
+        job = _find_by_id(listed, job_id, ("job_id", "idempotency_key"))
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.job.v1",
+                "object_type": "job",
+                "object_id": job_id,
+                "title": f"Job {job_id}",
+                "summary": "Sidecar scheduler job detail.",
+                "diagnostics": job
+                or _missing_read_model("job", supporting_component="scheduler_jobs"),
+                "timeline": [],
+                "provenance": {"upstream": [], "downstream": []},
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+                "audit": {"links": []},
+            }
+        )
+
+    @app.get("/admin/api/v1/schedules", response_model=ObservatoryCollectionResponse)
+    async def observatory_schedules(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        limit: int = 50,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        listed = await scheduler.list_schedules(limit=max(1, min(limit, 250)))
+        return _observatory_collection(
+            object_type="schedule",
+            title="Sidecar schedules",
+            items=[schedule.to_json() for schedule in listed],
+            limit=limit,
+            source="scheduler_store.list_schedules",
+        )
+
+    @app.get("/admin/api/v1/skills", response_model=ObservatoryCollectionResponse)
+    async def observatory_skills(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        lifecycle_state: str | None = None,
+        limit: int = 100,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        listed = await skills.list_skills(
+            workspace_key=workspace_id,
+            lifecycle_state=lifecycle_state,
+            limit=max(1, min(limit, 500)),
+        )
+        return _observatory_collection(
+            object_type="skill",
+            title="Skill library",
+            items=[skill.to_json() for skill in listed],
+            limit=limit,
+            source="skill_store.list_skills",
+        )
+
+    @app.get("/admin/api/v1/skills/{skill_id}", response_model=ObservatoryObjectResponse)
+    async def observatory_skill_detail(
+        skill_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        limit: int = 500,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        listed = [
+            skill.to_json()
+            for skill in await skills.list_skills(
+                workspace_key=workspace_id,
+                lifecycle_state=None,
+                limit=max(1, min(limit, 500)),
+            )
+        ]
+        skill = _find_by_id(listed, skill_id, ("skill_id", "slug", "active_version_id"))
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.skill.v1",
+                "object_type": "skill",
+                "object_id": skill_id,
+                "title": skill.get("name", skill_id) if skill else skill_id,
+                "summary": (
+                    "Skill lifecycle, active version, scanner/evaluator state, "
+                    "and manifest metadata."
+                ),
+                "diagnostics": skill
+                or _missing_read_model("skill", supporting_component="skill_ir_graph_ir"),
+                "timeline": [],
+                "provenance": {"upstream": [], "downstream": []},
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+                "audit": {"links": []},
+            }
+        )
+
+    @app.get(
+        "/admin/api/v1/skills/{skill_id}/versions/{version_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_skill_version_detail(
+        skill_id: str,
+        version_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        return await observatory_skill_detail(
+            skill_id=version_id or skill_id,
+            authorization=authorization,
+            x_skillkernel_roles=x_skillkernel_roles,
+            workspace_id=workspace_id,
+        )
+
+    @app.get("/admin/api/v1/topology", response_model=ObservatoryObjectResponse)
+    async def observatory_topology(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.topology.v1",
+                "object_type": "skill_topology",
+                "object_id": "current",
+                "title": "Skill topology",
+                "summary": "Current topology-related stations and flow edges.",
+                "nodes": [
+                    station
+                    for station in snapshot["pipeline"]["stations"]  # type: ignore[index]
+                    if "topology_design" in station.get("subsystem_ids", [])
+                    or "runtime_context" in station.get("subsystem_ids", [])
+                ],
+                "edges": [
+                    edge
+                    for edge in snapshot["pipeline"]["edges"]  # type: ignore[index]
+                    if "skill" in str(edge.get("dominant_item_kind", ""))
+                    or "candidate" in str(edge.get("dominant_item_kind", ""))
+                ],
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+            }
+        )
+
+    @app.get("/admin/api/v1/candidates", response_model=ObservatoryCollectionResponse)
+    async def observatory_candidates(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        lifecycle_state: str | None = "candidate",
+        limit: int = 100,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        listed = await candidates.list_candidate_reviews(
+            workspace_key=workspace_id,
+            lifecycle_state=lifecycle_state,
+            limit=max(1, min(limit, 250)),
+        )
+        return _observatory_collection(
+            object_type="candidate",
+            title="Candidate reviews",
+            items=[candidate.to_json() for candidate in listed],
+            limit=limit,
+            source="candidate_store.list_candidate_reviews",
+        )
+
+    @app.get("/admin/api/v1/candidates/{candidate_id}", response_model=ObservatoryObjectResponse)
+    async def observatory_candidate_detail(
+        candidate_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        limit: int = 250,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        listed = [
+            candidate.to_json()
+            for candidate in await candidates.list_candidate_reviews(
+                workspace_key=workspace_id,
+                lifecycle_state=None,
+                limit=max(1, min(limit, 250)),
+            )
+        ]
+        candidate = _find_by_id(
+            listed,
+            candidate_id,
+            ("skill_id", "skill_version_id", "slug", "name"),
+        )
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.candidate.v1",
+                "object_type": "candidate",
+                "object_id": candidate_id,
+                "title": candidate.get("name", candidate_id) if candidate else candidate_id,
+                "summary": "Candidate SkillIR/proposal review state.",
+                "diagnostics": candidate
+                or _missing_read_model("candidate", supporting_component="opportunity_mining"),
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+            }
+        )
+
+    @app.get("/admin/api/v1/evaluations", response_model=ObservatoryCollectionResponse)
+    async def observatory_evaluations(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        listed = await evaluations.list_evaluation_reviews(
+            workspace_key=workspace_id,
+            status=status,
+            limit=max(1, min(limit, 250)),
+        )
+        return _observatory_collection(
+            object_type="evaluation",
+            title="Evaluation reviews",
+            items=[evaluation.to_json() for evaluation in listed],
+            limit=limit,
+            source="evaluation_store.list_evaluation_reviews",
+        )
+
+    @app.get("/admin/api/v1/evaluations/{evaluation_id}", response_model=ObservatoryObjectResponse)
+    async def observatory_evaluation_detail(
+        evaluation_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        limit: int = 250,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        listed = [
+            evaluation.to_json()
+            for evaluation in await evaluations.list_evaluation_reviews(
+                workspace_key=workspace_id,
+                status=None,
+                limit=max(1, min(limit, 250)),
+            )
+        ]
+        evaluation = _find_by_id(
+            listed,
+            evaluation_id,
+            ("evaluation_id", "skill_id", "skill_version_id"),
+        )
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.evaluation.v1",
+                "object_type": "evaluation",
+                "object_id": evaluation_id,
+                "title": f"Evaluation {evaluation_id}",
+                "summary": "Evaluation/probe review state.",
+                "diagnostics": evaluation
+                or _missing_read_model("evaluation", supporting_component="evaluator_probes"),
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+            }
+        )
+
+    @app.get("/admin/api/v1/scanner-findings", response_model=ObservatoryCollectionResponse)
+    async def observatory_scanner_findings(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+        limit: int = 50,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        scanner = _find_by_id(
+            list(snapshot["pipeline"]["stations"]),  # type: ignore[index]
+            "scanner_security",
+            ("component_id",),
+        )
+        items = list(scanner.get("records", [])) if scanner else []
+        return _observatory_collection(
+            object_type="scanner_finding",
+            title="Scanner findings",
+            items=items,
+            limit=limit,
+            source="observatory_snapshot.scanner_security.records",
+            diagnostics=scanner
+            or _missing_read_model("scanner_finding", supporting_component="scanner_security"),
+        )
+
+    @app.get("/admin/api/v1/artifacts/{artifact_id}", response_model=ObservatoryObjectResponse)
+    async def observatory_artifact_detail(
+        artifact_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.artifact.v1",
+                "object_type": "artifact",
+                "object_id": artifact_id,
+                "title": f"Artifact {artifact_id}",
+                "summary": (
+                    "Redacted artifact preview is unavailable until a bounded artifact "
+                    "read model is present."
+                ),
+                "diagnostics": _missing_read_model(
+                    "artifact",
+                    supporting_component="deterministic_writer",
+                ),
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+            }
+        )
+
+    @app.get("/admin/api/v1/historical/imports", response_model=ObservatoryCollectionResponse)
+    async def observatory_historical_imports(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        sources = await historical_import.list_sources(
+            workspace_key=workspace_id,
+            status=status,
+            limit=max(1, min(limit, 250)),
+        )
+        return _observatory_collection(
+            object_type="historical_import",
+            title="Historical import sources",
+            items=[source.to_json() for source in sources],
+            limit=limit,
+            source="historical_import_store.list_sources",
+        )
+
+    @app.get(
+        "/admin/api/v1/historical/imports/{historical_import_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_historical_import_detail(
+        historical_import_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        limit: int = 250,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        sources = [
+            source.to_json()
+            for source in await historical_import.list_sources(
+                workspace_key=workspace_id,
+                limit=max(1, min(limit, 250)),
+            )
+        ]
+        source = _find_by_id(
+            sources,
+            historical_import_id,
+            ("historical_import_source_id", "external_source_id", "source_kind"),
+        )
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.historical-import.v1",
+                "object_type": "historical_import",
+                "object_id": historical_import_id,
+                "title": f"Historical import {historical_import_id}",
+                "summary": "Historical source/import status.",
+                "diagnostics": source
+                or _missing_read_model(
+                    "historical_import",
+                    supporting_component="historical_ingestion",
+                ),
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+            }
+        )
+
+    @app.get("/admin/api/v1/broker/decisions", response_model=ObservatoryCollectionResponse)
+    async def observatory_broker_decisions(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+        limit: int = 50,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        broker = _find_by_id(
+            list(snapshot["pipeline"]["stations"]),  # type: ignore[index]
+            "broker_runtime",
+            ("component_id",),
+        )
+        return _observatory_collection(
+            object_type="broker_decision",
+            title="Broker decisions",
+            items=list(broker.get("records", [])) if broker else [],
+            limit=limit,
+            source="observatory_snapshot.broker_runtime.records",
+            diagnostics=broker
+            or _missing_read_model("broker_decision", supporting_component="broker_runtime"),
+        )
+
+    @app.get(
+        "/admin/api/v1/broker/decisions/{decision_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_broker_decision_detail(
+        decision_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.broker-decision.v1",
+                "object_type": "broker_decision",
+                "object_id": decision_id,
+                "title": f"Broker decision {decision_id}",
+                "summary": "Broker decision detail requires a bounded retrieval-log read model.",
+                "diagnostics": _missing_read_model(
+                    "broker_decision",
+                    supporting_component="broker_runtime",
+                ),
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+            }
+        )
+
+    @app.get("/admin/api/v1/context/artifacts", response_model=ObservatoryCollectionResponse)
+    async def observatory_context_artifacts(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+        limit: int = 50,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        context = _find_by_id(
+            list(snapshot["pipeline"]["stations"]),  # type: ignore[index]
+            "context_compiler",
+            ("component_id",),
+        )
+        return _observatory_collection(
+            object_type="context_artifact",
+            title="Context artifacts",
+            items=list(context.get("records", [])) if context else [],
+            limit=limit,
+            source="observatory_snapshot.context_compiler.records",
+            diagnostics=context
+            or _missing_read_model("context_artifact", supporting_component="context_compiler"),
+        )
+
+    @app.get("/admin/api/v1/model-profile", response_model=ObservatoryCollectionResponse)
+    async def observatory_model_profile(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str = "default",
+        status: str | None = None,
+        limit: int = 100,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        listed = await profiles.list_model_profiles(
+            workspace_key=workspace_id,
+            status=status,
+            limit=max(1, min(limit, 500)),
+        )
+        return _observatory_collection(
+            object_type="model_profile",
+            title="Text model profiles",
+            items=[profile.to_json() for profile in listed],
+            limit=limit,
+            source="profile_store.list_model_profiles",
+        )
+
+    @app.get("/admin/api/v1/embedding-profile", response_model=ObservatoryCollectionResponse)
+    async def observatory_embedding_profile(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str = "default",
+        status: str | None = None,
+        limit: int = 100,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        listed = await profiles.list_embedding_profiles(
+            workspace_key=workspace_id,
+            status=status,
+            limit=max(1, min(limit, 500)),
+        )
+        return _observatory_collection(
+            object_type="embedding_profile",
+            title="Embedding profiles",
+            items=[profile.to_json() for profile in listed],
+            limit=limit,
+            source="profile_store.list_embedding_profiles",
+        )
+
+    @app.get("/admin/api/v1/storage", response_model=ObservatoryObjectResponse)
+    async def observatory_storage(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        return ObservatoryObjectResponse(
+            object=object_microscope(snapshot, object_type="component", object_id="storage_db")
+        )
+
+    @app.get("/admin/api/v1/audit", response_model=ObservatoryCollectionResponse)
+    async def observatory_audit(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        limit: int = 100,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        bounded_limit = max(1, min(limit, 500))
+        records = await audit.list_recent(workspace_key=workspace_id, limit=bounded_limit)
+        return _observatory_collection(
+            object_type="audit_record",
+            title="Audit trail",
+            items=[record.model_dump(mode="json") for record in records],
+            limit=bounded_limit,
+            source="audit_store.list_recent",
+            diagnostics={
+                "chain_valid": await audit.verify_chain(
+                    workspace_key=workspace_id,
+                    limit=bounded_limit,
+                )
+            },
+        )
+
+    @app.get("/admin/api/v1/comparisons", response_model=ObservatoryCollectionResponse)
+    async def observatory_comparisons(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        limit: int = 50,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        return _observatory_collection(
+            object_type="baseline_comparison",
+            title="Saved baseline comparisons",
+            items=[],
+            limit=limit,
+            source="missing_saved_comparison_read_model",
+            diagnostics=_missing_read_model(
+                "baseline_comparison",
+                supporting_component="observatory_admin",
+            ),
+        )
+
+    @app.post("/admin/api/v1/comparisons/query", response_model=ObservatoryObjectResponse)
+    async def observatory_comparison_query(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.comparison.v1",
+                "object_type": "baseline_comparison",
+                "object_id": f"snapshot-{snapshot['snapshot_seq']}",
+                "title": "Read-only snapshot baseline comparison",
+                "summary": "Bounded baseline comparison over the current Observatory snapshot.",
+                "left": {
+                    "snapshot_seq": snapshot["snapshot_seq"],
+                    "captured_at": snapshot["captured_at"],
+                },
+                "right": {
+                    "snapshot_seq": snapshot["snapshot_seq"],
+                    "captured_at": snapshot["captured_at"],
+                },
+                "differences": [],
+                "mutates_policy": False,
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+            }
+        )
+
+    @app.post("/admin/api/v1/diagnostics/bundles", response_model=ObservatoryObjectResponse)
+    async def observatory_create_diagnostic_bundle(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str = "dev-01",
+        window_minutes: int = 60,
+    ) -> ObservatoryObjectResponse:
+        principal = _require_admin_auth(
+            authorization,
+            x_skillkernel_roles,
+            required_roles={"operator", "admin"},
+        )
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        bundle_id = sha256_text(
+            f"{workspace_id}:{snapshot['snapshot_seq']}:{principal['subject']}"
+        )[:24]
+        audit_record = await audit.append_record(
+            AuditRecord(
+                action="observatory.create_diagnostic_bundle",
+                actor=str(principal["subject"]),
+                subject_type="diagnostic_bundle",
+                subject_id=bundle_id,
+                details={"workspace_id": workspace_id, "snapshot_seq": snapshot["snapshot_seq"]},
+            ),
+            workspace_key=workspace_id,
+        )
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.diagnostic-bundle.v1",
+                "object_type": "diagnostic_bundle",
+                "object_id": bundle_id,
+                "title": f"Diagnostic bundle {bundle_id}",
+                "summary": (
+                    "Redacted diagnostic bundle descriptor. Content export is redacted "
+                    "by default."
+                ),
+                "snapshot": {
+                    "global_health": snapshot["global_health"],
+                    "data_quality": snapshot["data_quality"],
+                    "issue_count": len(snapshot["issue_board"]),
+                },
+                "audit": audit_record.model_dump(mode="json"),
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+            }
+        )
+
+    @app.get(
+        "/admin/api/v1/diagnostics/bundles/{bundle_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_diagnostic_bundle(
+        bundle_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        return ObservatoryObjectResponse(
+            object={
+                "schema_version": "skillkernel.observatory.diagnostic-bundle.v1",
+                "object_type": "diagnostic_bundle",
+                "object_id": bundle_id,
+                "title": f"Diagnostic bundle {bundle_id}",
+                "summary": (
+                    "Persisted diagnostic bundle storage is not configured in this "
+                    "read model."
+                ),
+                "diagnostics": _missing_read_model(
+                    "diagnostic_bundle",
+                    supporting_component="observatory_admin",
+                ),
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+            }
         )
 
     @app.get("/admin/api/v1/replay/traces/{trace_id}", response_model=ObservatoryObjectResponse)
@@ -4584,60 +5814,90 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
     ) -> ObservatoryActionResponse:
-        principal = _require_admin_auth(
+        return await _record_observatory_action(
+            request,
             authorization,
             x_skillkernel_roles,
-            required_roles={"operator", "admin"},
         )
-        allowed_actions = {
-            "noop.audit",
-            "refresh_snapshot",
-            "verify_audit_chain",
-            "retry_job",
-            "trigger_dry_run_import",
-            "trigger_scan",
-            "trigger_evaluation",
-            "freeze_skill",
-            "unfreeze_skill",
-            "rollback_transaction",
-            "qualify_model_profile",
-            "qualify_embedding_profile",
-        }
-        accepted = request.action in allowed_actions
-        reason_codes = [] if accepted else ["unsupported-observatory-action"]
-        if (
-            request.action == "reveal_raw_content"
-            and not get_settings().web_admin_raw_content_enabled
-        ):
-            accepted = False
-            reason_codes = ["raw-content-disabled"]
-        audit_record = await audit.append_record(
-            AuditRecord(
-                action=f"observatory.{request.action}",
-                actor=str(principal["subject"]),
-                subject_type="observatory_action",
-                subject_id=request.idempotency_key,
-                details={
-                    "target": request.target,
-                    "reason": request.reason,
-                    "dry_run": request.dry_run,
-                    "accepted": accepted,
-                    "reason_codes": reason_codes,
-                    "metadata": request.metadata,
-                },
-            ),
-            workspace_key=request.workspace_id,
-        )
-        return ObservatoryActionResponse(
-            receipt=action_receipt(
-                action=request.action,
-                role=str(principal["role"]),
-                idempotency_key=request.idempotency_key,
-                accepted=accepted,
-                reason_codes=reason_codes,
-                audit=audit_record.model_dump(mode="json"),
-            )
-        )
+
+    _register_observatory_action_route("/admin/api/v1/actions/jobs/{id}/retry", "retry_job")
+    _register_observatory_action_route("/admin/api/v1/actions/jobs/{id}/cancel", "cancel_job")
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/schedules/{id}/pause",
+        "pause_schedule",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/schedules/{id}/resume",
+        "resume_schedule",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/historical/discover-dry-run",
+        "historical_discover_dry_run",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/historical/import",
+        "historical_import",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/candidates/{id}/quarantine",
+        "quarantine_candidate",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/skills/{id}/freeze",
+        "freeze_skill",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/skills/{id}/unfreeze",
+        "unfreeze_skill",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/skills/{id}/rollback",
+        "rollback_skill",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/evaluations/{id}/rerun",
+        "rerun_evaluation",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/scanner/rescan",
+        "rescan_scanner",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/broker/calibrate",
+        "calibrate_broker",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/model-profile/qualify",
+        "qualify_model_profile",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/embedding-profile/qualify",
+        "qualify_embedding_profile",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/storage/health-check",
+        "storage_health_check",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/storage/retention-dry-run",
+        "storage_retention_dry_run",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/audit/verify-chain",
+        "verify_audit_chain",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/observatory/refresh-read-models",
+        "refresh_read_models",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/observatory/verify-live-stream",
+        "verify_live_stream",
+    )
+    _register_observatory_action_route(
+        "/admin/api/v1/actions/revocation/revoke-source",
+        "revoke_source",
+    )
 
     @app.websocket("/admin/live")
     async def observatory_live(websocket: WebSocket) -> None:
@@ -4664,17 +5924,25 @@ def create_app(
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
         workspace_id: str | None = None,
         last_seq: int | None = None,
+        token: str | None = None,
     ) -> StreamingResponse:
-        _require_admin_auth(authorization, x_skillkernel_roles)
+        _require_admin_auth(
+            authorization or (f"Bearer {token}" if token else None),
+            x_skillkernel_roles,
+        )
 
         async def stream() -> AsyncIterator[str]:
-            snapshot = await _observatory_snapshot(
-                workspace_id=workspace_id,
-                window_minutes=60,
-            )
-            payload = build_live_envelope(snapshot, last_seq=last_seq)
-            yield f"event: {payload['event_type']}\n"
-            yield f"data: {json.dumps(payload, sort_keys=True)}\n\n"
+            current_last_seq = last_seq
+            while True:
+                snapshot = await _observatory_snapshot(
+                    workspace_id=workspace_id,
+                    window_minutes=60,
+                )
+                payload = build_live_envelope(snapshot, last_seq=current_last_seq)
+                yield f"event: {payload['event_type']}\n"
+                yield f"data: {json.dumps(payload, sort_keys=True)}\n\n"
+                current_last_seq = int(snapshot["snapshot_seq"])
+                await asyncio.sleep(5)
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 

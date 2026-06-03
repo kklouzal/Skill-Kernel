@@ -632,3 +632,49 @@ Acceptance:
 - telemetry-derived replay episode creation does not persist or reconstruct raw
   prompts; operators must supply redacted replay intent text when promoting a
   retrieval log into the replay corpus.
+
+## Phase 11 - Observatory Web Administration and Diagnostics
+
+Deliverables:
+
+- sidecar-hosted web-admin shell; implemented as a React/Vite Observatory under
+  `sidecar/autoskill/observatory`, served from `/admin`, with API calls bound to
+  sidecar admin routes rather than a second control plane;
+- role-aware admin configuration and content-safe API envelopes; implemented for
+  `/admin/api/v1/config`, `/summary`, `/pipeline`, `/subsystems`, `/components`,
+  `/issues`, `/search`, `/objects`, `/health/live`, and `/health/ready`;
+- bounded drill-down/read-model surfaces; implemented for components, reason
+  codes, playbooks, jobs, schedules, skills, candidates, evaluations, scanner
+  findings, historical imports, broker decisions, context artifacts,
+  model/embedding profiles, storage, audit, comparisons, diagnostic bundles,
+  trace detail, and trace replay;
+- live updates; implemented with `/admin/live` WebSocket and `/admin/live-sse`
+  fallback, plus frontend fallback logic and snapshot reload handling;
+- operator action gateway; implemented as audited, policy-checked action
+  receipts plus guarded aliases for retry/cancel jobs, pause/resume schedules,
+  historical import actions, candidate quarantine, freeze/unfreeze/rollback,
+  evaluator/scanner/broker/profile/storage/audit/Observatory actions, and source
+  revocation. High-impact actions fail closed without explicit confirmation;
+- frontend overview and cockpits; implemented with assembly-line/workcell
+  views, issue board, global search, object inspector, admin actions,
+  deep-link state, reduced-motion support, and station cockpit tabs for records,
+  metrics, traces, artifacts, config, audit, and help.
+
+Acceptance:
+
+- Observatory does not expose raw event, prompt, skill, support-file, or memory
+  content by default; collection/detail envelopes carry explicit raw-content
+  policy metadata;
+- Observatory admin routes use existing sidecar stores, snapshots, audit chain,
+  trace spine, worker/job surfaces, and governance controls instead of bypassing
+  deterministic policy/application layers;
+- focused Observatory API tests cover summary/search, bounded collection
+  envelopes, readiness, admin auth, audited action receipts, and
+  confirmation-required high-impact denial;
+- validation evidence for the route-map expansion passed: focused Observatory
+  tests `6 passed`, `uv run ruff check sidecar`, `uv run pytest` with 309
+  tests, `uv run python -m compileall -q sidecar`, `npm run build --prefix
+  sidecar/autoskill/observatory`, `git diff --check`, Docker Compose migration
+  image build with embedded Observatory UI, compose migration exit code 0, and a
+  Postgres-backed admin API smoke for bounded component envelopes, readiness,
+  audit-chain diagnostics, and rollback confirmation denial.
