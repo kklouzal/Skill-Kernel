@@ -826,6 +826,21 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   python -m compileall -q sidecar scripts`, `git diff --check`, `npm test
   --prefix plugin/autoskill` with 18 tests, `npm run check --prefix
   plugin/autoskill`, and `docker compose config --quiet`.
+- Sections 35/36 landscape assimilation and implementation readiness now have
+  an executable crosswalk: `scripts/autoskill_readiness.py --json` parses the
+  controlling handoff spec's landscape matrix, adopted stance, architecture
+  list, product operation definition, and implementation-order ladder. It
+  validates all 52 landscape rows, the eight stance lines, 28 architecture
+  items, four topology operations, 29 implementation-order steps, and the two
+  sequencing gates requiring control-plane-first implementation and concrete
+  failure-mode justification for future design changes. Every landscape row,
+  architecture item, and implementation-order step carries repo evidence.
+  Validation passed with focused readiness-report tests, focused ruff checks,
+  `python scripts/autoskill_readiness.py --json` reporting `ready=true`, full
+  `uv run ruff check sidecar scripts`, `uv run pytest -q` with 292 tests, `uv
+  run python -m compileall -q sidecar scripts`, `git diff --check`, `npm test
+  --prefix plugin/autoskill` with 18 tests, `npm run check --prefix
+  plugin/autoskill`, and `docker compose config --quiet`.
 
 ## Next Gates
 

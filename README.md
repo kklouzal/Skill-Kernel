@@ -118,6 +118,12 @@ Emit the Section 34 research traceability crosswalk:
 python scripts/autoskill_traceability.py --json
 ```
 
+Emit the Section 35/36 landscape and readiness crosswalk:
+
+```bash
+python scripts/autoskill_readiness.py --json
+```
+
 List content-safe broker replay candidates from retrieval telemetry:
 
 ```bash
