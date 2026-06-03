@@ -111,7 +111,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Shadowing control materialization is implemented: repeated selected-vs-expected shadowing evidence records medium-risk attribution events, creates a `shadow` skill graph edge, and activates a contrastive `shadowing` probe for broker/evaluator use.
 - Proposal-gate intervention replay is implemented: no-skill-control probes with recorded `no_skill` and `skill_visible` replay outcomes deterministically pass or fail instead of staying `needs_intervention`, and passed proposal gates record `intervention_validated` maturity for the skill version and cited evidence.
 - Contrastive replay induction is implemented for proposal gates: redacted evidence rows carrying paired `autoskill_replay`/`contrastive_replay` outcomes are clustered by planned no-skill probe evidence IDs, attached to the probe as deterministic `intervention_replay`, persisted with `maturity='contrastive'`, and then evaluated through the existing proposal gate.
-- Contrastive replay induction now also accepts normalized attribution, canary, and broker outcome schemas, so `missing_skill`/`skill_helped`, canary pass/fail, and broker no-skill control outcomes can produce deterministic no-skill versus skill-visible intervention replay evidence.
+- Contrastive replay induction now also accepts normalized attribution, canary, broker, and context-token-ledger outcome schemas, so `missing_skill`/`skill_helped`, canary pass/fail, broker no-skill control outcomes, and context-ledger marginal-value evidence can produce deterministic no-skill versus skill-visible intervention replay evidence.
 - Phase 9 deterministic drift probes now cover static path existence, bare executable availability, required environment presence, Python package availability, JSON schema loadability, and bounded TCP reachability without arbitrary shell execution.
 - Drift checks now create active drift probes for violated contracts, retire contract-scoped drift probes when a contract returns to valid, and attach localized repair-plan metadata to drift events without mutating runtime skills.
 - Runtime context cache invalidation is implemented: the in-process broker cache can evict by workspace and skill IDs, exposes a control endpoint, and freeze/critical-canary paths invalidate affected skill hints immediately.
@@ -888,6 +888,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `docker compose config --quiet`, `git diff --check`, all four executable
   crosswalk reports returning `ready=true`, and an idempotent compose Postgres
   migration smoke verifying all five locator columns exist.
+- Context-token-ledger contrastive evidence mining is implemented: contrastive
+  replay induction now accepts explicit context ledger outcomes plus
+  usage/source-metadata-shaped context ledger evidence, derives success from
+  known outcome labels, `task_success`, or marginal-value scores, and maps
+  `no_skill`/`skill_hidden` versus `skill_visible` visibility states into
+  deterministic intervention replay pairs. Focused validation passed with `uv
+  run pytest -q sidecar/autoskill/tests/test_contrastive.py` and `uv run ruff
+  check sidecar/autoskill/services/contrastive.py
+  sidecar/autoskill/tests/test_contrastive.py`; full validation passed with
+  `uv run pytest -q` with 298 tests, `uv run ruff check sidecar scripts`, `uv
+  run python -m compileall -q sidecar scripts`, `npm test --prefix
+  plugin/autoskill` with 18 tests, `npm run check --prefix plugin/autoskill`,
+  `docker compose config --quiet`, `git diff --check`, and all four executable
+  crosswalk reports returning `ready=true`.
 
 ## Next Gates
 
@@ -918,7 +932,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   testing.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
 - Worker health now includes persistent heartbeat records, long-running handlers renew job leases, and single-job worker runs emit content-safe progress phases through heartbeat summaries. Future lengthy semantic handlers may still add deeper domain-specific counters when their internal phases mature.
-- Evidence derivation now creates observed event evidence plus deterministic recurring evidence clusters, and `usage.aggregate` now mines retrieval/attribution co-use windows into topology evidence tables. Accepted recurring co-use clusters can now become propose-only compose topology operations; structured improve/decompose and broker-abstain consumption now exist. Remaining work is sustained replay/canary validation plus additional contrastive evidence mining beyond evaluator replay maturity.
+- Evidence derivation now creates observed event evidence plus deterministic recurring evidence clusters, and `usage.aggregate` now mines retrieval/attribution/co-use/context-token-ledger windows into topology evidence tables. Accepted recurring co-use clusters can now become propose-only compose topology operations; structured improve/decompose and broker-abstain consumption now exist, and contrastive induction consumes context-token-ledger outcomes plus marginal-value source metadata. Remaining work is sustained replay/canary validation under real traffic.
 - Memory quarantine/control-flow tables and operator APIs now exist, the runtime broker can record approved memory-influenced retrieval decisions without injecting memory text while blocking unapproved memory references before retrieval, and repair/writer mutation paths now gate and log approved or blocked memory influence.
 - Historical import now has durable source/chunk inventory, bounded discovery,
   parser checkpoint workers, redacted chunk storage, evidence derivation,

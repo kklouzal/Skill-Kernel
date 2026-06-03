@@ -75,6 +75,8 @@ def _extract_outcome(
     if not outcome:
         outcome = _broker_outcome(payload, redacted)
     if not outcome:
+        outcome = _context_token_ledger_outcome(payload, redacted)
+    if not outcome:
         return None
 
     outcome_slug = outcome.get("candidate_slug")
@@ -150,6 +152,67 @@ def _broker_outcome(payload: dict[str, Any], redacted: dict[str, Any]) -> dict[s
     return _outcome_payload(outcome, mode=mode, success=success)
 
 
+def _context_token_ledger_outcome(
+    payload: dict[str, Any],
+    redacted: dict[str, Any],
+) -> dict[str, Any]:
+    outcome = (
+        _dict(redacted.get("context_token_ledger_outcome"))
+        or _dict(redacted.get("context_token_ledger"))
+        or _context_token_ledger_source(redacted)
+        or _dict(payload.get("context_token_ledger_outcome"))
+        or _dict(payload.get("context_token_ledger"))
+        or _context_token_ledger_source(payload)
+    )
+    if not outcome:
+        return {}
+    status = str(outcome.get("outcome") or outcome.get("status") or "")
+    success = _outcome_success(status)
+    if success is None and "task_success" in outcome:
+        success = bool(outcome.get("task_success"))
+    if success is None:
+        success = _marginal_value_success(outcome)
+    if success is None:
+        return {}
+    mode = str(outcome.get("mode") or "")
+    if not mode:
+        visibility = str(outcome.get("visibility_state") or "")
+        if visibility in {"no_skill", "skill_hidden"}:
+            mode = "no_skill"
+        elif visibility == "skill_visible":
+            mode = "skill_visible"
+    return _outcome_payload(outcome, mode=mode, success=success)
+
+
+def _context_token_ledger_source(container: dict[str, Any]) -> dict[str, Any]:
+    if str(container.get("source_kind") or "") != "context_token_ledger":
+        return {}
+    source_metadata = _dict(container.get("source_metadata"))
+    return {
+        **source_metadata,
+        "candidate_slug": _first_present(
+            container.get("candidate_slug"),
+            source_metadata.get("candidate_slug"),
+            container.get("skill_slug"),
+            source_metadata.get("skill_slug"),
+            container.get("slug"),
+            source_metadata.get("slug"),
+        ),
+        "mode": _first_present(container.get("mode"), source_metadata.get("mode")),
+        "visibility_state": _first_present(
+            container.get("visibility_state"),
+            source_metadata.get("visibility_state"),
+        ),
+        "outcome": _first_present(container.get("outcome"), source_metadata.get("outcome")),
+        "status": _first_present(container.get("status"), source_metadata.get("status")),
+        "retries": _first_present(container.get("retries"), source_metadata.get("retries")),
+        "latency_ms": _first_present(
+            container.get("latency_ms"),
+            source_metadata.get("latency_ms"),
+        ),
+    }
+
+
 _SUCCESS_OUTCOMES = {
     "skill_helped",
     "helped",
@@ -163,11 +226,16 @@ _SUCCESS_OUTCOMES = {
 _FAILURE_OUTCOMES = {
     "skill_hurt",
     "hurt",
+    "ignored",
+    "ignored_load",
     "failed",
     "failure",
+    "false_positive",
+    "false_positive_load",
     "critical",
     "skill_shadowed",
     "shadowed",
+    "skill_ignored",
     "wrong_skill",
     "missing_skill",
     "skill_missing",
@@ -194,12 +262,28 @@ def _outcome_success(status: str) -> bool | None:
 
 def _outcome_payload(outcome: dict[str, Any], *, mode: str, success: bool) -> dict[str, Any]:
     return {
-        "candidate_slug": outcome.get("candidate_slug") or outcome.get("slug"),
+        "candidate_slug": (
+            outcome.get("candidate_slug") or outcome.get("skill_slug") or outcome.get("slug")
+        ),
         "mode": mode,
         "success": success,
         "retries": outcome.get("retries"),
         "latency_ms": outcome.get("latency_ms"),
     }
+
+
+def _marginal_value_success(outcome: dict[str, Any]) -> bool | None:
+    value = _optional_float(outcome.get("marginal_value"))
+    if value is None:
+        marginal = _dict(outcome.get("marginal_value"))
+        value = _optional_float(marginal.get("marginal_value"))
+    if value is None:
+        metadata = _dict(outcome.get("metadata"))
+        marginal = _dict(metadata.get("marginal_value"))
+        value = _optional_float(marginal.get("marginal_value"))
+    if value is None:
+        return None
+    return value > 0
 
 
 def _normalize_outcome(outcome: dict[str, Any]) -> dict[str, Any]:
@@ -257,6 +341,13 @@ def _candidate_improves(baseline: dict[str, Any], candidate: dict[str, Any]) -> 
 
 def _dict(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _first_present(*values: object) -> object | None:
+    for value in values:
+        if value is not None:
+            return value
+    return None
 
 
 def _optional_float(value: object) -> float | None:

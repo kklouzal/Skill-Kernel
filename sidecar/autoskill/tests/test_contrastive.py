@@ -154,3 +154,91 @@ def test_contrastive_replay_derives_from_canary_and_broker_outcomes() -> None:
     payload = replay.to_json()
     assert payload["no_skill"]["retries"] == 3.0
     assert payload["skill_visible"]["retries"] == 1.0
+
+
+def test_contrastive_replay_derives_from_context_token_ledger_outcomes() -> None:
+    replay = derive_contrastive_replay(
+        [
+            {
+                "evidence_id": "context-hidden",
+                "payload": {
+                    "redacted_payload": {
+                        "context_token_ledger_outcome": {
+                            "candidate_slug": "demo",
+                            "visibility_state": "skill_hidden",
+                            "outcome": "no_skill_failed",
+                            "latency_ms": 1400,
+                        }
+                    }
+                },
+            },
+            {
+                "evidence_id": "context-visible",
+                "payload": {
+                    "redacted_payload": {
+                        "context_token_ledger_outcome": {
+                            "candidate_slug": "demo",
+                            "visibility_state": "skill_visible",
+                            "outcome": "helped",
+                            "latency_ms": 800,
+                        }
+                    }
+                },
+            },
+        ],
+        candidate_slug="demo",
+    )
+
+    assert replay is not None
+    payload = replay.to_json()
+    assert payload["no_skill"]["success"] is False
+    assert payload["skill_visible"]["success"] is True
+    assert payload["skill_visible"]["latency_ms"] == 800.0
+
+
+def test_contrastive_replay_derives_context_token_ledger_source_metadata() -> None:
+    replay = derive_contrastive_replay(
+        [
+            {
+                "evidence_id": "context-negative-value",
+                "payload": {
+                    "redacted_payload": {
+                        "source_kind": "context_token_ledger",
+                        "skill_slug": "demo",
+                        "outcome": "measured",
+                        "source_metadata": {
+                            "visibility_state": "no_skill",
+                            "marginal_value": {
+                                "marginal_value": -0.5,
+                                "context_value_per_token": -0.01,
+                            },
+                        },
+                    }
+                },
+            },
+            {
+                "evidence_id": "context-positive-value",
+                "payload": {
+                    "redacted_payload": {
+                        "source_kind": "context_token_ledger",
+                        "skill_slug": "demo",
+                        "outcome": "measured",
+                        "source_metadata": {
+                            "visibility_state": "skill_visible",
+                            "marginal_value": {
+                                "marginal_value": 1.25,
+                                "context_value_per_token": 0.025,
+                            },
+                        },
+                    }
+                },
+            },
+        ],
+        candidate_slug="demo",
+    )
+
+    assert replay is not None
+    payload = replay.to_json()
+    assert payload["no_skill"]["success"] is False
+    assert payload["skill_visible"]["success"] is True
+    assert payload["evidence_ids"] == ["context-negative-value", "context-positive-value"]

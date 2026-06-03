@@ -291,7 +291,7 @@ Deliverables:
 - probe generator; implemented as deterministic target, no-skill-control, and regression probe plans for persisted candidates;
 - evaluator; implemented as deterministic proposal-gate execution that records target, no-skill-control, and regression probe results while requiring intervention replay before activation.
 - evaluator trace propagation; implemented for API-triggered and worker-triggered proposal-gate runs with content-safe `evaluator` spans, caller/job trace preservation, and safe count/status/object-ref close metadata.
-- contrastive induction; implemented for redacted paired outcome evidence by attaching generated `intervention_replay` inputs to no-skill-control probes, persisting contrastive probe maturity, and evaluating through the existing proposal gate.
+- contrastive induction; implemented for redacted paired outcome evidence by attaching generated `intervention_replay` inputs to no-skill-control probes, persisting contrastive probe maturity, and evaluating through the existing proposal gate. Induction accepts explicit replay outcomes, attribution outcomes, canary/broker outcomes, and context-token-ledger outcome evidence including usage-window source metadata with marginal-value signals.
 
 Acceptance:
 
