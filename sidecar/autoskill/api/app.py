@@ -3205,6 +3205,32 @@ def create_app(
         lifespan=lifespan,
     )
 
+    @app.middleware("http")
+    async def admin_browser_security_headers(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/admin"):
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                (
+                    "default-src 'self'; "
+                    "script-src 'self'; "
+                    "style-src 'self' 'unsafe-inline'; "
+                    "img-src 'self' data: blob:; "
+                    "font-src 'self' data:; "
+                    "connect-src 'self' ws: wss:; "
+                    "worker-src 'self' blob:; "
+                    "object-src 'none'; "
+                    "base-uri 'none'; "
+                    "form-action 'none'; "
+                    "frame-ancestors 'none'"
+                ),
+            )
+            response.headers.setdefault("Referrer-Policy", "no-referrer")
+            response.headers.setdefault("X-Content-Type-Options", "nosniff")
+            response.headers.setdefault("X-Frame-Options", "DENY")
+            response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        return response
+
     @app.get("/v1/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         return HealthResponse(ok=True, service="autoskill-sidecar", version=__version__)

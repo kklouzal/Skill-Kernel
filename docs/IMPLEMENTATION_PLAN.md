@@ -671,6 +671,10 @@ Deliverables:
   views, issue board, global search, object inspector, admin actions,
   deep-link state, reduced-motion support, and station cockpit tabs for records,
   metrics, traces, artifacts, config, audit, and help.
+- browser hardening; implemented as scoped `/admin` response headers for content
+  security policy, frame denial, referrer suppression, MIME sniffing prevention,
+  and same-origin opener isolation without applying those headers to ordinary
+  `/v1` sidecar routes.
 
 Acceptance:
 
@@ -703,5 +707,14 @@ Acceptance:
   passed for the edited API/test files, `uv run ruff check sidecar scripts`,
   `uv run pytest -q` with 314 tests, `uv run python -m compileall -q sidecar
   scripts`, `npm test --prefix plugin/autoskill` with 18 tests,
+  `npm run build --prefix sidecar/autoskill/observatory`, `docker compose
+  config --quiet`, and `git diff --check` passed.
+- validation evidence for the scoped admin browser-hardening slice passed on the
+  final tree: Observatory API tests `12 passed`, including a dependency-free
+  ASGI check that `/admin/api/v1/config` receives the security headers and
+  `/v1/health` does not, focused `uv run ruff check` passed for the edited
+  API/test files, `uv run ruff check sidecar scripts`, `uv run pytest -q` with
+  315 tests, `uv run python -m compileall -q sidecar scripts`, `npm test
+  --prefix plugin/autoskill` with 18 tests,
   `npm run build --prefix sidecar/autoskill/observatory`, `docker compose
   config --quiet`, and `git diff --check` passed.

@@ -1011,6 +1011,16 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   plugin/autoskill` with 18 passing tests, `npm run build --prefix
   sidecar/autoskill/observatory`, `docker compose config --quiet`, and `git
   diff --check`.
+- Observatory browser-hardening remediation is implemented for the Phase 16/23
+  security-header gap: `/admin` responses now receive scoped content security,
+  frame denial, referrer, MIME sniffing, and opener-isolation headers while
+  ordinary `/v1` sidecar routes are left unchanged. Focused validation passed
+  with Observatory API tests `12 passed`, including a direct ASGI middleware
+  check, and focused ruff. Final-tree validation also passed with `uv run ruff
+  check sidecar scripts`, `uv run pytest -q` with 315 passing tests, `uv run
+  python -m compileall -q sidecar scripts`, `npm test --prefix plugin/autoskill`
+  with 18 passing tests, `npm run build --prefix sidecar/autoskill/observatory`,
+  `docker compose config --quiet`, and `git diff --check`.
 
 ## Next Gates
 

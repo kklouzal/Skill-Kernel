@@ -108,6 +108,41 @@ def _routes(app):
     }
 
 
+async def _asgi_get(app, path: str) -> tuple[int, dict[str, str]]:
+    messages = [{"type": "http.request", "body": b"", "more_body": False}]
+    sent: list[dict[str, object]] = []
+
+    async def receive():
+        return messages.pop(0)
+
+    async def send(message):
+        sent.append(message)
+
+    await app(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": b"",
+            "headers": [],
+            "client": ("testclient", 0),
+            "server": ("testserver", 80),
+        },
+        receive,
+        send,
+    )
+    start = next(message for message in sent if message["type"] == "http.response.start")
+    headers = {
+        key.decode().lower(): value.decode()
+        for key, value in start.get("headers", [])
+    }
+    return int(start["status"]), headers
+
+
 def test_observatory_summary_exposes_all_pipeline_stations_and_truth_states() -> None:
     app = create_app(audit_store=MemoryAuditStore())
     route = _routes(app)[("/admin/api/v1/summary", "GET")]
@@ -225,6 +260,21 @@ def test_observatory_collection_routes_return_bounded_content_safe_envelopes() -
     assert playbooks.collection["content_policy"]["raw_available"] is False
     assert ready.object["schema_version"] == "skillkernel.observatory.ready.v1"
     assert ready.object["ready"] is False
+
+
+def test_observatory_admin_routes_include_browser_security_headers() -> None:
+    app = create_app(audit_store=MemoryAuditStore())
+
+    admin_status, admin_headers = asyncio.run(_asgi_get(app, "/admin/api/v1/config"))
+    health_status, health_headers = asyncio.run(_asgi_get(app, "/v1/health"))
+
+    assert admin_status == 200
+    assert health_status == 200
+    assert "frame-ancestors 'none'" in admin_headers["content-security-policy"]
+    assert admin_headers["x-content-type-options"] == "nosniff"
+    assert admin_headers["x-frame-options"] == "DENY"
+    assert admin_headers["referrer-policy"] == "no-referrer"
+    assert "content-security-policy" not in health_headers
 
 
 def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() -> None:
