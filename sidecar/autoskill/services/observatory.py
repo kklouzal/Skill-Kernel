@@ -779,6 +779,7 @@ def action_receipt(
     audit: dict[str, Any] | None = None,
     action_audit: dict[str, Any] | None = None,
     live_event: dict[str, Any] | None = None,
+    raw_reveal_grant: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "action": action,
@@ -805,6 +806,7 @@ def action_receipt(
         "audit": audit,
         "action_audit": action_audit,
         "live_event": live_event,
+        "raw_reveal_grant": raw_reveal_grant,
     }
 
 

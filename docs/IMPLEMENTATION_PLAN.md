@@ -672,7 +672,10 @@ Deliverables:
   Action receipts now also persist dedicated `admin_action_audit` rows linked to
   the generic audit hash-chain record, preserving actor roles, target identity,
   idempotency key, result, request ID, metadata-key summary, and confirmation
-  hashes without storing raw confirmation text;
+  hashes without storing raw confirmation text. The raw-content reveal action is
+  implemented as an admin-only, config-gated grant primitive that returns a
+  short-lived token only in the accepted response and persists only token hashes
+  and content-safe request metadata;
 - collection pagination and browser action protection; implemented as bounded
   cursor metadata on Observatory collection envelopes, malformed/stale cursor
   rejection, browser-session CSRF header enforcement for POST actions, and
@@ -750,3 +753,12 @@ Acceptance:
   `read_model_invalidated` row in `admin_live_event_outbox`, verified linked
   `admin_action_audit` and `audit_records` rows, deleted the smoke rows, and
   stopped Postgres while preserving the dev volume.
+- validation evidence for the raw-content reveal grant slice passed on the final
+  tree: focused Observatory API tests `16 passed`, `uv run ruff check sidecar`
+  passed, `uv run pytest` passed with 319 tests, `uv run python -m compileall -q
+  sidecar` passed, `docker compose config --quiet` passed, and `git diff
+  --check` passed. A compose/Postgres smoke applied migrations, accepted one
+  admin `reveal_raw_content` grant with raw content enabled, verified
+  `admin_action_audit` and `audit_records` persisted only the token hash and
+  content-safe request metadata, deleted the smoke rows, and stopped compose
+  while preserving the dev volume.

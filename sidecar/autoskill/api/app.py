@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hmac import compare_digest
 from pathlib import Path
 from time import monotonic
@@ -4808,6 +4809,7 @@ def create_app(
             "storage_retention_dry_run",
             "refresh_read_models",
             "verify_live_stream",
+            "reveal_raw_content",
             "revoke_source",
         }
         high_impact_actions = {
@@ -4817,10 +4819,12 @@ def create_app(
             "unfreeze_skill",
             "rollback_skill",
             "rollback_transaction",
+            "reveal_raw_content",
             "revoke_source",
         }
         accepted = request.action in allowed_actions
         reason_codes: list[str] = [] if accepted else ["unsupported-observatory-action"]
+        reveal_grant: dict[str, object] | None = None
         if (
             request.action == "reveal_raw_content"
             and not get_settings().web_admin_raw_content_enabled
@@ -4833,6 +4837,12 @@ def create_app(
                 bucket="raw-reveal",
                 limit=ADMIN_RAW_REVEAL_RATE_LIMIT,
             )
+            if "admin" not in principal["roles"]:
+                accepted = False
+                reason_codes = ["admin-role-required"]
+            elif not (request.reason or "").strip():
+                accepted = False
+                reason_codes = ["reveal-reason-required"]
         confirmation_required = request.action in high_impact_actions
         if (
             accepted
@@ -4847,6 +4857,18 @@ def create_app(
             request.action,
             request.target,
         )
+        if accepted and request.action == "reveal_raw_content" and not request.dry_run:
+            reveal_token = f"skor_{secrets.token_urlsafe(32)}"
+            expires_at = datetime.now(UTC) + timedelta(minutes=5)
+            reveal_grant = {
+                "schema_version": "skillkernel.observatory.raw-reveal-grant.v1",
+                "token": reveal_token,
+                "token_hash": f"sha256:{sha256_text(reveal_token)}",
+                "expires_at": expires_at.isoformat(),
+                "target_type": target_type,
+                "target_id": target_id,
+                "raw_content_included": False,
+            }
         confirmation_hash = (
             f"sha256:{sha256_text(request.confirmation)}"
             if request.confirmation
@@ -4863,6 +4885,14 @@ def create_app(
             "confirmation_hash": confirmation_hash,
             "source": _source_identity(http_request),
         }
+        if reveal_grant is not None:
+            action_request_payload["raw_reveal_grant"] = {
+                "token_hash": reveal_grant["token_hash"],
+                "expires_at": reveal_grant["expires_at"],
+                "target_type": target_type,
+                "target_id": target_id,
+                "raw_content_included": False,
+            }
         audit_record = await audit.append_record(
             AuditRecord(
                 action=f"observatory.{request.action}",
@@ -4882,6 +4912,10 @@ def create_app(
                     "actor_roles": principal["roles"],
                     "confirmation_hash": confirmation_hash,
                     "confirmation_required": confirmation_required,
+                    "raw_reveal_grant_hash": (
+                        reveal_grant["token_hash"] if reveal_grant is not None else None
+                    ),
+                    "raw_content_included": False,
                 },
             ),
             workspace_key=request.workspace_id,
@@ -4922,6 +4956,7 @@ def create_app(
                 audit=audit_record.model_dump(mode="json"),
                 action_audit=action_audit.to_json(),
                 live_event=live_event.to_json(),
+                raw_reveal_grant=reveal_grant,
             ),
             meta=response_meta,
         )

@@ -754,6 +754,95 @@ def test_observatory_high_impact_action_requires_confirmation() -> None:
     assert audit_store.records[0].details["confirmation_required"] is True
 
 
+def test_observatory_raw_reveal_action_fails_closed_by_default() -> None:
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(audit_store=MemoryAuditStore(), observatory_admin_store=observatory_admin)
+    route = _routes(app)[("/admin/api/v1/actions", "POST")]
+
+    async def run():
+        return await route.endpoint(
+            http_request=None,
+            request=ObservatoryActionRequest(
+                workspace_id="dev-01",
+                action="reveal_raw_content",
+                idempotency_key="raw-reveal-disabled",
+                target={"object_type": "captured_event", "object_id": "event-123"},
+                reason="operator needs incident diagnostics",
+                confirmation="confirm",
+                dry_run=False,
+            ),
+            x_skillkernel_roles="admin",
+        )
+
+    response = asyncio.run(run())
+
+    assert response.receipt["accepted"] is False
+    assert response.receipt["policy"]["reason_codes"] == ["raw-content-disabled"]
+    assert response.receipt["raw_reveal_grant"] is None
+    assert observatory_admin.actions[0].request_payload_redacted["confirmation_hash"].startswith(
+        "sha256:"
+    )
+
+
+def test_observatory_raw_reveal_grant_is_admin_only_and_hash_audited(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
+    monkeypatch.setenv("AUTOSKILL_WEB_ADMIN_RAW_CONTENT_ENABLED", "true")
+    get_settings.cache_clear()
+    audit_store = MemoryAuditStore()
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(audit_store=audit_store, observatory_admin_store=observatory_admin)
+    route = _routes(app)[("/admin/api/v1/actions", "POST")]
+
+    async def operator_attempt():
+        return await route.endpoint(
+            http_request=None,
+            request=ObservatoryActionRequest(
+                workspace_id="dev-01",
+                action="reveal_raw_content",
+                idempotency_key="raw-reveal-operator",
+                target={"object_type": "captured_event", "object_id": "event-123"},
+                reason="operator needs incident diagnostics",
+                confirmation="confirm",
+                dry_run=False,
+            ),
+            x_skillkernel_roles="operator",
+        )
+
+    async def admin_attempt():
+        return await route.endpoint(
+            http_request=None,
+            request=ObservatoryActionRequest(
+                workspace_id="dev-01",
+                action="reveal_raw_content",
+                idempotency_key="raw-reveal-admin",
+                target={"object_type": "captured_event", "object_id": "event-123"},
+                reason="admin-approved incident diagnostics",
+                confirmation="confirm",
+                dry_run=False,
+            ),
+            x_skillkernel_roles="admin",
+        )
+
+    operator_response = asyncio.run(operator_attempt())
+    admin_response = asyncio.run(admin_attempt())
+
+    assert operator_response.receipt["accepted"] is False
+    assert operator_response.receipt["policy"]["reason_codes"] == ["admin-role-required"]
+    grant = admin_response.receipt["raw_reveal_grant"]
+    assert admin_response.receipt["accepted"] is True
+    assert grant["schema_version"] == "skillkernel.observatory.raw-reveal-grant.v1"
+    assert grant["token"].startswith("skor_")
+    assert grant["token_hash"] == f"sha256:{sha256_text(grant['token'])}"
+    assert grant["raw_content_included"] is False
+    audited_payload = observatory_admin.actions[-1].request_payload_redacted
+    assert audited_payload["raw_reveal_grant"]["token_hash"] == grant["token_hash"]
+    assert "token" not in audited_payload["raw_reveal_grant"]
+    assert audit_store.records[-1].details["raw_reveal_grant_hash"] == grant["token_hash"]
+    assert audit_store.records[-1].details["raw_content_included"] is False
+
+    get_settings.cache_clear()
+
+
 def test_observatory_browser_action_requires_csrf(monkeypatch) -> None:
     monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
     get_settings.cache_clear()

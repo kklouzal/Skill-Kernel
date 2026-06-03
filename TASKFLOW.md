@@ -1055,6 +1055,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `admin_live_event_outbox` row plus linked `admin_action_audit` and
   `audit_records` rows, deleted the smoke rows, and stopped Postgres without
   removing the persistent volume.
+- Observatory raw-content reveal grant enforcement is implemented for the Phase
+  4.3/16.1/16.3 guarded-action gap: `reveal_raw_content` is now a config-gated,
+  admin-only, confirmation-required action that returns a short-lived token only
+  in the accepted response while persisting just the token hash, target,
+  confirmation hash, and content-safe metadata in `admin_action_audit` and the
+  generic audit chain. The action still returns no raw event, prompt, skill,
+  support-file, or memory content. Validation passed with focused Observatory
+  API tests `16 passed`, `uv run ruff check sidecar`, `uv run pytest` with 319
+  tests, `uv run python -m compileall -q sidecar`, `docker compose
+  config --quiet`, `git diff --check`, and a compose/Postgres smoke that
+  migrated the schema, accepted one admin raw-reveal grant, verified DB audit
+  hash-only persistence, deleted the smoke rows, and stopped compose without
+  removing the persistent volume.
 
 ## Next Gates
 
