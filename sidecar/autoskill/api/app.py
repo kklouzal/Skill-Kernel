@@ -11,7 +11,7 @@ from uuid import UUID
 
 from autoskill import __version__
 from autoskill.core.audit import AuditRecord
-from autoskill.core.config import get_settings
+from autoskill.core.config import effective_skillkernel_config, get_settings
 from autoskill.core.events import IngestRequest, IngestResult
 from autoskill.core.hashing import sha256_text
 from autoskill.core.skillir import EffectSignature, SkillIR
@@ -184,6 +184,10 @@ class DeploymentReadinessResponse(BaseModel):
     blockers: list[str]
     warnings: list[str]
     checks: dict[str, object]
+
+
+class EffectiveConfigResponse(BaseModel):
+    skillkernel: dict[str, object]
 
 
 class JobEnqueueRequest(BaseModel):
@@ -2957,6 +2961,13 @@ def create_app(
             writer_workspace_root=writer_workspace_root,
             replay_tag=replay_tag,
         )
+
+    @app.get("/v1/config/effective", response_model=EffectiveConfigResponse)
+    async def effective_config(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> EffectiveConfigResponse:
+        _require_control_auth(authorization)
+        return EffectiveConfigResponse(skillkernel=effective_skillkernel_config(get_settings()))
 
     @app.post("/v1/ingest/events", response_model=IngestResult)
     async def ingest_events(

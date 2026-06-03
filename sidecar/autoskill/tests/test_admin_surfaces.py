@@ -551,6 +551,66 @@ def test_observability_metrics_endpoint_reports_section_28_dashboards() -> None:
     assert response.dashboards["audit_integrity"]["chain_valid"] is True
 
 
+def test_effective_config_endpoint_reports_section_29_shape(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOSKILL_WORKSPACE_ID", "dev-01")
+    monkeypatch.setenv("SKILLKERNEL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("SKILLKERNEL_SIDECAR_TOKEN", "sidecar-token")
+    monkeypatch.setenv("SKILLKERNEL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("SKILLKERNEL_LOCAL_LLM_BASE_URL", "http://llm.local/v1")
+    monkeypatch.setenv("SKILLKERNEL_LOCAL_LLM_API_KEY", "llm-secret")
+    monkeypatch.setenv("SKILLKERNEL_EMBEDDING_BASE_URL", "http://embedding.local/v1")
+    monkeypatch.setenv("SKILLKERNEL_EMBEDDING_API_KEY", "embedding-secret")
+    monkeypatch.setenv("SKILLKERNEL_SIDECAR_URL", "http://sidecar.local:8765")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_MODEL", "nomic-embed-text")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_DIM", "768")
+    monkeypatch.setenv("AUTOSKILL_MAX_ACTIVE_SKILLS", "12")
+    get_settings.cache_clear()
+
+    app = create_app()
+    route = next(route for route in app.routes if route.path == "/v1/config/effective")
+
+    async def run():
+        return await route.endpoint(authorization="Bearer control-token")
+
+    response = asyncio.run(run())
+    config = response.skillkernel
+
+    assert set(config) >= {
+        "deployment",
+        "paths",
+        "historical_ingestion",
+        "plugin",
+        "database",
+        "llm",
+        "embeddings",
+        "skill_budget",
+        "context_compiler",
+        "gates",
+        "security",
+        "scheduler",
+    }
+    assert config["workspace_id"] == "dev-01"
+    assert config["deployment"]["sidecar_token_env"] == "SKILLKERNEL_SIDECAR_TOKEN"
+    assert config["deployment"]["sidecar_token_compat_env"] == "AUTOSKILL_INGEST_TOKEN"
+    assert config["plugin"]["sidecar_url"] == "http://sidecar.local:8765"
+    assert config["database"]["dsn_env"] == "SKILLKERNEL_DATABASE_URL"
+    assert config["database"]["configured"] is True
+    assert config["llm"]["profiles"]["service_reasoner"]["base_url_env"] == (
+        "SKILLKERNEL_LOCAL_LLM_BASE_URL"
+    )
+    assert config["llm"]["profiles"]["service_reasoner"]["configured"] is True
+    assert config["embeddings"]["profiles"]["default_embedding"]["dimensions"] == 768
+    assert config["embeddings"]["profiles"]["default_embedding"]["base_url_env"] == (
+        "SKILLKERNEL_EMBEDDING_BASE_URL"
+    )
+    assert config["skill_budget"]["max_active_skills"] == 12
+    assert "probes" in config["context_compiler"]["approved_support_dirs"]
+    assert config["scheduler"]["tick_seconds"] == 30
+
+    get_settings.cache_clear()
+
+
 def test_v14_trace_diagnostics_profiles_and_context_surfaces() -> None:
     app = create_app()
     routes = {

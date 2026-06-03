@@ -761,6 +761,21 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `docker compose config --quiet`, and a live compose worker smoke proving the
   default `audit.verify` schedule, enqueued job, and maintenance worker result
   `chain_valid=true`.
+- Section 29 effective configuration is now a first-class control surface:
+  settings support the spec-named `SKILLKERNEL_*` deployment/provider/token env
+  variables while preserving the existing `AUTOSKILL_*` compatibility names,
+  and `/v1/config/effective` returns a secret-free `skillkernel` config shape
+  with deployment, paths, historical-ingestion, plugin, database, LLM,
+  embedding, budget, compiler, gate, security, and scheduler blocks. The route
+  requires control auth and reports env variable names/compat aliases instead
+  of secret values. Validation passed with focused config/admin tests, focused
+  ruff checks, full `uv run ruff check sidecar`, `uv run pytest -q` with 287
+  tests, `uv run python -m compileall -q sidecar`, `git diff --check`, `npm
+  test --prefix plugin/autoskill` with 18 tests, `npm run check --prefix
+  plugin/autoskill`, `docker compose config --quiet`, and an HTTP smoke against
+  a temporary local sidecar showing the expected block list, `dsn_env=
+  SKILLKERNEL_DATABASE_URL`, configured database/LLM flags, embedding dimension
+  768, and sidecar URL projection.
 
 ## Next Gates
 
