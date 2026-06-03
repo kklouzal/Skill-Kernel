@@ -408,29 +408,26 @@ def propose_improvement(request: ImproveTopologyRequest) -> TopologyProposalResu
 def propose_composition(request: ComposeTopologyRequest) -> TopologyProposalResult:
     blockers = _bounded_component_blockers(request.components, request.max_components)
     required_by_slug = request.required_effects_by_component or {}
-    produced_so_far: set[str] = set()
+    previous_components: list[TopologySkill] = []
     edges: list[SkillGraphEdge] = []
 
     for component in request.components:
         required = set(required_by_slug.get(component.slug, []))
-        gaps = sorted(required - produced_so_far)
+        previous_terms = _union_effect_terms(previous_components)
+        gaps = sorted(required - previous_terms)
         if gaps:
             blockers.extend(
                 f"component {component.slug} requires unresolved effect: {gap}"
                 for gap in gaps
             )
-        produced = _effect_terms(component.effects)
-        if required:
-            edges.append(
-                SkillGraphEdge(
-                    from_slug=request.components[0].slug,
-                    to_slug=component.slug,
-                    edge_kind="requires",
-                    required_effects=sorted(required),
-                    produced_effects=sorted(produced_so_far),
-                )
+        edges.extend(
+            _requires_edges_for_component(
+                component=component,
+                previous_components=previous_components,
+                required_effects=required - set(gaps),
             )
-        produced_so_far.update(produced)
+        )
+        previous_components.append(component)
 
     output_terms = _effect_terms(request.composed_output.effects)
     component_terms = _union_effect_terms(request.components)
@@ -738,6 +735,38 @@ def _union_effect_terms(skills: list[TopologySkill]) -> set[str]:
     for skill in skills:
         terms.update(_effect_terms(skill.effects))
     return terms
+
+
+def _requires_edges_for_component(
+    *,
+    component: TopologySkill,
+    previous_components: list[TopologySkill],
+    required_effects: set[str],
+) -> list[SkillGraphEdge]:
+    required_by_provider: dict[str, set[str]] = {}
+    providers_by_slug = {provider.slug: provider for provider in previous_components}
+    for required_effect in sorted(required_effects):
+        provider = next(
+            (
+                candidate
+                for candidate in reversed(previous_components)
+                if required_effect in _effect_terms(candidate.effects)
+            ),
+            None,
+        )
+        if provider is not None:
+            required_by_provider.setdefault(provider.slug, set()).add(required_effect)
+
+    return [
+        SkillGraphEdge(
+            from_slug=provider_slug,
+            to_slug=component.slug,
+            edge_kind="requires",
+            required_effects=sorted(required),
+            produced_effects=sorted(_effect_terms(providers_by_slug[provider_slug].effects)),
+        )
+        for provider_slug, required in required_by_provider.items()
+    ]
 
 
 def _rollback_blockers(skills: list[TopologySkill]) -> list[str]:

@@ -585,6 +585,12 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   Real Compose/Postgres smokes verified migration idempotency, the diagnostic
   status/unique constraints, unscoped diagnostic aggregation, and
   ready-record claim/complete flow to `repair_queued`.
+- SkillGraphIR compose precondition attribution is now corrected for
+  multi-component workflows: required-effect edges point to the nearest previous
+  component that actually produced each required effect instead of defaulting to
+  the first component. Validation passed with focused topology tests, focused
+  ruff checks, full `uv run ruff check sidecar`, `uv run pytest -q` with 264
+  tests, `uv run python -m compileall -q sidecar`, and `git diff --check`.
 
 ## Next Gates
 

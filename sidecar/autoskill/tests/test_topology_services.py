@@ -223,6 +223,53 @@ def test_composition_proposal_builds_skillgraph_and_is_deterministic() -> None:
     assert first.transaction.rollback_actions[1]["operation"] == "restore_component_routing"
 
 
+def test_composition_required_edges_point_to_actual_effect_producers() -> None:
+    collect = TopologySkill(
+        skill_id=uuid4(),
+        slug="collect-logs",
+        effects=EffectSignature(outputs=["logs"]),
+    )
+    diagnose = TopologySkill(
+        skill_id=uuid4(),
+        slug="diagnose-failure",
+        effects=EffectSignature(outputs=["diagnostic"], effects=["logs interpreted"]),
+    )
+    repair = TopologySkill(
+        skill_id=uuid4(),
+        slug="repair-failure",
+        effects=EffectSignature(outputs=["patch"]),
+    )
+    result = propose_composition(
+        ComposeTopologyRequest(
+            components=[collect, diagnose, repair],
+            composed_output=TopologySkill(
+                slug="diagnose-and-repair",
+                effects=EffectSignature(outputs=["diagnostic", "patch"]),
+            ),
+            evidence_ids=["evidence-a"],
+            required_effects_by_component={
+                "diagnose-failure": ["logs"],
+                "repair-failure": ["diagnostic"],
+            },
+        )
+    )
+
+    assert result.ok
+    assert result.skill_graph_ir is not None
+    required_edges = [
+        edge
+        for edge in result.skill_graph_ir.edges
+        if edge.edge_kind == "requires"
+    ]
+    assert [
+        (edge.from_slug, edge.to_slug, edge.required_effects)
+        for edge in required_edges
+    ] == [
+        ("collect-logs", "diagnose-failure", ["logs"]),
+        ("diagnose-failure", "repair-failure", ["diagnostic"]),
+    ]
+
+
 def test_composition_blocks_unresolved_required_effects() -> None:
     result = propose_composition(
         ComposeTopologyRequest(
