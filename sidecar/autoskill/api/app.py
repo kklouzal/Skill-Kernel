@@ -2551,6 +2551,102 @@ async def _check_writer_activation_gate_for_api(
         )
 
 
+async def _check_writer_activation_window_for_api(
+    activation_window: object | None,
+    *,
+    governance: GovernanceStore,
+    request: WriterApplyRequest,
+    staging_root: Path,
+) -> None:
+    if activation_window is None:
+        return
+    manifest = _read_staged_writer_manifest_for_api(
+        staging_root,
+        request.manifest_relative_path,
+    )
+    active_relative_path = f"skills/autoskill/{manifest['slug']}"
+    window = await _call_activation_window_store(
+        activation_window,
+        workspace_key=request.workspace_id or "default",
+        active_relative_path=active_relative_path,
+        manifest_relative_path=request.manifest_relative_path,
+        evolution_transaction_id=request.evolution_transaction_id,
+    )
+    if bool(window.get("allowed", False)):
+        return
+    await governance.update_transaction_status(
+        evolution_transaction_id=request.evolution_transaction_id,
+        status="staged",
+        metrics={
+            "activation_deferred": True,
+            "activation_window": window,
+            "manifest_relative_path": request.manifest_relative_path,
+            "active_relative_path": active_relative_path,
+        },
+    )
+    raise HTTPException(
+        status_code=http_status.HTTP_409_CONFLICT,
+        detail={
+            "message": "activation window unavailable; writer apply deferred",
+            "activation_window": window,
+            "active_relative_path": active_relative_path,
+        },
+    )
+
+
+def _read_staged_writer_manifest_for_api(
+    staging_root: Path,
+    manifest_relative_path: str,
+) -> dict[str, object]:
+    try:
+        manifest_path = resolve_contained(staging_root, manifest_relative_path)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        slug = str(manifest["slug"])
+        if not slug:
+            raise ValueError("missing slug")
+        return manifest
+    except (KeyError, ValueError, FileNotFoundError, OSError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=f"activation window could not read staged manifest: {error}",
+        ) from error
+
+
+async def _call_activation_window_store(
+    activation_window: object,
+    *,
+    workspace_key: str,
+    active_relative_path: str,
+    manifest_relative_path: str,
+    evolution_transaction_id: UUID,
+) -> dict[str, object]:
+    check = getattr(activation_window, "check_activation_window", None)
+    if check is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="activation window store lacks check_activation_window",
+        )
+    result = await check(
+        workspace_key=workspace_key,
+        active_relative_path=active_relative_path,
+        manifest_relative_path=manifest_relative_path,
+        evolution_transaction_id=evolution_transaction_id,
+    )
+    if isinstance(result, dict):
+        window = dict(result)
+    else:
+        to_json = getattr(result, "to_json", None)
+        if to_json is not None:
+            window = dict(to_json())
+        else:
+            window = {
+                "allowed": bool(getattr(result, "allowed", False)),
+                "reason": str(getattr(result, "reason", "")),
+            }
+    window["allowed"] = bool(window.get("allowed", False))
+    return window
+
+
 def _json_object(payload: object) -> dict[str, object]:
     return payload if isinstance(payload, dict) else {}
 
@@ -2712,6 +2808,7 @@ def create_app(
     broker_policy_store: BrokerPolicyStore | None = None,
     topology_store: TopologyStore | None = None,
     activation_gate_store: ActivationGateStore | None = None,
+    activation_window_store: object | None = None,
     writer_workspace_root: Path | None = None,
     external_skill_roots: list[Path] | None = None,
     historical_import_roots: list[Path] | None = None,
@@ -4747,6 +4844,12 @@ def create_app(
         try:
             await _check_writer_activation_gate_for_api(
                 activation_gate,
+                request=request,
+                staging_root=staging_root,
+            )
+            await _check_writer_activation_window_for_api(
+                activation_window_store,
+                governance=governance,
                 request=request,
                 staging_root=staging_root,
             )

@@ -160,6 +160,7 @@ class WorkerStores:
     observability: ObservabilityStore | None = None
     attribution: AttributionStore | None = None
     activation_gate: ActivationGateStore | None = None
+    activation_window: object | None = None
     profiles: ProfileStore | None = None
     memory_governance: MemoryGovernanceStore | None = None
     embedder: TextEmbedder | None = None
@@ -1990,35 +1991,82 @@ async def _run_writer_apply(stores: WorkerStores, job: JobRecord) -> dict[str, A
             staging_root=staging_root,
             manifest_relative_path=manifest_relative_path,
         )
-        artifact = await apply_staged_manifest_with_governance(
-            stores.governance,
-            evolution_transaction_id=transaction_id,
+        activation_window = await _check_writer_activation_window(
+            stores,
+            job,
+            transaction_id=transaction_id,
             staging_root=staging_root,
-            workspace_root=stores.workspace_root,
-            archive_root=stores.archive_root,
             manifest_relative_path=manifest_relative_path,
         )
-        output = {
-            "artifact": artifact.to_json(),
-            "policy_approved": True,
-            "activation_gate": (
-                activation_readiness.to_json() if activation_readiness is not None else None
-            ),
-        }
-        await _record_memory_influence_for_mutation(
-            stores,
-            workspace_key=workspace,
-            memory_ids=memory_influence_ids,
-            run_id=f"writer-apply:{job.job_id}",
-            decision={
-                "control_surface": "writer.apply",
-                "decision": "mutation_applied",
-                "job_id": str(job.job_id),
-                "evolution_transaction_id": str(transaction_id),
-                "manifest_sha256": output["artifact"]["manifest_sha256"],
-                "active_relative_path": output["artifact"]["active_relative_path"],
-            },
-        )
+        if activation_window is not None and not activation_window["allowed"]:
+            await stores.governance.update_transaction_status(
+                evolution_transaction_id=transaction_id,
+                status="staged",
+                metrics={
+                    "activation_deferred": True,
+                    "activation_window": activation_window,
+                    "manifest_relative_path": manifest_relative_path,
+                    "active_relative_path": activation_window["active_relative_path"],
+                },
+            )
+            output = {
+                "status": "deferred",
+                "policy_approved": True,
+                "activation_gate": (
+                    activation_readiness.to_json()
+                    if activation_readiness is not None
+                    else None
+                ),
+                "activation_window": activation_window,
+                "manifest_relative_path": manifest_relative_path,
+            }
+            await _record_memory_influence_for_mutation(
+                stores,
+                workspace_key=workspace,
+                memory_ids=memory_influence_ids,
+                run_id=f"writer-apply:{job.job_id}",
+                decision={
+                    "control_surface": "writer.apply",
+                    "decision": "mutation_deferred",
+                    "job_id": str(job.job_id),
+                    "evolution_transaction_id": str(transaction_id),
+                    "active_relative_path": activation_window["active_relative_path"],
+                    "reason": activation_window.get("reason"),
+                },
+            )
+        else:
+            artifact = await apply_staged_manifest_with_governance(
+                stores.governance,
+                evolution_transaction_id=transaction_id,
+                staging_root=staging_root,
+                workspace_root=stores.workspace_root,
+                archive_root=stores.archive_root,
+                manifest_relative_path=manifest_relative_path,
+            )
+            output = {
+                "artifact": artifact.to_json(),
+                "policy_approved": True,
+                "activation_gate": (
+                    activation_readiness.to_json()
+                    if activation_readiness is not None
+                    else None
+                ),
+                "activation_window": activation_window,
+            }
+            await _record_memory_influence_for_mutation(
+                stores,
+                workspace_key=workspace,
+                memory_ids=memory_influence_ids,
+                run_id=f"writer-apply:{job.job_id}",
+                decision={
+                    "control_surface": "writer.apply",
+                    "decision": "mutation_applied",
+                    "job_id": str(job.job_id),
+                    "evolution_transaction_id": str(transaction_id),
+                    "manifest_sha256": output["artifact"]["manifest_sha256"],
+                    "active_relative_path": output["artifact"]["active_relative_path"],
+                },
+            )
     except Exception as error:
         await observability.finish_span(
             span_id=span.span_id,
@@ -2026,10 +2074,20 @@ async def _run_writer_apply(stores: WorkerStores, job: JobRecord) -> dict[str, A
             safe_attributes={"error": f"{type(error).__name__}: {error}"[:500]},
         )
         raise
-    await observability.finish_span(
-        span_id=span.span_id,
-        status="ok",
-        safe_attributes={
+    if output.get("status") == "deferred":
+        safe_attributes = {
+            "status": "deferred",
+            "active_relative_path": output["activation_window"]["active_relative_path"],
+            "activation_window_allowed": False,
+            "activation_window_reason": output["activation_window"].get("reason"),
+            "activation_gate_allowed": (
+                output["activation_gate"]["allowed"]
+                if output["activation_gate"] is not None
+                else None
+            ),
+        }
+    else:
+        safe_attributes = {
             "active_relative_path": output["artifact"]["active_relative_path"],
             "manifest_sha256": output["artifact"]["manifest_sha256"],
             "activation_gate_allowed": (
@@ -2037,7 +2095,16 @@ async def _run_writer_apply(stores: WorkerStores, job: JobRecord) -> dict[str, A
                 if output["activation_gate"] is not None
                 else None
             ),
-        },
+            "activation_window_allowed": (
+                output["activation_window"]["allowed"]
+                if output["activation_window"] is not None
+                else None
+            ),
+        }
+    await observability.finish_span(
+        span_id=span.span_id,
+        status="ok",
+        safe_attributes=safe_attributes,
         object_refs=[
             {"object_type": "job", "object_id": str(job.job_id)},
             {"object_type": "evolution_transaction", "object_id": str(transaction_id)},
@@ -2085,6 +2152,62 @@ async def _check_writer_activation_gate(
             "writer apply activation gate blocked: " + ", ".join(readiness.blockers)
         )
     return readiness
+
+
+async def _check_writer_activation_window(
+    stores: WorkerStores,
+    job: JobRecord,
+    *,
+    transaction_id: UUID,
+    staging_root: Path,
+    manifest_relative_path: str,
+) -> dict[str, object] | None:
+    if stores.activation_window is None:
+        return None
+    active_relative_path = _active_relative_path_from_staged_manifest(
+        staging_root,
+        manifest_relative_path,
+    )
+    check = getattr(stores.activation_window, "check_activation_window", None)
+    if check is None:
+        raise ValueError("activation_window store lacks check_activation_window")
+    result = await check(
+        workspace_key=_payload_workspace(job) or job.workspace_key or "unknown",
+        active_relative_path=active_relative_path,
+        manifest_relative_path=manifest_relative_path,
+        evolution_transaction_id=transaction_id,
+    )
+    window = _activation_window_to_json(result)
+    window["active_relative_path"] = active_relative_path
+    return window
+
+
+def _active_relative_path_from_staged_manifest(
+    staging_root: Path,
+    manifest_relative_path: str,
+) -> str:
+    manifest_path = resolve_contained(staging_root, manifest_relative_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    slug = str(manifest["slug"])
+    if not slug:
+        raise ValueError("writer apply activation window requires manifest slug")
+    return f"skills/autoskill/{slug}"
+
+
+def _activation_window_to_json(result: object) -> dict[str, object]:
+    if isinstance(result, dict):
+        window = dict(result)
+    else:
+        to_json = getattr(result, "to_json", None)
+        if to_json is not None:
+            window = dict(to_json())
+        else:
+            window = {
+                "allowed": bool(getattr(result, "allowed", False)),
+                "reason": str(getattr(result, "reason", "")),
+            }
+    window["allowed"] = bool(window.get("allowed", False))
+    return window
 
 
 async def _execute_rollback_revocation(

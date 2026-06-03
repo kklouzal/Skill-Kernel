@@ -674,6 +674,16 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   compileall -q sidecar`, `git diff --check`, `npm test --prefix
   plugin/autoskill` with 18 tests, and `npm run check --prefix
   plugin/autoskill`.
+- Writer activation now has the section 25.2 safe-window gate on both direct
+  API apply and queued mutation-worker apply: an optional activation-window
+  store can block active-root mutation when the target skill package is unsafe
+  to rewrite, leaving the evolution transaction staged with defer metadata and
+  returning a conflict/deferred result without writing active files or
+  governance items. Validation passed with focused writer/worker/admin tests,
+  focused ruff checks, full `uv run ruff check sidecar`, `uv run pytest -q`
+  with 275 tests, `uv run python -m compileall -q sidecar`, `git diff
+  --check`, `npm test --prefix plugin/autoskill` with 18 tests, and `npm run
+  check --prefix plugin/autoskill`.
 
 ## Next Gates
 

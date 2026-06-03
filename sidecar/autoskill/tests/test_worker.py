@@ -202,6 +202,35 @@ class MemoryActivationGateStore:
         )
 
 
+class MemoryActivationWindowStore:
+    def __init__(self, *, allowed: bool = True, reason: str = "safe") -> None:
+        self.allowed = allowed
+        self.reason = reason
+        self.calls: list[dict[str, object]] = []
+
+    async def check_activation_window(
+        self,
+        *,
+        workspace_key: str,
+        active_relative_path: str,
+        manifest_relative_path: str,
+        evolution_transaction_id,
+    ) -> dict[str, object]:
+        self.calls.append(
+            {
+                "workspace_key": workspace_key,
+                "active_relative_path": active_relative_path,
+                "manifest_relative_path": manifest_relative_path,
+                "evolution_transaction_id": evolution_transaction_id,
+            }
+        )
+        return {
+            "allowed": self.allowed,
+            "reason": self.reason,
+            "policy": "next-session-or-idle",
+        }
+
+
 class MemoryObservabilityStore:
     def __init__(self) -> None:
         self.started: list[TraceSpanRecord] = []
@@ -1562,6 +1591,7 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
         "active_relative_path": "skills/autoskill/approved-skill",
         "manifest_sha256": result.output["artifact"]["manifest_sha256"],
         "activation_gate_allowed": True,
+        "activation_window_allowed": None,
     }
     assert observability.finished[0]["object_refs"] == [
         {"object_type": "job", "object_id": str(result.job.job_id)},
@@ -1582,6 +1612,92 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
             "context_output_manifest_hash": context_output_manifest_hash,
         }
     ]
+
+
+def test_mutation_worker_apply_defers_when_activation_window_unavailable(tmp_path) -> None:
+    jobs = MemoryJobStore()
+    governance = MemoryGovernanceStore()
+    activation_window = MemoryActivationWindowStore(
+        allowed=False,
+        reason="session-in-use",
+    )
+    observability = MemoryObservabilityStore()
+    workspace_root = tmp_path / "workspace"
+    staging_root = workspace_root / ".autoskill" / "staging"
+    archive_root = workspace_root / ".autoskill" / "archive"
+    transaction_id = None
+    manifest_relative_path = None
+
+    async def run():
+        nonlocal transaction_id, manifest_relative_path
+        transaction = await governance.start_transaction(
+            workspace_key="dev-01",
+            transaction_kind="compile",
+            idempotency_key="apply:deferred-skill",
+            plan_hash="apply-plan-deferred",
+        )
+        transaction_id = transaction.transaction.evolution_transaction_id
+        staged = stage_compiled_skill(
+            staging_root,
+            staging_id=uuid4(),
+            skill_version_id=uuid4(),
+            slug="deferred-skill",
+            compiled_skill_md="WHEN deferred\nDO safe behavior\n",
+        )
+        manifest_relative_path = staged.manifest_relative_path
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="writer.apply",
+            idempotency_key="writer-apply:deferred-skill",
+            payload={
+                "policy_approved": True,
+                "evolution_transaction_id": str(transaction_id),
+                "manifest_relative_path": staged.manifest_relative_path,
+            },
+        )
+        return await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=MemoryPendingEmbeddingStore(),
+                governance=governance,
+                activation_window=activation_window,
+                observability=observability,
+                workspace_root=workspace_root,
+                archive_root=archive_root,
+            ),
+            worker_id="mutation-worker",
+            pool="mutation",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["status"] == "deferred"
+    assert result.output["activation_window"]["allowed"] is False
+    assert result.output["activation_window"]["reason"] == "session-in-use"
+    assert not (workspace_root / "skills" / "autoskill" / "deferred-skill").exists()
+    transaction = next(iter(governance.transactions.values()))
+    assert transaction.status == "staged"
+    assert transaction.metrics["activation_deferred"] is True
+    assert transaction.metrics["active_relative_path"] == "skills/autoskill/deferred-skill"
+    assert governance.items == []
+    assert activation_window.calls == [
+        {
+            "workspace_key": "dev-01",
+            "active_relative_path": "skills/autoskill/deferred-skill",
+            "manifest_relative_path": manifest_relative_path,
+            "evolution_transaction_id": transaction_id,
+        }
+    ]
+    assert observability.finished[0]["safe_attributes"] == {
+        "status": "deferred",
+        "active_relative_path": "skills/autoskill/deferred-skill",
+        "activation_window_allowed": False,
+        "activation_window_reason": "session-in-use",
+        "activation_gate_allowed": None,
+    }
 
 
 def test_mutation_worker_apply_fails_closed_when_activation_gate_blocks(tmp_path) -> None:
