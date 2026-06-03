@@ -80,6 +80,11 @@ from autoskill.db.observability import (
     NullObservabilityStore,
     ObservabilityStore,
 )
+from autoskill.db.observatory_admin import (
+    AsyncpgObservatoryAdminStore,
+    NullObservatoryAdminStore,
+    ObservatoryAdminStore,
+)
 from autoskill.db.profile_qualifications import (
     AsyncpgProfileQualificationStore,
     NullProfileQualificationStore,
@@ -1723,6 +1728,16 @@ def _build_observability_store() -> ObservabilityStore:
     return NullObservabilityStore()
 
 
+def _build_observatory_admin_store() -> ObservatoryAdminStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgObservatoryAdminStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullObservatoryAdminStore()
+
+
 def _build_diagnostic_store() -> DiagnosticMomentumStore:
     settings = get_settings()
     if settings.database_url:
@@ -3050,6 +3065,7 @@ def create_app(
     governance_store: GovernanceStore | None = None,
     lifecycle_store: LifecycleStore | None = None,
     observability_store: ObservabilityStore | None = None,
+    observatory_admin_store: ObservatoryAdminStore | None = None,
     diagnostic_store: DiagnosticMomentumStore | None = None,
     profile_store: ProfileStore | None = None,
     llm_invocation_store: LLMInvocationStore | None = None,
@@ -3085,6 +3101,7 @@ def create_app(
     governance = governance_store or _build_governance_store()
     lifecycle = lifecycle_store or _build_lifecycle_store(governance)
     observability = observability_store or _build_observability_store()
+    observatory_admin = observatory_admin_store or _build_observatory_admin_store()
     diagnostics = diagnostic_store or _build_diagnostic_store()
     profiles = profile_store or _build_profile_store()
     llm_invocations = llm_invocation_store or _build_llm_invocation_store()
@@ -4970,33 +4987,54 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
         workspace_id: str | None = None,
+        event_type: str | None = None,
+        trace_id: UUID | None = None,
         window_minutes: int = 60,
         limit: int = 50,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
+        records = await store.list_events(
+            workspace_key=workspace_id,
+            event_type=event_type,
+            trace_id=trace_id,
+            limit=max(1, min(limit, 500)),
+        )
         return _observatory_collection(
             object_type="captured_event",
             title="Redacted captured events",
-            items=[],
+            items=[record.to_json() for record in records],
             limit=limit,
-            source="missing_bounded_event_read_model",
-            diagnostics=_missing_read_model("captured_event", supporting_component="spool_ingest"),
+            source="event_store.list_events",
+            diagnostics={
+                "supporting_component": "spool_ingest",
+                "event_type": event_type,
+                "trace_id": str(trace_id) if trace_id else None,
+                "raw_payload_available": False,
+            },
         )
 
     @app.get("/admin/api/v1/traces", response_model=ObservatoryCollectionResponse)
     async def observatory_traces(
         authorization: Annotated[str | None, Header()] = None,
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
         limit: int = 50,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
+        traces = await observability.list_traces(
+            workspace_key=workspace_id,
+            limit=max(1, min(limit, 500)),
+        )
         return _observatory_collection(
             object_type="trace",
             title="Trace search",
-            items=[],
+            items=[trace.to_json() for trace in traces],
             limit=limit,
-            source="missing_trace_search_read_model",
-            diagnostics=_missing_read_model("trace", supporting_component="audit_trace"),
+            source="observability_store.list_traces",
+            diagnostics={
+                "supporting_component": "audit_trace",
+                "raw_content_available": False,
+            },
         )
 
     @app.get("/admin/api/v1/traces/{trace_id}", response_model=ObservatoryObjectResponse)
@@ -5713,19 +5751,24 @@ def create_app(
     async def observatory_comparisons(
         authorization: Annotated[str | None, Header()] = None,
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
         limit: int = 50,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
+        comparisons = await observatory_admin.list_comparisons(
+            workspace_key=workspace_id,
+            limit=max(1, min(limit, 500)),
+        )
         return _observatory_collection(
             object_type="baseline_comparison",
             title="Saved baseline comparisons",
-            items=[],
+            items=[comparison.to_json() for comparison in comparisons],
             limit=limit,
-            source="missing_saved_comparison_read_model",
-            diagnostics=_missing_read_model(
-                "baseline_comparison",
-                supporting_component="observatory_admin",
-            ),
+            source="observatory_admin_store.list_comparisons",
+            diagnostics={
+                "supporting_component": "observatory_admin",
+                "mutates_policy": False,
+            },
         )
 
     @app.post("/admin/api/v1/comparisons/query", response_model=ObservatoryObjectResponse)
@@ -5735,33 +5778,36 @@ def create_app(
         workspace_id: str | None = None,
         window_minutes: int = 60,
     ) -> ObservatoryObjectResponse:
-        _require_admin_auth(authorization, x_skillkernel_roles)
+        principal = _require_admin_auth(authorization, x_skillkernel_roles)
+        workspace_key = workspace_id or "dev-01"
         snapshot = await _observatory_snapshot(
-            workspace_id=workspace_id,
+            workspace_id=workspace_key,
             window_minutes=window_minutes,
         )
-        return ObservatoryObjectResponse(
-            object={
-                "schema_version": "skillkernel.observatory.comparison.v1",
-                "object_type": "baseline_comparison",
-                "object_id": f"snapshot-{snapshot['snapshot_seq']}",
-                "title": "Read-only snapshot baseline comparison",
+        comparison = await observatory_admin.create_comparison(
+            workspace_key=workspace_key,
+            actor_id=str(principal["subject"]),
+            comparison_kind="snapshot",
+            left_selector={
+                "kind": "snapshot",
+                "snapshot_seq": snapshot["snapshot_seq"],
+                "captured_at": snapshot["captured_at"],
+            },
+            right_selector={
+                "kind": "snapshot",
+                "snapshot_seq": snapshot["snapshot_seq"],
+                "captured_at": snapshot["captured_at"],
+            },
+            result_summary={
                 "summary": "Bounded baseline comparison over the current Observatory snapshot.",
-                "left": {
-                    "snapshot_seq": snapshot["snapshot_seq"],
-                    "captured_at": snapshot["captured_at"],
-                },
-                "right": {
-                    "snapshot_seq": snapshot["snapshot_seq"],
-                    "captured_at": snapshot["captured_at"],
-                },
                 "differences": [],
+                "global_health": snapshot["global_health"],
+                "issue_count": len(snapshot["issue_board"]),
                 "mutates_policy": False,
-                "content_policy": {
-                    "raw_available": False,
-                    "raw_reason": "raw-content-disabled",
-                },
-            }
+            },
+        )
+        return ObservatoryObjectResponse(
+            object=comparison.to_json()
         )
 
     @app.post("/admin/api/v1/diagnostics/bundles", response_model=ObservatoryObjectResponse)
@@ -5780,40 +5826,39 @@ def create_app(
             workspace_id=workspace_id,
             window_minutes=window_minutes,
         )
-        bundle_id = sha256_text(
-            f"{workspace_id}:{snapshot['snapshot_seq']}:{principal['subject']}"
-        )[:24]
+        bundle = await observatory_admin.create_diagnostic_bundle(
+            workspace_key=workspace_id,
+            actor_id=str(principal["subject"]),
+            scope={
+                "workspace_id": workspace_id,
+                "window_minutes": max(1, min(window_minutes, 24 * 60)),
+                "snapshot_seq": snapshot["snapshot_seq"],
+            },
+            redaction_level="default",
+            manifest={
+                "schema_version": "skillkernel.observatory.diagnostic-bundle.manifest.v1",
+                "global_health": snapshot["global_health"],
+                "data_quality": snapshot["data_quality"],
+                "issue_count": len(snapshot["issue_board"]),
+                "component_count": len(snapshot["pipeline"]["stations"]),
+                "subsystem_count": len(snapshot["subsystems"]),
+            },
+            storage_uri=f"db://autoskill.admin_diagnostic_bundles/{sha256_text(str(snapshot['snapshot_seq']))[:16]}",
+        )
         audit_record = await audit.append_record(
             AuditRecord(
                 action="observatory.create_diagnostic_bundle",
                 actor=str(principal["subject"]),
                 subject_type="diagnostic_bundle",
-                subject_id=bundle_id,
+                subject_id=str(bundle.bundle_id),
                 details={"workspace_id": workspace_id, "snapshot_seq": snapshot["snapshot_seq"]},
             ),
             workspace_key=workspace_id,
         )
+        payload = bundle.to_json()
+        payload["audit"] = audit_record.model_dump(mode="json")
         return ObservatoryObjectResponse(
-            object={
-                "schema_version": "skillkernel.observatory.diagnostic-bundle.v1",
-                "object_type": "diagnostic_bundle",
-                "object_id": bundle_id,
-                "title": f"Diagnostic bundle {bundle_id}",
-                "summary": (
-                    "Redacted diagnostic bundle descriptor. Content export is redacted "
-                    "by default."
-                ),
-                "snapshot": {
-                    "global_health": snapshot["global_health"],
-                    "data_quality": snapshot["data_quality"],
-                    "issue_count": len(snapshot["issue_board"]),
-                },
-                "audit": audit_record.model_dump(mode="json"),
-                "content_policy": {
-                    "raw_available": False,
-                    "raw_reason": "raw-content-disabled",
-                },
-            }
+            object=payload
         )
 
     @app.get(
@@ -5824,27 +5869,27 @@ def create_app(
         bundle_id: str,
         authorization: Annotated[str | None, Header()] = None,
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
     ) -> ObservatoryObjectResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
+        try:
+            parsed_bundle_id = UUID(bundle_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="diagnostic bundle not found",
+            ) from exc
+        bundle = await observatory_admin.get_diagnostic_bundle(
+            bundle_id=parsed_bundle_id,
+            workspace_key=workspace_id,
+        )
+        if bundle is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="diagnostic bundle not found",
+            )
         return ObservatoryObjectResponse(
-            object={
-                "schema_version": "skillkernel.observatory.diagnostic-bundle.v1",
-                "object_type": "diagnostic_bundle",
-                "object_id": bundle_id,
-                "title": f"Diagnostic bundle {bundle_id}",
-                "summary": (
-                    "Persisted diagnostic bundle storage is not configured in this "
-                    "read model."
-                ),
-                "diagnostics": _missing_read_model(
-                    "diagnostic_bundle",
-                    supporting_component="observatory_admin",
-                ),
-                "content_policy": {
-                    "raw_available": False,
-                    "raw_reason": "raw-content-disabled",
-                },
-            }
+            object=bundle.to_json()
         )
 
     @app.get("/admin/api/v1/replay/traces/{trace_id}", response_model=ObservatoryObjectResponse)

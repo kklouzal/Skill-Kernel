@@ -971,6 +971,18 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   read it through the admin collection/detail routes with bearer auth, verified
   `raw_query_stored=false`, deleted the smoke rows, and stopped Postgres without
   removing the persistent volume.
+- Observatory placeholder read-model remediation is implemented for the next
+  spec slice: `/admin/api/v1/events` now lists bounded redacted `raw_events`
+  metadata from the event store; `/admin/api/v1/traces` now lists bounded trace
+  summaries from `trace_spans`; `/admin/api/v1/comparisons/query` persists
+  read-only baseline comparison records; `/admin/api/v1/comparisons` lists
+  saved comparisons; and diagnostic bundle creation/retrieval now persists
+  redacted bundle descriptors instead of returning a missing-read-model
+  placeholder.
+- Focused validation passed for the Observatory event/trace/comparison/bundle
+  read models: `uv run pytest -q sidecar/autoskill/tests/test_observatory_api.py`
+  passed with `11 passed`, and focused `uv run ruff check` passed for the edited
+  API, DB, and Observatory test files.
 
 ## Next Gates
 

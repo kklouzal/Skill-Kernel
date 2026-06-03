@@ -647,10 +647,14 @@ Deliverables:
   codes, playbooks, jobs, schedules, skills, candidates, evaluations, scanner
   findings, historical imports, broker decisions, context artifacts,
   model/embedding profiles, storage, audit, comparisons, diagnostic bundles,
-  trace detail, and trace replay. Broker-decision collection/detail now reads
-  `retrieval_logs` directly and exposes content-safe query hashes, candidate
-  object IDs, rendered skill IDs, trace/span links, reason codes, and
-  suppression metadata without raw query text;
+  trace search/detail, event history, and trace replay. Broker-decision
+  collection/detail now reads `retrieval_logs` directly and exposes content-safe
+  query hashes, candidate object IDs, rendered skill IDs, trace/span links,
+  reason codes, and suppression metadata without raw query text. Event history
+  now reads bounded redacted `raw_events` metadata, trace search reads bounded
+  `trace_spans` summaries, saved comparisons persist in
+  `admin_comparison_runs`, and diagnostic bundles persist redacted descriptors
+  in `admin_diagnostic_bundles`;
 - live updates; implemented with `/admin/live` WebSocket and `/admin/live-sse`
   fallback, plus frontend fallback logic and snapshot reload handling;
 - operator action gateway; implemented as audited, policy-checked action
@@ -673,7 +677,8 @@ Acceptance:
   deterministic policy/application layers;
 - focused Observatory API tests cover summary/search, bounded collection
   envelopes, readiness, admin auth, audited action receipts, and
-  confirmation-required high-impact denial;
+  confirmation-required high-impact denial, plus event/trace read models,
+  persisted comparisons, and persisted diagnostic bundle retrieval;
 - validation evidence for the broker-decision drill-down slice passed on the
   final tree: focused Observatory tests `9 passed`, `uv run ruff check sidecar`,
   `uv run pytest` with 312 tests, `uv run python -m compileall -q sidecar`, a

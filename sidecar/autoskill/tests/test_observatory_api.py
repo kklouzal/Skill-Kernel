@@ -6,6 +6,10 @@ import pytest
 from autoskill.api.app import ObservatoryActionRequest, create_app
 from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.core.config import get_settings
+from autoskill.core.enums import TrustClass
+from autoskill.core.events import EventEnvelope
+from autoskill.db.events import NullEventStore
+from autoskill.db.observability import TraceSpanRecord, TraceSummaryRecord
 from autoskill.db.retrieval import RetrievalLog
 from autoskill.services.observatory import build_observatory_snapshot
 from fastapi import HTTPException
@@ -55,6 +59,45 @@ class MemoryRetrievalLogStore:
             if log.retrieval_log_id == retrieval_log_id:
                 return log
         return None
+
+
+class MemoryTraceStore:
+    def __init__(self, spans: list[TraceSpanRecord]) -> None:
+        self.spans = spans
+
+    async def list_trace(self, *, trace_id, limit: int = 100, **_kwargs) -> list[TraceSpanRecord]:
+        return [span for span in self.spans if span.trace_id == trace_id][:limit]
+
+    async def list_traces(self, *, limit: int = 50, **_kwargs) -> list[TraceSummaryRecord]:
+        summaries: list[TraceSummaryRecord] = []
+        trace_ids = []
+        for span in self.spans:
+            if span.trace_id not in trace_ids:
+                trace_ids.append(span.trace_id)
+        for trace_id in trace_ids:
+            spans = [span for span in self.spans if span.trace_id == trace_id]
+            summaries.append(
+                TraceSummaryRecord(
+                    trace_id=trace_id,
+                    workspace_key=spans[0].workspace_key,
+                    span_count=len(spans),
+                    statuses=sorted({span.status for span in spans}),
+                    operation_kinds=sorted({span.operation_kind for span in spans}),
+                    object_refs=[
+                        ref for span in spans for ref in span.object_refs if isinstance(ref, dict)
+                    ],
+                    started_at=min(span.started_at for span in spans),
+                    last_event_at=max((span.ended_at or span.started_at) for span in spans),
+                )
+            )
+        return summaries[:limit]
+
+    async def operator_metrics(self, **_kwargs):
+        return {
+            "captured_at": datetime.now(UTC).isoformat(),
+            "metrics": {},
+            "dashboards": {},
+        }
 
 
 def _routes(app):
@@ -323,6 +366,107 @@ def test_observatory_broker_decisions_use_content_safe_retrieval_logs() -> None:
         candidate_object_id
     )
     assert detail.object["effects"]["rendered_skill_ids"] == [str(rendered_skill_id)]
+
+
+def test_observatory_event_and_trace_read_models_are_bounded_and_content_safe() -> None:
+    trace_id = uuid4()
+    event_store = NullEventStore()
+    event = EventEnvelope(
+        workspace_id="dev-01",
+        trace_id=trace_id,
+        span_id=uuid4(),
+        session_id="session-1",
+        turn_id="turn-1",
+        event_type="tool_call_end",
+        trust=TrustClass.TOOL_OUTPUT,
+        payload={"secret": "nope", "safe": "ok"},
+    ).redacted()
+    asyncio.run(event_store.ingest_events([event]))
+    span = TraceSpanRecord(
+        trace_id=trace_id,
+        span_id=uuid4(),
+        parent_span_id=None,
+        workspace_id=None,
+        workspace_key="dev-01",
+        operation_name="broker decision",
+        operation_kind="broker",
+        status="ok",
+        safe_attributes={"decision": "skill_hint"},
+        object_refs=[{"object_type": "captured_event", "object_id": str(event.event_id)}],
+        started_at=datetime.now(UTC),
+        ended_at=datetime.now(UTC),
+    )
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        event_store=event_store,
+        observability_store=MemoryTraceStore([span]),
+    )
+    routes = _routes(app)
+
+    async def run():
+        events = await routes[("/admin/api/v1/events", "GET")].endpoint(
+            workspace_id="dev-01",
+            event_type="tool_call_end",
+            trace_id=trace_id,
+            limit=10,
+        )
+        traces = await routes[("/admin/api/v1/traces", "GET")].endpoint(
+            workspace_id="dev-01",
+            limit=10,
+        )
+        detail = await routes[("/admin/api/v1/traces/{trace_id}", "GET")].endpoint(
+            trace_id=trace_id,
+            workspace_id="dev-01",
+            limit=10,
+        )
+        return events, traces, detail
+
+    events, traces, detail = asyncio.run(run())
+
+    assert events.collection["source"] == "event_store.list_events"
+    assert events.collection["items"][0]["event_id"] == str(event.event_id)
+    assert events.collection["items"][0]["payload_keys"] == ["safe", "secret"]
+    assert events.collection["items"][0]["content_policy"]["raw_available"] is False
+    assert "nope" not in str(events.collection["items"][0])
+    assert traces.collection["source"] == "observability_store.list_traces"
+    assert traces.collection["items"][0]["trace_id"] == str(trace_id)
+    assert detail.object["timeline"][0]["object_refs"][0]["object_id"] == str(event.event_id)
+
+
+def test_observatory_comparisons_and_diagnostic_bundles_are_persisted() -> None:
+    audit_store = MemoryAuditStore()
+    app = create_app(audit_store=audit_store)
+    routes = _routes(app)
+
+    async def run():
+        comparison = await routes[("/admin/api/v1/comparisons/query", "POST")].endpoint(
+            workspace_id="dev-01",
+            window_minutes=10,
+        )
+        comparisons = await routes[("/admin/api/v1/comparisons", "GET")].endpoint(
+            workspace_id="dev-01",
+            limit=10,
+        )
+        bundle = await routes[("/admin/api/v1/diagnostics/bundles", "POST")].endpoint(
+            workspace_id="dev-01",
+            window_minutes=10,
+        )
+        bundle_detail = await routes[
+            ("/admin/api/v1/diagnostics/bundles/{bundle_id}", "GET")
+        ].endpoint(bundle_id=bundle.object["object_id"], workspace_id="dev-01")
+        return comparison, comparisons, bundle, bundle_detail
+
+    comparison, comparisons, bundle, bundle_detail = asyncio.run(run())
+
+    assert comparison.object["object_type"] == "baseline_comparison"
+    assert comparison.object["mutates_policy"] is False
+    assert comparisons.collection["source"] == "observatory_admin_store.list_comparisons"
+    assert comparisons.collection["items"][0]["object_id"] == comparison.object["object_id"]
+    assert bundle.object["object_type"] == "diagnostic_bundle"
+    assert bundle.object["content_policy"]["raw_available"] is False
+    assert bundle_detail.object["object_id"] == bundle.object["object_id"]
+    assert bundle_detail.object["manifest"]["component_count"] == 24
+    assert audit_store.records[-1].subject_id == bundle.object["object_id"]
 
 
 def test_observatory_stale_or_missing_telemetry_never_reports_healthy() -> None:

@@ -1343,6 +1343,59 @@ CREATE TABLE IF NOT EXISTS autoskill.trace_span_links (
   PRIMARY KEY (from_span_id, to_span_id, link_type)
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.admin_live_event_outbox (
+  seq bigserial PRIMARY KEY,
+  kind text NOT NULL,
+  component_id text,
+  trace_id text,
+  object_type text,
+  object_id text,
+  payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  redaction_level text NOT NULL DEFAULT 'default',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  delivered_hint boolean NOT NULL DEFAULT false
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.admin_action_audit (
+  action_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_id text NOT NULL,
+  actor_roles text[] NOT NULL DEFAULT '{}',
+  action_kind text NOT NULL,
+  target_type text NOT NULL,
+  target_id text NOT NULL,
+  idempotency_key text NOT NULL,
+  request_payload_redacted jsonb NOT NULL DEFAULT '{}'::jsonb,
+  reason text NOT NULL,
+  result text NOT NULL CHECK (result IN ('accepted','rejected','failed','completed')),
+  linked_job_id uuid REFERENCES autoskill.jobs(job_id),
+  linked_audit_id uuid REFERENCES autoskill.audit_records(audit_id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (actor_id, action_kind, target_type, target_id, idempotency_key)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.admin_comparison_runs (
+  comparison_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  actor_id text NOT NULL,
+  comparison_kind text NOT NULL,
+  left_selector jsonb NOT NULL,
+  right_selector jsonb NOT NULL,
+  result_summary jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.admin_diagnostic_bundles (
+  bundle_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  actor_id text NOT NULL,
+  scope jsonb NOT NULL,
+  redaction_level text NOT NULL,
+  manifest jsonb NOT NULL DEFAULT '{}'::jsonb,
+  storage_uri text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz
+);
+
 CREATE TABLE IF NOT EXISTS autoskill.diagnostic_momentum (
   diagnostic_momentum_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
@@ -1562,6 +1615,18 @@ CREATE INDEX IF NOT EXISTS drift_events_workspace_time_idx
 
 CREATE INDEX IF NOT EXISTS trace_spans_trace_idx
   ON autoskill.trace_spans (workspace_id, trace_id, started_at);
+
+CREATE INDEX IF NOT EXISTS admin_live_event_created_idx
+  ON autoskill.admin_live_event_outbox(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS admin_live_event_component_idx
+  ON autoskill.admin_live_event_outbox(component_id, seq DESC);
+
+CREATE INDEX IF NOT EXISTS admin_comparison_runs_workspace_time_idx
+  ON autoskill.admin_comparison_runs(workspace_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS admin_diagnostic_bundles_workspace_time_idx
+  ON autoskill.admin_diagnostic_bundles(workspace_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS diagnostic_momentum_ready_idx
   ON autoskill.diagnostic_momentum (

@@ -63,6 +63,48 @@ class TraceSpanRecord:
         }
 
 
+@dataclass(frozen=True)
+class TraceSummaryRecord:
+    trace_id: UUID
+    workspace_key: str | None
+    span_count: int
+    statuses: list[str]
+    operation_kinds: list[str]
+    object_refs: list[dict[str, Any]]
+    started_at: datetime
+    last_event_at: datetime
+
+    def to_json(self) -> dict[str, Any]:
+        status = "ok"
+        if any(item in {"error", "timeout", "denied", "quarantined"} for item in self.statuses):
+            status = "degraded"
+        elif "running" in self.statuses:
+            status = "running"
+        return {
+            "object_type": "trace",
+            "object_id": str(self.trace_id),
+            "trace_id": str(self.trace_id),
+            "workspace_key": self.workspace_key,
+            "span_count": self.span_count,
+            "statuses": self.statuses,
+            "operation_kinds": self.operation_kinds,
+            "object_refs": self.object_refs,
+            "started_at": self.started_at.isoformat(),
+            "last_event_at": self.last_event_at.isoformat(),
+            "status": status,
+            "title": f"Trace {self.trace_id}",
+            "summary": (
+                f"{self.span_count} spans; status={status}; "
+                f"operations={len(self.operation_kinds)}"
+            ),
+            "details_url": f"/admin/traces/{self.trace_id}",
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+            },
+        }
+
+
 class ObservabilityStore(Protocol):
     async def start_span(
         self,
@@ -104,6 +146,14 @@ class ObservabilityStore(Protocol):
         limit: int = 100,
     ) -> list[TraceSpanRecord]:
         """Return spans for one trace."""
+
+    async def list_traces(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+    ) -> list[TraceSummaryRecord]:
+        """Return bounded content-safe trace summaries."""
 
     async def operator_metrics(
         self,
@@ -171,6 +221,14 @@ class NullObservabilityStore:
         trace_id: UUID,
         limit: int = 100,
     ) -> list[TraceSpanRecord]:
+        return []
+
+    async def list_traces(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+    ) -> list[TraceSummaryRecord]:
         return []
 
     async def operator_metrics(
@@ -318,6 +376,43 @@ class AsyncpgObservabilityStore(AsyncpgPoolOwner):
                 max(1, min(limit, 1000)),
             )
         return [TraceSpanRecord.from_row(row) for row in rows]
+
+    async def list_traces(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+    ) -> list[TraceSummaryRecord]:
+        bounded_limit = max(1, min(limit, 500))
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            workspace_id = await _lookup_workspace_id(conn, workspace_key)
+            if workspace_key is not None and workspace_id is None:
+                return []
+            rows = await conn.fetch(
+                """
+                SELECT
+                  ts.trace_id,
+                  $3::text AS workspace_key,
+                  count(*)::int AS span_count,
+                  array_agg(DISTINCT ts.status ORDER BY ts.status) AS statuses,
+                  array_agg(
+                    DISTINCT ts.operation_kind ORDER BY ts.operation_kind
+                  ) AS operation_kinds,
+                  jsonb_agg(ts.object_refs) AS object_ref_sets,
+                  min(ts.started_at) AS started_at,
+                  max(COALESCE(ts.ended_at, ts.started_at)) AS last_event_at
+                FROM autoskill.trace_spans ts
+                WHERE ($1::uuid IS NULL OR ts.workspace_id = $1)
+                GROUP BY ts.trace_id
+                ORDER BY max(COALESCE(ts.ended_at, ts.started_at)) DESC, ts.trace_id DESC
+                LIMIT $2
+                """,
+                workspace_id,
+                bounded_limit,
+                workspace_key,
+            )
+        return [_trace_summary_from_row(row) for row in rows]
 
     async def operator_metrics(
         self,
@@ -679,6 +774,34 @@ def _json_list(value: object) -> list[dict[str, Any]]:
     if isinstance(value, str):
         parsed = json.loads(value)
         return _json_list(parsed)
+    return []
+
+
+def _trace_summary_from_row(row: asyncpg.Record | dict[str, Any]) -> TraceSummaryRecord:
+    object_refs: list[dict[str, Any]] = []
+    for ref_set in _json_nested_lists(row["object_ref_sets"]):
+        object_refs.extend(ref_set)
+    return TraceSummaryRecord(
+        trace_id=row["trace_id"],
+        workspace_key=_row_get(row, "workspace_key"),
+        span_count=int(row["span_count"]),
+        statuses=sorted(str(item) for item in row["statuses"]),
+        operation_kinds=sorted(str(item) for item in row["operation_kinds"]),
+        object_refs=object_refs,
+        started_at=row["started_at"],
+        last_event_at=row["last_event_at"],
+    )
+
+
+def _json_nested_lists(value: object) -> list[list[dict[str, Any]]]:
+    if isinstance(value, list):
+        output: list[list[dict[str, Any]]] = []
+        for item in value:
+            output.append(_json_list(item))
+        return output
+    if isinstance(value, str):
+        parsed = json.loads(value)
+        return _json_nested_lists(parsed)
     return []
 
 
