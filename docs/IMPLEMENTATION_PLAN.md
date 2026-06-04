@@ -879,6 +879,18 @@ Acceptance:
   `npm test --prefix plugin/autoskill` (`18 passed`), `npm run build --prefix
   sidecar/autoskill/observatory`, `docker compose config --quiet`, and
   `git diff --check`.
+- validation evidence for the Observatory trace replay backend enrichment slice
+  passed on the final tree: `/admin/api/v1/replay/traces/{trace_id}` now derives
+  station highlights, a span waterfall, policy/gate badges, safe diff/hash
+  metadata panels, detail-drawer refs, deduplicated downstream provenance, and a
+  redacted export bundle descriptor from existing `trace_spans` rows without
+  exposing raw content or re-executing work. Focused Observatory API tests
+  passed with `32 passed`, `uv run ruff check sidecar` passed, `uv run pytest`
+  passed with 349 tests, `uv run python -m compileall -q sidecar` passed,
+  `npm run build --prefix sidecar/autoskill/observatory` passed,
+  `docker compose config --quiet` passed, and `git diff --check` passed. No
+  compose/Postgres smoke was needed because this is a read-model shaping change
+  over already-tested trace store data.
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and

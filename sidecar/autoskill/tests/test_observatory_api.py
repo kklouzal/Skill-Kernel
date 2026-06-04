@@ -1041,24 +1041,51 @@ def test_observatory_event_and_trace_read_models_are_bounded_and_content_safe() 
         payload={"secret": "nope", "safe": "ok"},
     ).redacted()
     asyncio.run(event_store.ingest_events([event]))
+    started_at = datetime.now(UTC)
+    span_id = uuid4()
+    child_span_id = uuid4()
     span = TraceSpanRecord(
         trace_id=trace_id,
-        span_id=uuid4(),
+        span_id=span_id,
         parent_span_id=None,
         workspace_id=None,
         workspace_key="dev-01",
         operation_name="broker decision",
         operation_kind="broker",
         status="ok",
-        safe_attributes={"decision": "skill_hint"},
+        safe_attributes={
+            "decision": "skill_hint",
+            "policy_gate_passed": True,
+            "manifest_hash": "manifest-safe-hash",
+        },
         object_refs=[{"object_type": "captured_event", "object_id": str(event.event_id)}],
-        started_at=datetime.now(UTC),
-        ended_at=datetime.now(UTC),
+        started_at=started_at,
+        ended_at=started_at + timedelta(milliseconds=25),
+    )
+    child_span = TraceSpanRecord(
+        trace_id=trace_id,
+        span_id=child_span_id,
+        parent_span_id=span_id,
+        workspace_id=None,
+        workspace_key="dev-01",
+        operation_name="writer apply",
+        operation_kind="writer",
+        status="denied",
+        safe_attributes={
+            "activation_gate_status": "blocked",
+            "after_hash": "candidate-safe-hash",
+        },
+        object_refs=[
+            {"object_type": "captured_event", "object_id": str(event.event_id)},
+            {"object_type": "skill_version", "object_id": "version-1"},
+        ],
+        started_at=started_at + timedelta(milliseconds=30),
+        ended_at=started_at + timedelta(milliseconds=45),
     )
     app = create_app(
         audit_store=MemoryAuditStore(),
         event_store=event_store,
-        observability_store=MemoryTraceStore([span]),
+        observability_store=MemoryTraceStore([child_span, span]),
     )
     routes = _routes(app)
 
@@ -1104,8 +1131,27 @@ def test_observatory_event_and_trace_read_models_are_bounded_and_content_safe() 
     assert detail.object["timeline"][0]["object_refs"][0]["object_id"] == str(event.event_id)
     assert replay.object["schema_version"] == "skillkernel.observatory.trace-replay.v1"
     assert replay.object["timeline"][0]["object_refs"][0]["object_id"] == str(event.event_id)
+    assert replay.object["timeline"][0]["component_id"] == "broker_runtime"
+    assert replay.object["timeline"][0]["duration_ms"] == 25
+    assert replay.object["timeline"][1]["component_id"] == "deterministic_writer"
+    assert replay.object["span_waterfall"][1]["parent_span_id"] == str(span_id)
+    assert {
+        item["component_id"] for item in replay.object["station_highlights"]
+    } == {"broker_runtime", "deterministic_writer"}
+    assert replay.object["policy_gate_badges"][0]["label"] == "policy_gate_passed"
+    assert replay.object["policy_gate_badges"][0]["status"] == "passed"
+    assert any(
+        item["label"] == "activation_gate_status" and item["status"] == "blocked"
+        for item in replay.object["policy_gate_badges"]
+    )
+    assert replay.object["diff_panels"][0]["raw_diff_available"] is False
+    assert replay.object["redacted_export_bundle"]["raw_content_included"] is False
+    assert replay.object["redacted_export_bundle"]["span_count"] == 2
+    assert len(replay.object["provenance"]["downstream"]) == 2
     assert replay.object["replay_safety"]["reexecutes_work"] is False
     assert replay.object["replay_safety"]["raw_content_included"] is False
+    assert replay.object["replay_safety"]["uses_persisted_state_only"] is True
+    assert replay.object["content_policy"]["raw_available"] is False
     assert object_detail.object["object_type"] == "captured_event"
     assert object_detail.object["effects"]["payload_hash"] == event.payload_hash
     assert object_detail.object["content_policy"]["raw_available"] is False

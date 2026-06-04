@@ -5265,6 +5265,275 @@ def create_app(
             return "storage_db"
         return "observatory_admin"
 
+    def _trace_component_for_operation(operation_kind: str) -> str:
+        return {
+            "archive": "activation_curation",
+            "broker": "broker_runtime",
+            "compiler": "context_compiler",
+            "embedding_call": "model_embedding",
+            "evaluator": "evaluator_probes",
+            "evidence": "evidence_memory",
+            "evolution": "topology_operations",
+            "ingest": "spool_ingest",
+            "job": "scheduler_jobs",
+            "llm_call": "model_embedding",
+            "memory": "evidence_memory",
+            "plugin_capture": "openclaw_live_capture",
+            "promotion": "activation_curation",
+            "redaction": "redaction_taint",
+            "retrieval": "retrieval_indexing",
+            "rollback": "canary_rollback",
+            "scanner": "scanner_security",
+            "scheduler": "scheduler_jobs",
+            "tool_attribution": "audit_trace",
+            "topology": "topology_operations",
+            "writer": "deterministic_writer",
+        }.get(operation_kind, "audit_trace")
+
+    def _trace_parse_iso_datetime(value: str) -> datetime:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed
+
+    def _trace_span_duration_ms(span_payload: dict[str, Any]) -> int | None:
+        started_at = _trace_parse_iso_datetime(str(span_payload["started_at"]))
+        ended_at_raw = span_payload.get("ended_at")
+        if ended_at_raw is None:
+            return None
+        ended_at = _trace_parse_iso_datetime(str(ended_at_raw))
+        return max(0, int((ended_at - started_at).total_seconds() * 1000))
+
+    def _trace_policy_badges(span_payload: dict[str, Any]) -> list[dict[str, Any]]:
+        attrs = span_payload.get("safe_attributes")
+        if not isinstance(attrs, dict):
+            return []
+        badges: list[dict[str, Any]] = []
+        for key in sorted(attrs):
+            key_text = str(key)
+            lower_key = key_text.lower()
+            if not any(
+                marker in lower_key
+                for marker in (
+                    "gate",
+                    "policy",
+                    "verdict",
+                    "scanner",
+                    "evaluator",
+                    "activation",
+                    "canary",
+                    "rollback",
+                    "blocked",
+                )
+            ):
+                continue
+            value = attrs[key]
+            if isinstance(value, str | int | float | bool) or value is None:
+                safe_value: object = value
+            else:
+                safe_value = type(value).__name__
+            badges.append(
+                {
+                    "label": key_text,
+                    "value": safe_value,
+                    "status": _trace_badge_status(key_text, safe_value),
+                }
+            )
+        return badges
+
+    def _trace_badge_status(label: str, value: object) -> str:
+        value_text = str(value).lower()
+        label_text = label.lower()
+        if value is False or any(
+            marker in value_text for marker in ("blocked", "failed", "denied", "reject")
+        ):
+            return "blocked"
+        if value is True or any(marker in value_text for marker in ("pass", "ok", "allow")):
+            return "passed"
+        if any(marker in label_text for marker in ("gate", "policy", "verdict")):
+            return "observed"
+        return "informational"
+
+    def _trace_diff_panels(span_payload: dict[str, Any]) -> list[dict[str, Any]]:
+        attrs = span_payload.get("safe_attributes")
+        if not isinstance(attrs, dict):
+            return []
+        diff_keys = [
+            key
+            for key in sorted(attrs)
+            if any(
+                marker in str(key).lower()
+                for marker in (
+                    "diff",
+                    "before_hash",
+                    "after_hash",
+                    "manifest_hash",
+                    "artifact_hash",
+                    "compiled_hash",
+                    "skillir_hash",
+                )
+            )
+        ]
+        if not diff_keys:
+            return []
+        return [
+            {
+                "span_id": span_payload["span_id"],
+                "title": "Safe artifact/hash diff metadata",
+                "metadata": {
+                    key: attrs[key]
+                    if isinstance(attrs[key], str | int | float | bool) or attrs[key] is None
+                    else type(attrs[key]).__name__
+                    for key in diff_keys
+                },
+                "raw_diff_available": False,
+            }
+        ]
+
+    def _trace_replay_object(
+        *,
+        trace_id: UUID,
+        workspace_id: str,
+        spans: list[Any],
+    ) -> dict[str, Any]:
+        span_payloads = sorted(
+            (span.to_json() for span in spans),
+            key=lambda payload: (payload["started_at"], payload["span_id"]),
+        )
+        station_counts: dict[str, int] = {}
+        station_statuses: dict[str, set[str]] = {}
+        timeline: list[dict[str, Any]] = []
+        waterfall: list[dict[str, Any]] = []
+        detail_drawer: list[dict[str, Any]] = []
+        policy_gate_badges: list[dict[str, Any]] = []
+        diff_panels: list[dict[str, Any]] = []
+        downstream: list[dict[str, Any]] = []
+        seen_refs: set[tuple[str, str]] = set()
+
+        for index, payload in enumerate(span_payloads, start=1):
+            component_id = _trace_component_for_operation(str(payload["operation_kind"]))
+            station_counts[component_id] = station_counts.get(component_id, 0) + 1
+            station_statuses.setdefault(component_id, set()).add(str(payload["status"]))
+            duration_ms = _trace_span_duration_ms(payload)
+            badges = _trace_policy_badges(payload)
+            policy_gate_badges.extend(
+                {"span_id": payload["span_id"], "component_id": component_id, **badge}
+                for badge in badges
+            )
+            diff_panels.extend(_trace_diff_panels(payload))
+            object_refs = [
+                ref for ref in payload.get("object_refs", []) if isinstance(ref, dict)
+            ]
+            for ref in object_refs:
+                ref_key = (str(ref.get("object_type")), str(ref.get("object_id")))
+                if ref_key in seen_refs:
+                    continue
+                seen_refs.add(ref_key)
+                downstream.append(
+                    {
+                        "object_type": ref_key[0],
+                        "object_id": ref_key[1],
+                    }
+                )
+            timeline.append(
+                {
+                    **payload,
+                    "index": index,
+                    "at": payload["started_at"],
+                    "event": "span_observed",
+                    "component_id": component_id,
+                    "duration_ms": duration_ms,
+                    "policy_gate_badges": badges,
+                }
+            )
+            waterfall.append(
+                {
+                    "span_id": payload["span_id"],
+                    "parent_span_id": payload["parent_span_id"],
+                    "component_id": component_id,
+                    "operation_name": payload["operation_name"],
+                    "operation_kind": payload["operation_kind"],
+                    "status": payload["status"],
+                    "started_at": payload["started_at"],
+                    "ended_at": payload["ended_at"],
+                    "duration_ms": duration_ms,
+                }
+            )
+            detail_drawer.append(
+                {
+                    "span_id": payload["span_id"],
+                    "component_id": component_id,
+                    "safe_attribute_keys": sorted(
+                        str(key)
+                        for key in (
+                            payload.get("safe_attributes")
+                            if isinstance(payload.get("safe_attributes"), dict)
+                            else {}
+                        )
+                    ),
+                    "object_refs": object_refs,
+                    "raw_content_available": False,
+                }
+            )
+
+        station_highlights = [
+            {
+                "component_id": component_id,
+                "span_count": station_counts[component_id],
+                "statuses": sorted(station_statuses[component_id]),
+                "highlight": True,
+            }
+            for component_id in sorted(station_counts)
+        ]
+        export_payload = {
+            "trace_id": str(trace_id),
+            "workspace_id": workspace_id,
+            "span_count": len(span_payloads),
+            "station_ids": [item["component_id"] for item in station_highlights],
+            "object_ref_count": len(downstream),
+            "raw_content_included": False,
+        }
+        return {
+            "schema_version": "skillkernel.observatory.trace-replay.v1",
+            "object_type": "trace",
+            "object_id": str(trace_id),
+            "workspace_id": workspace_id,
+            "title": f"Trace {trace_id}",
+            "summary": "Content-safe trace replay assembled from recorded spans.",
+            "timeline": timeline,
+            "span_waterfall": waterfall,
+            "station_highlights": station_highlights,
+            "policy_gate_badges": policy_gate_badges,
+            "detail_drawer": detail_drawer,
+            "diff_panels": diff_panels,
+            "provenance": {
+                "upstream": [],
+                "downstream": downstream,
+            },
+            "redacted_export_bundle": {
+                "schema_version": "skillkernel.observatory.trace-bundle.v1",
+                "bundle_hash": sha256_text(json.dumps(export_payload, sort_keys=True)),
+                **export_payload,
+            },
+            "replay_safety": {
+                "reexecutes_work": False,
+                "raw_content_included": False,
+                "uses_persisted_state_only": True,
+                "mutates_policy": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "redacted_or_not_applicable",
+            },
+            "diagnostics": {
+                "span_count": len(span_payloads),
+                "station_count": len(station_highlights),
+                "object_ref_count": len(downstream),
+                "bounded_limit": len(span_payloads),
+            },
+        }
+
     def _snapshot_live_fallback(
         snapshot: dict[str, object],
         *,
@@ -7129,28 +7398,11 @@ def create_app(
             limit=max(1, min(limit, 500)),
         )
         return ObservatoryObjectResponse(
-            object={
-                "schema_version": "skillkernel.observatory.trace-replay.v1",
-                "object_type": "trace",
-                "object_id": str(trace_id),
-                "workspace_id": workspace_id,
-                "title": f"Trace {trace_id}",
-                "summary": "Content-safe trace replay assembled from recorded spans.",
-                "timeline": [span.to_json() for span in spans],
-                "provenance": {
-                    "upstream": [],
-                    "downstream": [
-                        ref
-                        for span in spans
-                        for ref in span.to_json().get("object_refs", [])
-                        if isinstance(ref, dict)
-                    ],
-                },
-                "replay_safety": {
-                    "reexecutes_work": False,
-                    "raw_content_included": False,
-                },
-            }
+            object=_trace_replay_object(
+                trace_id=trace_id,
+                workspace_id=workspace_id,
+                spans=spans,
+            )
         )
 
     @app.post("/admin/api/v1/actions", response_model=ObservatoryActionResponse)

@@ -1288,6 +1288,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   sidecar`, `npm test --prefix plugin/autoskill` (`18 passed`), `npm run build
   --prefix sidecar/autoskill/observatory`, `docker compose config --quiet`, and
   `git diff --check`.
+- Observatory trace replay backend enrichment is implemented for Section 11:
+  `/admin/api/v1/replay/traces/{trace_id}` now returns a content-safe replay
+  object with ordered span timeline entries, span waterfall rows, station
+  highlights, policy/gate badges, diff/hash metadata panels, detail-drawer
+  object refs, deduplicated downstream provenance, and a redacted export bundle
+  descriptor while preserving the persisted-state-only/no-reexecution safety
+  contract. Validation passed with focused Observatory API tests (`32 passed`),
+  `uv run ruff check sidecar`, `uv run pytest` (`349 passed`), `uv run python
+  -m compileall -q sidecar`, `npm run build --prefix
+  sidecar/autoskill/observatory`, `docker compose config --quiet`, and `git
+  diff --check`. No compose/Postgres smoke was needed because the slice only
+  reshapes already-covered trace-span read data and adds no schema or
+  asyncpg-store behavior.
 
 ## Next Gates
 
