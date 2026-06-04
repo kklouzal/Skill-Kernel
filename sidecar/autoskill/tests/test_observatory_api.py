@@ -826,6 +826,80 @@ def test_observatory_planned_evaluations_are_not_failures() -> None:
     assert "evaluation-failures-present" in evaluator["reason_codes"]
 
 
+def test_observatory_station_latency_uses_operation_specific_samples() -> None:
+    settings = get_settings().model_copy(
+        update={
+            "database_url": "postgresql://autoskill:autoskill-dev@127.0.0.1/autoskill",
+            "control_token": "control-token",
+        }
+    )
+    snapshot = build_observatory_snapshot(
+        settings=settings,
+        status={
+            "mode": "dev",
+            "database_configured": True,
+            "ingest_auth_configured": True,
+            "control_auth_configured": True,
+            "runtime_context_broker": {"enabled": True},
+            "jobs": {},
+            "workers": {},
+        },
+        operator_metrics={
+            "captured_at": datetime.now(UTC).isoformat(),
+            "metrics": {
+                "ingest": {"events_in_window": 1, "total_events": 1},
+                "redaction_counts": {},
+                "spool_backlog": {},
+                "retrieval_decisions": {},
+                "embedding_backlog": {},
+                "context_hint_injection_count": 0,
+                "context_hint_token_cost": 0,
+                "context_hint_token_ledger_count": 0,
+                "skill_creation_improvement_counts": {},
+                "skill_lifecycle_counts": {},
+                "scanner_reject_counts": {},
+                "evaluation_pass_fail_counts": {},
+                "rollback_freeze_counts": {},
+                "job_queue_depth": {},
+                "postgres_table_index_growth": [],
+                "audit": {},
+                "sidecar_latency_ms": {
+                    "span_count": 10,
+                    "avg": 100.0,
+                    "p95": 999.0,
+                    "max": 1100.0,
+                },
+                "latency_by_operation_kind": {
+                    "job": {"span_count": 2, "avg": 25.0, "p95": 120.0, "max": 150.0},
+                    "embedding_call": {
+                        "span_count": 3,
+                        "avg": 80.0,
+                        "p95": 340.0,
+                        "max": 360.0,
+                    },
+                },
+            },
+            "dashboards": {},
+        },
+        worker_health={},
+        audit_chain_valid=True,
+        static_available=True,
+        workspace_id="dev-01",
+        window_minutes=10,
+    )
+
+    stations = {
+        station["component_id"]: station
+        for station in snapshot["pipeline"]["stations"]  # type: ignore[index]
+    }
+
+    assert stations["observatory_admin"]["p95_latency_ms"] == 999.0
+    assert stations["scheduler_jobs"]["p95_latency_ms"] == 120.0
+    assert stations["model_embedding"]["p95_latency_ms"] == 340.0
+    assert stations["retrieval_indexing"]["p95_latency_ms"] == 340.0
+    assert stations["openclaw_live_capture"]["p95_latency_ms"] == 0.0
+
+
 def test_observatory_missing_object_read_model_uses_specific_reason_code() -> None:
     app = create_app(audit_store=MemoryAuditStore())
     route = _routes(app)[("/admin/api/v1/artifacts/{artifact_id}", "GET")]

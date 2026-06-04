@@ -274,7 +274,17 @@ export function AssemblyLine({ stations, edges, selectedId, onSelect }: Props) {
   );
 }
 
+function compactMetric(value: number, fractionDigits = 1) {
+  if (!Number.isFinite(value)) return "0";
+  return new Intl.NumberFormat("en", {
+    maximumFractionDigits: Math.abs(value) < 10 ? fractionDigits : 0,
+    notation: Math.abs(value) >= 10000 ? "compact" : "standard"
+  }).format(value);
+}
+
 function StationCard({ station }: { station: Station }) {
+  const activeFlow = Math.max(station.input_rate_1m, station.output_rate_1m);
+
   return (
     <div className="station-card">
       <div className="station-card__top">
@@ -287,15 +297,15 @@ function StationCard({ station }: { station: Station }) {
       <p>{station.purpose}</p>
       <div className="station-card__metrics">
         <span>
-          <strong>{station.input_rate_1m.toFixed(1)}</strong>
-          <small>in/min</small>
+          <strong>{compactMetric(activeFlow)}</strong>
+          <small>flow</small>
         </span>
         <span>
-          <strong>{station.queue_depth}</strong>
+          <strong>{compactMetric(station.queue_depth, 0)}</strong>
           <small>queued</small>
         </span>
         <span>
-          <strong>{station.p95_latency_ms.toFixed(0)}</strong>
+          <strong>{compactMetric(station.p95_latency_ms, 0)}</strong>
           <small>ms p95</small>
         </span>
       </div>

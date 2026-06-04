@@ -45,6 +45,26 @@ REQUIRED_METRICS_BY_FAMILY: dict[str, tuple[str, ...]] = {
     "observatory": ("sidecar_latency_ms",),
 }
 
+LATENCY_OPERATION_KINDS_BY_FAMILY: dict[str, tuple[str, ...]] = {
+    "ingest": ("plugin_capture", "ingest"),
+    "redaction": ("redaction",),
+    "evidence": ("evidence", "memory"),
+    "retrieval": ("retrieval", "embedding_call"),
+    "broker": ("broker",),
+    "topology": ("evolution",),
+    "skills": ("compiler",),
+    "artifact": ("compiler",),
+    "context": ("compiler",),
+    "scanner": ("scanner",),
+    "evaluator": ("evaluator",),
+    "writer": ("writer",),
+    "lifecycle": ("archive", "promotion"),
+    "rollback": ("rollback",),
+    "jobs": ("scheduler", "job"),
+    "profiles": ("llm_call", "embedding_call"),
+    "audit": ("tool_attribution",),
+}
+
 
 @dataclass(frozen=True)
 class StationDefinition:
@@ -854,9 +874,7 @@ def _component_snapshot(
     queued_jobs = int(jobs.get("queued") or 0)
     leased_jobs = int(jobs.get("leased") or 0)
     job_backlog = queued_jobs + leased_jobs
-    latency = _dict(metrics.get("sidecar_latency_ms"))
-    p95_latency = float(latency.get("p95") or 0.0)
-    p50_latency = float(latency.get("avg") or 0.0)
+    p50_latency, p95_latency = _component_latency_ms(station.metric_family, metrics)
 
     if station.metric_family == "ingest":
         ingest = _dict(metrics.get("ingest"))
@@ -1741,6 +1759,32 @@ def _nested_total(value: dict[str, Any]) -> int:
         else:
             total += int(item or 0)
     return total
+
+
+def _component_latency_ms(metric_family: str, metrics: dict[str, Any]) -> tuple[float, float]:
+    if metric_family == "observatory":
+        latency = _dict(metrics.get("sidecar_latency_ms"))
+        return float(latency.get("avg") or 0.0), float(latency.get("p95") or 0.0)
+
+    latency_by_kind = _dict(metrics.get("latency_by_operation_kind"))
+    selected = [
+        _dict(latency_by_kind.get(operation_kind))
+        for operation_kind in LATENCY_OPERATION_KINDS_BY_FAMILY.get(metric_family, ())
+        if isinstance(latency_by_kind.get(operation_kind), dict)
+    ]
+    if not selected:
+        return 0.0, 0.0
+
+    span_count = sum(int(item.get("span_count") or 0) for item in selected)
+    if span_count:
+        avg_latency = sum(
+            float(item.get("avg") or 0.0) * int(item.get("span_count") or 0)
+            for item in selected
+        ) / span_count
+    else:
+        avg_latency = max(float(item.get("avg") or 0.0) for item in selected)
+    p95_latency = max(float(item.get("p95") or 0.0) for item in selected)
+    return avg_latency, p95_latency
 
 
 def _evaluation_failure_count(counts: dict[str, Any]) -> int:

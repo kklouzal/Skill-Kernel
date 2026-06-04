@@ -477,6 +477,30 @@ class AsyncpgObservabilityStore(AsyncpgPoolOwner):
                 workspace_id,
                 bounded_window,
             )
+            latency_by_kind_rows = await conn.fetch(
+                """
+                SELECT
+                  operation_kind,
+                  count(*)::int AS span_count,
+                  COALESCE(avg(EXTRACT(epoch FROM ended_at - started_at) * 1000), 0)
+                    ::double precision AS avg_ms,
+                  COALESCE(
+                    percentile_cont(0.95) WITHIN GROUP (
+                      ORDER BY EXTRACT(epoch FROM ended_at - started_at) * 1000
+                    ),
+                    0
+                  )::double precision AS p95_ms,
+                  COALESCE(max(EXTRACT(epoch FROM ended_at - started_at) * 1000), 0)
+                    ::double precision AS max_ms
+                FROM autoskill.trace_spans
+                WHERE ($1::uuid IS NULL OR workspace_id = $1)
+                  AND ended_at IS NOT NULL
+                  AND started_at >= now() - ($2::int * interval '1 minute')
+                GROUP BY operation_kind
+                """,
+                workspace_id,
+                bounded_window,
+            )
             job_status_rows = await conn.fetch(
                 """
                 SELECT status, count(*)::int AS count
@@ -718,6 +742,7 @@ class AsyncpgObservabilityStore(AsyncpgPoolOwner):
             ingest=dict(ingest or {}),
             redaction_counts=_counts(redaction_rows, "redaction_state"),
             latency=dict(latency or {}),
+            latency_by_operation_kind=_latency_by_operation_kind(latency_by_kind_rows),
             job_status_counts=_counts(job_status_rows, "status"),
             job_kind_counts=_nested_counts(job_kind_rows, "job_kind", "status"),
             embedding_backlog=dict(embedding_backlog or {}),
@@ -827,6 +852,7 @@ def _empty_operator_metrics(
         ingest={"events_in_window": 0, "total_events": 0},
         redaction_counts={},
         latency={"span_count": 0, "avg_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0},
+        latency_by_operation_kind={},
         job_status_counts={},
         job_kind_counts={},
         embedding_backlog={
@@ -867,6 +893,7 @@ def _operator_metrics_payload(
     ingest: dict[str, Any],
     redaction_counts: dict[str, int],
     latency: dict[str, Any],
+    latency_by_operation_kind: dict[str, dict[str, Any]],
     job_status_counts: dict[str, int],
     job_kind_counts: dict[str, dict[str, int]],
     embedding_backlog: dict[str, Any],
@@ -913,6 +940,7 @@ def _operator_metrics_payload(
             "p95": float(latency.get("p95_ms") or 0.0),
             "max": float(latency.get("max_ms") or 0.0),
         },
+        "latency_by_operation_kind": latency_by_operation_kind,
         "spool_backlog": {
             "status": "plugin_diagnostics_required",
             "reason": "plugin spool files are outside sidecar database visibility",
@@ -1015,6 +1043,18 @@ def _nested_counts(
         inner = str(row[inner_key])
         counts.setdefault(outer, {})[inner] = int(row["count"])
     return counts
+
+
+def _latency_by_operation_kind(rows: list[asyncpg.Record]) -> dict[str, dict[str, Any]]:
+    return {
+        str(row["operation_kind"]): {
+            "span_count": int(row["span_count"] or 0),
+            "avg": float(row["avg_ms"] or 0.0),
+            "p95": float(row["p95_ms"] or 0.0),
+            "max": float(row["max_ms"] or 0.0),
+        }
+        for row in rows
+    }
 
 
 def _int_dict(values: dict[str, Any]) -> dict[str, int]:
