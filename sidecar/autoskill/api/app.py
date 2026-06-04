@@ -5310,6 +5310,63 @@ def create_app(
                 detail=f"{object_label} not found",
             ) from exc
 
+    def _is_threshold_deadlock_decision(record: Any) -> bool:
+        return (
+            record.dominant_reason_code == "threshold_deadlock"
+            or record.soft_threshold_state == "threshold_deadlock_candidate"
+        )
+
+    def _threshold_deadlock_payload(record: Any) -> dict[str, Any]:
+        decision = record.to_json()
+        return {
+            "schema_version": "skillkernel.observatory.threshold-deadlock.v1",
+            "object_type": "threshold_deadlock",
+            "object_id": str(record.decision_id),
+            "decision_id": str(record.decision_id),
+            "workspace_id": record.workspace_key,
+            "decision_family": record.decision_family,
+            "target": decision["target"],
+            "action_risk_tier": record.action_risk_tier,
+            "hard_invariant_state": record.hard_invariant_state,
+            "soft_threshold_state": record.soft_threshold_state,
+            "selected_action": record.selected_action,
+            "confidence_band": record.confidence_band,
+            "evidence_fidelity": record.evidence_fidelity,
+            "autonomy_support_state": record.autonomy_support_state,
+            "dominant_reason_code": record.dominant_reason_code,
+            "autonomy_decision": decision,
+            "diagnostics": {
+                "read_model": "admin_autonomy_decision_status",
+                "derived_from_object_type": "autonomy_decision",
+                "derived_from_object_id": str(record.decision_id),
+                "threshold_deadlock_candidate": True,
+                "raw_content_available": False,
+                "safe_next_action": "inspect_adjudication_and_collect_more_evidence",
+            },
+            "provenance": {
+                "upstream": [
+                    {
+                        "object_type": "autonomy_decision",
+                        "object_id": str(record.decision_id),
+                        "relationship": "source_decision_status",
+                    },
+                    {
+                        "object_type": record.target_kind,
+                        "object_id": record.target_id,
+                        "relationship": "decision_target",
+                    },
+                ],
+                "downstream": [],
+            },
+            "created_at": record.created_at.isoformat(),
+            "updated_at": record.updated_at.isoformat(),
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "threshold-deadlock-status-read-model",
+                "redaction_state": "status_only",
+            },
+        }
+
     def _event_microscope(record: Any) -> dict[str, Any]:
         payload = record.to_json()
         upstream = []
@@ -6941,10 +6998,9 @@ def create_app(
             limit=500,
         )
         deadlocks = [
-            record.to_json()
+            _threshold_deadlock_payload(record)
             for record in records
-            if record.dominant_reason_code == "threshold_deadlock"
-            or record.soft_threshold_state == "threshold_deadlock_candidate"
+            if _is_threshold_deadlock_decision(record)
         ]
         return _observatory_collection(
             object_type="threshold_deadlock",
@@ -6959,6 +7015,25 @@ def create_app(
                 "raw_content_available": False,
             },
         )
+
+    @app.get(
+        "/admin/api/v1/autonomy/threshold-deadlocks/{decision_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_threshold_deadlock_detail(
+        decision_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_id = _uuid_or_404(decision_id, "threshold deadlock")
+        record = await observatory_admin.get_autonomy_decision(decision_id=parsed_id)
+        if record is None or not _is_threshold_deadlock_decision(record):
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="threshold deadlock not found",
+            )
+        return ObservatoryObjectResponse(object=_threshold_deadlock_payload(record))
 
     @app.get("/admin/api/v1/escalations", response_model=ObservatoryCollectionResponse)
     async def observatory_administrative_escalations(
@@ -7060,6 +7135,15 @@ def create_app(
             )
             if decision is not None:
                 return ObservatoryObjectResponse(object=decision.to_json())
+        if object_type in {"threshold_deadlock", "threshold-deadlock"}:
+            decision_id = _uuid_or_404(object_id, "threshold deadlock")
+            decision = await observatory_admin.get_autonomy_decision(
+                decision_id=decision_id
+            )
+            if decision is not None and _is_threshold_deadlock_decision(decision):
+                return ObservatoryObjectResponse(
+                    object=_threshold_deadlock_payload(decision)
+                )
         if object_type in {"semantic_adjudication", "adjudication"}:
             adjudication_id = _uuid_or_404(object_id, "semantic adjudication")
             adjudication = await observatory_admin.get_semantic_adjudication(

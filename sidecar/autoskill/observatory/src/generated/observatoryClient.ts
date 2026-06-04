@@ -35,6 +35,7 @@ export const OBSERVATORY_ROUTE_PATHS = [
   "/autonomy/decisions",
   "/autonomy/decisions/{decision_id}",
   "/autonomy/threshold-deadlocks",
+  "/autonomy/threshold-deadlocks/{decision_id}",
   "/broker/decisions",
   "/broker/decisions/{decision_id}",
   "/broker/replay-episodes",
@@ -97,7 +98,7 @@ export const OBSERVATORY_ROUTE_PATHS = [
   "/traces/{trace_id}"
 ] as const;
 
-export type ObservatoryRoutePath = "/actions" | "/actions/audit" | "/actions/audit/verify-chain" | "/actions/audit/{action_id}" | "/actions/broker/calibrate" | "/actions/candidates/{id}/quarantine" | "/actions/embedding-profile/qualify" | "/actions/evaluations/{id}/rerun" | "/actions/historical/discover-dry-run" | "/actions/historical/import" | "/actions/jobs/{id}/cancel" | "/actions/jobs/{id}/retry" | "/actions/model-profile/qualify" | "/actions/observatory/refresh-read-models" | "/actions/observatory/verify-live-stream" | "/actions/revocation/revoke-source" | "/actions/scanner/rescan" | "/actions/schedules/{id}/pause" | "/actions/schedules/{id}/resume" | "/actions/skills/{id}/freeze" | "/actions/skills/{id}/rollback" | "/actions/skills/{id}/unfreeze" | "/actions/storage/health-check" | "/actions/storage/retention-dry-run" | "/adjudications" | "/adjudications/{adjudication_run_id}" | "/artifacts/{artifact_id}" | "/audit" | "/autonomy/decisions" | "/autonomy/decisions/{decision_id}" | "/autonomy/threshold-deadlocks" | "/broker/decisions" | "/broker/decisions/{decision_id}" | "/broker/replay-episodes" | "/broker/replay-episodes/{episode_id}" | "/candidates" | "/candidates/{candidate_id}" | "/comparisons" | "/comparisons/query" | "/components" | "/components/{component_id}" | "/components/{component_id}/metrics" | "/config" | "/config/effective" | "/context/artifacts" | "/control-flow/events" | "/control-flow/events/{control_flow_event_id}" | "/diagnostics/bundles" | "/diagnostics/bundles/{bundle_id}" | "/embedding-profile" | "/escalations" | "/escalations/{event_id}" | "/evaluations" | "/evaluations/{evaluation_id}" | "/events" | "/evidence/fidelity" | "/evidence/fidelity/{fidelity_id}" | "/health/live" | "/health/ready" | "/historical/imports" | "/historical/imports/{historical_import_id}" | "/invariants" | "/issues" | "/issues/{issue_id}" | "/jobs" | "/jobs/{job_id}" | "/memory/quarantine" | "/memory/quarantine/{quarantine_id}" | "/model-profile" | "/objects/{object_type}/{object_id}" | "/observatory" | "/pipeline" | "/playbooks" | "/playbooks/{playbook_id}" | "/raw-vault/summary" | "/reason-codes" | "/replay/traces/{trace_id}" | "/scanner-findings" | "/schedules" | "/search" | "/skills" | "/skills/{skill_id}" | "/skills/{skill_id}/versions/{version_id}" | "/storage" | "/subsystems" | "/subsystems/{subsystem_id}" | "/summary" | "/topology" | "/topology/operations/{operation_id}" | "/traces" | "/traces/{trace_id}";
+export type ObservatoryRoutePath = "/actions" | "/actions/audit" | "/actions/audit/verify-chain" | "/actions/audit/{action_id}" | "/actions/broker/calibrate" | "/actions/candidates/{id}/quarantine" | "/actions/embedding-profile/qualify" | "/actions/evaluations/{id}/rerun" | "/actions/historical/discover-dry-run" | "/actions/historical/import" | "/actions/jobs/{id}/cancel" | "/actions/jobs/{id}/retry" | "/actions/model-profile/qualify" | "/actions/observatory/refresh-read-models" | "/actions/observatory/verify-live-stream" | "/actions/revocation/revoke-source" | "/actions/scanner/rescan" | "/actions/schedules/{id}/pause" | "/actions/schedules/{id}/resume" | "/actions/skills/{id}/freeze" | "/actions/skills/{id}/rollback" | "/actions/skills/{id}/unfreeze" | "/actions/storage/health-check" | "/actions/storage/retention-dry-run" | "/adjudications" | "/adjudications/{adjudication_run_id}" | "/artifacts/{artifact_id}" | "/audit" | "/autonomy/decisions" | "/autonomy/decisions/{decision_id}" | "/autonomy/threshold-deadlocks" | "/autonomy/threshold-deadlocks/{decision_id}" | "/broker/decisions" | "/broker/decisions/{decision_id}" | "/broker/replay-episodes" | "/broker/replay-episodes/{episode_id}" | "/candidates" | "/candidates/{candidate_id}" | "/comparisons" | "/comparisons/query" | "/components" | "/components/{component_id}" | "/components/{component_id}/metrics" | "/config" | "/config/effective" | "/context/artifacts" | "/control-flow/events" | "/control-flow/events/{control_flow_event_id}" | "/diagnostics/bundles" | "/diagnostics/bundles/{bundle_id}" | "/embedding-profile" | "/escalations" | "/escalations/{event_id}" | "/evaluations" | "/evaluations/{evaluation_id}" | "/events" | "/evidence/fidelity" | "/evidence/fidelity/{fidelity_id}" | "/health/live" | "/health/ready" | "/historical/imports" | "/historical/imports/{historical_import_id}" | "/invariants" | "/issues" | "/issues/{issue_id}" | "/jobs" | "/jobs/{job_id}" | "/memory/quarantine" | "/memory/quarantine/{quarantine_id}" | "/model-profile" | "/objects/{object_type}/{object_id}" | "/observatory" | "/pipeline" | "/playbooks" | "/playbooks/{playbook_id}" | "/raw-vault/summary" | "/reason-codes" | "/replay/traces/{trace_id}" | "/scanner-findings" | "/schedules" | "/search" | "/skills" | "/skills/{skill_id}" | "/skills/{skill_id}/versions/{version_id}" | "/storage" | "/subsystems" | "/subsystems/{subsystem_id}" | "/summary" | "/topology" | "/topology/operations/{operation_id}" | "/traces" | "/traces/{trace_id}";
 export type ObservatoryHttpMethod = "GET" | "POST";
 
 export type ObservatoryRoute = {
@@ -324,6 +325,13 @@ export const OBSERVATORY_ROUTES = [
     "operationId": "observatory_threshold_deadlocks_admin_api_v1_autonomy_threshold_deadlocks_get",
     "path": "/autonomy/threshold-deadlocks",
     "summary": "Observatory Threshold Deadlocks",
+    "tags": []
+  },
+  {
+    "method": "GET",
+    "operationId": "observatory_threshold_deadlock_detail_admin_api_v1_autonomy_threshold_deadlocks__decision_id__get",
+    "path": "/autonomy/threshold-deadlocks/{decision_id}",
+    "summary": "Observatory Threshold Deadlock Detail",
     "tags": []
   },
   {

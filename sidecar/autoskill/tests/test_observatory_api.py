@@ -901,6 +901,7 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/autonomy/decisions", "GET"),
         ("/admin/api/v1/autonomy/decisions/{decision_id}", "GET"),
         ("/admin/api/v1/autonomy/threshold-deadlocks", "GET"),
+        ("/admin/api/v1/autonomy/threshold-deadlocks/{decision_id}", "GET"),
         ("/admin/api/v1/escalations", "GET"),
         ("/admin/api/v1/escalations/{event_id}", "GET"),
         ("/admin/api/v1/components", "GET"),
@@ -1092,6 +1093,9 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
         deadlocks = await routes[
             ("/admin/api/v1/autonomy/threshold-deadlocks", "GET")
         ].endpoint(workspace_id="dev-01", limit=10)
+        deadlock_detail = await routes[
+            ("/admin/api/v1/autonomy/threshold-deadlocks/{decision_id}", "GET")
+        ].endpoint(decision_id=str(decision_id))
         decision_detail = await routes[
             ("/admin/api/v1/autonomy/decisions/{decision_id}", "GET")
         ].endpoint(decision_id=str(decision_id))
@@ -1110,6 +1114,13 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             object_id=str(decision_id),
             workspace_id="dev-01",
         )
+        deadlock_object_detail = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="threshold_deadlock",
+            object_id=str(decision_id),
+            workspace_id="dev-01",
+        )
         fidelity_detail = await routes[
             ("/admin/api/v1/evidence/fidelity/{fidelity_id}", "GET")
         ].endpoint(
@@ -1122,10 +1133,12 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             adjudication_detail,
             decisions,
             deadlocks,
+            deadlock_detail,
             decision_detail,
             escalations,
             escalation_detail,
             object_detail,
+            deadlock_object_detail,
             fidelity_detail,
         )
 
@@ -1136,10 +1149,12 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
         adjudication_detail,
         decisions,
         deadlocks,
+        deadlock_detail,
         decision_detail,
         escalations,
         escalation_detail,
         object_detail,
+        deadlock_object_detail,
         fidelity_detail,
     ) = asyncio.run(run())
 
@@ -1162,7 +1177,16 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
     assert decision_item["selected_action"] == "run_more_probes"
     assert decision_detail.object["hard_invariant_state"] == "passed"
     assert object_detail.object["object_type"] == "autonomy_decision"
+    assert deadlocks.collection["items"][0]["object_type"] == "threshold_deadlock"
     assert deadlocks.collection["items"][0]["object_id"] == str(decision_id)
+    assert deadlock_detail.object["autonomy_decision"]["object_type"] == (
+        "autonomy_decision"
+    )
+    assert deadlock_detail.object["diagnostics"]["safe_next_action"] == (
+        "inspect_adjudication_and_collect_more_evidence"
+    )
+    assert deadlock_detail.object["content_policy"]["raw_available"] is False
+    assert deadlock_object_detail.object["object_type"] == "threshold_deadlock"
 
     escalation_item = escalations.collection["items"][0]
     assert escalation_item["hard_boundary_kind"] == "raw_reveal_requested"

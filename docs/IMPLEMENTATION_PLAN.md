@@ -1025,6 +1025,19 @@ Acceptance:
   --check`, and a real compose/Postgres smoke that applied migrations,
   inserted/listed/detail-read the four read-model families, and deleted smoke
   rows.
+- validation evidence for the Observatory threshold-deadlock detail slice
+  passed on the final tree: `/admin/api/v1/autonomy/threshold-deadlocks/{decision_id}`
+  now exposes a first-class content-safe threshold-deadlock object derived from
+  `admin_autonomy_decision_status`, and the generic object microscope resolves
+  `threshold_deadlock` aliases to the same payload with autonomy-decision
+  provenance, safe-next-action diagnostics, and raw-content-disabled policy.
+  This advances Observatory Sections 7.6, 7.7, 8.5.3, 12.1, and 12.6 without
+  mutation authority. Focused validation passed with Observatory API tests
+  (`38 passed`), generated OpenAPI client `--check`, `uv run ruff check
+  sidecar`, `uv run pytest` (`368 passed`), `uv run python -m compileall -q
+  sidecar`, `npm run build --prefix sidecar/autoskill/observatory`, `docker
+  compose config --quiet`, `git diff --check`, and the Observatory acceptance
+  report (`86` satisfied, `0` validation errors).
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and
