@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 8757",
     "generate:api": "python ../../../scripts/generate_observatory_openapi_client.py",
+    "fixtures:check": "python ../../../scripts/autoskill_observatory_fixtures.py --check",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 8757"
   },

@@ -118,6 +118,12 @@ Regenerate the Observatory frontend admin API route client from FastAPI OpenAPI:
 python scripts/generate_observatory_openapi_client.py
 ```
 
+Validate the deterministic Observatory E2E/load/visual fixture catalog:
+
+```bash
+python scripts/autoskill_observatory_fixtures.py --check
+```
+
 Emit the Section 32/33 risk and developer handoff crosswalk:
 
 ```bash

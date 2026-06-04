@@ -9,6 +9,7 @@ SCRIPT_PATH = (
 )
 REPO_ROOT = SCRIPT_PATH.parents[1]
 CLIENT_GENERATOR_PATH = REPO_ROOT / "scripts" / "generate_observatory_openapi_client.py"
+FIXTURE_GENERATOR_PATH = REPO_ROOT / "scripts" / "autoskill_observatory_fixtures.py"
 SPEC = importlib.util.spec_from_file_location("autoskill_observatory_acceptance", SCRIPT_PATH)
 assert SPEC is not None
 observatory_acceptance = importlib.util.module_from_spec(SPEC)
@@ -25,6 +26,16 @@ client_generator = importlib.util.module_from_spec(CLIENT_GENERATOR_SPEC)
 assert CLIENT_GENERATOR_SPEC.loader is not None
 sys.modules[CLIENT_GENERATOR_SPEC.name] = client_generator
 CLIENT_GENERATOR_SPEC.loader.exec_module(client_generator)
+
+FIXTURE_GENERATOR_SPEC = importlib.util.spec_from_file_location(
+    "autoskill_observatory_fixtures",
+    FIXTURE_GENERATOR_PATH,
+)
+assert FIXTURE_GENERATOR_SPEC is not None
+fixture_generator = importlib.util.module_from_spec(FIXTURE_GENERATOR_SPEC)
+assert FIXTURE_GENERATOR_SPEC.loader is not None
+sys.modules[FIXTURE_GENERATOR_SPEC.name] = fixture_generator
+FIXTURE_GENERATOR_SPEC.loader.exec_module(fixture_generator)
 
 
 def test_observatory_acceptance_report_maps_ui_spec_and_checklist() -> None:
@@ -104,3 +115,21 @@ def test_observatory_guarded_action_dialog_is_present() -> None:
     assert "aria-modal" in app_source
     assert "Confirm dry-run" in app_source
     assert "action-dialog" in styles
+
+
+def test_observatory_e2e_load_and_visual_fixtures_are_fresh() -> None:
+    fixture_path = (
+        REPO_ROOT / "sidecar/autoskill/observatory/fixtures/visual-regression-fixtures.json"
+    )
+    generated = fixture_path.read_text(encoding="utf-8")
+    expected = fixture_generator.render_json()
+    report = fixture_generator.build_fixture_report()
+
+    assert generated == expected
+    assert report["ready"] is True
+    assert report["summary"]["scenario_count"] == 11
+    assert report["summary"]["missing_visual_states"] == []
+    assert report["summary"]["high_load_skill_count"] >= 1000
+    assert fixture_generator.validate_fixture_report(report["fixtures"]) == []
+    assert all(fixture["e2e_journey"] for fixture in report["fixtures"])
+    assert all(fixture["visual_assertions"] for fixture in report["fixtures"])

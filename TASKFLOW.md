@@ -1240,6 +1240,16 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   gateway. Validation passed with focused pytest (`5 passed`), ruff,
   `npm run build --prefix sidecar/autoskill/observatory`, `git diff --check`,
   and the Observatory acceptance report showing `implemented_equivalent=2`.
+- Observatory E2E/load/visual fixture remediation is implemented for Sections
+  21.7, 21.40, 24.36, and 24.37: `scripts/autoskill_observatory_fixtures.py`
+  now generates and checks
+  `sidecar/autoskill/observatory/fixtures/visual-regression-fixtures.json`,
+  covering healthy/degraded/blocked/security/context-pressure/rollback/stale
+  telemetry/reduced-motion/low-power/WebGL-fallback/high-load-soak scenarios.
+  Validation passed with fixture `--check`, npm `fixtures:check`, focused
+  pytest (`6 passed`), ruff, `npm run build --prefix
+  sidecar/autoskill/observatory`, `git diff --check`, and the Observatory
+  acceptance report showing `implemented_equivalent=0`.
 
 ## Next Gates
 

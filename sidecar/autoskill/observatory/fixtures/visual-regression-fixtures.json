@@ -1,0 +1,364 @@
+{
+  "fixtures": [
+    {
+      "e2e_journey": [
+        "/admin/?view=overview",
+        "/admin/?view=workcells",
+        "/admin/?view=cockpit"
+      ],
+      "expected_health": "healthy",
+      "load_profile": {
+        "agents": 3,
+        "historical_imports": 2,
+        "skills": 64,
+        "transcript_months": 1
+      },
+      "operator_modes": {
+        "low_power": false,
+        "reduced_motion": false,
+        "webgl_available": true
+      },
+      "reason_codes": [],
+      "scenario_id": "healthy",
+      "title": "Nominal control-room overview",
+      "viewport": {
+        "height": 920,
+        "width": 1440
+      },
+      "visual_assertions": [
+        "all stations render custom cards",
+        "semantic edges remain labeled",
+        "issue board is empty or low-priority only"
+      ]
+    },
+    {
+      "e2e_journey": [
+        "/admin/?view=overview",
+        "/admin/?view=workcells&subsystem=control_storage"
+      ],
+      "expected_health": "degraded",
+      "load_profile": {
+        "agents": 5,
+        "historical_imports": 4,
+        "skills": 128,
+        "transcript_months": 2
+      },
+      "operator_modes": {
+        "low_power": false,
+        "reduced_motion": false,
+        "webgl_available": true
+      },
+      "reason_codes": [
+        "failed-jobs-present",
+        "read-model-stale"
+      ],
+      "scenario_id": "degraded",
+      "title": "Degraded queue and telemetry pressure",
+      "viewport": {
+        "height": 920,
+        "width": 1440
+      },
+      "visual_assertions": [
+        "degraded badges are visible",
+        "workcell bottleneck metrics remain legible"
+      ]
+    },
+    {
+      "e2e_journey": [
+        "/admin/?view=cockpit&station=scanner_security",
+        "/admin/?view=trace"
+      ],
+      "expected_health": "blocked",
+      "load_profile": {
+        "agents": 4,
+        "historical_imports": 3,
+        "skills": 96,
+        "transcript_months": 2
+      },
+      "operator_modes": {
+        "low_power": false,
+        "reduced_motion": false,
+        "webgl_available": true
+      },
+      "reason_codes": [
+        "activation-gate-blocked",
+        "scanner-blocking-finding"
+      ],
+      "scenario_id": "blocked",
+      "title": "Blocked activation and mutation gate",
+      "viewport": {
+        "height": 860,
+        "width": 1280
+      },
+      "visual_assertions": [
+        "blocked halo outranks degraded styling",
+        "supporting records stay redacted"
+      ]
+    },
+    {
+      "e2e_journey": [
+        "/admin/?view=admin",
+        "/admin/?view=cockpit&station=operator_action_gateway"
+      ],
+      "expected_health": "blocked",
+      "load_profile": {
+        "agents": 3,
+        "historical_imports": 2,
+        "skills": 80,
+        "transcript_months": 1
+      },
+      "operator_modes": {
+        "low_power": false,
+        "reduced_motion": false,
+        "webgl_available": true
+      },
+      "reason_codes": [
+        "raw-content-denied",
+        "csrf-required",
+        "audit-chain-warning"
+      ],
+      "scenario_id": "security",
+      "title": "Security and raw-content guardrail",
+      "viewport": {
+        "height": 900,
+        "width": 1366
+      },
+      "visual_assertions": [
+        "action dialog is modal",
+        "raw-content controls remain audited"
+      ]
+    },
+    {
+      "e2e_journey": [
+        "/admin/?view=skills",
+        "/admin/?view=cockpit&station=context_compiler"
+      ],
+      "expected_health": "degraded",
+      "load_profile": {
+        "agents": 6,
+        "historical_imports": 6,
+        "skills": 220,
+        "transcript_months": 3
+      },
+      "operator_modes": {
+        "low_power": false,
+        "reduced_motion": false,
+        "webgl_available": true
+      },
+      "reason_codes": [
+        "context-token-pressure",
+        "ignored-skill-load"
+      ],
+      "scenario_id": "context_pressure",
+      "title": "Context token pressure and ignored-load state",
+      "viewport": {
+        "height": 920,
+        "width": 1440
+      },
+      "visual_assertions": [
+        "token budget panels show pressure",
+        "skill detail keeps budget evidence visible"
+      ]
+    },
+    {
+      "e2e_journey": [
+        "/admin/?view=cockpit&station=canary_rollback",
+        "/admin/?view=trace"
+      ],
+      "expected_health": "frozen",
+      "load_profile": {
+        "agents": 4,
+        "historical_imports": 3,
+        "skills": 120,
+        "transcript_months": 2
+      },
+      "operator_modes": {
+        "low_power": false,
+        "reduced_motion": false,
+        "webgl_available": true
+      },
+      "reason_codes": [
+        "canary-critical-failure",
+        "rollback-queued"
+      ],
+      "scenario_id": "rollback_freeze",
+      "title": "Frozen skill with rollback evidence",
+      "viewport": {
+        "height": 920,
+        "width": 1440
+      },
+      "visual_assertions": [
+        "freeze state is visually distinct",
+        "rollback links preserve object refs"
+      ]
+    },
+    {
+      "e2e_journey": [
+        "/admin/?view=overview",
+        "/admin/?view=admin"
+      ],
+      "expected_health": "unknown",
+      "load_profile": {
+        "agents": 4,
+        "historical_imports": 4,
+        "skills": 100,
+        "transcript_months": 2
+      },
+      "operator_modes": {
+        "low_power": false,
+        "reduced_motion": false,
+        "webgl_available": true
+      },
+      "reason_codes": [
+        "telemetry-stale",
+        "missing-required-signal"
+      ],
+      "scenario_id": "stale_telemetry",
+      "title": "Stale live stream and partial telemetry",
+      "viewport": {
+        "height": 860,
+        "width": 1280
+      },
+      "visual_assertions": [
+        "green health is not shown for missing signals",
+        "freshness badges are visible"
+      ]
+    },
+    {
+      "e2e_journey": [
+        "/admin/?view=overview",
+        "/admin/?view=trace"
+      ],
+      "expected_health": "degraded",
+      "load_profile": {
+        "agents": 3,
+        "historical_imports": 2,
+        "skills": 90,
+        "transcript_months": 1
+      },
+      "operator_modes": {
+        "low_power": false,
+        "reduced_motion": true,
+        "webgl_available": true
+      },
+      "reason_codes": [
+        "reduced-motion-enabled"
+      ],
+      "scenario_id": "reduced_motion",
+      "title": "Reduced-motion operator mode",
+      "viewport": {
+        "height": 768,
+        "width": 1024
+      },
+      "visual_assertions": [
+        "particle layer is disabled",
+        "station and edge information remains complete"
+      ]
+    },
+    {
+      "e2e_journey": [
+        "/admin/?view=overview",
+        "/admin/?view=workcells"
+      ],
+      "expected_health": "degraded",
+      "load_profile": {
+        "agents": 2,
+        "historical_imports": 1,
+        "skills": 72,
+        "transcript_months": 1
+      },
+      "operator_modes": {
+        "low_power": true,
+        "reduced_motion": true,
+        "webgl_available": false
+      },
+      "reason_codes": [
+        "low-power-mode"
+      ],
+      "scenario_id": "low_power",
+      "title": "Low-power dense dashboard mode",
+      "viewport": {
+        "height": 844,
+        "width": 390
+      },
+      "visual_assertions": [
+        "mobile layout does not overlap controls",
+        "charts collapse below the graph"
+      ]
+    },
+    {
+      "e2e_journey": [
+        "/admin/?view=overview"
+      ],
+      "expected_health": "healthy",
+      "load_profile": {
+        "agents": 3,
+        "historical_imports": 2,
+        "skills": 64,
+        "transcript_months": 1
+      },
+      "operator_modes": {
+        "low_power": false,
+        "reduced_motion": false,
+        "webgl_available": false
+      },
+      "reason_codes": [
+        "webgl-unavailable"
+      ],
+      "scenario_id": "webgl_fallback",
+      "title": "WebGL unavailable visual fallback",
+      "viewport": {
+        "height": 900,
+        "width": 1366
+      },
+      "visual_assertions": [
+        "graph remains the source of truth",
+        "data-backed effects are optional"
+      ]
+    },
+    {
+      "e2e_journey": [
+        "/admin/?view=overview",
+        "/admin/?view=skills",
+        "/admin/?view=trace"
+      ],
+      "expected_health": "degraded",
+      "load_profile": {
+        "agents": 24,
+        "historical_imports": 48,
+        "live_events": 250000,
+        "skills": 1600,
+        "transcript_months": 18
+      },
+      "operator_modes": {
+        "low_power": false,
+        "reduced_motion": false,
+        "webgl_available": true
+      },
+      "reason_codes": [
+        "storage-growth-watch",
+        "read-model-backpressure"
+      ],
+      "scenario_id": "high_load_soak",
+      "title": "High-load soak history",
+      "viewport": {
+        "height": 1080,
+        "width": 1920
+      },
+      "visual_assertions": [
+        "bounded collection limits prevent unbounded fetches",
+        "overview remains useful with large skill libraries",
+        "trace replay list remains paginated"
+      ]
+    }
+  ],
+  "ready": true,
+  "schema": "autoskill.observatory-fixtures.v1",
+  "summary": {
+    "high_load_skill_count": 1600,
+    "missing_visual_states": [],
+    "required_visual_states": 11,
+    "scenario_count": 11,
+    "validation_errors": []
+  }
+}

@@ -34,7 +34,7 @@ ACCEPTANCE_CRITERIA: tuple[ObservatoryItem, ...] = (
     ObservatoryItem("21.4", "The overview graph uses custom station cards, semantic edges, label chips, selected states, and theme alignment.", ("sidecar/autoskill/observatory/src/components/AssemblyLine.tsx", "sidecar/autoskill/observatory/src/styles.css")),
     ObservatoryItem("21.5", "The overview graph avoids default demo styling and is complete enough for the main control-room map.", ("custom React Flow edge renderer and station card styles", "overview centerpiece CSS in styles.css")),
     ObservatoryItem("21.6", "Visual effects are performance-safe, data-backed, adaptive, and optional.", ("sidecar/autoskill/observatory/src/components/ParticleLayer.tsx", "reducedMotion gate in App.tsx")),
-    ObservatoryItem("21.7", "Overview visual fixtures cover healthy, degraded, blocked, security, context-pressure, rollback/freeze, stale telemetry, reduced-motion, low-power, and WebGL fallback states.", ("build_observatory_snapshot component health tests", "stale telemetry and planned-evaluation tests in test_observatory_api.py", "reduced-motion and particle fallback frontend paths")),
+    ObservatoryItem("21.7", "Overview visual fixtures cover healthy, degraded, blocked, security, context-pressure, rollback/freeze, stale telemetry, reduced-motion, low-power, and WebGL fallback states.", ("sidecar/autoskill/observatory/fixtures/visual-regression-fixtures.json", "scripts/autoskill_observatory_fixtures.py", "stale telemetry and planned-evaluation tests in test_observatory_api.py", "reduced-motion and particle fallback frontend paths")),
     ObservatoryItem("21.8", "Each subsystem has an intermediate workcell lens.", ("SUBSYSTEMS in sidecar/autoskill/services/observatory.py", "Workcells component in App.tsx")),
     ObservatoryItem("21.9", "Each station has a drill-down cockpit with metrics, records, traces, config, audit, and help.", ("Cockpit tabs in App.tsx", "/admin/api/v1/components/{component_id} route")),
     ObservatoryItem("21.10", "The issue board surfaces actionable degraded, blocked, security, regression, freeze, stale telemetry, and data-quality conditions.", ("_issue_board in services/observatory.py", "test_observatory_stale_telemetry... coverage")),
@@ -67,7 +67,7 @@ ACCEPTANCE_CRITERIA: tuple[ObservatoryItem, ...] = (
     ObservatoryItem("21.37", "The overview graph passes the centerpiece rubric for finish, legibility, honesty, spatial memory, clutter control, performance, accessibility, and theme coherence.", ("custom ELK layout spacing and edge labels in AssemblyLine.tsx", "theme tokens in styles.css")),
     ObservatoryItem("21.38", "Every core topology, lifecycle, artifact, broker, scanner/evaluator, scheduler, and historical-ingestion state has a visible path from overview to object evidence.", ("24-station component map", "route inventory coverage in test_observatory_api.py")),
     ObservatoryItem("21.39", "The system triage summary identifies healthy, degraded, blocked, frozen, stale, and unknown states with reason codes and safe next actions.", ("fitness summary and issue board in services/observatory.py", "stale telemetry tests")),
-    ObservatoryItem("21.40", "Seeded high-load fixtures demonstrate Observatory remains effective for large deployments.", ("bounded pagination and storage_limit defaults", "operator metrics and high-count snapshot tests")),
+    ObservatoryItem("21.40", "Seeded high-load fixtures demonstrate Observatory remains effective for large deployments.", ("high_load_soak fixture in sidecar/autoskill/observatory/fixtures/visual-regression-fixtures.json", "bounded pagination and storage_limit defaults", "operator metrics and high-count snapshot tests")),
 )
 
 
@@ -107,8 +107,8 @@ DEVELOPER_CHECKLIST: tuple[ObservatoryItem, ...] = (
     ObservatoryItem("24.33", "Add PixiJS particle overlay.", ("ParticleLayer component",)),
     ObservatoryItem("24.34", "Add reduced-motion, low-power, keyboard, and accessibility modes.", ("reduced motion toggle and semantic controls",)),
     ObservatoryItem("24.35", "Add raw-content safeguards and browser security headers.", ("content policy fields and browser-session CSRF headers",)),
-    ObservatoryItem("24.36", "Add E2E tests and load fixtures.", ("bounded API route tests and high-count snapshot fixtures",), "implemented_equivalent"),
-    ObservatoryItem("24.37", "Add visual regression tests.", ("deterministic visual-state fixture coverage through snapshot tests",), "implemented_equivalent"),
+    ObservatoryItem("24.36", "Add E2E tests and load fixtures.", ("scripts/autoskill_observatory_fixtures.py", "sidecar/autoskill/observatory/fixtures/visual-regression-fixtures.json", "test_observatory_acceptance_report.py validates E2E journeys and high-load thresholds")),
+    ObservatoryItem("24.37", "Add visual regression tests.", ("deterministic visual-state fixture catalog in sidecar/autoskill/observatory/fixtures/visual-regression-fixtures.json", "test_observatory_acceptance_report.py validates required visual states and assertions")),
     ObservatoryItem("24.38", "Add documentation and operator runbook.", ("README Observatory commands and TASKFLOW ledger",)),
 )
 
