@@ -992,7 +992,9 @@ def _planning_priority(rollup: SkillUtilityRollupRecord) -> tuple[int, int, int,
     return (
         rollup.features.shadow_count,
         rollup.features.hurt_count,
-        rollup.features.ignored_load_count + rollup.features.false_positive_load_count,
+        rollup.features.ignored_load_count
+        + rollup.features.false_positive_load_count
+        + min(5, rollup.features.token_waste // 400),
         -rollup.utility_score,
     )
 
@@ -1000,6 +1002,11 @@ def _planning_priority(rollup: SkillUtilityRollupRecord) -> tuple[int, int, int,
 def _planning_action_for_rollup(rollup: SkillUtilityRollupRecord) -> tuple[str | None, str]:
     if rollup.features.shadow_count >= 2 and rollup.features.hurt_count >= 1:
         return "plan_split", "shadowing plus harm suggests unstable skill boundaries"
+    if _has_decomposition_grade_context_waste(rollup.features):
+        return (
+            "plan_split",
+            "material context waste suggests decomposing broad low-value runtime text",
+        )
     if rollup.features.shadow_count >= 2:
         return "plan_disambiguation_repair", "repeated shadowing requires boundary repair"
     if rollup.features.hurt_count >= 2:
@@ -1014,6 +1021,15 @@ def _planning_action_for_rollup(rollup: SkillUtilityRollupRecord) -> tuple[str |
             "context token outcomes show low or wasteful marginal value",
         )
     return None, ""
+
+
+def _has_decomposition_grade_context_waste(features: SkillUtilityFeatures) -> bool:
+    context_confusion = features.ignored_load_count + features.false_positive_load_count
+    if context_confusion >= 3 and features.token_waste >= 600:
+        return True
+    if features.false_positive_load_count >= 2 and features.token_waste >= 400:
+        return True
+    return features.context_value_per_token <= -0.02 and features.token_waste >= 900
 
 
 def _repair_proposal_for_rollup(
@@ -1079,6 +1095,7 @@ def _repair_objectives(action: str) -> list[str]:
             "separate broad behavior into narrower successor skills",
             "preserve subject effects through successor coverage",
             "reduce sibling shadowing under broker replay",
+            "reduce false-positive or ignored context loads from broad runtime text",
         ]
     if action == "plan_disambiguation_repair":
         return [

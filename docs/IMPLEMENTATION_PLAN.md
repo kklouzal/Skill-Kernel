@@ -420,8 +420,9 @@ Deliverables:
 - utility rollups; implemented as deterministic v1 rollups from attribution events, rendered retrieval counts, shadowing/hurt outcomes, and canary failures;
 - context-value utility signals; implemented by folding token-ledger marginal
   value, context-value-per-token, ignored/false-positive load counts, and token
-  waste into utility rollups, score computation, and guarded improvement
-  planning with an explicit context-value acceptance gate;
+  waste into utility rollups, score computation, guarded improvement planning,
+  and decomposition-grade context-waste planning with explicit context-value
+  acceptance gates;
 - usage/topology evidence aggregation; implemented as the `usage.aggregate`
   maintenance job, which mines content-safe retrieval and attribution rows into
   idempotent usage windows, co-use/sequence edges, and observed usage clusters
@@ -491,6 +492,10 @@ Acceptance:
   passed, `uv run ruff check sidecar`, `uv run pytest` with 256 tests, `uv run
   python -m compileall -q sidecar`, `npm test --prefix plugin/autoskill` with
   18 tests, and `git diff --check` passed.
+- validation evidence for decomposition-grade context-waste repair planning:
+  focused utility tests passed with `7 passed`, focused ruff checks passed, and
+  the final validation ladder for the committed slice recorded the exact full
+  gate results in `TASKFLOW.md`.
 - historical source-item lineage; implemented as v2 content-safe lineage
   metadata on every parsed historical chunk, including source-item locator hash,
   item-key hash, item kind, chunk kind/index, optional record index, and optional

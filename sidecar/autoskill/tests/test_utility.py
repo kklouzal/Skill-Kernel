@@ -121,7 +121,7 @@ def test_curation_plans_improvement_for_wasteful_context_value() -> None:
                     features=SkillUtilityFeatures(
                         context_value_per_token=-0.03,
                         ignored_load_count=2,
-                        token_waste=900,
+                        token_waste=300,
                     ),
                     computed_at=datetime.now().astimezone(),
                 )
@@ -137,6 +137,62 @@ def test_curation_plans_improvement_for_wasteful_context_value() -> None:
     assert "context_value" in proposal["planned_trials"]
     assert proposal["signals"]["context_value_per_token"] == -0.03
     assert proposal["acceptance_gate"]["context_value_per_token_non_negative"] is True
+
+
+def test_curation_plans_decomposition_for_material_context_waste() -> None:
+    class FakeConn:
+        async def fetchrow(self, _query, *_args):
+            return {
+                "curation_action_id": uuid4(),
+                "skill_id": _args[1],
+                "action": _args[2],
+                "status": _args[3],
+                "reason": _args[4],
+                "features": _args[5],
+                "created_at": datetime.now().astimezone(),
+            }
+
+    skill_id = uuid4()
+
+    async def run():
+        return await _plan_improvements_and_splits(
+            FakeConn(),
+            workspace_id=uuid4(),
+            rollups=[
+                SkillUtilityRollupRecord(
+                    skill_id=skill_id,
+                    workspace_id=None,
+                    workspace_key="dev-01",
+                    slug="broad-context-skill",
+                    lifecycle_state="active",
+                    utility_score=-0.6,
+                    features=SkillUtilityFeatures(
+                        context_value_per_token=-0.025,
+                        ignored_load_count=2,
+                        false_positive_load_count=1,
+                        token_waste=900,
+                    ),
+                    computed_at=datetime.now().astimezone(),
+                )
+            ],
+            max_actions=5,
+        )
+
+    actions = asyncio.run(run())
+
+    assert [action.action for action in actions] == ["plan_split"]
+    proposal = actions[0].features["repair_proposal"]
+    assert proposal["proposal_kind"] == "decompose"
+    assert proposal["reason"] == (
+        "material context waste suggests decomposing broad low-value runtime text"
+    )
+    assert "context_value" in proposal["planned_trials"]
+    assert "sibling" in proposal["planned_trials"]
+    assert (
+        "reduce false-positive or ignored context loads from broad runtime text"
+        in proposal["objectives"]
+    )
+    assert proposal["signals"]["token_waste"] == 900
 
 
 def test_curation_archive_helpers_move_active_files_to_archive(tmp_path) -> None:

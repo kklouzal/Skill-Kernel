@@ -1315,6 +1315,21 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   because this is a frontend/read-model consumption change over the already
   validated trace replay API.
 
+- Deterministic context-waste repair planning now distinguishes moderate
+  low-value context from decomposition-grade context bloat: curation still
+  plans guarded `improve` for repairable token waste, but repeated ignored/
+  false-positive context loads or materially negative context value with high
+  token waste now plan a propose-only `decompose` repair with sibling and
+  context-value trials. This advances core handoff Sections 11.13-11.15,
+  19.1-19.4, and 21.8 without writing runtime skills or bypassing evaluator,
+  scanner, context, or rollback gates. Focused validation passed with `uv run
+  pytest -q sidecar/autoskill/tests/test_utility.py` (`7 passed`) and `uv run
+  ruff check sidecar/autoskill/db/utility.py
+  sidecar/autoskill/tests/test_utility.py`; full validation passed with `uv run
+  ruff check sidecar`, `uv run pytest` (`351 passed`), `uv run python -m
+  compileall -q sidecar`, `docker compose config --quiet`, and `git diff
+  --check`.
+
 ## Next Gates
 
 1. Continue collecting sustained Dev-01 telemetry and add only distinct,
