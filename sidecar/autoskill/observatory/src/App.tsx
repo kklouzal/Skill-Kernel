@@ -945,6 +945,9 @@ function SkillsAndTopology({
   const contextForSkill = contextArtifacts.filter((artifact) =>
     selectedSkillId ? JSON.stringify(artifact).includes(selectedSkillId) : true
   );
+  const operationRows = topologyOperationRows(topology);
+  const trialRows = topologyTrialRows(topology);
+  const recentOperations = topologyRecentOperations(topology);
 
   return (
     <section className="topology-page">
@@ -1011,6 +1014,41 @@ function SkillsAndTopology({
           <div className="skill-evidence-grid">
             <section>
               <h3>Topology</h3>
+              <div className="topology-metrics-grid" aria-label="Topology operation metrics">
+                {operationRows.map((row) => (
+                  <div key={row.kind} className="topology-metric-card">
+                    <span>{row.kind}</span>
+                    <strong>{row.total}</strong>
+                    <small>{row.summary}</small>
+                  </div>
+                ))}
+              </div>
+              <div className="topology-trial-matrix" aria-label="Topology trial matrix">
+                {trialRows.length ? (
+                  trialRows.slice(0, 8).map((row) => (
+                    <div key={`${row.operationKind}-${row.trialKind}`}>
+                      <span>{row.operationKind}</span>
+                      <strong>{row.trialKind}</strong>
+                      <small>{row.summary}</small>
+                    </div>
+                  ))
+                ) : (
+                  <p>No topology trials are visible in the current read model.</p>
+                )}
+              </div>
+              <div className="topology-recent-operations" aria-label="Recent topology operations">
+                <strong>Recent Operations</strong>
+                {recentOperations.length ? (
+                  recentOperations.slice(0, 4).map((operation) => (
+                    <small key={String(operation.skill_graph_operation_id ?? JSON.stringify(operation))}>
+                      {String(operation.operation_kind ?? "unknown")} /{" "}
+                      {String(operation.status ?? "unknown")}
+                    </small>
+                  ))
+                ) : (
+                  <small>No recent SkillGraphIR operations.</small>
+                )}
+              </div>
               <Inspector value={topology ?? { state: "topology-read-model-unavailable" }} />
             </section>
             <section>
@@ -1030,6 +1068,49 @@ function SkillsAndTopology({
       </div>
     </section>
   );
+}
+
+function topologyOperationRows(topology?: Record<string, unknown>) {
+  const metrics = topology?.operation_metrics as Record<string, unknown> | undefined;
+  const operationsByKind = metrics?.operations_by_kind as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+  return ["create", "improve", "compose", "decompose"].map((kind) => {
+    const counts = operationsByKind?.[kind] ?? {};
+    const candidate = numericCount(counts.candidate);
+    const accepted = numericCount(counts.accepted);
+    const applied = numericCount(counts.applied);
+    const rolledBack = numericCount(counts.rolled_back);
+    return {
+      kind,
+      total: numericCount(counts.total),
+      summary: `${candidate} candidate, ${accepted} accepted, ${applied} applied, ${rolledBack} rolled back`
+    };
+  });
+}
+
+function topologyTrialRows(topology?: Record<string, unknown>) {
+  const metrics = topology?.operation_metrics as Record<string, unknown> | undefined;
+  const byOperation = metrics?.trials_by_operation_kind as
+    | Record<string, Record<string, Record<string, unknown>>>
+    | undefined;
+  return Object.entries(byOperation ?? {}).flatMap(([operationKind, trials]) =>
+    Object.entries(trials).map(([trialKind, counts]) => ({
+      operationKind,
+      trialKind,
+      summary: `${numericCount(counts.planned)} planned, ${numericCount(counts.passed)} passed, ${numericCount(counts.failed)} failed`
+    }))
+  );
+}
+
+function topologyRecentOperations(topology?: Record<string, unknown>) {
+  const metrics = topology?.operation_metrics as Record<string, unknown> | undefined;
+  const recent = metrics?.recent_operations;
+  return Array.isArray(recent) ? (recent as Array<Record<string, unknown>>) : [];
+}
+
+function numericCount(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function skillIdentifier(skill?: Record<string, unknown>) {

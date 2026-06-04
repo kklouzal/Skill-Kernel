@@ -141,6 +141,23 @@ def test_observatory_frontend_trace_replay_read_model_is_visible() -> None:
     assert "TraceReplayBadge" in types_source
 
 
+def test_observatory_frontend_topology_metrics_are_visible() -> None:
+    app_source = (
+        REPO_ROOT / "sidecar/autoskill/observatory/src/App.tsx"
+    ).read_text(encoding="utf-8")
+    styles = (
+        REPO_ROOT / "sidecar/autoskill/observatory/src/styles.css"
+    ).read_text(encoding="utf-8")
+
+    assert "topologyOperationRows" in app_source
+    assert "topologyTrialRows" in app_source
+    assert "Topology operation metrics" in app_source
+    assert "Topology trial matrix" in app_source
+    assert "Recent Operations" in app_source
+    assert "topology-metrics-grid" in styles
+    assert "topology-trial-matrix" in styles
+
+
 def test_observatory_guarded_action_dialog_is_present() -> None:
     app_source = (
         REPO_ROOT / "sidecar/autoskill/observatory/src/App.tsx"

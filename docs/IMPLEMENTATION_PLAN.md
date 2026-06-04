@@ -910,6 +910,16 @@ Acceptance:
   passed, and `git diff --check` passed. No compose/Postgres smoke was needed
   because this is a frontend/read-model consumption change over the already
   validated Trace Replay API.
+- validation evidence for the Observatory topology metrics read-model slice
+  passed on the final tree: `/admin/api/v1/topology` now includes content-safe
+  `topology_store.metrics` output for create/improve/compose/decompose
+  operation states, trial status matrices, and recent SkillGraphIR operations,
+  and the React Skills/Topology view renders those cockpit signals before the
+  raw inspector payload. This advances Observatory Sections 8.9, 9.3, 12.6, and
+  13.1 without adding any mutation path or exposing raw skill/evidence content.
+  Focused validation passed with the Observatory API/source assertions, `uv run
+  ruff check` on edited Python files, and the Observatory frontend build; final
+  validation evidence is recorded in `TASKFLOW.md`.
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and

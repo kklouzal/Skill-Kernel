@@ -910,6 +910,66 @@ h3 {
   gap: 12px;
 }
 
+.topology-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(96px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.topology-metric-card {
+  display: grid;
+  gap: 4px;
+  min-height: 92px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  background: var(--panel-2);
+}
+
+.topology-metric-card span,
+.topology-trial-matrix span,
+.topology-recent-operations strong {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.topology-metric-card strong {
+  font-size: 1.45rem;
+  line-height: 1.1;
+}
+
+.topology-metric-card small,
+.topology-trial-matrix small,
+.topology-recent-operations small {
+  color: var(--muted);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.topology-trial-matrix {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.topology-trial-matrix > div,
+.topology-recent-operations {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 6px;
+  padding: 9px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.topology-recent-operations {
+  margin-bottom: 10px;
+}
+
 .trace-layout {
   display: grid;
   grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
@@ -1290,6 +1350,8 @@ h3 {
   .admin-columns,
   .skill-layout,
   .skill-evidence-grid,
+  .topology-metrics-grid,
+  .topology-trial-matrix,
   .trace-layout,
   .replay-layout,
   .replay-evidence-grid,

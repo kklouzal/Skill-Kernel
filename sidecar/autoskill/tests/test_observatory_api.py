@@ -25,6 +25,7 @@ from autoskill.db.observability import (
 )
 from autoskill.db.observatory_admin import NullObservatoryAdminStore
 from autoskill.db.retrieval import RetrievalLog
+from autoskill.db.topology import NullTopologyStore
 from autoskill.services.observatory import build_live_envelope, build_observatory_snapshot
 from fastapi import HTTPException, Response
 
@@ -889,6 +890,53 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         "rollback-revokes-derived-data",
         "read-models-fresh",
     }.issubset(invariant_ids)
+
+
+def test_observatory_topology_exposes_operation_metrics_read_model() -> None:
+    topology = NullTopologyStore()
+
+    async def seed() -> None:
+        operation = await topology.record_operation(
+            workspace_key="dev-01",
+            operation_kind="decompose",
+            status="accepted",
+            subject_skill_ids=[uuid4()],
+            output_skill_ids=[uuid4(), uuid4()],
+            effect_coverage={"context_value_gate": "passed"},
+            trial_summary={"decision": "split broad context"},
+        )
+        await topology.record_planned_trial(
+            workspace_key="dev-01",
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+            trial_kind="context_value",
+            objective="successors preserve utility while lowering token waste",
+            expected={"token_waste_reduction": True},
+            status="passed",
+        )
+
+    asyncio.run(seed())
+    app = create_app(topology_store=topology, audit_store=MemoryAuditStore())
+    route = next(route for route in app.routes if route.path == "/admin/api/v1/topology")
+
+    async def run():
+        return await route.endpoint(
+            authorization=None,
+            x_skillkernel_roles=None,
+            workspace_id="dev-01",
+            window_minutes=60,
+            limit=10,
+        )
+
+    response = asyncio.run(run())
+    payload = response.object
+    metrics = payload["operation_metrics"]
+
+    assert payload["read_model"]["source"] == "topology_store.metrics"
+    assert payload["content_policy"]["raw_available"] is False
+    assert metrics["operations_by_kind"]["decompose"]["accepted"] == 1
+    assert metrics["operations_by_kind"]["create"]["total"] == 0
+    assert metrics["trials_by_operation_kind"]["decompose"]["context_value"]["passed"] == 1
+    assert metrics["recent_operations"][0]["operation_kind"] == "decompose"
 
 
 def test_observatory_broker_decisions_use_content_safe_retrieval_logs() -> None:

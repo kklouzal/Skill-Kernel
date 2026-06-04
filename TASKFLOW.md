@@ -1329,6 +1329,21 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   ruff check sidecar`, `uv run pytest` (`351 passed`), `uv run python -m
   compileall -q sidecar`, `docker compose config --quiet`, and `git diff
   --check`.
+- Observatory topology metrics cockpit visibility is implemented for Sections
+  8.9, 9.3, 12.6, and 13.1: `/admin/api/v1/topology` now includes the existing
+  sidecar `topology_store.metrics` read model with create/improve/compose/
+  decompose operation counts, trial status matrices, recent SkillGraphIR
+  operations, data-quality/read-model metadata, and raw-content-disabled policy;
+  the React Skills/Topology view renders those operation and trial signals
+  before the JSON inspector without adding any mutation path. Focused validation
+  passed with the Observatory API/source assertions (`2 passed`), focused ruff,
+  and `npm run build --prefix sidecar/autoskill/observatory`; full validation
+  passed with `uv run ruff check sidecar`, `uv run pytest` (`353 passed`),
+  `uv run python -m compileall -q sidecar`, `npm run build --prefix
+  sidecar/autoskill/observatory`, `docker compose config --quiet`, and
+  `git diff --check`. No compose/Postgres smoke was needed because this is a
+  read-model shaping and frontend consumption change over the already-validated
+  topology store metrics surface.
 
 ## Next Gates
 

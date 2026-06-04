@@ -6532,11 +6532,16 @@ def create_app(
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
         workspace_id: str | None = None,
         window_minutes: int = 60,
+        limit: int = 25,
     ) -> ObservatoryObjectResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
         snapshot = await _observatory_snapshot(
             workspace_id=workspace_id,
             window_minutes=window_minutes,
+        )
+        topology_metrics = await topology.metrics(
+            workspace_key=workspace_id,
+            limit=max(1, min(limit, 100)),
         )
         return ObservatoryObjectResponse(
             object={
@@ -6544,7 +6549,18 @@ def create_app(
                 "object_type": "skill_topology",
                 "object_id": "current",
                 "title": "Skill topology",
-                "summary": "Current topology-related stations and flow edges.",
+                "summary": (
+                    "Current topology-related stations, flow edges, operation "
+                    "states, and planned trial signals."
+                ),
+                "read_model": {
+                    "source": "topology_store.metrics",
+                    "workspace_id": workspace_id,
+                    "window_minutes": window_minutes,
+                    "recent_operation_limit": max(1, min(limit, 100)),
+                    "data_quality": "content-safe-derived",
+                },
+                "operation_metrics": topology_metrics,
                 "nodes": [
                     station
                     for station in snapshot["pipeline"]["stations"]  # type: ignore[index]
