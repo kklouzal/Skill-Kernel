@@ -383,12 +383,24 @@ input:focus-visible {
   white-space: nowrap;
 }
 
-.pipeline-edge-label.health-degraded {
+.pipeline-edge-label--healthy {
+  border-color: rgba(104, 211, 145, 0.26);
+}
+
+.pipeline-edge-label--degraded {
   border-color: rgba(246, 197, 111, 0.28);
 }
 
-.pipeline-edge-label.health-blocked {
+.pipeline-edge-label--blocked {
   border-color: rgba(255, 107, 107, 0.32);
+}
+
+.pipeline-edge-label--frozen {
+  border-color: rgba(139, 211, 255, 0.28);
+}
+
+.pipeline-edge-label--offline {
+  border-color: rgba(154, 164, 178, 0.3);
 }
 
 .assembly-line .react-flow__controls,

@@ -103,7 +103,7 @@ function PipelineFlowEdge({
       />
       <EdgeLabelRenderer>
         <div
-          className={`pipeline-edge-label health-${data?.health ?? "unknown"}`}
+          className={`pipeline-edge-label pipeline-edge-label--${data?.health ?? "unknown"}`}
           style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${adjustedLabelY}px)` }}
           title={label}
         >
