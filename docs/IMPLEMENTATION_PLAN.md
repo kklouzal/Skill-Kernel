@@ -1006,6 +1006,21 @@ Acceptance:
   (`36 passed`); final validation passed with `uv run ruff check sidecar`, `uv
   run pytest` (`358 passed`), `uv run python -m compileall -q sidecar`,
   `docker compose config --quiet`, and `git diff --check`.
+- validation evidence for the Observatory autonomy/evidence read-model slice
+  passed on the final tree: the durable schema now includes status-only
+  `admin_evidence_fidelity_status`, `admin_autonomy_decision_status`,
+  `admin_semantic_adjudication_status`, and
+  `admin_administrative_escalation_status`; the admin store and generated route
+  client expose bounded list/detail surfaces for `/admin/api/v1/evidence/fidelity`,
+  `/raw-vault/summary`, `/adjudications`, `/autonomy/decisions`,
+  `/autonomy/threshold-deadlocks`, and `/escalations`. This advances
+  Observatory Sections 8.5.1-8.5.3, 12.1, 12.6, 13.3.1 and acceptance items
+  `21.23`, `21.24`, `21.40`, `24.auto.1`, `24.auto.3`, and `24.auto.6`
+  without exposing raw evidence, raw-vault records, or LLM verdict payloads and
+  without adding mutation authority. Focused validation passed with
+  Observatory API tests (`37 passed`), generated OpenAPI client `--check`, and
+  focused ruff on edited files; full cron validation is recorded in
+  `TASKFLOW.md`.
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and
