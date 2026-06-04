@@ -1227,6 +1227,13 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   Validation passed with generator `--check`, focused pytest (`3 passed`),
   ruff, `npm run build --prefix sidecar/autoskill/observatory`, and the
   Observatory acceptance report showing `implemented_equivalent=4`.
+- Observatory render/mount diagnostics remediation is implemented for Section
+  24.18: the React app now tracks app render count, session-persisted mount
+  count, live snapshot applications, duplicate snapshot suppressions, summary
+  seeds, and sequence-gap snapshot reloads, and exposes those counters in the
+  Admin view. Validation passed with focused pytest (`4 passed`), ruff,
+  `npm run build --prefix sidecar/autoskill/observatory`, `git diff --check`,
+  and the Observatory acceptance report showing `implemented_equivalent=3`.
 
 ## Next Gates
 

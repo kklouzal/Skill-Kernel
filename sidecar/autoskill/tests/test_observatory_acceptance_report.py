@@ -76,3 +76,16 @@ def test_observatory_generated_openapi_client_is_fresh() -> None:
     assert "/summary" in generated
     assert "/actions/audit" in generated
     assert "/replay/traces/{trace_id}" in generated
+
+
+def test_observatory_frontend_render_diagnostics_are_visible() -> None:
+    app_source = (
+        REPO_ROOT / "sidecar/autoskill/observatory/src/App.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "FrontendDiagnostics" in app_source
+    assert "app_render_count" in app_source
+    assert "app_mount_count" in app_source
+    assert "duplicate_snapshot_suppression_count" in app_source
+    assert "sequence_gap_reload_count" in app_source
+    assert "Frontend Diagnostics" in app_source

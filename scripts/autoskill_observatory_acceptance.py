@@ -89,7 +89,7 @@ DEVELOPER_CHECKLIST: tuple[ObservatoryItem, ...] = (
     ObservatoryItem("24.15", "Build React/Vite app shell.", ("observatory package.json and App.tsx",)),
     ObservatoryItem("24.16", "Build overview assembly-line graph with subsystem lanes.", ("AssemblyLine and Workcells components",)),
     ObservatoryItem("24.17", "Implement stable-identity live reconciliation.", ("snapshotContentSignature and AssemblyLine structuralKey",)),
-    ObservatoryItem("24.18", "Add render/mount counters and live-update defect tests.", ("live-update continuity tests and stable-identity reducer behavior",), "implemented_equivalent"),
+    ObservatoryItem("24.18", "Add render/mount counters and live-update defect tests.", ("FrontendDiagnostics counters surfaced in observatory/src/App.tsx", "live-update continuity tests and stable-identity reducer behavior", "test_observatory_acceptance_report.py source assertion for frontend diagnostics")),
     ObservatoryItem("24.19", "Build subsystem lens framework.", ("Workcells component",)),
     ObservatoryItem("24.20", "Build station cockpit framework.", ("Cockpit component",)),
     ObservatoryItem("24.21", "Build all component cockpits.", ("generic cockpit over all 24 stations",)),

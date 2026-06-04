@@ -850,3 +850,7 @@ Acceptance:
   `observatoryClient.ts` route map from FastAPI OpenAPI, frontend wrappers
   consume generated admin route paths, and focused tests fail if the generated
   file drifts from the current app schema.
+- the Observatory Admin surface now exposes frontend render/live-update
+  diagnostics: render count, session mount count, live snapshot application
+  count, duplicate snapshot suppression count, summary seed count, and
+  sequence-gap reload count are visible beside the operator action/audit tools.

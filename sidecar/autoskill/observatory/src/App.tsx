@@ -51,6 +51,17 @@ import { ParticleLayer } from "./components/ParticleLayer";
 
 type View = "overview" | "workcells" | "cockpit" | "skills" | "trace" | "admin";
 type CockpitTab = "records" | "metrics" | "traces" | "artifacts" | "config" | "audit" | "help";
+type FrontendDiagnostics = {
+  app_render_count: number;
+  app_mount_count: number;
+  live_snapshot_apply_count: number;
+  duplicate_snapshot_suppression_count: number;
+  sequence_gap_reload_count: number;
+  summary_snapshot_seed_count: number;
+  last_snapshot_signature: string | null;
+  live_state: string;
+  selected_view: View;
+};
 
 const storedToken = sessionStorage.getItem("skillkernel.admin.token") ?? "";
 const initialParams = new URLSearchParams(window.location.search);
@@ -65,8 +76,19 @@ const initialWindowMinutes = (() => {
   return Number.isFinite(value) && value > 0 ? value : 60;
 })();
 
+function incrementSessionCounter(key: string): number {
+  const next = Number(sessionStorage.getItem(key) ?? 0) + 1;
+  sessionStorage.setItem(key, String(next));
+  return next;
+}
+
 function App() {
   const queryClient = useQueryClient();
+  const renderCount = useRef(0);
+  const mountCount = useRef<number | null>(null);
+  if (mountCount.current === null) {
+    mountCount.current = incrementSessionCounter("skillkernel.observatory.app_mount_count");
+  }
   const [session, setSession] = useState<ApiSession>({
     token: storedToken,
     roles: "admin,operator,auditor,viewer"
@@ -96,6 +118,16 @@ function App() {
   const lastSeq = useRef<number | undefined>(undefined);
   const liveSnapshotSignature = useRef<string | undefined>(undefined);
   const hasAdminToken = session.token.trim().length > 0;
+  const [frontendDiagnostics, setFrontendDiagnostics] = useState<
+    Omit<FrontendDiagnostics, "app_render_count" | "app_mount_count" | "live_state" | "selected_view">
+  >({
+    live_snapshot_apply_count: 0,
+    duplicate_snapshot_suppression_count: 0,
+    sequence_gap_reload_count: 0,
+    summary_snapshot_seed_count: 0,
+    last_snapshot_signature: null
+  });
+  renderCount.current += 1;
 
   const summary = useQuery({
     queryKey: ["summary", session.token, session.roles, workspaceId, windowMinutes],
@@ -194,7 +226,13 @@ function App() {
 
   useEffect(() => {
     if (summary.data?.snapshot) {
-      liveSnapshotSignature.current = snapshotContentSignature(summary.data.snapshot);
+      const signature = snapshotContentSignature(summary.data.snapshot);
+      liveSnapshotSignature.current = signature;
+      setFrontendDiagnostics((current) => ({
+        ...current,
+        summary_snapshot_seed_count: current.summary_snapshot_seed_count + 1,
+        last_snapshot_signature: signature.slice(0, 24)
+      }));
     }
   }, [summary.data?.snapshot]);
 
@@ -260,13 +298,28 @@ function App() {
     const applyEnvelope = (envelope: LiveEnvelope) => {
       lastSeq.current = envelope.cursor_seq ?? envelope.seq;
       if (envelope.requires_snapshot_reload) {
+        setFrontendDiagnostics((current) => ({
+          ...current,
+          sequence_gap_reload_count: current.sequence_gap_reload_count + 1
+        }));
         void queryClient.invalidateQueries({ queryKey: ["summary"] });
       }
       if (isSnapshotPayload(envelope.payload)) {
         const nextSignature = snapshotContentSignature(envelope.payload);
-        if (nextSignature === liveSnapshotSignature.current) return;
+        if (nextSignature === liveSnapshotSignature.current) {
+          setFrontendDiagnostics((current) => ({
+            ...current,
+            duplicate_snapshot_suppression_count: current.duplicate_snapshot_suppression_count + 1
+          }));
+          return;
+        }
         liveSnapshotSignature.current = nextSignature;
         setLiveSnapshot(envelope.payload);
+        setFrontendDiagnostics((current) => ({
+          ...current,
+          live_snapshot_apply_count: current.live_snapshot_apply_count + 1,
+          last_snapshot_signature: nextSignature.slice(0, 24)
+        }));
         queryClient.setQueryData(["summary", session.token, session.roles, workspaceId, windowMinutes], {
           snapshot: envelope.payload
         });
@@ -322,6 +375,14 @@ function App() {
       ]
     };
   }, [snapshot]);
+
+  const frontendDiagnosticsPayload: FrontendDiagnostics = {
+    ...frontendDiagnostics,
+    app_render_count: renderCount.current,
+    app_mount_count: mountCount.current,
+    live_state: liveState,
+    selected_view: view
+  };
 
   function selectStation(station: Station) {
     setSelectedStationId(station.component_id);
@@ -532,6 +593,7 @@ function App() {
           {view === "admin" && (
             <Admin
               snapshot={snapshot}
+              frontendDiagnostics={frontendDiagnosticsPayload}
               actionPending={actionMutation.isPending}
               actionResult={actionMutation.data?.receipt}
               actionAudits={actionAuditsQuery.data?.collection.items ?? []}
@@ -1185,6 +1247,7 @@ function diffPanelPayload(span?: TraceSpan) {
 
 function Admin({
   snapshot,
+  frontendDiagnostics,
   actionPending,
   actionResult,
   actionAudits,
@@ -1192,6 +1255,7 @@ function Admin({
   onAction
 }: {
   snapshot: ObservatorySnapshot;
+  frontendDiagnostics: FrontendDiagnostics;
   actionPending: boolean;
   actionResult?: Record<string, unknown>;
   actionAudits: Array<Record<string, unknown>>;
@@ -1244,6 +1308,10 @@ function Admin({
           <Inspector value={actionResult ?? snapshot.auth} />
         </section>
       </div>
+      <section>
+        <h3>Frontend Diagnostics</h3>
+        <Inspector value={frontendDiagnostics} />
+      </section>
       <section>
         <h3>Action Audit</h3>
         {auditsLoading ? <p>Loading action audit records.</p> : null}
