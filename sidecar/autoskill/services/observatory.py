@@ -18,6 +18,8 @@ HEALTH_ORDER = {
     "offline": 5,
 }
 
+EVALUATION_FAILURE_STATUSES = {"blocked", "failed", "needs_intervention"}
+
 REQUIRED_METRICS_BY_FAMILY: dict[str, tuple[str, ...]] = {
     "ingest": ("ingest",),
     "historical": ("ingest",),
@@ -898,9 +900,7 @@ def _component_snapshot(
             reason_codes.append("scanner-rejections-present")
     elif station.metric_family == "evaluator":
         evals = _dict(metrics.get("evaluation_pass_fail_counts"))
-        failures = sum(
-            int(value or 0) for key, value in evals.items() if key not in {"passed", "pending"}
-        )
+        failures = _evaluation_failure_count(evals)
         evaluator_pressure = min(1.0, failures / 10)
         blocked_count = failures
         if failures:
@@ -1153,10 +1153,8 @@ def _issue_board(
         issues.append(_issue("embedding-backlog-present", "medium", "retrieval_indexing"))
     if int(_dict(metrics.get("scanner_reject_counts")).get("skill_versions") or 0):
         issues.append(_issue("scanner-rejections-present", "high", "scanner_security"))
-    eval_failures = sum(
-        int(value or 0)
-        for key, value in _dict(metrics.get("evaluation_pass_fail_counts")).items()
-        if key not in {"passed", "pending"}
+    eval_failures = _evaluation_failure_count(
+        _dict(metrics.get("evaluation_pass_fail_counts"))
     )
     if eval_failures:
         issues.append(_issue("evaluation-failures-present", "high", "evaluator_probes"))
@@ -1743,6 +1741,14 @@ def _nested_total(value: dict[str, Any]) -> int:
         else:
             total += int(item or 0)
     return total
+
+
+def _evaluation_failure_count(counts: dict[str, Any]) -> int:
+    return sum(
+        int(value or 0)
+        for status, value in counts.items()
+        if status in EVALUATION_FAILURE_STATUSES
+    )
 
 
 def _rollup_health(healths: list[str]) -> str:
