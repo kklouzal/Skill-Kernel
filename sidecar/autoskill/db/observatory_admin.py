@@ -227,6 +227,253 @@ class AdminDiagnosticBundleRecord:
         }
 
 
+@dataclass(frozen=True)
+class AdminEvidenceFidelityStatusRecord:
+    workspace_key: str
+    source_kind: str
+    decision_family: str
+    evidence_fidelity: str
+    item_count: int
+    autonomy_support_state: str
+    dominant_reason_code: str | None
+    updated_at: datetime
+
+    @classmethod
+    def from_row(
+        cls, row: asyncpg.Record | dict[str, Any]
+    ) -> AdminEvidenceFidelityStatusRecord:
+        return cls(
+            workspace_key=row["workspace_key"],
+            source_kind=row["source_kind"],
+            decision_family=row["decision_family"],
+            evidence_fidelity=row["evidence_fidelity"],
+            item_count=int(row["item_count"]),
+            autonomy_support_state=row["autonomy_support_state"],
+            dominant_reason_code=_row_get(row, "dominant_reason_code"),
+            updated_at=row["updated_at"],
+        )
+
+    @property
+    def object_id(self) -> str:
+        return ":".join(
+            (
+                self.workspace_key,
+                self.source_kind,
+                self.decision_family,
+                self.evidence_fidelity,
+            )
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "schema_version": "skillkernel.observatory.evidence-fidelity.v1",
+            "object_type": "evidence_fidelity_status",
+            "object_id": self.object_id,
+            "workspace_id": self.workspace_key,
+            "source_kind": self.source_kind,
+            "decision_family": self.decision_family,
+            "evidence_fidelity": self.evidence_fidelity,
+            "item_count": self.item_count,
+            "autonomy_support_state": self.autonomy_support_state,
+            "dominant_reason_code": self.dominant_reason_code,
+            "updated_at": self.updated_at.isoformat(),
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "read-model-summary-only",
+                "redaction_state": "aggregate_status",
+            },
+        }
+
+
+@dataclass(frozen=True)
+class AdminAutonomyDecisionStatusRecord:
+    decision_id: UUID
+    workspace_key: str
+    decision_family: str
+    target_kind: str
+    target_id: str
+    action_risk_tier: str
+    hard_invariant_state: str
+    soft_threshold_state: str
+    selected_action: str
+    confidence_band: str
+    evidence_fidelity: str
+    autonomy_support_state: str
+    dominant_reason_code: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_row(
+        cls, row: asyncpg.Record | dict[str, Any]
+    ) -> AdminAutonomyDecisionStatusRecord:
+        return cls(
+            decision_id=row["decision_id"],
+            workspace_key=row["workspace_key"],
+            decision_family=row["decision_family"],
+            target_kind=row["target_kind"],
+            target_id=row["target_id"],
+            action_risk_tier=row["action_risk_tier"],
+            hard_invariant_state=row["hard_invariant_state"],
+            soft_threshold_state=row["soft_threshold_state"],
+            selected_action=row["selected_action"],
+            confidence_band=row["confidence_band"],
+            evidence_fidelity=row["evidence_fidelity"],
+            autonomy_support_state=row["autonomy_support_state"],
+            dominant_reason_code=_row_get(row, "dominant_reason_code"),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "schema_version": "skillkernel.observatory.autonomy-decision.v1",
+            "object_type": "autonomy_decision",
+            "object_id": str(self.decision_id),
+            "decision_id": str(self.decision_id),
+            "workspace_id": self.workspace_key,
+            "decision_family": self.decision_family,
+            "target": {
+                "object_type": self.target_kind,
+                "object_id": self.target_id,
+            },
+            "action_risk_tier": self.action_risk_tier,
+            "hard_invariant_state": self.hard_invariant_state,
+            "soft_threshold_state": self.soft_threshold_state,
+            "selected_action": self.selected_action,
+            "confidence_band": self.confidence_band,
+            "evidence_fidelity": self.evidence_fidelity,
+            "autonomy_support_state": self.autonomy_support_state,
+            "dominant_reason_code": self.dominant_reason_code,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "decision-status-read-model",
+                "redaction_state": "status_only",
+            },
+        }
+
+
+@dataclass(frozen=True)
+class AdminSemanticAdjudicationStatusRecord:
+    adjudication_run_id: UUID
+    workspace_key: str
+    decision_family: str
+    model_profile_id: UUID | None
+    schema_status: str
+    confidence_band: str
+    evidence_fidelity: str
+    verifier_state: str
+    raw_vault_exposure_class: str
+    dominant_reason_code: str | None
+    started_at: datetime
+    completed_at: datetime | None
+
+    @classmethod
+    def from_row(
+        cls, row: asyncpg.Record | dict[str, Any]
+    ) -> AdminSemanticAdjudicationStatusRecord:
+        return cls(
+            adjudication_run_id=row["adjudication_run_id"],
+            workspace_key=row["workspace_key"],
+            decision_family=row["decision_family"],
+            model_profile_id=_row_get(row, "model_profile_id"),
+            schema_status=row["schema_status"],
+            confidence_band=row["confidence_band"],
+            evidence_fidelity=row["evidence_fidelity"],
+            verifier_state=row["verifier_state"],
+            raw_vault_exposure_class=row["raw_vault_exposure_class"],
+            dominant_reason_code=_row_get(row, "dominant_reason_code"),
+            started_at=row["started_at"],
+            completed_at=_row_get(row, "completed_at"),
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "schema_version": "skillkernel.observatory.semantic-adjudication.v1",
+            "object_type": "semantic_adjudication",
+            "object_id": str(self.adjudication_run_id),
+            "adjudication_run_id": str(self.adjudication_run_id),
+            "workspace_id": self.workspace_key,
+            "decision_family": self.decision_family,
+            "model_profile_id": str(self.model_profile_id) if self.model_profile_id else None,
+            "schema_status": self.schema_status,
+            "confidence_band": self.confidence_band,
+            "evidence_fidelity": self.evidence_fidelity,
+            "verifier_state": self.verifier_state,
+            "raw_vault_exposure_class": self.raw_vault_exposure_class,
+            "dominant_reason_code": self.dominant_reason_code,
+            "started_at": self.started_at.isoformat(),
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "adjudication-status-only",
+                "redaction_state": "verdict_content_omitted",
+            },
+        }
+
+
+@dataclass(frozen=True)
+class AdminAdministrativeEscalationStatusRecord:
+    event_id: UUID
+    workspace_key: str
+    hard_boundary_kind: str
+    decision_family: str
+    target_kind: str
+    target_id: str
+    attempted_autonomous_alternatives: list[dict[str, Any]]
+    resolution_state: str
+    dominant_reason_code: str
+    opened_at: datetime
+    resolved_at: datetime | None
+
+    @classmethod
+    def from_row(
+        cls, row: asyncpg.Record | dict[str, Any]
+    ) -> AdminAdministrativeEscalationStatusRecord:
+        return cls(
+            event_id=row["event_id"],
+            workspace_key=row["workspace_key"],
+            hard_boundary_kind=row["hard_boundary_kind"],
+            decision_family=row["decision_family"],
+            target_kind=row["target_kind"],
+            target_id=row["target_id"],
+            attempted_autonomous_alternatives=_json_list(
+                row["attempted_autonomous_alternatives"]
+            ),
+            resolution_state=row["resolution_state"],
+            dominant_reason_code=row["dominant_reason_code"],
+            opened_at=row["opened_at"],
+            resolved_at=_row_get(row, "resolved_at"),
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "schema_version": "skillkernel.observatory.administrative-escalation.v1",
+            "object_type": "administrative_escalation",
+            "object_id": str(self.event_id),
+            "event_id": str(self.event_id),
+            "workspace_id": self.workspace_key,
+            "hard_boundary_kind": self.hard_boundary_kind,
+            "decision_family": self.decision_family,
+            "target": {
+                "object_type": self.target_kind,
+                "object_id": self.target_id,
+            },
+            "attempted_autonomous_alternatives": self.attempted_autonomous_alternatives,
+            "resolution_state": self.resolution_state,
+            "dominant_reason_code": self.dominant_reason_code,
+            "opened_at": self.opened_at.isoformat(),
+            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "escalation-status-read-model",
+                "redaction_state": "status_only",
+            },
+        }
+
+
 class ObservatoryAdminStore(Protocol):
     async def append_live_event(
         self,
@@ -335,6 +582,70 @@ class ObservatoryAdminStore(Protocol):
     ) -> AdminDiagnosticBundleRecord | None:
         """Fetch one diagnostic bundle descriptor."""
 
+    async def list_evidence_fidelity_status(
+        self,
+        *,
+        workspace_key: str | None = None,
+        decision_family: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminEvidenceFidelityStatusRecord]:
+        """Return bounded evidence-fidelity read-model rows."""
+
+    async def get_evidence_fidelity_status(
+        self,
+        *,
+        object_id: str,
+    ) -> AdminEvidenceFidelityStatusRecord | None:
+        """Fetch one evidence-fidelity read-model row by stable object ID."""
+
+    async def list_autonomy_decisions(
+        self,
+        *,
+        workspace_key: str | None = None,
+        decision_family: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminAutonomyDecisionStatusRecord]:
+        """Return bounded autonomy-decision status rows."""
+
+    async def get_autonomy_decision(
+        self,
+        *,
+        decision_id: UUID,
+    ) -> AdminAutonomyDecisionStatusRecord | None:
+        """Fetch one autonomy-decision status row."""
+
+    async def list_semantic_adjudications(
+        self,
+        *,
+        workspace_key: str | None = None,
+        decision_family: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminSemanticAdjudicationStatusRecord]:
+        """Return bounded semantic-adjudication status rows."""
+
+    async def get_semantic_adjudication(
+        self,
+        *,
+        adjudication_run_id: UUID,
+    ) -> AdminSemanticAdjudicationStatusRecord | None:
+        """Fetch one semantic-adjudication status row."""
+
+    async def list_administrative_escalations(
+        self,
+        *,
+        workspace_key: str | None = None,
+        resolution_state: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminAdministrativeEscalationStatusRecord]:
+        """Return bounded administrative-escalation status rows."""
+
+    async def get_administrative_escalation(
+        self,
+        *,
+        event_id: UUID,
+    ) -> AdminAdministrativeEscalationStatusRecord | None:
+        """Fetch one administrative-escalation status row."""
+
 
 class NullObservatoryAdminStore:
     def __init__(self) -> None:
@@ -342,6 +653,12 @@ class NullObservatoryAdminStore:
         self.actions: list[AdminActionAuditRecord] = []
         self.comparisons: list[AdminComparisonRecord] = []
         self.bundles: list[AdminDiagnosticBundleRecord] = []
+        self.evidence_fidelity: list[AdminEvidenceFidelityStatusRecord] = []
+        self.autonomy_decisions: list[AdminAutonomyDecisionStatusRecord] = []
+        self.semantic_adjudications: list[AdminSemanticAdjudicationStatusRecord] = []
+        self.administrative_escalations: list[
+            AdminAdministrativeEscalationStatusRecord
+        ] = []
 
     async def append_live_event(
         self,
@@ -544,6 +861,117 @@ class NullObservatoryAdminStore:
             if record.bundle_id == bundle_id and (
                 workspace_key is None or record.workspace_key == workspace_key
             ):
+                return record
+        return None
+
+    async def list_evidence_fidelity_status(
+        self,
+        *,
+        workspace_key: str | None = None,
+        decision_family: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminEvidenceFidelityStatusRecord]:
+        records = list(self.evidence_fidelity)
+        if workspace_key is not None:
+            records = [record for record in records if record.workspace_key == workspace_key]
+        if decision_family is not None:
+            records = [
+                record for record in records if record.decision_family == decision_family
+            ]
+        records.sort(key=lambda record: record.updated_at, reverse=True)
+        return records[: max(1, min(limit, 500))]
+
+    async def get_evidence_fidelity_status(
+        self,
+        *,
+        object_id: str,
+    ) -> AdminEvidenceFidelityStatusRecord | None:
+        for record in self.evidence_fidelity:
+            if record.object_id == object_id:
+                return record
+        return None
+
+    async def list_autonomy_decisions(
+        self,
+        *,
+        workspace_key: str | None = None,
+        decision_family: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminAutonomyDecisionStatusRecord]:
+        records = list(self.autonomy_decisions)
+        if workspace_key is not None:
+            records = [record for record in records if record.workspace_key == workspace_key]
+        if decision_family is not None:
+            records = [
+                record for record in records if record.decision_family == decision_family
+            ]
+        records.sort(key=lambda record: (record.created_at, record.decision_id), reverse=True)
+        return records[: max(1, min(limit, 500))]
+
+    async def get_autonomy_decision(
+        self,
+        *,
+        decision_id: UUID,
+    ) -> AdminAutonomyDecisionStatusRecord | None:
+        for record in self.autonomy_decisions:
+            if record.decision_id == decision_id:
+                return record
+        return None
+
+    async def list_semantic_adjudications(
+        self,
+        *,
+        workspace_key: str | None = None,
+        decision_family: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminSemanticAdjudicationStatusRecord]:
+        records = list(self.semantic_adjudications)
+        if workspace_key is not None:
+            records = [record for record in records if record.workspace_key == workspace_key]
+        if decision_family is not None:
+            records = [
+                record for record in records if record.decision_family == decision_family
+            ]
+        records.sort(
+            key=lambda record: (record.started_at, record.adjudication_run_id),
+            reverse=True,
+        )
+        return records[: max(1, min(limit, 500))]
+
+    async def get_semantic_adjudication(
+        self,
+        *,
+        adjudication_run_id: UUID,
+    ) -> AdminSemanticAdjudicationStatusRecord | None:
+        for record in self.semantic_adjudications:
+            if record.adjudication_run_id == adjudication_run_id:
+                return record
+        return None
+
+    async def list_administrative_escalations(
+        self,
+        *,
+        workspace_key: str | None = None,
+        resolution_state: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminAdministrativeEscalationStatusRecord]:
+        records = list(self.administrative_escalations)
+        if workspace_key is not None:
+            records = [record for record in records if record.workspace_key == workspace_key]
+        if resolution_state is not None:
+            records = [
+                record for record in records if record.resolution_state == resolution_state
+            ]
+        records.sort(key=lambda record: (record.opened_at, record.event_id), reverse=True)
+        return records[: max(1, min(limit, 500))]
+
+    async def get_administrative_escalation(
+        self,
+        *,
+        event_id: UUID,
+    ) -> AdminAdministrativeEscalationStatusRecord | None:
+        for record in self.administrative_escalations:
+            if record.event_id == event_id:
                 return record
         return None
 
@@ -878,6 +1306,183 @@ class AsyncpgObservatoryAdminStore(AsyncpgPoolOwner):
             )
         return AdminDiagnosticBundleRecord.from_row(row) if row else None
 
+    async def list_evidence_fidelity_status(
+        self,
+        *,
+        workspace_key: str | None = None,
+        decision_family: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminEvidenceFidelityStatusRecord]:
+        bounded_limit = max(1, min(limit, 500))
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT *
+                FROM autoskill.admin_evidence_fidelity_status
+                WHERE ($1::text IS NULL OR workspace_key = $1)
+                  AND ($2::text IS NULL OR decision_family = $2)
+                ORDER BY updated_at DESC, source_kind, decision_family, evidence_fidelity
+                LIMIT $3
+                """,
+                workspace_key,
+                decision_family,
+                bounded_limit,
+            )
+        return [AdminEvidenceFidelityStatusRecord.from_row(row) for row in rows]
+
+    async def get_evidence_fidelity_status(
+        self,
+        *,
+        object_id: str,
+    ) -> AdminEvidenceFidelityStatusRecord | None:
+        parts = object_id.split(":", 3)
+        if len(parts) != 4:
+            return None
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT *
+                FROM autoskill.admin_evidence_fidelity_status
+                WHERE workspace_key = $1
+                  AND source_kind = $2
+                  AND decision_family = $3
+                  AND evidence_fidelity = $4
+                """,
+                parts[0],
+                parts[1],
+                parts[2],
+                parts[3],
+            )
+        return AdminEvidenceFidelityStatusRecord.from_row(row) if row else None
+
+    async def list_autonomy_decisions(
+        self,
+        *,
+        workspace_key: str | None = None,
+        decision_family: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminAutonomyDecisionStatusRecord]:
+        bounded_limit = max(1, min(limit, 500))
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT *
+                FROM autoskill.admin_autonomy_decision_status
+                WHERE ($1::text IS NULL OR workspace_key = $1)
+                  AND ($2::text IS NULL OR decision_family = $2)
+                ORDER BY created_at DESC, decision_id DESC
+                LIMIT $3
+                """,
+                workspace_key,
+                decision_family,
+                bounded_limit,
+            )
+        return [AdminAutonomyDecisionStatusRecord.from_row(row) for row in rows]
+
+    async def get_autonomy_decision(
+        self,
+        *,
+        decision_id: UUID,
+    ) -> AdminAutonomyDecisionStatusRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT *
+                FROM autoskill.admin_autonomy_decision_status
+                WHERE decision_id = $1
+                """,
+                decision_id,
+            )
+        return AdminAutonomyDecisionStatusRecord.from_row(row) if row else None
+
+    async def list_semantic_adjudications(
+        self,
+        *,
+        workspace_key: str | None = None,
+        decision_family: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminSemanticAdjudicationStatusRecord]:
+        bounded_limit = max(1, min(limit, 500))
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT *
+                FROM autoskill.admin_semantic_adjudication_status
+                WHERE ($1::text IS NULL OR workspace_key = $1)
+                  AND ($2::text IS NULL OR decision_family = $2)
+                ORDER BY started_at DESC, adjudication_run_id DESC
+                LIMIT $3
+                """,
+                workspace_key,
+                decision_family,
+                bounded_limit,
+            )
+        return [AdminSemanticAdjudicationStatusRecord.from_row(row) for row in rows]
+
+    async def get_semantic_adjudication(
+        self,
+        *,
+        adjudication_run_id: UUID,
+    ) -> AdminSemanticAdjudicationStatusRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT *
+                FROM autoskill.admin_semantic_adjudication_status
+                WHERE adjudication_run_id = $1
+                """,
+                adjudication_run_id,
+            )
+        return AdminSemanticAdjudicationStatusRecord.from_row(row) if row else None
+
+    async def list_administrative_escalations(
+        self,
+        *,
+        workspace_key: str | None = None,
+        resolution_state: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminAdministrativeEscalationStatusRecord]:
+        bounded_limit = max(1, min(limit, 500))
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT *
+                FROM autoskill.admin_administrative_escalation_status
+                WHERE ($1::text IS NULL OR workspace_key = $1)
+                  AND ($2::text IS NULL OR resolution_state = $2)
+                ORDER BY opened_at DESC, event_id DESC
+                LIMIT $3
+                """,
+                workspace_key,
+                resolution_state,
+                bounded_limit,
+            )
+        return [AdminAdministrativeEscalationStatusRecord.from_row(row) for row in rows]
+
+    async def get_administrative_escalation(
+        self,
+        *,
+        event_id: UUID,
+    ) -> AdminAdministrativeEscalationStatusRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT *
+                FROM autoskill.admin_administrative_escalation_status
+                WHERE event_id = $1
+                """,
+                event_id,
+            )
+        return AdminAdministrativeEscalationStatusRecord.from_row(row) if row else None
+
 
 def _json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
@@ -890,6 +1495,15 @@ def _json_dict(value: object) -> dict[str, Any]:
         parsed = json.loads(value)
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def _json_list(value: object) -> list[dict[str, Any]]:
+    parsed: object = value
+    if isinstance(value, str):
+        parsed = json.loads(value)
+    if isinstance(parsed, list):
+        return [dict(item) for item in parsed if isinstance(item, dict)]
+    return []
 
 
 def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:

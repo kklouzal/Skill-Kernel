@@ -4778,11 +4778,16 @@ def create_app(
     @app.get("/v1/jobs")
     async def list_jobs(
         authorization: Annotated[str | None, Header()] = None,
+        workspace_id: str | None = None,
         status_filter: Annotated[str | None, Query(alias="status")] = None,
         limit: int = 50,
     ) -> dict[str, list[dict[str, object]]]:
         _require_control_auth(authorization)
-        listed = await jobs.list_jobs(status=status_filter, limit=max(1, min(limit, 250)))
+        listed = await jobs.list_jobs(
+            workspace_key=workspace_id,
+            status=status_filter,
+            limit=max(1, min(limit, 250)),
+        )
         return {"jobs": [job.to_json() for job in listed]}
 
     @app.post("/v1/jobs/enqueue", response_model=JobEnqueueResponse)
@@ -6739,6 +6744,270 @@ def create_app(
         payload = search_observatory(snapshot, query, limit=limit)
         return ObservatorySearchResponse(**payload)
 
+    @app.get("/admin/api/v1/evidence/fidelity", response_model=ObservatoryCollectionResponse)
+    async def observatory_evidence_fidelity(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        decision_family: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        records = await observatory_admin.list_evidence_fidelity_status(
+            workspace_key=workspace_id,
+            decision_family=decision_family,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="evidence_fidelity_status",
+            title="Evidence fidelity status",
+            items=[record.to_json() for record in records],
+            limit=limit,
+            cursor=cursor,
+            source="observatory_admin_store.list_evidence_fidelity_status",
+            diagnostics={
+                "supporting_component": "evidence_memory",
+                "decision_family": decision_family,
+                "raw_content_available": False,
+                "status_read_model_only": True,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/evidence/fidelity/{fidelity_id:path}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_evidence_fidelity_detail(
+        fidelity_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        record = await observatory_admin.get_evidence_fidelity_status(object_id=fidelity_id)
+        if record is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="evidence fidelity status not found",
+            )
+        return ObservatoryObjectResponse(object=record.to_json())
+
+    @app.get(
+        "/admin/api/v1/raw-vault/summary",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_raw_vault_summary(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        records = await observatory_admin.list_evidence_fidelity_status(
+            workspace_key=workspace_id,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="raw_vault_fidelity_summary",
+            title="Raw-vault policy and evidence-fidelity summary",
+            items=[record.to_json() for record in records],
+            limit=limit,
+            cursor=cursor,
+            source="observatory_admin_store.list_evidence_fidelity_status",
+            diagnostics={
+                "supporting_component": "evidence_memory",
+                "raw_content_available": False,
+                "raw_vault_records_returned": False,
+            },
+        )
+
+    @app.get("/admin/api/v1/adjudications", response_model=ObservatoryCollectionResponse)
+    async def observatory_semantic_adjudications(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        decision_family: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        records = await observatory_admin.list_semantic_adjudications(
+            workspace_key=workspace_id,
+            decision_family=decision_family,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="semantic_adjudication",
+            title="Semantic adjudications",
+            items=[record.to_json() for record in records],
+            limit=limit,
+            cursor=cursor,
+            source="observatory_admin_store.list_semantic_adjudications",
+            diagnostics={
+                "supporting_component": "model_embedding",
+                "decision_family": decision_family,
+                "verdict_payload_returned": False,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/adjudications/{adjudication_run_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_semantic_adjudication_detail(
+        adjudication_run_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_id = _uuid_or_404(adjudication_run_id, "semantic adjudication")
+        record = await observatory_admin.get_semantic_adjudication(
+            adjudication_run_id=parsed_id,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="semantic adjudication not found",
+            )
+        return ObservatoryObjectResponse(object=record.to_json())
+
+    @app.get(
+        "/admin/api/v1/autonomy/decisions",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_autonomy_decisions(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        decision_family: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        records = await observatory_admin.list_autonomy_decisions(
+            workspace_key=workspace_id,
+            decision_family=decision_family,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="autonomy_decision",
+            title="Autonomy decisions",
+            items=[record.to_json() for record in records],
+            limit=limit,
+            cursor=cursor,
+            source="observatory_admin_store.list_autonomy_decisions",
+            diagnostics={
+                "supporting_component": "operator_action_gateway",
+                "decision_family": decision_family,
+                "hard_and_soft_gates_visible": True,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/autonomy/decisions/{decision_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_autonomy_decision_detail(
+        decision_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_id = _uuid_or_404(decision_id, "autonomy decision")
+        record = await observatory_admin.get_autonomy_decision(decision_id=parsed_id)
+        if record is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="autonomy decision not found",
+            )
+        return ObservatoryObjectResponse(object=record.to_json())
+
+    @app.get(
+        "/admin/api/v1/autonomy/threshold-deadlocks",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_threshold_deadlocks(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        records = await observatory_admin.list_autonomy_decisions(
+            workspace_key=workspace_id,
+            decision_family=None,
+            limit=500,
+        )
+        deadlocks = [
+            record.to_json()
+            for record in records
+            if record.dominant_reason_code == "threshold_deadlock"
+            or record.soft_threshold_state == "threshold_deadlock_candidate"
+        ]
+        return _observatory_collection(
+            object_type="threshold_deadlock",
+            title="Threshold-deadlock findings",
+            items=deadlocks,
+            limit=limit,
+            cursor=cursor,
+            source="observatory_admin_store.list_autonomy_decisions",
+            diagnostics={
+                "supporting_component": "evaluator_probes",
+                "derived_from": "admin_autonomy_decision_status",
+                "raw_content_available": False,
+            },
+        )
+
+    @app.get("/admin/api/v1/escalations", response_model=ObservatoryCollectionResponse)
+    async def observatory_administrative_escalations(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        resolution_state: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        records = await observatory_admin.list_administrative_escalations(
+            workspace_key=workspace_id,
+            resolution_state=resolution_state,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="administrative_escalation",
+            title="Administrative escalations",
+            items=[record.to_json() for record in records],
+            limit=limit,
+            cursor=cursor,
+            source="observatory_admin_store.list_administrative_escalations",
+            diagnostics={
+                "supporting_component": "operator_action_gateway",
+                "hard_boundary_only": True,
+                "raw_content_available": False,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/escalations/{event_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_administrative_escalation_detail(
+        event_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_id = _uuid_or_404(event_id, "administrative escalation")
+        record = await observatory_admin.get_administrative_escalation(event_id=parsed_id)
+        if record is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="administrative escalation not found",
+            )
+        return ObservatoryObjectResponse(object=record.to_json())
+
     @app.get(
         "/admin/api/v1/objects/{object_type}/{object_id}",
         response_model=ObservatoryObjectResponse,
@@ -6778,6 +7047,33 @@ def create_app(
             action = await observatory_admin.get_action_audit(action_id=action_id)
             if action is not None:
                 return ObservatoryObjectResponse(object=_admin_action_microscope(action))
+        if object_type in {"evidence_fidelity_status", "evidence_fidelity"}:
+            fidelity = await observatory_admin.get_evidence_fidelity_status(
+                object_id=object_id
+            )
+            if fidelity is not None:
+                return ObservatoryObjectResponse(object=fidelity.to_json())
+        if object_type in {"autonomy_decision", "autonomy-decision"}:
+            decision_id = _uuid_or_404(object_id, "autonomy decision")
+            decision = await observatory_admin.get_autonomy_decision(
+                decision_id=decision_id
+            )
+            if decision is not None:
+                return ObservatoryObjectResponse(object=decision.to_json())
+        if object_type in {"semantic_adjudication", "adjudication"}:
+            adjudication_id = _uuid_or_404(object_id, "semantic adjudication")
+            adjudication = await observatory_admin.get_semantic_adjudication(
+                adjudication_run_id=adjudication_id,
+            )
+            if adjudication is not None:
+                return ObservatoryObjectResponse(object=adjudication.to_json())
+        if object_type in {"administrative_escalation", "escalation"}:
+            escalation_id = _uuid_or_404(object_id, "administrative escalation")
+            escalation = await observatory_admin.get_administrative_escalation(
+                event_id=escalation_id,
+            )
+            if escalation is not None:
+                return ObservatoryObjectResponse(object=escalation.to_json())
         if object_type in {"broker_replay_episode", "replay_episode"}:
             episode_id = _uuid_or_404(object_id, "broker replay episode")
             episode = await broker_policies.get_replay_episode(

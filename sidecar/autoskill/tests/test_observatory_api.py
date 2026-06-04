@@ -24,7 +24,13 @@ from autoskill.db.observability import (
     TraceSummaryRecord,
     _operator_metrics_payload,
 )
-from autoskill.db.observatory_admin import NullObservatoryAdminStore
+from autoskill.db.observatory_admin import (
+    AdminAdministrativeEscalationStatusRecord,
+    AdminAutonomyDecisionStatusRecord,
+    AdminEvidenceFidelityStatusRecord,
+    AdminSemanticAdjudicationStatusRecord,
+    NullObservatoryAdminStore,
+)
 from autoskill.db.retrieval import RetrievalLog
 from autoskill.db.topology import NullTopologyStore
 from autoskill.services.observatory import (
@@ -879,6 +885,16 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/health/live", "GET"),
         ("/admin/api/v1/health/ready", "GET"),
         ("/admin/api/v1/search", "GET"),
+        ("/admin/api/v1/evidence/fidelity", "GET"),
+        ("/admin/api/v1/evidence/fidelity/{fidelity_id:path}", "GET"),
+        ("/admin/api/v1/raw-vault/summary", "GET"),
+        ("/admin/api/v1/adjudications", "GET"),
+        ("/admin/api/v1/adjudications/{adjudication_run_id}", "GET"),
+        ("/admin/api/v1/autonomy/decisions", "GET"),
+        ("/admin/api/v1/autonomy/decisions/{decision_id}", "GET"),
+        ("/admin/api/v1/autonomy/threshold-deadlocks", "GET"),
+        ("/admin/api/v1/escalations", "GET"),
+        ("/admin/api/v1/escalations/{event_id}", "GET"),
         ("/admin/api/v1/components", "GET"),
         ("/admin/api/v1/components/{component_id}/metrics", "GET"),
         ("/admin/api/v1/events", "GET"),
@@ -964,6 +980,200 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         "rollback-revokes-derived-data",
         "read-models-fresh",
     }.issubset(invariant_ids)
+
+
+def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
+    observatory_admin = NullObservatoryAdminStore()
+    now = datetime.now(UTC)
+    decision_id = uuid4()
+    adjudication_id = uuid4()
+    escalation_id = uuid4()
+    observatory_admin.evidence_fidelity.append(
+        AdminEvidenceFidelityStatusRecord(
+            workspace_key="dev-01",
+            source_kind="historical_chunk",
+            decision_family="intent_reconstruction",
+            evidence_fidelity="metadata_only",
+            item_count=7,
+            autonomy_support_state="evidence_insufficient_for_autonomy",
+            dominant_reason_code="metadata_only_without_redacted_derivative",
+            updated_at=now,
+        )
+    )
+    observatory_admin.autonomy_decisions.append(
+        AdminAutonomyDecisionStatusRecord(
+            decision_id=decision_id,
+            workspace_key="dev-01",
+            decision_family="skill_plan_semantic_adjudication",
+            target_kind="candidate",
+            target_id="candidate-1",
+            action_risk_tier="T2_trial_artifact",
+            hard_invariant_state="passed",
+            soft_threshold_state="threshold_deadlock_candidate",
+            selected_action="run_more_probes",
+            confidence_band="improve_evidence",
+            evidence_fidelity="redacted_derivative",
+            autonomy_support_state="degraded",
+            dominant_reason_code="threshold_deadlock",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    observatory_admin.semantic_adjudications.append(
+        AdminSemanticAdjudicationStatusRecord(
+            adjudication_run_id=adjudication_id,
+            workspace_key="dev-01",
+            decision_family="skill_plan_semantic_adjudication",
+            model_profile_id=None,
+            schema_status="valid",
+            confidence_band="improve_evidence",
+            evidence_fidelity="redacted_derivative",
+            verifier_state="not_run",
+            raw_vault_exposure_class="not_exposed",
+            dominant_reason_code="needs_more_probe_margin",
+            started_at=now,
+            completed_at=now,
+        )
+    )
+    observatory_admin.administrative_escalations.append(
+        AdminAdministrativeEscalationStatusRecord(
+            event_id=escalation_id,
+            workspace_key="dev-01",
+            hard_boundary_kind="raw_reveal_requested",
+            decision_family="memory_declassification",
+            target_kind="raw_vault_record",
+            target_id="vault-record-1",
+            attempted_autonomous_alternatives=[
+                {"action": "declassified_summary", "status": "insufficient"}
+            ],
+            resolution_state="open",
+            dominant_reason_code="raw_reveal_requires_admin",
+            opened_at=now,
+            resolved_at=None,
+        )
+    )
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        observatory_admin_store=observatory_admin,
+    )
+    routes = _routes(app)
+
+    async def run():
+        evidence = await routes[("/admin/api/v1/evidence/fidelity", "GET")].endpoint(
+            workspace_id="dev-01",
+            decision_family="intent_reconstruction",
+            limit=10,
+        )
+        raw_vault = await routes[("/admin/api/v1/raw-vault/summary", "GET")].endpoint(
+            workspace_id="dev-01",
+            limit=10,
+        )
+        adjudications = await routes[("/admin/api/v1/adjudications", "GET")].endpoint(
+            workspace_id="dev-01",
+            decision_family="skill_plan_semantic_adjudication",
+            limit=10,
+        )
+        adjudication_detail = await routes[
+            ("/admin/api/v1/adjudications/{adjudication_run_id}", "GET")
+        ].endpoint(adjudication_run_id=str(adjudication_id))
+        decisions = await routes[("/admin/api/v1/autonomy/decisions", "GET")].endpoint(
+            workspace_id="dev-01",
+            decision_family="skill_plan_semantic_adjudication",
+            limit=10,
+        )
+        deadlocks = await routes[
+            ("/admin/api/v1/autonomy/threshold-deadlocks", "GET")
+        ].endpoint(workspace_id="dev-01", limit=10)
+        decision_detail = await routes[
+            ("/admin/api/v1/autonomy/decisions/{decision_id}", "GET")
+        ].endpoint(decision_id=str(decision_id))
+        escalations = await routes[("/admin/api/v1/escalations", "GET")].endpoint(
+            workspace_id="dev-01",
+            resolution_state="open",
+            limit=10,
+        )
+        escalation_detail = await routes[
+            ("/admin/api/v1/escalations/{event_id}", "GET")
+        ].endpoint(event_id=str(escalation_id))
+        object_detail = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="autonomy_decision",
+            object_id=str(decision_id),
+            workspace_id="dev-01",
+        )
+        fidelity_detail = await routes[
+            ("/admin/api/v1/evidence/fidelity/{fidelity_id:path}", "GET")
+        ].endpoint(
+            fidelity_id="dev-01:historical_chunk:intent_reconstruction:metadata_only"
+        )
+        return (
+            evidence,
+            raw_vault,
+            adjudications,
+            adjudication_detail,
+            decisions,
+            deadlocks,
+            decision_detail,
+            escalations,
+            escalation_detail,
+            object_detail,
+            fidelity_detail,
+        )
+
+    (
+        evidence,
+        raw_vault,
+        adjudications,
+        adjudication_detail,
+        decisions,
+        deadlocks,
+        decision_detail,
+        escalations,
+        escalation_detail,
+        object_detail,
+        fidelity_detail,
+    ) = asyncio.run(run())
+
+    evidence_item = evidence.collection["items"][0]
+    assert evidence.collection["source"] == (
+        "observatory_admin_store.list_evidence_fidelity_status"
+    )
+    assert evidence_item["autonomy_support_state"] == (
+        "evidence_insufficient_for_autonomy"
+    )
+    assert evidence_item["content_policy"]["raw_available"] is False
+    assert raw_vault.collection["diagnostics"]["raw_vault_records_returned"] is False
+
+    adjudication_item = adjudications.collection["items"][0]
+    assert adjudications.collection["diagnostics"]["verdict_payload_returned"] is False
+    assert adjudication_item["object_id"] == str(adjudication_id)
+    assert adjudication_detail.object["raw_vault_exposure_class"] == "not_exposed"
+
+    decision_item = decisions.collection["items"][0]
+    assert decision_item["selected_action"] == "run_more_probes"
+    assert decision_detail.object["hard_invariant_state"] == "passed"
+    assert object_detail.object["object_type"] == "autonomy_decision"
+    assert deadlocks.collection["items"][0]["object_id"] == str(decision_id)
+
+    escalation_item = escalations.collection["items"][0]
+    assert escalation_item["hard_boundary_kind"] == "raw_reveal_requested"
+    assert escalation_detail.object["attempted_autonomous_alternatives"] == [
+        {"action": "declassified_summary", "status": "insufficient"}
+    ]
+    assert fidelity_detail.object["object_type"] == "evidence_fidelity_status"
+    combined = json.dumps(
+        [
+            evidence.collection,
+            raw_vault.collection,
+            adjudications.collection,
+            decisions.collection,
+            escalations.collection,
+        ],
+        sort_keys=True,
+    )
+    assert "raw operator transcript" not in combined
+    assert "verbatim_llm_verdict" not in combined
 
 
 def test_observatory_topology_exposes_operation_metrics_read_model() -> None:

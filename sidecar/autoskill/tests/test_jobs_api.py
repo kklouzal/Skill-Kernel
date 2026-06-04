@@ -150,8 +150,16 @@ class MemoryJobStore:
                 return renewed
         return None
 
-    async def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[JobRecord]:
+    async def list_jobs(
+        self,
+        *,
+        workspace_key: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[JobRecord]:
         jobs = list(self.jobs.values())
+        if workspace_key:
+            jobs = [job for job in jobs if job.workspace_key == workspace_key]
         if status:
             jobs = [job for job in jobs if job.status == status]
         return jobs[:limit]
@@ -394,6 +402,35 @@ def test_jobs_api_uses_job_store() -> None:
     assert renewed["job"]["status"] == "leased"
     assert renewed["job"]["span_id"] == str(span_id)
     assert listed["jobs"][0]["idempotency_key"] == "event:two"
+
+
+def test_jobs_api_filters_by_workspace_id() -> None:
+    store = MemoryJobStore()
+    app = create_app(job_store=store)
+    enqueue_route = next(route for route in app.routes if route.path == "/v1/jobs/enqueue")
+    list_route = next(route for route in app.routes if route.path == "/v1/jobs")
+
+    async def run() -> dict[str, object]:
+        await enqueue_route.endpoint(
+            request=JobEnqueueRequest(
+                workspace_id="dev-01",
+                job_kind="evidence_extraction",
+                idempotency_key="event:dev",
+            )
+        )
+        await enqueue_route.endpoint(
+            request=JobEnqueueRequest(
+                workspace_id="smoke-workspace",
+                job_kind="evidence_extraction",
+                idempotency_key="event:smoke",
+            )
+        )
+        return await list_route.endpoint(workspace_id="dev-01")
+
+    listed = asyncio.run(run())
+
+    assert [job["workspace_key"] for job in listed["jobs"]] == ["dev-01"]
+    assert [job["idempotency_key"] for job in listed["jobs"]] == ["event:dev"]
 
 
 def test_jobs_api_rejects_invalid_control_token(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1478,6 +1478,93 @@ CREATE TABLE IF NOT EXISTS autoskill.admin_diagnostic_bundles (
   expires_at timestamptz
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.admin_evidence_fidelity_status (
+  workspace_key text NOT NULL,
+  source_kind text NOT NULL,
+  decision_family text NOT NULL,
+  evidence_fidelity text NOT NULL CHECK (evidence_fidelity IN (
+    'raw_vault_linked',
+    'declassified_summary',
+    'redacted_derivative',
+    'metadata_only',
+    'hash_only',
+    'unavailable'
+  )),
+  item_count bigint NOT NULL DEFAULT 0 CHECK (item_count >= 0),
+  autonomy_support_state text NOT NULL CHECK (autonomy_support_state IN (
+    'sufficient',
+    'degraded',
+    'evidence_insufficient_for_autonomy',
+    'policy_disallowed',
+    'not_applicable',
+    'unknown'
+  )),
+  dominant_reason_code text,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (workspace_key, source_kind, decision_family, evidence_fidelity)
+);
+
+CREATE INDEX IF NOT EXISTS admin_evidence_fidelity_lookup_idx
+ON autoskill.admin_evidence_fidelity_status(workspace_key, decision_family, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.admin_autonomy_decision_status (
+  decision_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_key text NOT NULL,
+  decision_family text NOT NULL,
+  target_kind text NOT NULL,
+  target_id text NOT NULL,
+  action_risk_tier text NOT NULL,
+  hard_invariant_state text NOT NULL,
+  soft_threshold_state text NOT NULL,
+  selected_action text NOT NULL,
+  confidence_band text NOT NULL,
+  evidence_fidelity text NOT NULL,
+  autonomy_support_state text NOT NULL,
+  dominant_reason_code text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS admin_autonomy_decision_lookup_idx
+ON autoskill.admin_autonomy_decision_status(workspace_key, decision_family, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.admin_semantic_adjudication_status (
+  adjudication_run_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_key text NOT NULL,
+  decision_family text NOT NULL,
+  model_profile_id uuid REFERENCES autoskill.model_profiles(model_profile_id),
+  schema_status text NOT NULL,
+  confidence_band text NOT NULL,
+  evidence_fidelity text NOT NULL,
+  verifier_state text NOT NULL,
+  raw_vault_exposure_class text NOT NULL,
+  dominant_reason_code text,
+  started_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS admin_semantic_adjudication_lookup_idx
+ON autoskill.admin_semantic_adjudication_status(workspace_key, decision_family, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.admin_administrative_escalation_status (
+  event_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_key text NOT NULL,
+  hard_boundary_kind text NOT NULL,
+  decision_family text NOT NULL,
+  target_kind text NOT NULL,
+  target_id text NOT NULL,
+  attempted_autonomous_alternatives jsonb NOT NULL DEFAULT '[]'::jsonb,
+  resolution_state text NOT NULL CHECK (
+    resolution_state IN ('open','acknowledged','resolved','rejected','expired')
+  ),
+  dominant_reason_code text NOT NULL,
+  opened_at timestamptz NOT NULL DEFAULT now(),
+  resolved_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS admin_administrative_escalation_lookup_idx
+ON autoskill.admin_administrative_escalation_status(workspace_key, resolution_state, opened_at DESC);
+
 CREATE TABLE IF NOT EXISTS autoskill.diagnostic_momentum (
   diagnostic_momentum_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),

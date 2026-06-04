@@ -182,7 +182,13 @@ class JobStore(Protocol):
     ) -> JobRecord | None:
         """Extend a currently held lease."""
 
-    async def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[JobRecord]:
+    async def list_jobs(
+        self,
+        *,
+        workspace_key: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[JobRecord]:
         """List recent jobs."""
 
     async def summary(self, *, workspace_key: str | None = None) -> JobQueueSummary:
@@ -275,7 +281,13 @@ class NullJobStore:
     ) -> JobRecord | None:
         return None
 
-    async def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[JobRecord]:
+    async def list_jobs(
+        self,
+        *,
+        workspace_key: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[JobRecord]:
         return []
 
     async def summary(self, *, workspace_key: str | None = None) -> JobQueueSummary:
@@ -524,7 +536,13 @@ class AsyncpgJobStore(AsyncpgPoolOwner):
             workspace_key = await _workspace_key(conn, row["workspace_id"])
             return JobRecord.from_row({**dict(row), "workspace_key": workspace_key})
 
-    async def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[JobRecord]:
+    async def list_jobs(
+        self,
+        *,
+        workspace_key: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[JobRecord]:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
@@ -532,10 +550,12 @@ class AsyncpgJobStore(AsyncpgPoolOwner):
                 SELECT j.*, w.external_key AS workspace_key
                 FROM autoskill.jobs j
                 JOIN autoskill.workspaces w USING (workspace_id)
-                WHERE ($1::text IS NULL OR j.status = $1)
+                WHERE ($1::text IS NULL OR w.external_key = $1)
+                  AND ($2::text IS NULL OR j.status = $2)
                 ORDER BY j.created_at DESC
-                LIMIT $2
+                LIMIT $3
                 """,
+                workspace_key,
                 status,
                 limit,
             )
