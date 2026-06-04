@@ -1115,6 +1115,14 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `OPENCLAW_STATE_DIR`, registered expected historical discovery/parse schedule
   payloads, then deleted the smoke workspace and schedules from the persistent
   dev DB.
+- Live Dev-01 broad historical import is running over the bounded OpenClaw
+  roots rather than a single agent root: the first broad discovery/parse run
+  imported 10,005 historical sources and 20,005 redacted chunks, derived 20,003
+  historical evidence rows, completed 40 evidence derivation jobs, completed 40
+  initial embedding jobs, completed one persisted historical bootstrap
+  consolidation job, and queued 100 additional `embeddings.generate` jobs to
+  drain the remaining evidence/historical chunk embedding backlog with the
+  maintenance worker active.
 
 ## Next Gates
 
