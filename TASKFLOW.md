@@ -1106,7 +1106,8 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   bounded OpenClaw state subroots plus the configured workspace root; local
   compose mounts OpenClaw state read-only and no longer schedules broad
   `/workspace` import as the only default root. Scheduler defaults now carry
-  bounded bootstrap parse limits. Validation passed with focused historical
+  bounded but aggressive bootstrap limits for discovery, parse, evidence,
+  embedding, and historical consolidation. Validation passed with focused historical
   import/scheduler tests `23 passed`, `uv run ruff check sidecar`, full `uv run
   pytest` with 324 tests, `uv run python -m compileall -q sidecar`, `docker
   compose config --quiet`, and `git diff --check`. A compose/Postgres smoke

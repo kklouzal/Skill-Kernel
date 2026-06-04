@@ -210,8 +210,10 @@ Acceptance:
   rows through the normal governance transaction/probe path without writing
   runtime skill files;
 - worker default discovery/import scheduling now uses bounded deployment-level
-  limits for historical bootstrap over mounted OpenClaw state roots, while
-  preserving explicit root overrides and avoiding raw path persistence;
+  limits for historical bootstrap over mounted OpenClaw state roots, with
+  recurring evidence, embedding, parse, and consolidation payloads sized for
+  aggressive Dev-01 backlog processing while preserving explicit root overrides
+  and avoiding raw path persistence;
 - remaining historical ingestion work is sustained validation of richer
   non-file ledgers and live source systems beyond the current hashed
   file/item/chunk locator model.

@@ -92,13 +92,14 @@ def test_core_schedule_defaults_register_handler_backed_jobs() -> None:
     assert upserts_by_name["repair.execute"]["misfire_policy"] == "skip"
     assert upserts_by_name["historical_import.parse"]["payload"] == {
         "workspace_id": "dev-01",
-        "max_files": 5000,
+        "max_files": 10_000,
         "max_bytes": 536_870_912,
         "max_chunks": 20_000,
     }
     assert upserts_by_name["historical_bootstrap.consolidate"]["payload"] == {
         "workspace_id": "dev-01",
         "persist": True,
-        "limit": 25,
+        "limit": 1000,
+        "min_support": 2,
     }
     assert all(entry["next_run_at"] == now for entry in scheduler.upserts)

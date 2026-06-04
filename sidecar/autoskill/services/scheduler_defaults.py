@@ -85,14 +85,14 @@ CORE_DEFAULT_SCHEDULES = (
         job_kind="historical_import.parse",
         interval_seconds=30 * 60,
         misfire_policy="coalesce",
-        payload={"max_files": 5000, "max_bytes": 536_870_912, "max_chunks": 20_000},
+        payload={"max_files": 10_000, "max_bytes": 536_870_912, "max_chunks": 20_000},
     ),
     DefaultSchedule(
         name="historical_bootstrap.consolidate",
         job_kind="historical_bootstrap.consolidate",
         interval_seconds=24 * 60 * 60,
         misfire_policy="coalesce",
-        payload={"persist": True, "limit": 25},
+        payload={"persist": True, "limit": 1000, "min_support": 2},
     ),
     DefaultSchedule(
         name="evaluations.run",
