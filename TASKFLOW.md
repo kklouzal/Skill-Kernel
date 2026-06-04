@@ -16,6 +16,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-04: Implementation and Observatory specs were refreshed, revealing acceptance-crosswalk drift. The executable reports now cover the current main production criteria (`31.1`-`31.63`, plus seven context criteria) and Observatory criteria/checklist (`21.1`-`21.42`, `24.auto.1`-`24.auto.6`, `24.1`-`24.38`). Added automatic broker replay episode synthesis from eligible LLM-synthesized redacted telemetry through `/v1/broker/replay-episodes/synthesize`, with explicit hash-only/metadata-only skip reasons and no raw prompt exposure.
 - Project directory created.
 - Handoff saved and checksum-verified.
 - Project-local `AGENTS.md` added.

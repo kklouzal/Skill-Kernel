@@ -419,6 +419,177 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
             "deployment readiness and scheduler defaults separate runtime capture from backfill",
         ),
     ),
+    AcceptanceCriterion(
+        "31.45",
+        "Replay-corpus candidates can be promoted automatically from eligible telemetry without requiring an operator-authored replay plan in the normal path.",
+        (
+            "/v1/broker/replay-episodes/synthesize creates episodes from LLM-synthesized redacted telemetry",
+            "synthesis requires eligible evidence fidelity and deterministic validation pass",
+            "sidecar/autoskill/tests/test_broker_policy_api.py",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.46",
+        "Hash-only telemetry is treated as degraded evidence and cannot silently support full-autonomy replay/canary claims.",
+        (
+            "replay synthesis skips hash_only and metadata_only evidence-fidelity tiers",
+            "synthesis skip reasons are returned to the caller",
+            "test_broker_policy_synthesis_skips_hash_only_telemetry",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.47",
+        "Memory quarantine can resolve high-confidence safe/unsafe records autonomously and escalates only policy, contradiction, or low-confidence cases.",
+        (
+            "memory governance store and action routes expose taint/status/provenance safely",
+            "control-flow and memory quarantine admin read models",
+            "sidecar/autoskill/tests/test_observatory_api.py",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.48",
+        "Every LLM adjudication record stores evidence identity, exposure level, declassification state, confidence, deterministic checks, decision, and escalation reason.",
+        (
+            "LLM invocation and trace-spine records link model calls to safe attributes and object refs",
+            "autonomy assurance payloads expose evidence fidelity and policy gates",
+            "Observatory playbook and microscope tests",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.49",
+        "Raw-prompt retention disabled remains functional while surfacing limited autonomy and reduced replay/canary evidence confidence.",
+        (
+            "raw_content_available=false is explicit in Observatory data quality and content policy",
+            "raw-vault and replay corpus metadata keep raw_prompt_stored=false",
+            "test_observatory_summary_exposes_all_pipeline_stations_and_truth_states",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.50",
+        "Soft-threshold misses trigger autonomous alternatives before administrative escalation.",
+        (
+            "autonomy orchestrator and playbook detail expose fallback actions and blocked-policy actions",
+            "issue board safe_next_action records",
+            "sidecar/autoskill/tests/test_observatory_api.py",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.51",
+        "Hard invariants are separate from adaptive soft thresholds in code, database state, UI, and acceptance reports.",
+        (
+            "scanner/evaluator/writer gates remain deterministic hard blockers",
+            "threshold policy, calibration, and fallback states are read-model diagnostics",
+            "Observatory autonomy assurance and acceptance crosswalks",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.52",
+        "Threshold-deadlock detection and evaluated remediation are represented as first-class diagnostic states.",
+        (
+            "issue board and guided playbooks expose stalled decision reason codes and safe next actions",
+            "Observatory autonomy/degraded evidence acceptance entries",
+            "sidecar/autoskill/tests/test_observatory_api.py",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.53",
+        "Composite confidence records include model confidence, evidence coverage, source fidelity, contradiction, scanner/evaluator, reversibility, canary, and calibration support.",
+        (
+            "autonomy assurance dashboards expose confidence, evidence, fallback, and calibration fields",
+            "trace replay read model includes policy/gate badges",
+            "sidecar/autoskill/tests/test_observatory_acceptance_report.py",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.54",
+        "Near-margin accepted decisions move to canary, ephemeral, narrower activation, or more-probe states without defaulting to admin when hard gates pass.",
+        (
+            "broker canary feedback records critical/degraded/pass state and rollback recommendations",
+            "proposal gates support target/regression/adversarial/canary probes",
+            "sidecar/autoskill/tests/test_broker_policy_api.py",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.55",
+        "Every semantic decision family has calibration observations, delayed outcomes, and reliability metrics visible for operation.",
+        (
+            "Observatory model/profile, replay, canary, and autonomy assurance read models",
+            "operator metrics include scanner/evaluator failures and replay corpus coverage",
+            "scripts/autoskill_observatory_acceptance.py",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.56",
+        "Soft-threshold policy versions pass replay/backtest/shadow/canary evidence before activation.",
+        (
+            "broker policy replay and stored replay corpus endpoints",
+            "broker policy canary feedback can roll back critical policies",
+            "test_broker_policy_api_activates_policy_and_replay_uses_it",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.57",
+        "Adaptive thresholding cannot weaken hard safety, privacy, rollback, scanner, evaluator, filesystem, or audit invariants.",
+        (
+            "synthesis and action routes require deterministic validation and control auth",
+            "writer/scanner/evaluator gates remain outside threshold policy artifacts",
+            "scripts/autoskill_acceptance.py hard-invariant criteria 31.14-31.17",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.58",
+        "High-impact runtime changes use risk tiering, verifier/probe coverage, canary, and rollback rather than default administrative escalation.",
+        (
+            "activation gates require scanner/evaluator/proposal states",
+            "canary rollback and revocation worker paths",
+            "sidecar/autoskill/tests/test_lifecycle.py",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.59",
+        "Administrative escalation is reason-coded and cannot be represented merely as a failed soft threshold.",
+        (
+            "administrative_escalation station, issue board reason codes, and playbook detail",
+            "safe diagnostic actions distinguish blocked policy from operator actions",
+            "sidecar/autoskill/tests/test_observatory_api.py",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.60",
+        "Observatory exposes calibration support, reliability metrics, threshold-deadlock state, and reason codes for stalled decisions.",
+        (
+            "observatory autonomy acceptance criteria 21.23 and developer checklist autonomy items",
+            "playbook signal state includes confidence, issue links, warnings, and actions",
+            "scripts/autoskill_observatory_acceptance.py",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.61",
+        "Replay synthesis stores provenance, exposure policy, deterministic validation, and source retrieval log links for automatically derived episodes.",
+        (
+            "BrokerReplayEpisodeSynthesizeResponse returns episodes and skip reasons",
+            "broker_replay_episodes.metadata includes source, evidence_fidelity, validation, and raw_prompt_stored=false",
+            "test_broker_policy_synthesizes_replay_episodes_from_redacted_telemetry",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.62",
+        "Automatically synthesized replay episodes are immediately usable by normal broker replay/canary evaluation.",
+        (
+            "synthesized episodes are stored through BrokerPolicyStore.record_replay_episode",
+            "BrokerPolicyReplayRequest include_stored_episodes consumes telemetry-derived tags",
+            "test_broker_policy_synthesizes_replay_episodes_from_redacted_telemetry",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.63",
+        "New implementation-spec criteria are covered by executable acceptance crosswalks rather than informal ledger claims.",
+        (
+            "scripts/autoskill_acceptance.py covers production criteria 31.1 through 31.63",
+            "sidecar/autoskill/tests/test_acceptance_report.py asserts the current criterion count",
+            "uv run python scripts/autoskill_acceptance.py --json",
+        ),
+    ),
 )
 
 

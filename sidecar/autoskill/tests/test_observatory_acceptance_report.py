@@ -43,9 +43,9 @@ def test_observatory_acceptance_report_maps_ui_spec_and_checklist() -> None:
 
     assert report["ready"] is True
     assert report["summary"]["validation_errors"] == []
-    assert report["summary"]["acceptance_criteria"] == 40
-    assert report["summary"]["developer_checklist"] == 38
-    assert report["summary"]["satisfied"] == 78
+    assert report["summary"]["acceptance_criteria"] == 42
+    assert report["summary"]["developer_checklist"] == 44
+    assert report["summary"]["satisfied"] == 86
     assert observatory_acceptance.validate_items(
         (
             *observatory_acceptance.ACCEPTANCE_CRITERIA,

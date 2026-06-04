@@ -2,6 +2,8 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-04 update: the authoritative main and Observatory specs were refreshed. Acceptance crosswalks were expanded to the current main criteria (`31.1`-`31.63` plus context criteria) and Observatory criteria/checklist (`21.1`-`21.42`, `24.auto.1`-`24.auto.6`, `24.1`-`24.38`). The first newly exposed implementation gap was closed by adding automatic, content-safe broker replay episode synthesis from eligible LLM-synthesized redacted telemetry; hash-only and metadata-only telemetry now produces explicit skip reasons instead of being treated as full-autonomy replay evidence.
+
 ## Phase 0 - Confirm OpenClaw Seams
 
 Deliverables:

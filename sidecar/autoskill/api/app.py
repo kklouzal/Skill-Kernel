@@ -1218,6 +1218,18 @@ class BrokerReplayEpisodeListResponse(BaseModel):
     episodes: list[dict[str, object]]
 
 
+class BrokerReplayEpisodeSynthesizeRequest(BaseModel):
+    workspace_id: str
+    limit: int = 50
+    tags: list[str] = Field(default_factory=list)
+    min_intent_chars: int = 8
+
+
+class BrokerReplayEpisodeSynthesizeResponse(BaseModel):
+    episodes: list[dict[str, object]]
+    skipped: list[dict[str, object]]
+
+
 class BrokerPolicyCanaryRequest(BaseModel):
     workspace_id: str
     broker_policy_version_id: UUID
@@ -3224,6 +3236,148 @@ async def _broker_replay_episodes(
     return episodes
 
 
+REPLAY_SYNTHESIS_ALLOWED_FIDELITY = {
+    "raw_vault_linked",
+    "declassified_summary",
+    "redacted_derivative",
+}
+REPLAY_SYNTHESIS_SECRET_MARKERS = (
+    "sk-",
+    "api_key",
+    "apikey",
+    "authorization:",
+    "bearer ",
+    "password",
+    "token=",
+    "secret",
+)
+
+
+def _broker_replay_synthesis_candidate(
+    log: Any,
+    *,
+    min_intent_chars: int,
+) -> tuple[dict[str, object] | None, str]:
+    metadata = log.metadata if isinstance(log.metadata, dict) else {}
+    intent, intent_source = _redacted_replay_intent(metadata)
+    if intent is None or len(intent) < min_intent_chars:
+        return None, "missing-redacted-intent"
+    lowered = intent.lower()
+    if any(marker in lowered for marker in REPLAY_SYNTHESIS_SECRET_MARKERS):
+        return None, "redacted-intent-secret-marker"
+
+    evidence_fidelity = _metadata_text(
+        metadata,
+        "evidence_fidelity",
+        "replay.evidence_fidelity",
+        "semantic_adjudication.evidence_fidelity",
+        "evidence.fidelity",
+    )
+    if evidence_fidelity not in REPLAY_SYNTHESIS_ALLOWED_FIDELITY:
+        return None, f"unsupported-evidence-fidelity:{evidence_fidelity or 'missing'}"
+
+    adjudication_source = _metadata_text(
+        metadata,
+        "redacted_intent_source",
+        "replay.redacted_intent_source",
+        "semantic_adjudication.source",
+        "semantic_adjudication.adjudicator",
+    )
+    semantic_adjudication = _metadata_path(metadata, "semantic_adjudication")
+    llm_backed = (
+        isinstance(adjudication_source, str)
+        and "llm" in adjudication_source.lower()
+    ) or isinstance(semantic_adjudication, dict)
+    if not llm_backed:
+        return None, "missing-llm-adjudication"
+
+    validation = _metadata_path(metadata, "deterministic_validation")
+    validation_status = _metadata_text(
+        metadata,
+        "deterministic_validation.status",
+        "replay.deterministic_validation.status",
+        "semantic_adjudication.deterministic_validation.status",
+    )
+    if validation_status not in {"passed", "valid", "validated", "ok"}:
+        return None, f"deterministic-validation-not-passed:{validation_status or 'missing'}"
+
+    expected_skill_ids = list(log.rendered_skill_ids or log.candidate_skill_ids or [])
+    expected_decision = _expected_replay_decision(log)
+    metadata_payload = {
+        "source": "automatic_replay_synthesis",
+        "source_retrieval_log_id": str(log.retrieval_log_id),
+        "trace_id": str(log.trace_id) if log.trace_id else None,
+        "span_id": str(log.span_id) if log.span_id else None,
+        "session_id": log.session_id,
+        "turn_id": log.turn_id,
+        "evidence_fidelity": evidence_fidelity,
+        "redacted_intent_source": adjudication_source or intent_source,
+        "deterministic_validation": validation if isinstance(validation, dict) else {},
+        "raw_prompt_stored": False,
+        "operator_plan_required": False,
+        "normal_path": True,
+    }
+    return (
+        {
+            "episode_key": f"telemetry-{str(log.retrieval_log_id)[:12]}",
+            "redacted_user_intent": intent,
+            "expected_decision": expected_decision,
+            "expected_skill_ids": expected_skill_ids,
+            "metadata": metadata_payload,
+            "source_retrieval_log_id": log.retrieval_log_id,
+        },
+        "eligible",
+    )
+
+
+def _redacted_replay_intent(metadata: dict[str, Any]) -> tuple[str | None, str]:
+    paths = (
+        "redacted_user_intent",
+        "redacted_intent",
+        "replay.redacted_user_intent",
+        "semantic_adjudication.redacted_user_intent",
+        "semantic_adjudication.redacted_intent",
+    )
+    for path in paths:
+        value = _metadata_path(metadata, path)
+        if isinstance(value, str) and value.strip():
+            return value.strip(), path
+    return None, ""
+
+
+def _metadata_text(metadata: dict[str, Any], *paths: str) -> str | None:
+    for path in paths:
+        value = _metadata_path(metadata, path)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _metadata_path(metadata: dict[str, Any], path: str) -> Any:
+    current: Any = metadata
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _expected_replay_decision(log: Any) -> str:
+    if log.rendered_skill_ids:
+        return "skill_hint"
+    decision = str(log.decision or "")
+    if log.no_skill_control or decision in {
+        "no_skill",
+        "no_candidates",
+        "empty_query",
+        "retrieval-empty",
+    }:
+        return "no_skill"
+    if decision in {"defer_skill", "evidence_only", "evidence-only"}:
+        return "defer_skill"
+    return "skill_hint" if log.candidate_skill_ids else "no_skill"
+
+
 def create_app(
     event_store: EventStore | None = None,
     job_store: JobStore | None = None,
@@ -3747,6 +3901,57 @@ def create_app(
             source_retrieval_log_id=request.source_retrieval_log_id,
         )
         return BrokerReplayEpisodeRecordResponse(episode=episode.to_json())
+
+    @app.post(
+        "/v1/broker/replay-episodes/synthesize",
+        response_model=BrokerReplayEpisodeSynthesizeResponse,
+    )
+    async def synthesize_broker_replay_episodes(
+        request: BrokerReplayEpisodeSynthesizeRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> BrokerReplayEpisodeSynthesizeResponse:
+        _require_control_auth(authorization)
+        logs = await retrieval.list_recent_logs(
+            workspace_key=request.workspace_id,
+            limit=max(1, min(request.limit, 250)),
+        )
+        base_tags = {
+            "production",
+            "redacted",
+            "telemetry-derived",
+            "llm-synthesized",
+        }
+        tags = sorted(base_tags | {tag for tag in request.tags if tag.strip()})
+        episodes: list[dict[str, object]] = []
+        skipped: list[dict[str, object]] = []
+        for log in logs:
+            candidate, reason = _broker_replay_synthesis_candidate(
+                log,
+                min_intent_chars=max(1, request.min_intent_chars),
+            )
+            if candidate is None:
+                skipped.append(
+                    {
+                        "retrieval_log_id": str(log.retrieval_log_id),
+                        "reason": reason,
+                    }
+                )
+                continue
+            episode = await broker_policies.record_replay_episode(
+                workspace_key=request.workspace_id,
+                episode_key=str(candidate["episode_key"]),
+                redacted_user_intent=str(candidate["redacted_user_intent"]),
+                expected_decision=str(candidate["expected_decision"]),
+                expected_skill_ids=list(candidate["expected_skill_ids"]),
+                tags=tags,
+                metadata=dict(candidate["metadata"]),
+                source_retrieval_log_id=candidate["source_retrieval_log_id"],
+            )
+            episodes.append(episode.to_json())
+        return BrokerReplayEpisodeSynthesizeResponse(
+            episodes=episodes,
+            skipped=skipped,
+        )
 
     @app.get(
         "/v1/broker/replay-episodes",

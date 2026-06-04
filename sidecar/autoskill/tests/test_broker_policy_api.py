@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from autoskill.api.app import (
@@ -8,10 +9,11 @@ from autoskill.api.app import (
     BrokerPolicyUpsertRequest,
     BrokerPolicyUsageProposalRequest,
     BrokerReplayEpisodeRecordRequest,
+    BrokerReplayEpisodeSynthesizeRequest,
     create_app,
 )
 from autoskill.db.broker_policy import NullBrokerPolicyStore
-from autoskill.db.retrieval import RetrievalCandidate
+from autoskill.db.retrieval import RetrievalCandidate, RetrievalLog
 from autoskill.db.usage import UsageTopologyRecommendation
 from autoskill.services.broker import BrokerReplayEpisode
 from autoskill.tests.test_broker import MemoryBrokerRetrievalStore
@@ -43,6 +45,26 @@ class MemoryUsageRecommendationStore:
             }
         )
         return self.recommendations[:limit]
+
+
+class TelemetryReplayRetrievalStore(MemoryBrokerRetrievalStore):
+    def __init__(
+        self,
+        candidates: list[RetrievalCandidate],
+        logs: list[RetrievalLog],
+    ) -> None:
+        super().__init__(candidates)
+        self.logs = logs
+        self.list_calls: list[dict[str, object]] = []
+
+    async def list_recent_logs(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+    ) -> list[RetrievalLog]:
+        self.list_calls.append({"workspace_key": workspace_key, "limit": limit})
+        return self.logs[:limit]
 
 
 def test_broker_policy_api_activates_policy_and_replay_uses_it() -> None:
@@ -117,6 +139,153 @@ def test_broker_policy_api_activates_policy_and_replay_uses_it() -> None:
     assert replayed.replay.matched == 1
     assert replayed.replay.policy["version"] == "broker-policy-test.v1"
     assert retrieval.calls[0]["limit"] == 2
+
+
+def test_broker_policy_synthesizes_replay_episodes_from_redacted_telemetry() -> None:
+    policy_store = NullBrokerPolicyStore()
+    skill_id = uuid4()
+    retrieval_log_id = uuid4()
+    retrieval = TelemetryReplayRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=skill_id,
+                summary="WHEN PDF tables are malformed, use the deterministic repair workflow.",
+                rank=0.9,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "pdf-table-repair",
+                },
+            )
+        ],
+        [
+            RetrievalLog(
+                retrieval_log_id=retrieval_log_id,
+                trace_id=uuid4(),
+                span_id=uuid4(),
+                parent_span_id=None,
+                session_id="sess-redacted",
+                turn_id="turn-redacted",
+                broker_policy_version_id=None,
+                decision="candidates_found",
+                candidate_skill_ids=[skill_id],
+                rendered_skill_ids=[skill_id],
+                no_skill_control=False,
+                metadata={
+                    "evidence_fidelity": "raw_vault_linked",
+                    "redacted_user_intent": "repair redacted pdf table",
+                    "redacted_intent_source": "llm_synthesized_redacted_intent",
+                    "deterministic_validation": {
+                        "status": "passed",
+                        "schema": "redacted-intent.v1",
+                    },
+                },
+                created_at=datetime.now(UTC),
+            )
+        ],
+    )
+    app = create_app(
+        broker_policy_store=policy_store,
+        retrieval_store=retrieval,
+    )
+    synthesize = next(
+        route
+        for route in app.routes
+        if route.path == "/v1/broker/replay-episodes/synthesize"
+    )
+    replay = next(route for route in app.routes if route.path == "/v1/broker/policies/replay")
+
+    async def run():
+        synthesized = await synthesize.endpoint(
+            request=BrokerReplayEpisodeSynthesizeRequest(
+                workspace_id="dev-01",
+                tags=["operator-reviewed"],
+            )
+        )
+        replayed = await replay.endpoint(
+            request=BrokerPolicyReplayRequest(
+                workspace_id="dev-01",
+                include_stored_episodes=True,
+                stored_episode_tags=["telemetry-derived"],
+            )
+        )
+        return synthesized, replayed
+
+    synthesized, replayed = asyncio.run(run())
+
+    assert synthesized.skipped == []
+    assert len(synthesized.episodes) == 1
+    episode = synthesized.episodes[0]
+    assert episode["episode_key"] == f"telemetry-{str(retrieval_log_id)[:12]}"
+    assert episode["redacted_user_intent"] == "repair redacted pdf table"
+    assert episode["expected_decision"] == "skill_hint"
+    assert episode["expected_skill_ids"] == [str(skill_id)]
+    assert set(episode["tags"]) >= {
+        "production",
+        "redacted",
+        "telemetry-derived",
+        "llm-synthesized",
+        "operator-reviewed",
+    }
+    assert episode["metadata"]["operator_plan_required"] is False
+    assert episode["metadata"]["raw_prompt_stored"] is False
+    assert episode["source_retrieval_log_id"] == str(retrieval_log_id)
+    assert replayed.replay.total == 1
+    assert replayed.replay.matched == 1
+
+
+def test_broker_policy_synthesis_skips_hash_only_telemetry() -> None:
+    retrieval_log_id = uuid4()
+    retrieval = TelemetryReplayRetrievalStore(
+        [],
+        [
+            RetrievalLog(
+                retrieval_log_id=retrieval_log_id,
+                trace_id=None,
+                span_id=None,
+                parent_span_id=None,
+                session_id=None,
+                turn_id=None,
+                broker_policy_version_id=None,
+                decision="no_candidates",
+                candidate_skill_ids=[],
+                rendered_skill_ids=[],
+                no_skill_control=True,
+                metadata={
+                    "evidence_fidelity": "hash_only",
+                    "redacted_user_intent": "repair redacted pdf table",
+                    "redacted_intent_source": "llm_synthesized_redacted_intent",
+                    "deterministic_validation": {"status": "passed"},
+                },
+                created_at=datetime.now(UTC),
+            )
+        ],
+    )
+    app = create_app(
+        broker_policy_store=NullBrokerPolicyStore(),
+        retrieval_store=retrieval,
+    )
+    synthesize = next(
+        route
+        for route in app.routes
+        if route.path == "/v1/broker/replay-episodes/synthesize"
+    )
+
+    response = asyncio.run(
+        synthesize.endpoint(
+            request=BrokerReplayEpisodeSynthesizeRequest(workspace_id="dev-01")
+        )
+    )
+
+    assert response.episodes == []
+    assert response.skipped == [
+        {
+            "retrieval_log_id": str(retrieval_log_id),
+            "reason": "unsupported-evidence-fidelity:hash_only",
+        }
+    ]
 
 
 def test_broker_policy_replay_uses_stored_redacted_episode_corpus() -> None:

@@ -16,9 +16,9 @@ def test_production_acceptance_report_maps_every_concrete_criterion() -> None:
 
     assert report["ready"] is True
     assert report["summary"]["validation_errors"] == []
-    assert report["summary"]["production_criteria"] == 44
+    assert report["summary"]["production_criteria"] == 63
     assert report["summary"]["context_criteria"] == 7
-    assert report["summary"]["implemented"] == 51
+    assert report["summary"]["implemented"] == 70
     assert (
         acceptance.validate_criteria(
             (*acceptance.PRODUCTION_CRITERIA, *acceptance.CONTEXT_CRITERIA)
