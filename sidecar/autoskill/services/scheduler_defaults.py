@@ -121,15 +121,19 @@ async def ensure_core_schedules(
     """Register handler-backed core schedules from the implementation spec."""
 
     scheduled_at = now or datetime.now(UTC)
+    existing_by_name = {
+        schedule.name: schedule for schedule in await scheduler.list_schedules(limit=500)
+    }
     results: list[ScheduleUpsertResult] = []
     for schedule in CORE_DEFAULT_SCHEDULES:
+        existing = existing_by_name.get(schedule.name)
         payload = {"workspace_id": workspace_key, **schedule.payload}
         result = await scheduler.upsert_schedule(
             workspace_key=workspace_key,
             name=schedule.name,
             job_kind=schedule.job_kind,
             interval_seconds=schedule.interval_seconds,
-            next_run_at=scheduled_at,
+            next_run_at=existing.next_run_at if existing is not None else scheduled_at,
             payload=payload,
             enabled=enabled,
             misfire_policy=schedule.misfire_policy,

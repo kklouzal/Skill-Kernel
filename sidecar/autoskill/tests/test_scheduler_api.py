@@ -8,6 +8,7 @@ from autoskill.db.scheduler import (
     ScheduleRecord,
     SchedulerTickResult,
     ScheduleUpsertResult,
+    _json_object,
     _missed_run_count,
     _next_run_after,
     _should_enqueue_misfire,
@@ -154,6 +155,14 @@ def test_scheduler_api_upserts_and_ticks_due_schedules() -> None:
     assert ticked.jobs[0]["job_kind"] == "evidence_extraction"
     assert listed["schedules"][0]["misfire_policy"] == "coalesce"
     assert listed["schedules"][0]["name"] == "evidence"
+
+
+def test_scheduler_normalizes_asyncpg_jsonb_string_payloads() -> None:
+    assert _json_object('{"limit": 500, "workspace_id": "dev-01"}') == {
+        "limit": 500,
+        "workspace_id": "dev-01",
+    }
+    assert _json_object('"not-an-object"') == {}
 
 
 def test_scheduler_api_skips_stale_schedule_by_misfire_policy() -> None:

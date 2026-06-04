@@ -25,6 +25,7 @@ from autoskill.db.observability import AsyncpgObservabilityStore
 from autoskill.db.retrieval import AsyncpgRetrievalStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore
 from autoskill.db.topology import AsyncpgTopologyStore
+from autoskill.db.usage import AsyncpgUsageStore
 from autoskill.db.utility import AsyncpgUtilityStore
 from autoskill.services.embedding_generation import build_text_embedder_from_settings
 from autoskill.services.external_inventory import ensure_external_skill_scan_schedule
@@ -86,6 +87,10 @@ async def run_worker(args: argparse.Namespace) -> int:
         statement_timeout_ms=settings.statement_timeout_ms,
     )
     utility = AsyncpgUtilityStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
+    usage = AsyncpgUsageStore(
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
     )
@@ -181,6 +186,7 @@ async def run_worker(args: argparse.Namespace) -> int:
                 diagnostics=diagnostics,
                 context_governance=context_governance,
                 topology=topology,
+                usage=usage,
                 attribution=attribution,
                 activation_gate=activation_gate,
                 memory_governance=memory_governance,
@@ -219,6 +225,7 @@ async def run_worker(args: argparse.Namespace) -> int:
         await context_governance.close()
         await observability.close()
         await topology.close()
+        await usage.close()
         await attribution.close()
         await activation_gate.close()
         await memory_governance.close()

@@ -92,6 +92,43 @@ def test_historical_bootstrap_consolidates_only_historical_evidence() -> None:
     assert result.to_json()["activation_allowed"] is False
 
 
+def test_historical_bootstrap_ignores_legacy_string_payload_evidence() -> None:
+    historical_one = _historical_evidence("taskflow", "repair repeated task ledger")
+    historical_two = _historical_evidence("taskflow", "repair repeated task ledger")
+    legacy_payload = EvidenceRecord(
+        evidence_id=uuid4(),
+        workspace_id=uuid4(),
+        workspace_key="dev-01",
+        source_event_id=None,
+        evidence_hash=str(uuid4()),
+        kind="historical_chunk_observation",
+        maturity="observed",
+        trust="historical_import",
+        taint=["historical", "raw_historical"],
+        summary="Legacy historical payload shape.",
+        payload="legacy-payload",  # type: ignore[arg-type]
+        created_at=datetime.now(UTC),
+    )
+    evidence = MemoryHistoricalBootstrapEvidenceStore(
+        [legacy_payload, historical_one, historical_two]
+    )
+    retrieval = MemoryHistoricalBootstrapRetrievalStore([])
+
+    async def run():
+        return await consolidate_historical_bootstrap(
+            evidence,
+            retrieval,
+            workspace_key="dev-01",
+            min_support=2,
+        )
+
+    result = asyncio.run(run())
+
+    assert result.scanned == 3
+    assert result.historical_scanned == 2
+    assert result.proposals.proposed == 1
+
+
 def test_historical_bootstrap_suppresses_candidate_when_active_match_exists() -> None:
     skill_id = uuid4()
     evidence = MemoryHistoricalBootstrapEvidenceStore(

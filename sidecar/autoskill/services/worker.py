@@ -327,6 +327,12 @@ async def run_worker_loop(
     succeeded = 0
     failed = 0
     idle = 0
+    scheduler_ticks = 0
+    scheduler_due = 0
+    scheduler_enqueued = 0
+    scheduler_skipped = 0
+    scheduler_misfires_coalesced = 0
+    scheduler_lock_misses = 0
 
     while stop_event is None or not stop_event.is_set():
         if config.max_iterations is not None and iterations >= config.max_iterations:
@@ -336,15 +342,31 @@ async def run_worker_loop(
             pool=config.pool,
             concurrency=concurrency,
             status="running",
-            summary={
-                "iterations": iterations,
-                "claimed": claimed,
-                "succeeded": succeeded,
-                "failed": failed,
-                "idle": idle,
-            },
+            summary=_worker_loop_summary(
+                iterations=iterations,
+                claimed=claimed,
+                succeeded=succeeded,
+                failed=failed,
+                idle=idle,
+                scheduler_ticks=scheduler_ticks,
+                scheduler_due=scheduler_due,
+                scheduler_enqueued=scheduler_enqueued,
+                scheduler_skipped=scheduler_skipped,
+                scheduler_misfires_coalesced=scheduler_misfires_coalesced,
+                scheduler_lock_misses=scheduler_lock_misses,
+            ),
         )
         iterations += 1
+        if config.pool == "scheduler":
+            tick = await stores.scheduler.run_due_schedules(limit=max(25, concurrency * 25))
+            scheduler_ticks += 1
+            if tick.lock_acquired:
+                scheduler_due += tick.due
+                scheduler_enqueued += tick.enqueued
+                scheduler_skipped += tick.skipped
+                scheduler_misfires_coalesced += tick.misfires_coalesced
+            else:
+                scheduler_lock_misses += 1
         results = await asyncio.gather(
             *[
                 run_worker_once(
@@ -374,13 +396,19 @@ async def run_worker_loop(
         pool=config.pool,
         concurrency=concurrency,
         status="stopped" if stop_event and stop_event.is_set() else "idle",
-        summary={
-            "iterations": iterations,
-            "claimed": claimed,
-            "succeeded": succeeded,
-            "failed": failed,
-            "idle": idle,
-        },
+        summary=_worker_loop_summary(
+            iterations=iterations,
+            claimed=claimed,
+            succeeded=succeeded,
+            failed=failed,
+            idle=idle,
+            scheduler_ticks=scheduler_ticks,
+            scheduler_due=scheduler_due,
+            scheduler_enqueued=scheduler_enqueued,
+            scheduler_skipped=scheduler_skipped,
+            scheduler_misfires_coalesced=scheduler_misfires_coalesced,
+            scheduler_lock_misses=scheduler_lock_misses,
+        ),
     )
     return WorkerLoopSummary(
         iterations=iterations,
@@ -390,6 +418,41 @@ async def run_worker_loop(
         idle=idle,
         stopped=bool(stop_event and stop_event.is_set()),
     )
+
+
+def _worker_loop_summary(
+    *,
+    iterations: int,
+    claimed: int,
+    succeeded: int,
+    failed: int,
+    idle: int,
+    scheduler_ticks: int,
+    scheduler_due: int,
+    scheduler_enqueued: int,
+    scheduler_skipped: int,
+    scheduler_misfires_coalesced: int,
+    scheduler_lock_misses: int,
+) -> dict[str, int]:
+    summary = {
+        "iterations": iterations,
+        "claimed": claimed,
+        "succeeded": succeeded,
+        "failed": failed,
+        "idle": idle,
+    }
+    if scheduler_ticks:
+        summary.update(
+            {
+                "scheduler_ticks": scheduler_ticks,
+                "scheduler_due": scheduler_due,
+                "scheduler_enqueued": scheduler_enqueued,
+                "scheduler_skipped": scheduler_skipped,
+                "scheduler_misfires_coalesced": scheduler_misfires_coalesced,
+                "scheduler_lock_misses": scheduler_lock_misses,
+            }
+        )
+    return summary
 
 
 async def _run_with_lease_renewal(
@@ -1660,7 +1723,7 @@ async def _run_historical_bootstrap_consolidate(
     proposal_payload = output["proposals"]
     proposal_rows = proposal_payload.get("proposals", [])
     transaction = None
-    transaction_id = _uuid_value(job.payload.get("evolution_transaction_id"))
+    transaction_id = _uuid_value(_payload_dict(job.payload).get("evolution_transaction_id"))
     if result.proposals.proposed > 0 and transaction_id is None:
         started = await stores.governance.start_transaction(
             workspace_key=workspace,

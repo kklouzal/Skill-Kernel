@@ -290,7 +290,7 @@ async def _enqueue_scheduled_job(
         schedule["workspace_id"],
         schedule["job_kind"],
         idempotency_key,
-        _json(schedule["payload"]),
+        _json(_json_object(schedule["payload"])),
     )
     if row is None:
         return None
@@ -340,6 +340,18 @@ def _validate_misfire_policy(value: str) -> str:
 
 def _json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _json_object(payload: object) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, str):
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
 
 
 def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:

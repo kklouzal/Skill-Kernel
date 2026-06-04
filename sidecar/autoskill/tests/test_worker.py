@@ -57,7 +57,14 @@ class MemoryEvidenceWorkerStore:
 
 
 class MemorySchedulerWorkerStore:
+    def __init__(self, results: list[SchedulerTickResult] | None = None) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.results = list(results or [])
+
     async def run_due_schedules(self, *, limit: int = 25) -> SchedulerTickResult:
+        self.calls.append({"limit": limit})
+        if self.results:
+            return self.results.pop(0)
         return SchedulerTickResult(due=0, enqueued=0, jobs=[])
 
     async def upsert_schedule(self, **_kwargs):
@@ -1019,6 +1026,43 @@ def test_worker_loop_runs_bounded_concurrent_iterations() -> None:
     assert summary.idle == 1
     assert stores.jobs.heartbeats["loop-worker"].status == "idle"
     assert stores.jobs.heartbeats["loop-worker"].summary["claimed"] == 2
+
+
+def test_scheduler_worker_loop_ticks_due_schedules_without_tick_job() -> None:
+    stores = WorkerTestStores(
+        jobs=MemoryJobStore(),
+        scheduler=MemorySchedulerWorkerStore(
+            results=[
+                SchedulerTickResult(due=2, enqueued=2, jobs=[], misfires_coalesced=3),
+                SchedulerTickResult(due=0, enqueued=0, jobs=[]),
+            ]
+        ),
+        evidence=MemoryEvidenceWorkerStore(),
+        embeddings=MemoryPendingEmbeddingStore(),
+    )
+
+    async def run():
+        return await run_worker_loop(
+            stores.as_worker_stores(),
+            WorkerLoopConfig(
+                worker_id="scheduler-worker",
+                pool="scheduler",
+                concurrency=1,
+                idle_sleep_seconds=0,
+                max_iterations=2,
+            ),
+        )
+
+    summary = asyncio.run(run())
+
+    assert summary.iterations == 2
+    assert summary.claimed == 0
+    assert stores.scheduler.calls == [{"limit": 25}, {"limit": 25}]
+    heartbeat = stores.jobs.heartbeats["scheduler-worker"]
+    assert heartbeat.summary["scheduler_ticks"] == 2
+    assert heartbeat.summary["scheduler_due"] == 2
+    assert heartbeat.summary["scheduler_enqueued"] == 2
+    assert heartbeat.summary["scheduler_misfires_coalesced"] == 3
 
 
 def test_worker_loop_stops_on_event_while_idle() -> None:

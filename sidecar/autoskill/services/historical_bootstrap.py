@@ -54,6 +54,8 @@ async def consolidate_historical_bootstrap(
 
 
 def _historical_bootstrap_evidence(record: EvidenceRecord) -> bool:
+    if not isinstance(record.payload, dict):
+        return False
     if record.kind == "historical_chunk_observation":
         return True
     if record.kind != "recurring_evidence_cluster":

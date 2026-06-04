@@ -10,8 +10,9 @@ from autoskill.services.scheduler_defaults import (
 
 
 class MemorySchedulerStore:
-    def __init__(self) -> None:
+    def __init__(self, schedules: list[ScheduleRecord] | None = None) -> None:
         self.upserts: list[dict[str, object]] = []
+        self.schedules = schedules or []
 
     async def upsert_schedule(
         self,
@@ -56,7 +57,7 @@ class MemorySchedulerStore:
         raise NotImplementedError
 
     async def list_schedules(self, *, limit: int = 50):
-        raise NotImplementedError
+        return self.schedules[:limit]
 
 
 def test_core_schedule_defaults_register_handler_backed_jobs() -> None:
@@ -103,3 +104,35 @@ def test_core_schedule_defaults_register_handler_backed_jobs() -> None:
         "min_support": 2,
     }
     assert all(entry["next_run_at"] == now for entry in scheduler.upserts)
+
+
+def test_core_schedule_defaults_preserve_existing_schedule_cadence() -> None:
+    now = datetime(2026, 6, 3, tzinfo=UTC)
+    existing_next_run_at = datetime(2026, 6, 3, 1, 30, tzinfo=UTC)
+    scheduler = MemorySchedulerStore(
+        schedules=[
+            ScheduleRecord(
+                schedule_id=uuid4(),
+                workspace_key="dev-01",
+                name="embeddings.generate",
+                job_kind="embeddings.generate",
+                enabled=True,
+                interval_seconds=300,
+                next_run_at=existing_next_run_at,
+                payload={"workspace_id": "dev-01", "limit": 500},
+                misfire_policy="coalesce",
+            )
+        ]
+    )
+
+    asyncio.run(
+        ensure_core_schedules(
+            scheduler,
+            workspace_key="dev-01",
+            now=now,
+        )
+    )
+
+    upserts_by_name = {entry["name"]: entry for entry in scheduler.upserts}
+    assert upserts_by_name["embeddings.generate"]["next_run_at"] == existing_next_run_at
+    assert upserts_by_name["evidence.derive"]["next_run_at"] == now
