@@ -18,7 +18,7 @@ HEALTH_ORDER = {
     "offline": 5,
 }
 
-EVALUATION_FAILURE_STATUSES = {"blocked", "failed", "needs_intervention"}
+EVALUATION_FAILURE_STATUSES = {"blocked", "failed"}
 
 REQUIRED_METRICS_BY_FAMILY: dict[str, tuple[str, ...]] = {
     "ingest": ("ingest",),

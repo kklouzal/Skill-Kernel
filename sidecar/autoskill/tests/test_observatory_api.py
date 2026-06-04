@@ -322,6 +322,24 @@ def test_observatory_summary_defaults_to_effective_workspace(
     get_settings.cache_clear()
 
 
+def test_status_defaults_to_effective_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AUTOSKILL_WORKSPACE_ID", "prod-ops")
+    get_settings.cache_clear()
+    jobs = MemorySummaryJobStore()
+    app = create_app(job_store=jobs)
+    route = _routes(app)[("/v1/status", "GET")]
+
+    async def run():
+        return await route.endpoint(workspace_id=None)
+
+    response = asyncio.run(run())
+
+    assert response.workspace_id == "prod-ops"
+    assert jobs.summary_calls == ["prod-ops", "prod-ops"]
+
+    get_settings.cache_clear()
+
+
 def test_observatory_live_sse_fallback_preserves_snapshot_sequence() -> None:
     app = create_app(audit_store=MemoryAuditStore())
     route = _routes(app)[("/admin/live-sse", "GET")]
@@ -859,7 +877,9 @@ def test_observatory_planned_evaluations_are_not_failures() -> None:
             window_minutes=10,
         )
 
-    planned_snapshot = snapshot_for({"planned": 4, "passed": 1, "revoked": 2})
+    planned_snapshot = snapshot_for(
+        {"planned": 4, "passed": 1, "revoked": 2, "needs_intervention": 3}
+    )
     evaluator = next(
         station
         for station in planned_snapshot["pipeline"]["stations"]  # type: ignore[index]

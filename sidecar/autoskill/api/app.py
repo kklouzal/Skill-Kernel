@@ -229,6 +229,7 @@ class HealthResponse(BaseModel):
 
 
 class StatusResponse(BaseModel):
+    workspace_id: str | None = None
     mode: str
     database_configured: bool
     ingest_auth_configured: bool
@@ -3386,9 +3387,14 @@ def create_app(
         return HealthResponse(ok=True, service="autoskill-sidecar", version=__version__)
 
     @app.get("/v1/status", response_model=StatusResponse)
-    async def status() -> StatusResponse:
+    async def status(workspace_id: str | None = None) -> StatusResponse:
         settings = get_settings()
-        job_summary = await jobs.summary()
+        effective_workspace_id = (
+            workspace_id
+            or os.environ.get("AUTOSKILL_WORKSPACE_ID")
+            or DEFAULT_OBSERVATORY_WORKSPACE_ID
+        )
+        job_summary = await jobs.summary(workspace_key=effective_workspace_id)
         worker_health = await build_worker_health(
             jobs,
             concurrency_by_pool={
@@ -3396,8 +3402,10 @@ def create_app(
                 "maintenance": settings.worker_maintenance_concurrency,
                 "mutation": settings.worker_mutation_concurrency,
             },
+            workspace_key=effective_workspace_id,
         )
         return StatusResponse(
+            workspace_id=effective_workspace_id,
             mode=settings.mode.value,
             database_configured=bool(settings.database_url),
             ingest_auth_configured=bool(settings.ingest_token),
