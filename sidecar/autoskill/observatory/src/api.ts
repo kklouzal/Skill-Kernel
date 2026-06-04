@@ -1,4 +1,5 @@
 import type {
+  BrokerReplayEpisodeSummary,
   CollectionResponse,
   LiveEnvelope,
   ObjectResponse,
@@ -145,6 +146,38 @@ export function fetchTraceReplay(
   if (workspaceId) params.set("workspace_id", workspaceId);
   return fetchJson<ObjectResponse>(
     `${adminApiPath("/replay/traces/{trace_id}", { trace_id: traceId })}?${params}`,
+    session
+  );
+}
+
+export function fetchBrokerReplayEpisodes(
+  session: ApiSession,
+  workspaceId: string,
+  tags: string[] = ["production"],
+  limit = 50
+) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  for (const tag of tags.map((item) => item.trim()).filter(Boolean)) {
+    params.append("tags", tag);
+  }
+  return fetchJson<CollectionResponse<BrokerReplayEpisodeSummary>>(
+    `${adminApiPath("/broker/replay-episodes")}?${params}`,
+    session
+  );
+}
+
+export function fetchBrokerReplayEpisodeDetail(
+  session: ApiSession,
+  episodeId: string,
+  workspaceId: string
+) {
+  const params = new URLSearchParams();
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  return fetchJson<ObjectResponse>(
+    `${adminApiPath("/broker/replay-episodes/{episode_id}", {
+      episode_id: episodeId
+    })}?${params}`,
     session
   );
 }

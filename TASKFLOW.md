@@ -1266,6 +1266,16 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   tagged replay episode through `AsyncpgBrokerPolicyStore`, read it through the
   new admin list/detail routes with bearer auth, verified `raw_prompt_stored=false`,
   and deleted the smoke rows.
+- Observatory broker replay corpus frontend visibility is implemented for
+  Sections 1.4, 1.9, 8.7, and 12.6: the React app now has a dedicated Replay
+  tab backed by the generated `/admin/api/v1/broker/replay-episodes` routes,
+  production-tag filtering, episode selection, expected routing/provenance
+  panels, and explicit raw-prompt/content-policy badges without exposing raw
+  prompt text by default. Validation passed with focused frontend source
+  assertions (`7 passed`), `npm run build --prefix
+  sidecar/autoskill/observatory`, `uv run ruff check sidecar`, `uv run pytest
+  -q` (`348 passed`), `uv run python -m compileall -q sidecar`, and `git diff
+  --check`.
 
 ## Next Gates
 

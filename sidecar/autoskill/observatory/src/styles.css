@@ -125,7 +125,8 @@ input:focus-visible {
 .admin-actions button,
 .search-results button,
 .workcell-list button,
-.station-grid button {
+.station-grid button,
+.replay-list button {
   border: 1px solid var(--line);
   border-radius: 6px;
   color: var(--text);
@@ -433,6 +434,7 @@ input:focus-visible {
 .cockpit-side,
 .topology-page,
 .trace-page,
+.replay-page,
 .admin-page,
 .login-panel {
   border: 1px solid var(--line);
@@ -725,6 +727,7 @@ h3 {
 .cockpit-side,
 .topology-page,
 .trace-page,
+.replay-page,
 .admin-page {
   padding: 14px;
 }
@@ -765,6 +768,7 @@ h3 {
 .cockpit-main p,
 .topology-page p,
 .trace-page p,
+.replay-page p,
 .admin-actions p {
   color: var(--muted);
   line-height: 1.45;
@@ -853,6 +857,7 @@ h3 {
 
 .topology-page,
 .trace-page,
+.replay-page,
 .admin-page {
   display: grid;
   gap: 14px;
@@ -911,13 +916,15 @@ h3 {
   gap: 12px;
 }
 
-.trace-list {
+.trace-list,
+.replay-list {
   display: grid;
   gap: 8px;
   align-content: start;
 }
 
-.trace-list button {
+.trace-list button,
+.replay-list button {
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr);
   gap: 8px;
@@ -926,16 +933,19 @@ h3 {
   text-align: left;
 }
 
-.trace-list button.is-selected {
+.trace-list button.is-selected,
+.replay-list button.is-selected {
   border-color: var(--focus);
 }
 
-.trace-list small {
+.trace-list small,
+.replay-list small {
   grid-column: 2;
   color: var(--muted);
 }
 
-.trace-replay {
+.trace-replay,
+.replay-detail {
   display: grid;
   gap: 12px;
   min-width: 0;
@@ -946,6 +956,67 @@ h3 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 0.55fr);
   gap: 12px;
+}
+
+.replay-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.replay-filter {
+  display: grid;
+  gap: 8px;
+}
+
+.replay-filter label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+}
+
+.replay-filter input {
+  min-width: 0;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--text);
+  background: #0d1114;
+}
+
+.replay-evidence-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.8fr);
+  gap: 12px;
+}
+
+.replay-expected {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.replay-expected span {
+  display: grid;
+  gap: 4px;
+  min-height: 64px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  background: var(--panel-2);
+}
+
+.replay-expected strong,
+.replay-expected small {
+  overflow-wrap: anywhere;
+}
+
+.replay-expected small {
+  color: var(--muted);
+  text-transform: uppercase;
 }
 
 .trace-badges {
@@ -1220,6 +1291,8 @@ h3 {
   .skill-layout,
   .skill-evidence-grid,
   .trace-layout,
+  .replay-layout,
+  .replay-evidence-grid,
   .trace-replay__header,
   .trace-detail-grid {
     grid-template-columns: 1fr;
@@ -1246,7 +1319,8 @@ h3 {
   }
 
   .kpi-ribbon,
-  .workcell-layout {
+  .workcell-layout,
+  .replay-expected {
     grid-template-columns: 1fr;
   }
 

@@ -5,7 +5,6 @@ import {
   Activity,
   Boxes,
   Bug,
-  Database,
   FileJson,
   Gauge,
   KeyRound,
@@ -20,6 +19,8 @@ import {
 import type { EChartsOption } from "echarts";
 import {
   fetchActionAudits,
+  fetchBrokerReplayEpisodeDetail,
+  fetchBrokerReplayEpisodes,
   fetchContextArtifacts,
   fetchObject,
   fetchSkillDetail,
@@ -35,6 +36,7 @@ import {
 } from "./api";
 import type { ApiSession } from "./api";
 import type {
+  BrokerReplayEpisodeSummary,
   HealthState,
   Issue,
   LiveEnvelope,
@@ -49,7 +51,7 @@ import { EChartPanel } from "./components/EChartPanel";
 import { Inspector } from "./components/Inspector";
 import { ParticleLayer } from "./components/ParticleLayer";
 
-type View = "overview" | "workcells" | "cockpit" | "skills" | "trace" | "admin";
+type View = "overview" | "workcells" | "cockpit" | "skills" | "trace" | "replay" | "admin";
 type CockpitTab = "records" | "metrics" | "traces" | "artifacts" | "config" | "audit" | "help";
 type FrontendDiagnostics = {
   app_render_count: number;
@@ -67,7 +69,7 @@ const storedToken = sessionStorage.getItem("skillkernel.admin.token") ?? "";
 const initialParams = new URLSearchParams(window.location.search);
 const initialView = ((): View => {
   const value = initialParams.get("view");
-  return value && ["overview", "workcells", "cockpit", "skills", "trace", "admin"].includes(value)
+  return value && ["overview", "workcells", "cockpit", "skills", "trace", "replay", "admin"].includes(value)
     ? (value as View)
     : "overview";
 })();
@@ -103,6 +105,10 @@ function App() {
   const [selectedTraceId, setSelectedTraceId] = useState<string | undefined>(
     initialParams.get("trace") ?? undefined
   );
+  const [selectedReplayEpisodeId, setSelectedReplayEpisodeId] = useState<string | undefined>(
+    initialParams.get("episode") ?? undefined
+  );
+  const [replayTag, setReplayTag] = useState(initialParams.get("replay_tag") ?? "production");
   const [selectedSkillId, setSelectedSkillId] = useState<string | undefined>(
     initialParams.get("skill") ?? undefined
   );
@@ -168,6 +174,28 @@ function App() {
     queryKey: ["trace-replay", session.token, session.roles, workspaceId, effectiveTraceId],
     enabled: hasAdminToken && view === "trace" && Boolean(effectiveTraceId),
     queryFn: () => fetchTraceReplay(session, effectiveTraceId!, workspaceId, 150),
+    retry: false
+  });
+  const replayEpisodesQuery = useQuery({
+    queryKey: ["broker-replay-episodes", session.token, session.roles, workspaceId, replayTag],
+    enabled: hasAdminToken && view === "replay",
+    queryFn: () =>
+      fetchBrokerReplayEpisodes(session, workspaceId, replayTag.trim() ? [replayTag] : [], 50),
+    retry: false
+  });
+  const replayEpisodeItems = replayEpisodesQuery.data?.collection.items ?? [];
+  const effectiveReplayEpisodeId =
+    selectedReplayEpisodeId ?? replayEpisodeItems[0]?.broker_replay_episode_id;
+  const replayEpisodeDetailQuery = useQuery({
+    queryKey: [
+      "broker-replay-episode",
+      session.token,
+      session.roles,
+      workspaceId,
+      effectiveReplayEpisodeId
+    ],
+    enabled: hasAdminToken && view === "replay" && Boolean(effectiveReplayEpisodeId),
+    queryFn: () => fetchBrokerReplayEpisodeDetail(session, effectiveReplayEpisodeId!, workspaceId),
     retry: false
   });
   const skillsQuery = useQuery({
@@ -261,6 +289,8 @@ function App() {
     if (selectedStationId) params.set("station", selectedStationId);
     if (selectedSubsystemId) params.set("subsystem", selectedSubsystemId);
     if (selectedTraceId) params.set("trace", selectedTraceId);
+    if (selectedReplayEpisodeId) params.set("episode", selectedReplayEpisodeId);
+    if (replayTag.trim()) params.set("replay_tag", replayTag.trim());
     if (selectedSkillId) params.set("skill", selectedSkillId);
     if (query.trim()) params.set("q", query.trim());
     window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
@@ -269,7 +299,9 @@ function App() {
     selectedStationId,
     selectedSubsystemId,
     selectedTraceId,
+    selectedReplayEpisodeId,
     selectedSkillId,
+    replayTag,
     view,
     windowMinutes,
     workspaceId
@@ -280,6 +312,16 @@ function App() {
       setSelectedTraceId(traceItems[0].trace_id);
     }
   }, [selectedTraceId, traceItems]);
+
+  useEffect(() => {
+    if (!selectedReplayEpisodeId && replayEpisodeItems[0]?.broker_replay_episode_id) {
+      setSelectedReplayEpisodeId(replayEpisodeItems[0].broker_replay_episode_id);
+    }
+  }, [selectedReplayEpisodeId, replayEpisodeItems]);
+
+  useEffect(() => {
+    setSelectedReplayEpisodeId(undefined);
+  }, [replayTag, workspaceId]);
 
   useEffect(() => {
     const firstSkillId = skillIdentifier(skillItems[0]);
@@ -479,6 +521,7 @@ function App() {
         <Tab active={view === "cockpit"} label="Cockpit" icon={<Activity />} onClick={() => setView("cockpit")} />
         <Tab active={view === "skills"} label="Skills" icon={<Network />} onClick={() => setView("skills")} />
         <Tab active={view === "trace"} label="Trace" icon={<FileJson />} onClick={() => setView("trace")} />
+        <Tab active={view === "replay"} label="Replay" icon={<Boxes />} onClick={() => setView("replay")} />
         <Tab active={view === "admin"} label="Admin" icon={<ShieldCheck />} onClick={() => setView("admin")} />
       </nav>
 
@@ -517,6 +560,9 @@ function App() {
                       } else if (result.object_type === "trace") {
                         setSelectedTraceId(result.object_id);
                         setView("trace");
+                      } else if (result.object_type === "broker_replay_episode") {
+                        setSelectedReplayEpisodeId(result.object_id);
+                        setView("replay");
                       } else if (result.object_type === "skill") {
                         setSelectedSkillId(result.object_id);
                         setView("skills");
@@ -588,6 +634,18 @@ function App() {
               loading={tracesQuery.isLoading || traceReplayQuery.isLoading}
               error={tracesQuery.error ?? traceReplayQuery.error}
               onSelectTrace={setSelectedTraceId}
+            />
+          )}
+          {view === "replay" && (
+            <BrokerReplayCorpus
+              episodes={replayEpisodeItems}
+              selectedEpisodeId={effectiveReplayEpisodeId}
+              replayObject={replayEpisodeDetailQuery.data?.object}
+              replayTag={replayTag}
+              loading={replayEpisodesQuery.isLoading || replayEpisodeDetailQuery.isLoading}
+              error={replayEpisodesQuery.error ?? replayEpisodeDetailQuery.error}
+              onSelectEpisode={setSelectedReplayEpisodeId}
+              onReplayTagChange={setReplayTag}
             />
           )}
           {view === "admin" && (
@@ -1243,6 +1301,160 @@ function diffPanelPayload(span?: TraceSpan) {
     };
   }
   return Object.fromEntries(diffEntries);
+}
+
+function BrokerReplayCorpus({
+  episodes,
+  selectedEpisodeId,
+  replayObject,
+  replayTag,
+  loading,
+  error,
+  onSelectEpisode,
+  onReplayTagChange
+}: {
+  episodes: BrokerReplayEpisodeSummary[];
+  selectedEpisodeId?: string;
+  replayObject?: Record<string, unknown>;
+  replayTag: string;
+  loading: boolean;
+  error: unknown;
+  onSelectEpisode: (episodeId: string) => void;
+  onReplayTagChange: (tag: string) => void;
+}) {
+  const selectedEpisode = episodes.find(
+    (episode) => episode.broker_replay_episode_id === selectedEpisodeId
+  );
+  const diagnostics = replayObject?.diagnostics as Record<string, unknown> | undefined;
+  const effects = replayObject?.effects as Record<string, unknown> | undefined;
+  const provenance = replayObject?.provenance as Record<string, unknown> | undefined;
+  const contentPolicy =
+    (replayObject?.content_policy as Record<string, unknown> | undefined) ??
+    selectedEpisode?.content_policy;
+
+  return (
+    <section className="replay-page">
+      <div className="replay-layout">
+        <aside className="replay-list" aria-label="Broker replay episode list">
+          <div className="replay-filter">
+            <h2>Broker Replay Corpus</h2>
+            <label>
+              Tag
+              <input
+                value={replayTag}
+                placeholder="production"
+                onChange={(event) => onReplayTagChange(event.target.value)}
+              />
+            </label>
+          </div>
+          {loading ? <p>Loading replay episodes.</p> : null}
+          {error ? <p>{error instanceof Error ? error.message : "Broker replay corpus unavailable."}</p> : null}
+          {episodes.length ? (
+            episodes.map((episode) => (
+              <button
+                key={episode.broker_replay_episode_id}
+                className={
+                  episode.broker_replay_episode_id === selectedEpisodeId ? "is-selected" : ""
+                }
+                type="button"
+                onClick={() => onSelectEpisode(episode.broker_replay_episode_id)}
+              >
+                <span className={`status-dot health-${replayHealth(episode.expected_decision)}`} />
+                <strong>{episode.episode_key}</strong>
+                <small>
+                  {episode.expected_decision ?? "decision-unspecified"} /{" "}
+                  {episode.expected_skill_ids.length} skills / {episode.tags.join(", ") || "untagged"}
+                </small>
+              </button>
+            ))
+          ) : (
+            <p>No broker replay episodes match the current workspace and tag.</p>
+          )}
+        </aside>
+
+        <section className="replay-detail">
+          <div className="trace-replay__header">
+            <div>
+              <h2>{selectedEpisode?.episode_key ?? "No Replay Episode Selected"}</h2>
+              <p>
+                {String(
+                  replayObject?.summary ??
+                    selectedEpisode?.summary ??
+                    "Select an operator-reviewed replay episode to inspect routing expectations."
+                )}
+              </p>
+            </div>
+            <div className="trace-badges">
+              <span>{String(contentPolicy?.raw_prompt_stored === false ? "raw prompt absent" : "raw policy unknown")}</span>
+              <span>{String(contentPolicy?.redaction_state ?? "redaction state unknown")}</span>
+              <span>{String(selectedEpisode?.expected_decision ?? "decision unspecified")}</span>
+            </div>
+          </div>
+
+          <div className="replay-evidence-grid">
+            <section>
+              <h3>Expected Routing</h3>
+              <div className="replay-expected">
+                <span>
+                  <strong>{String(effects?.expected_decision ?? selectedEpisode?.expected_decision ?? "unknown")}</strong>
+                  <small>decision</small>
+                </span>
+                <span>
+                  <strong>{expectedSkillIds(effects, selectedEpisode).length}</strong>
+                  <small>expected skills</small>
+                </span>
+                <span>
+                  <strong>{selectedEpisode?.tags.length ?? 0}</strong>
+                  <small>tags</small>
+                </span>
+              </div>
+              <Inspector
+                value={{
+                  expected_skill_ids: expectedSkillIds(effects, selectedEpisode),
+                  metadata_keys: diagnostics?.metadata_keys ?? [],
+                  redacted_intent_hash: diagnostics?.redacted_intent_hash ?? null,
+                  raw_prompt_stored: contentPolicy?.raw_prompt_stored ?? false
+                }}
+              />
+            </section>
+            <section>
+              <h3>Replay Provenance</h3>
+              <Inspector
+                value={{
+                  upstream: provenance?.upstream ?? [],
+                  details_url: selectedEpisode?.details_url ?? null,
+                  content_policy: contentPolicy ?? { raw_available: false }
+                }}
+              />
+            </section>
+          </div>
+
+          <section>
+            <h3>Object Microscope</h3>
+            <Inspector value={replayObject ?? selectedEpisode ?? { state: "empty" }} />
+          </section>
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function replayHealth(expectedDecision?: string | null): HealthState {
+  if (expectedDecision === "skill_hint") return "healthy";
+  if (expectedDecision === "no_skill") return "unknown";
+  if (expectedDecision) return "degraded";
+  return "unknown";
+}
+
+function expectedSkillIds(
+  effects?: Record<string, unknown>,
+  episode?: BrokerReplayEpisodeSummary
+): string[] {
+  const effectIds = effects?.expected_skill_ids;
+  if (Array.isArray(effectIds)) {
+    return effectIds.map((item) => String(item));
+  }
+  return episode?.expected_skill_ids ?? [];
 }
 
 function Admin({

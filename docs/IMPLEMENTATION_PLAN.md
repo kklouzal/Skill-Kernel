@@ -855,6 +855,15 @@ Acceptance:
   migrations, inserted one production-tagged replay episode through
   `AsyncpgBrokerPolicyStore`, read it through the new admin routes with bearer
   auth, verified `raw_prompt_stored=false`, and deleted the smoke rows.
+- validation evidence for the Observatory broker replay corpus frontend slice
+  passed on the final tree: the React Observatory now exposes a dedicated Replay
+  tab wired through generated `/admin/api/v1/broker/replay-episodes` paths,
+  production-tag filtering, episode selection, expected routing/provenance
+  panels, and explicit raw-prompt/content-policy badges. Focused frontend source
+  assertions passed with `7 passed`, `npm run build --prefix
+  sidecar/autoskill/observatory` passed, `uv run ruff check sidecar` passed,
+  `uv run pytest -q` passed with `348 passed`, `uv run python -m compileall -q
+  sidecar` passed, and `git diff --check` passed.
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and

@@ -102,6 +102,26 @@ def test_observatory_frontend_render_diagnostics_are_visible() -> None:
     assert "Frontend Diagnostics" in app_source
 
 
+def test_observatory_frontend_broker_replay_corpus_is_visible() -> None:
+    app_source = (
+        REPO_ROOT / "sidecar/autoskill/observatory/src/App.tsx"
+    ).read_text(encoding="utf-8")
+    api_source = (
+        REPO_ROOT / "sidecar/autoskill/observatory/src/api.ts"
+    ).read_text(encoding="utf-8")
+    styles = (
+        REPO_ROOT / "sidecar/autoskill/observatory/src/styles.css"
+    ).read_text(encoding="utf-8")
+
+    assert 'label="Replay"' in app_source
+    assert "BrokerReplayCorpus" in app_source
+    assert "Broker Replay Corpus" in app_source
+    assert "raw_prompt_stored" in app_source
+    assert "fetchBrokerReplayEpisodes" in api_source
+    assert 'adminApiPath("/broker/replay-episodes")' in api_source
+    assert "replay-layout" in styles
+
+
 def test_observatory_guarded_action_dialog_is_present() -> None:
     app_source = (
         REPO_ROOT / "sidecar/autoskill/observatory/src/App.tsx"

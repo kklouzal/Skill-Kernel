@@ -199,6 +199,22 @@ export type TraceSummary = {
   content_policy: Record<string, unknown>;
 };
 
+export type BrokerReplayEpisodeSummary = {
+  object_type: "broker_replay_episode";
+  object_id: string;
+  broker_replay_episode_id: string;
+  episode_key: string;
+  expected_decision?: string | null;
+  expected_skill_ids: string[];
+  tags: string[];
+  created_at: string;
+  title: string;
+  summary: string;
+  details_url: string;
+  content_policy: Record<string, unknown>;
+  diagnostics?: Record<string, unknown>;
+};
+
 export type TraceSpan = {
   trace_id: string;
   span_id: string;
