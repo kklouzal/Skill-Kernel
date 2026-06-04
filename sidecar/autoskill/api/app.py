@@ -6775,7 +6775,7 @@ def create_app(
         )
 
     @app.get(
-        "/admin/api/v1/evidence/fidelity/{fidelity_id:path}",
+        "/admin/api/v1/evidence/fidelity/{fidelity_id}",
         response_model=ObservatoryObjectResponse,
     )
     async def observatory_evidence_fidelity_detail(

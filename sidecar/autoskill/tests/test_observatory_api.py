@@ -886,7 +886,7 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/health/ready", "GET"),
         ("/admin/api/v1/search", "GET"),
         ("/admin/api/v1/evidence/fidelity", "GET"),
-        ("/admin/api/v1/evidence/fidelity/{fidelity_id:path}", "GET"),
+        ("/admin/api/v1/evidence/fidelity/{fidelity_id}", "GET"),
         ("/admin/api/v1/raw-vault/summary", "GET"),
         ("/admin/api/v1/adjudications", "GET"),
         ("/admin/api/v1/adjudications/{adjudication_run_id}", "GET"),
@@ -1103,7 +1103,7 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             workspace_id="dev-01",
         )
         fidelity_detail = await routes[
-            ("/admin/api/v1/evidence/fidelity/{fidelity_id:path}", "GET")
+            ("/admin/api/v1/evidence/fidelity/{fidelity_id}", "GET")
         ].endpoint(
             fidelity_id="dev-01:historical_chunk:intent_reconstruction:metadata_only"
         )
