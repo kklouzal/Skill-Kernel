@@ -47,6 +47,7 @@ export type Station = {
     telemetry_freshness_seconds: number;
     coverage_state: string;
     missing_signals: string[];
+    missing_signal_keys?: string[];
     raw_content_available: boolean;
   };
   records: Array<Record<string, unknown>>;

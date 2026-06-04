@@ -413,6 +413,10 @@ REASON_CODES: dict[str, str] = {
     "control-token-not-configured": "Control endpoints are not protected by a control token.",
     "ingest-token-not-configured": "Ingest endpoints are not protected by an ingest token.",
     "missing-required-signal": "The component lacks one or more required signal classes.",
+    "read-model-missing": "No bounded Observatory read model exists for this object class yet.",
+    "no-ingest-events-observed": (
+        "The ingest read model is present but has not observed captured events."
+    ),
     "telemetry-partial": "Telemetry exists but coverage is incomplete or sampled.",
     "telemetry-stale": "Read-model freshness exceeds the configured warning threshold.",
     "spool-diagnostics-required": "Plugin spool state is outside sidecar database visibility.",
@@ -425,6 +429,7 @@ REASON_CODES: dict[str, str] = {
     "drift-violations-present": "Environment contract drift violations exist.",
     "embedding-backlog-present": "Embeddings or embedding jobs are pending.",
     "audit-chain-unverified": "Audit chain verification failed or was unavailable.",
+    "embedding-endpoint-not-configured": "The configured embedding provider has no endpoint URL.",
     "raw-content-disabled": "Raw content reveal is disabled by configuration.",
     "static-app-not-built": (
         "The React application has not been built into the configured static directory."
@@ -858,14 +863,10 @@ def _component_snapshot(
         if status.get("database_configured") and int(ingest.get("total_events") or 0) == 0:
             health = _worse(health, "unknown")
             coverage = "partial"
-            reason_codes.append("missing-required-signal")
+            reason_codes.append("no-ingest-events-observed")
     elif station.metric_family == "redaction":
         redaction = _dict(metrics.get("redaction_counts"))
         output_rate = float(sum(int(value or 0) for value in redaction.values()))
-        if status.get("database_configured") and not redaction:
-            health = _worse(health, "unknown")
-            coverage = "partial"
-            reason_codes.append("missing-required-signal")
     elif station.metric_family == "spool":
         health = _worse(health, "degraded")
         coverage = "partial"
@@ -936,7 +937,7 @@ def _component_snapshot(
     elif station.metric_family == "profiles":
         if settings.embedding_provider != "hash" and not settings.embedding_api_base_url:
             health = _worse(health, "degraded")
-            reason_codes.append("missing-required-signal")
+            reason_codes.append("embedding-endpoint-not-configured")
     elif station.metric_family == "storage":
         if not status.get("database_configured"):
             health = "blocked"
@@ -971,7 +972,8 @@ def _component_snapshot(
             else "unknown",
         )
 
-    missing_signals = _missing_signal_classes(station.metric_family, metrics, status)
+    missing_metric_keys = _missing_metric_keys(station.metric_family, metrics, status)
+    missing_signals = _missing_signal_classes(station.metric_family, missing_metric_keys, status)
     if missing_signals and health == "healthy":
         health = "unknown"
         coverage = "partial"
@@ -1044,6 +1046,7 @@ def _component_snapshot(
             "read_model_age_seconds": read_model_age_seconds,
             "coverage_state": coverage,
             "missing_signals": missing_signals,
+            "missing_signal_keys": missing_metric_keys,
         },
         "records": _station_records(
             station.metric_family, metrics=metrics, worker_health=worker_health
@@ -1531,9 +1534,21 @@ def _safe_next_actions(reason_code: str) -> list[dict[str, str]]:
             "configure_ingest_token",
             "Set SKILLKERNEL_SIDECAR_TOKEN or AUTOSKILL_INGEST_TOKEN.",
         ),
+        "read-model-missing": (
+            "implement_read_model",
+            "Add a bounded content-safe Observatory read model for this object class.",
+        ),
+        "no-ingest-events-observed": (
+            "verify_live_capture",
+            "Check plugin hook capture, sidecar ingest auth, and recent raw event rows.",
+        ),
         "failed-jobs-present": (
             "inspect_failed_jobs",
             "Open scheduler/jobs cockpit and inspect failed job records.",
+        ),
+        "embedding-endpoint-not-configured": (
+            "configure_embedding_endpoint",
+            "Set AUTOSKILL_EMBEDDING_API_BASE_URL or use the deterministic hash provider.",
         ),
         "embedding-backlog-present": (
             "run_embedding_worker",
@@ -1559,17 +1574,24 @@ def _safe_next_actions(reason_code: str) -> list[dict[str, str]]:
     return [{"action": action, "summary": summary}]
 
 
-def _missing_signal_classes(
+def _missing_metric_keys(
     metric_family: str, metrics: dict[str, Any], status: dict[str, Any]
 ) -> list[str]:
     if not status.get("database_configured"):
-        return ["input", "processing", "output", "quality", "evidence"]
-    missing_keys = [
+        return list(REQUIRED_METRICS_BY_FAMILY.get(metric_family, ()))
+    return [
         key
         for key in REQUIRED_METRICS_BY_FAMILY.get(metric_family, ())
         if not _metric_present(metrics, key)
     ]
-    if not missing_keys:
+
+
+def _missing_signal_classes(
+    metric_family: str, missing_metric_keys: list[str], status: dict[str, Any]
+) -> list[str]:
+    if not status.get("database_configured"):
+        return ["input", "processing", "output", "quality", "evidence"]
+    if not missing_metric_keys:
         return []
     signal_map = {
         "ingest": "input",
@@ -1602,14 +1624,7 @@ def _missing_signal_classes(
 def _metric_present(metrics: dict[str, Any], key: str) -> bool:
     if key not in metrics:
         return False
-    value = metrics[key]
-    if value is None:
-        return False
-    if isinstance(value, dict):
-        return bool(value)
-    if isinstance(value, list):
-        return bool(value)
-    return True
+    return metrics[key] is not None
 
 
 def _append_match(

@@ -4582,7 +4582,7 @@ def create_app(
     ) -> dict[str, Any]:
         return {
             "health": "unknown",
-            "reason_codes": ["missing-required-signal"],
+            "reason_codes": ["read-model-missing"],
             "supporting_component": supporting_component,
             "summary": (
                 "No bounded Observatory read model exists for this object class yet."

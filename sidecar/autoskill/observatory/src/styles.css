@@ -771,6 +771,7 @@ h3 {
 }
 
 .reason-panel,
+.signal-panel,
 .records-panel {
   margin-top: 14px;
 }
@@ -798,6 +799,7 @@ h3 {
 }
 
 .reason-panel code,
+.signal-panel code,
 .command-row code {
   display: inline-block;
   margin: 0 6px 6px 0;
@@ -806,6 +808,10 @@ h3 {
   padding: 4px 6px;
   color: var(--cyan);
   background: #10161b;
+}
+
+.signal-panel code {
+  color: var(--amber);
 }
 
 .records-panel pre {

@@ -1084,6 +1084,22 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   verified workspace-filtered list/detail reads through the new asyncpg store
   methods, deleted the smoke row, and left the pre-existing Postgres container
   running.
+- Observatory missing-signal diagnostics are remediated across the sidecar and
+  frontend: zero-valued but present metric read models no longer produce
+  `missing-required-signal`, stations now expose `data_quality.missing_signal_keys`
+  for genuinely absent metric fields, missing admin object/read-model fallbacks
+  use the more specific `read-model-missing` reason code, and the station cockpit
+  renders explicit missing-signal chips only when such signals are actually
+  present. Validation passed with focused Observatory API tests `19 passed`, full
+  `uv run pytest -q` with 322 tests, `uv run ruff check` for the edited sidecar
+  files, `uv run python -m compileall -q sidecar`, `npm test --prefix
+  plugin/autoskill` with 18 tests, `npm run build --prefix
+  sidecar/autoskill/observatory`, `docker compose config --quiet`, and `git diff
+  --check`. The live Dev-01 Observatory sidecar on `:8758` was restarted with the
+  patch and reported no `missing-required-signal` stations, no missing signal
+  keys, 24 rendered graph labels, 24 stations, 24 edges, all `/admin/assets`
+  returning 200, and the remaining visible issue limited to
+  `embedding-backlog-present`.
 
 ## Next Gates
 

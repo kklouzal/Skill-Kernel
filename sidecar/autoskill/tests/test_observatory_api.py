@@ -634,6 +634,86 @@ def test_observatory_comparisons_and_diagnostic_bundles_are_persisted() -> None:
     assert bundle.object["live_event"]["redaction_level"] == "default"
 
 
+def test_observatory_zero_count_read_models_are_not_missing_required_signals() -> None:
+    settings = get_settings().model_copy(
+        update={
+            "database_url": "postgresql://autoskill:autoskill-dev@127.0.0.1/autoskill",
+            "control_token": "control-token",
+        }
+    )
+    zero_count_metrics = {
+        "ingest": {
+            "events_in_window": 0,
+            "total_events": 1,
+            "event_rate_per_minute": 0.0,
+        },
+        "redaction_counts": {},
+        "spool_backlog": {},
+        "retrieval_decisions": {},
+        "embedding_backlog": {},
+        "context_hint_injection_count": 0,
+        "context_hint_token_cost": 0,
+        "context_hint_token_ledger_count": 0,
+        "skill_creation_improvement_counts": {},
+        "skill_lifecycle_counts": {},
+        "scanner_reject_counts": {},
+        "evaluation_pass_fail_counts": {},
+        "rollback_freeze_counts": {},
+        "job_queue_depth": {},
+        "postgres_table_index_growth": [],
+        "audit": {},
+        "sidecar_latency_ms": {},
+    }
+    snapshot = build_observatory_snapshot(
+        settings=settings,
+        status={
+            "mode": "dev",
+            "database_configured": True,
+            "ingest_auth_configured": True,
+            "control_auth_configured": True,
+            "runtime_context_broker": {"enabled": True},
+            "jobs": {},
+            "workers": {},
+        },
+        operator_metrics={
+            "captured_at": datetime.now(UTC).isoformat(),
+            "metrics": zero_count_metrics,
+            "dashboards": {},
+        },
+        worker_health={},
+        audit_chain_valid=True,
+        static_available=True,
+        workspace_id="dev-01",
+        window_minutes=10,
+    )
+
+    stations = snapshot["pipeline"]["stations"]
+    assert not [
+        station
+        for station in stations
+        if "missing-required-signal" in station["reason_codes"]
+    ]
+    assert all(station["data_quality"]["missing_signal_keys"] == [] for station in stations)
+    assert any(
+        station["reason_codes"] == ["spool-diagnostics-required"]
+        for station in stations
+        if station["component_id"] == "spool_ingest"
+    )
+
+
+def test_observatory_missing_object_read_model_uses_specific_reason_code() -> None:
+    app = create_app(audit_store=MemoryAuditStore())
+    route = _routes(app)[("/admin/api/v1/artifacts/{artifact_id}", "GET")]
+
+    async def run():
+        return await route.endpoint(artifact_id="artifact-123")
+
+    response = asyncio.run(run())
+
+    assert response.object["diagnostics"]["reason_codes"] == ["read-model-missing"]
+    assert response.object["diagnostics"]["supporting_component"] == "deterministic_writer"
+
+
 def test_observatory_stale_or_missing_telemetry_never_reports_healthy() -> None:
     settings = get_settings().model_copy(
         update={
@@ -667,6 +747,10 @@ def test_observatory_stale_or_missing_telemetry_never_reports_healthy() -> None:
     assert snapshot["data_quality"]["stale"] is True
     assert all(
         station["health"] != "healthy" for station in snapshot["pipeline"]["stations"]
+    )
+    assert any(
+        station["data_quality"]["missing_signal_keys"]
+        for station in snapshot["pipeline"]["stations"]
     )
     assert any(
         "telemetry-stale" in issue["reason_codes"] for issue in snapshot["issue_board"]

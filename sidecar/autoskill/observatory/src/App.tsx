@@ -584,9 +584,13 @@ function Cockpit({
     help: {
       purpose: station.purpose,
       reason_codes: station.reason_codes,
+      missing_signals: station.data_quality.missing_signals,
+      missing_signal_keys: station.data_quality.missing_signal_keys ?? [],
       safe_next_actions: issues.flatMap((issue) => issue.safe_next_actions)
     }
   };
+  const missingSignals = station.data_quality.missing_signals;
+  const missingSignalKeys = station.data_quality.missing_signal_keys ?? [];
   return (
     <section className="cockpit-layout">
       <div className="cockpit-main">
@@ -606,6 +610,17 @@ function Cockpit({
             <code>no-active-reason-codes</code>
           )}
         </section>
+        {missingSignals.length || missingSignalKeys.length ? (
+          <section className="signal-panel">
+            <h3>Missing Signals</h3>
+            {missingSignals.map((signal) => (
+              <code key={`signal-${signal}`}>{signal}</code>
+            ))}
+            {missingSignalKeys.map((signalKey) => (
+              <code key={`key-${signalKey}`}>{signalKey}</code>
+            ))}
+          </section>
+        ) : null}
         <div className="cockpit-tabs" role="tablist" aria-label="Station cockpit panels">
           {tabs.map((tab) => (
             <button

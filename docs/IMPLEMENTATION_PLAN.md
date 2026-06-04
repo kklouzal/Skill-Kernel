@@ -777,3 +777,17 @@ Acceptance:
   `admin_action_audit` and `audit_records` persisted only the token hash and
   content-safe request metadata, deleted the smoke rows, and stopped compose
   while preserving the dev volume.
+- validation evidence for the Observatory missing-signal remediation passed on
+  the final tree: focused Observatory API tests `19 passed`, `uv run ruff check`
+  passed for the edited sidecar files, `uv run pytest -q` passed with 322 tests,
+  `uv run python -m compileall -q sidecar` passed, `npm test --prefix
+  plugin/autoskill` passed with 18 tests, `npm run build --prefix
+  sidecar/autoskill/observatory` passed, `docker compose config --quiet` passed,
+  and `git diff --check` passed. The sidecar now distinguishes absent metric
+  fields from present zero-valued read models, exposes
+  `data_quality.missing_signal_keys`, uses `read-model-missing` for absent
+  bounded admin object/read-model fallbacks, and the Observatory cockpit renders
+  missing-signal chips only when a station actually reports missing signals. A
+  live Dev-01 validation against `/admin/api/v1/summary?workspace_id=dev-01`
+  reported zero stations with `missing-required-signal` and one remaining real
+  issue, `embedding-backlog-present`.
