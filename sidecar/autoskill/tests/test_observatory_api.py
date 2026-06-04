@@ -1587,14 +1587,24 @@ def test_observatory_station_latency_uses_operation_specific_samples() -> None:
 def test_observatory_missing_object_read_model_uses_specific_reason_code() -> None:
     app = create_app(audit_store=MemoryAuditStore())
     route = _routes(app)[("/admin/api/v1/artifacts/{artifact_id}", "GET")]
+    generic_route = _routes(app)[("/admin/api/v1/objects/{object_type}/{object_id}", "GET")]
 
     async def run():
-        return await route.endpoint(artifact_id="artifact-123")
+        artifact = await route.endpoint(artifact_id="artifact-123")
+        generic = await generic_route.endpoint(
+            object_type="unsupported_object",
+            object_id="missing-123",
+            workspace_id="dev-01",
+        )
+        return artifact, generic
 
-    response = asyncio.run(run())
+    artifact, generic = asyncio.run(run())
 
-    assert response.object["diagnostics"]["reason_codes"] == ["read-model-missing"]
-    assert response.object["diagnostics"]["supporting_component"] == "deterministic_writer"
+    assert artifact.object["diagnostics"]["reason_codes"] == ["read-model-missing"]
+    assert artifact.object["diagnostics"]["supporting_component"] == "deterministic_writer"
+    assert generic.object["diagnostics"]["reason_codes"] == ["read-model-missing"]
+    assert generic.object["diagnostics"]["supporting_component"] == "observatory_admin"
+    assert generic.object["content_policy"]["raw_available"] is False
 
 
 def test_observatory_stale_or_missing_telemetry_never_reports_healthy() -> None:

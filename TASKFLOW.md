@@ -1385,6 +1385,15 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   and `git diff --check`. No compose/Postgres smoke was needed because this is
   a deterministic snapshot/read-model shaping slice over existing in-memory
   Observatory snapshot data.
+- Observatory object microscope read-model fallbacks now keep missing telemetry
+  and missing read models distinct for Sections 7.6, 7.7, and 12.6: unsupported
+  object types return `read-model-missing` with `observatory_admin` as the
+  supporting component instead of incorrectly reporting
+  `missing-required-signal`. This preserves the required signal contract while
+  giving operators a truthful dead-end explanation without raw-content access.
+  Focused validation passed with the Observatory API regression (`2 passed`);
+  final validation evidence is recorded in the implementation plan entry for
+  this slice.
 
 ## Next Gates
 

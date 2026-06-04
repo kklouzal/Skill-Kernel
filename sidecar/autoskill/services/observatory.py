@@ -776,7 +776,8 @@ def object_microscope(
         summary="No bounded read model exists for this object yet.",
         diagnostics={
             "health": "unknown",
-            "reason_codes": ["missing-required-signal"],
+            "reason_codes": ["read-model-missing"],
+            "supporting_component": "observatory_admin",
             "content_policy": {"raw_available": False, "redaction": "not_loaded"},
         },
         upstream=[],

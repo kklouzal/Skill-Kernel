@@ -958,6 +958,16 @@ Acceptance:
   (`35 passed`); final validation passed with `uv run ruff check sidecar`,
   `uv run pytest` (`356 passed`), `uv run python -m compileall -q sidecar`,
   `docker compose config --quiet`, and `git diff --check`.
+- validation evidence for the Observatory object microscope read-model fallback
+  slice passed on the final tree: unsupported `/admin/api/v1/objects/{type}/{id}`
+  lookups now return `read-model-missing` with `observatory_admin` support
+  metadata instead of conflating absent bounded read models with
+  `missing-required-signal` telemetry-contract failures. This advances
+  Observatory Sections 7.6, 7.7, 12.6, and acceptance criterion 31 without
+  adding mutation authority or raw-content access. Focused Observatory API
+  regression passed (`2 passed`); final validation passed with `uv run ruff
+  check sidecar`, `uv run pytest`, `uv run python -m compileall -q sidecar`,
+  `docker compose config --quiet`, and `git diff --check`.
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and
