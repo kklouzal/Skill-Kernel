@@ -4851,6 +4851,66 @@ def create_app(
             },
         }
 
+    def _broker_replay_episode_microscope(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        source_log_id = payload.get("source_retrieval_log_id")
+        expected_skill_ids = [
+            str(item) for item in payload.get("expected_skill_ids", []) if item
+        ]
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        return {
+            **payload,
+            "schema_version": "skillkernel.observatory.broker-replay-episode.v1",
+            "object_type": "broker_replay_episode",
+            "object_id": payload["broker_replay_episode_id"],
+            "title": f"Broker replay episode {payload['episode_key']}",
+            "summary": (
+                f"{payload.get('expected_decision') or 'decision-unspecified'}; "
+                f"expected_skills={len(expected_skill_ids)}; "
+                f"tags={len(payload.get('tags', []))}"
+            ),
+            "timeline": [
+                {
+                    "at": payload["created_at"],
+                    "event": "broker_replay_episode_recorded",
+                    "episode_key": payload["episode_key"],
+                }
+            ],
+            "provenance": {
+                "upstream": [
+                    {"object_type": "broker_decision", "object_id": str(source_log_id)}
+                ]
+                if source_log_id
+                else [],
+                "downstream": [
+                    {"object_type": "skill", "object_id": skill_id}
+                    for skill_id in expected_skill_ids
+                ],
+            },
+            "effects": {
+                "replay_tags": payload.get("tags", []),
+                "expected_decision": payload.get("expected_decision"),
+                "expected_skill_ids": expected_skill_ids,
+            },
+            "diagnostics": {
+                "workspace_id": payload.get("workspace_key"),
+                "episode_key": payload["episode_key"],
+                "redacted_user_intent": payload.get("redacted_user_intent"),
+                "redacted_intent_hash": sha256_text(
+                    str(payload.get("redacted_user_intent") or "")
+                ),
+                "source_retrieval_log_id": source_log_id,
+                "metadata_keys": sorted(str(key) for key in metadata),
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "raw_prompt_stored": False,
+                "redaction_state": "operator_redacted_replay_intent",
+            },
+            "audit": {"links": [], "chain_visible": True},
+        }
+
     async def _record_observatory_action(
         request: ObservatoryActionRequest,
         authorization: str | None,
@@ -5647,6 +5707,16 @@ def create_app(
             action = await observatory_admin.get_action_audit(action_id=action_id)
             if action is not None:
                 return ObservatoryObjectResponse(object=_admin_action_microscope(action))
+        if object_type in {"broker_replay_episode", "replay_episode"}:
+            episode_id = _uuid_or_404(object_id, "broker replay episode")
+            episode = await broker_policies.get_replay_episode(
+                workspace_key=workspace_id,
+                broker_replay_episode_id=episode_id,
+            )
+            if episode is not None:
+                return ObservatoryObjectResponse(
+                    object=_broker_replay_episode_microscope(episode)
+                )
         snapshot = await _observatory_snapshot(
             workspace_id=workspace_id,
             window_minutes=window_minutes,
@@ -6330,6 +6400,92 @@ def create_app(
                 },
                 "audit": {"links": [], "chain_visible": True},
             }
+        )
+
+    @app.get(
+        "/admin/api/v1/broker/replay-episodes",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_broker_replay_episodes(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        tags: Annotated[list[str] | None, Query()] = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        effective_workspace_id = (
+            workspace_id
+            or os.environ.get("AUTOSKILL_WORKSPACE_ID")
+            or DEFAULT_OBSERVATORY_WORKSPACE_ID
+        )
+        episodes = await broker_policies.list_replay_episodes(
+            workspace_key=effective_workspace_id,
+            tags=tags or [],
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="broker_replay_episode",
+            title="Broker replay corpus",
+            items=[
+                {
+                    **episode.to_json(),
+                    "object_id": str(episode.broker_replay_episode_id),
+                    "object_type": "broker_replay_episode",
+                    "title": f"Broker replay episode {episode.episode_key}",
+                    "summary": (
+                        f"{episode.expected_decision or 'decision-unspecified'}; "
+                        f"expected_skills={len(episode.expected_skill_ids)}; "
+                        f"tags={len(episode.tags)}"
+                    ),
+                    "content_policy": {
+                        "raw_available": False,
+                        "raw_reason": "raw-content-disabled",
+                        "raw_prompt_stored": False,
+                        "redaction_state": "operator_redacted_replay_intent",
+                    },
+                    "details_url": (
+                        "/admin/broker/replay-episodes/"
+                        f"{episode.broker_replay_episode_id}"
+                    ),
+                }
+                for episode in episodes
+            ],
+            limit=limit,
+            cursor=cursor,
+            source="broker_policy_store.list_replay_episodes",
+            diagnostics={
+                "supporting_component": "broker_runtime",
+                "workspace_id": effective_workspace_id,
+                "tags": tags or [],
+                "raw_prompt_stored": False,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/broker/replay-episodes/{episode_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_broker_replay_episode_detail(
+        episode_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        episode_uuid = _uuid_or_404(episode_id, "broker replay episode")
+        episode = await broker_policies.get_replay_episode(
+            workspace_key=workspace_id,
+            broker_replay_episode_id=episode_uuid,
+        )
+        if episode is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="broker replay episode not found",
+            )
+        return ObservatoryObjectResponse(
+            object=_broker_replay_episode_microscope(episode)
         )
 
     @app.get("/admin/api/v1/context/artifacts", response_model=ObservatoryCollectionResponse)

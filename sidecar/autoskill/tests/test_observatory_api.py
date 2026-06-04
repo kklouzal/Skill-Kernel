@@ -14,6 +14,7 @@ from autoskill.core.config import get_settings
 from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope
 from autoskill.core.hashing import sha256_text
+from autoskill.db.broker_policy import NullBrokerPolicyStore
 from autoskill.db.events import NullEventStore
 from autoskill.db.jobs import JobQueueSummary
 from autoskill.db.observability import (
@@ -714,6 +715,8 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/historical/imports/{historical_import_id}", "GET"),
         ("/admin/api/v1/broker/decisions", "GET"),
         ("/admin/api/v1/broker/decisions/{decision_id}", "GET"),
+        ("/admin/api/v1/broker/replay-episodes", "GET"),
+        ("/admin/api/v1/broker/replay-episodes/{episode_id}", "GET"),
         ("/admin/api/v1/context/artifacts", "GET"),
         ("/admin/api/v1/model-profile", "GET"),
         ("/admin/api/v1/embedding-profile", "GET"),
@@ -835,6 +838,78 @@ def test_observatory_broker_decisions_use_content_safe_retrieval_logs() -> None:
         candidate_object_id
     )
     assert detail.object["effects"]["rendered_skill_ids"] == [str(rendered_skill_id)]
+
+
+def test_observatory_broker_replay_episode_read_model_is_content_safe() -> None:
+    broker_policy_store = NullBrokerPolicyStore()
+    expected_skill_id = uuid4()
+    retrieval_log_id = uuid4()
+
+    async def seed_episode():
+        return await broker_policy_store.record_replay_episode(
+            workspace_key="dev-01",
+            episode_key="operator-reviewed-broker-paraphrase",
+            redacted_user_intent="fix unreadable labels in a generated diagram",
+            expected_decision="skill_hint",
+            expected_skill_ids=[expected_skill_id],
+            tags=["production", "operator-reviewed"],
+            metadata={
+                "query_hash": "sha256:retrieval-query",
+                "operator_notes": "redacted review note",
+            },
+            source_retrieval_log_id=retrieval_log_id,
+        )
+
+    episode = asyncio.run(seed_episode())
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        broker_policy_store=broker_policy_store,
+    )
+    routes = _routes(app)
+
+    async def run():
+        collection = await routes[
+            ("/admin/api/v1/broker/replay-episodes", "GET")
+        ].endpoint(
+            workspace_id="dev-01",
+            tags=["production"],
+            limit=10,
+        )
+        detail = await routes[
+            ("/admin/api/v1/broker/replay-episodes/{episode_id}", "GET")
+        ].endpoint(
+            episode_id=str(episode.broker_replay_episode_id),
+            workspace_id="dev-01",
+        )
+        object_detail = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="broker_replay_episode",
+            object_id=str(episode.broker_replay_episode_id),
+            workspace_id="dev-01",
+        )
+        return collection, detail, object_detail
+
+    collection, detail, object_detail = asyncio.run(run())
+
+    assert collection.collection["source"] == "broker_policy_store.list_replay_episodes"
+    assert collection.collection["items"][0]["object_id"] == str(
+        episode.broker_replay_episode_id
+    )
+    assert collection.collection["items"][0]["content_policy"]["raw_prompt_stored"] is False
+    assert collection.collection["content_policy"]["raw_available"] is False
+    assert detail.object["object_type"] == "broker_replay_episode"
+    assert detail.object["effects"]["expected_skill_ids"] == [str(expected_skill_id)]
+    assert detail.object["provenance"]["upstream"][0]["object_id"] == str(retrieval_log_id)
+    assert detail.object["diagnostics"]["redacted_intent_hash"] == sha256_text(
+        "fix unreadable labels in a generated diagram"
+    )
+    assert detail.object["content_policy"]["raw_prompt_stored"] is False
+    assert object_detail.object["object_id"] == str(episode.broker_replay_episode_id)
+    assert object_detail.object["diagnostics"]["metadata_keys"] == [
+        "operator_notes",
+        "query_hash",
+    ]
 
 
 def test_observatory_event_and_trace_read_models_are_bounded_and_content_safe() -> None:

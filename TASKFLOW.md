@@ -1250,6 +1250,22 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   pytest (`6 passed`), ruff, `npm run build --prefix
   sidecar/autoskill/observatory`, `git diff --check`, and the Observatory
   acceptance report showing `implemented_equivalent=0`.
+- Observatory broker replay corpus visibility is implemented for the replay/
+  canary readiness gate: `/admin/api/v1/broker/replay-episodes` lists bounded
+  content-safe stored replay episodes with tag filtering and cursor pagination,
+  `/admin/api/v1/broker/replay-episodes/{episode_id}` returns an object
+  microscope payload with source broker-decision provenance, expected skill
+  links, redacted intent hash, metadata-key summary, and explicit
+  `raw_prompt_stored=false` policy metadata, and the generic object microscope
+  resolves `broker_replay_episode` objects through the broker policy store.
+  Validation passed with focused Observatory API tests (`2 passed`), generated
+  Observatory OpenAPI client `--check`, `uv run ruff check sidecar`,
+  `uv run pytest` (`347 passed`), `uv run python -m compileall -q sidecar`,
+  `npm run build --prefix sidecar/autoskill/observatory`, and a real
+  compose/Postgres smoke that migrated the schema, inserted one production-
+  tagged replay episode through `AsyncpgBrokerPolicyStore`, read it through the
+  new admin list/detail routes with bearer auth, verified `raw_prompt_stored=false`,
+  and deleted the smoke rows.
 
 ## Next Gates
 

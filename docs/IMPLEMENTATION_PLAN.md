@@ -676,7 +676,12 @@ Deliverables:
   `admin_action_audit`. The generic object microscope route now resolves
   captured events, saved baseline
   comparisons, diagnostic bundles, and operator action receipts from those
-  stores instead of falling back to placeholder snapshot objects;
+  stores instead of falling back to placeholder snapshot objects. Broker replay
+  corpus visibility is implemented with bounded admin list/detail routes over
+  stored replay episodes plus generic `broker_replay_episode` object microscope
+  support, exposing only operator-redacted replay intent text, hashes, expected
+  skill IDs, source broker-decision links, metadata-key summaries, and explicit
+  `raw_prompt_stored=false` policy metadata;
 - live updates; implemented with `/admin/live` WebSocket and `/admin/live-sse`
   fallback, frontend fallback logic, snapshot reload handling, and persisted
   `admin_live_event_outbox` events for audited operator actions, diagnostic
@@ -840,6 +845,16 @@ Acceptance:
   sidecar/autoskill/tests/test_observatory_acceptance_report.py` (`1 passed`)
   and the report command returned `ready=true`, `satisfied=78`, and no
   validation errors.
+- validation evidence for the Observatory broker replay corpus read model passed
+  on the final tree: focused Observatory API tests covered admin list/detail and
+  generic object-microscope lookup for a stored replay episode, generated
+  Observatory OpenAPI client `--check` passed, `uv run ruff check sidecar`
+  passed, `uv run pytest` passed with 347 tests, `uv run python -m compileall
+  -q sidecar` passed, and `npm run build --prefix
+  sidecar/autoskill/observatory` passed. A real compose/Postgres smoke applied
+  migrations, inserted one production-tagged replay episode through
+  `AsyncpgBrokerPolicyStore`, read it through the new admin routes with bearer
+  auth, verified `raw_prompt_stored=false`, and deleted the smoke rows.
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and

@@ -179,6 +179,14 @@ class BrokerPolicyStore(Protocol):
     ) -> list[BrokerReplayEpisodeRecord]:
         """List content-safe broker replay episodes for historical policy replay."""
 
+    async def get_replay_episode(
+        self,
+        *,
+        workspace_key: str | None,
+        broker_replay_episode_id: UUID,
+    ) -> BrokerReplayEpisodeRecord | None:
+        """Return one content-safe broker replay episode."""
+
 
 class NullBrokerPolicyStore:
     def __init__(self) -> None:
@@ -339,6 +347,20 @@ class NullBrokerPolicyStore:
         records.sort(key=lambda item: item.created_at, reverse=True)
         return records[:limit]
 
+    async def get_replay_episode(
+        self,
+        *,
+        workspace_key: str | None,
+        broker_replay_episode_id: UUID,
+    ) -> BrokerReplayEpisodeRecord | None:
+        for (record_workspace, _episode_key), record in self.replay_episodes.items():
+            if record.broker_replay_episode_id != broker_replay_episode_id:
+                continue
+            if workspace_key is not None and record_workspace != workspace_key:
+                continue
+            return record
+        return None
+
 
 class AsyncpgBrokerPolicyStore(AsyncpgPoolOwner):
     async def get_policy_version(
@@ -450,6 +472,27 @@ class AsyncpgBrokerPolicyStore(AsyncpgPoolOwner):
                 limit,
             )
         return [BrokerReplayEpisodeRecord.from_row(row) for row in rows]
+
+    async def get_replay_episode(
+        self,
+        *,
+        workspace_key: str | None,
+        broker_replay_episode_id: UUID,
+    ) -> BrokerReplayEpisodeRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT e.*, w.external_key AS workspace_key
+                FROM autoskill.broker_replay_episodes e
+                JOIN autoskill.workspaces w ON w.workspace_id = e.workspace_id
+                WHERE e.broker_replay_episode_id = $1
+                  AND ($2::text IS NULL OR w.external_key = $2)
+                """,
+                broker_replay_episode_id,
+                workspace_key,
+            )
+        return BrokerReplayEpisodeRecord.from_row(row) if row else None
 
     async def get_active_policy(
         self,
