@@ -175,10 +175,14 @@ def test_observatory_live_fallback_uses_snapshot_sequence_for_heartbeats() -> No
     assert initial["seq"] == 42
     assert initial["cursor_seq"] == 0
     assert initial["event_type"] == "snapshot"
+    assert initial["kind"] == "snapshot"
+    assert datetime.fromisoformat(initial["sent_at"]).tzinfo is not None
     assert initial["payload"] == snapshot
     assert heartbeat["seq"] == 42
     assert heartbeat["cursor_seq"] == 42
     assert heartbeat["event_type"] == "heartbeat"
+    assert heartbeat["kind"] == "heartbeat"
+    assert datetime.fromisoformat(heartbeat["sent_at"]).tzinfo is not None
     assert heartbeat["requires_snapshot_reload"] is False
     assert heartbeat["payload"] == {
         "global_health": "degraded",

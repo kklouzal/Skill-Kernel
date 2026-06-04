@@ -853,6 +853,14 @@ Acceptance:
   scripts/autoskill_observatory_live_smoke.py` proved
   `snapshot_seq=1780550603438`, `snapshot_cursor_seq=11`,
   `stale_outbox_seq=11`, and `live_outbox_seq=12` before deleting smoke rows.
+- validation evidence for the Observatory live-stream envelope contract
+  hardening passed on the final tree: snapshot and heartbeat fallback envelopes
+  now include additive `kind` and `sent_at` fields like persisted live-outbox
+  deltas, preserving existing reconciliation fields while satisfying the
+  Section 12.3 timestamped live-envelope shape. Focused live fallback/SSE tests
+  passed with `6 passed`; final validation passed with `uv run ruff check
+  sidecar`, `uv run pytest` (`365 passed`), `uv run python -m compileall -q
+  sidecar`, `docker compose config --quiet`, and `git diff --check`.
 - validation evidence for the Observatory job-health scoping slice passed on
   the final tree: focused job/Observatory tests passed with `2 passed`,
   `uv run ruff check sidecar` passed, `uv run pytest` passed with 334 tests,
