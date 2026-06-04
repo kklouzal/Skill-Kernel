@@ -1153,6 +1153,24 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `AsyncpgJobStore`, verified the job summary and Observatory
   `operator_metrics.job_queue_depth` returned only `{"succeeded": 1}`, then
   deleted the smoke workspace rows.
+- Observatory live-stream delta/outbox continuity is implemented for the Phase
+  2/12.3 stream contract: WebSocket and SSE now keep the timestamp-derived
+  snapshot freshness sequence separate from the persisted
+  `admin_live_event_outbox` cursor, expose `cursor_seq` for reconnect-safe
+  frontend resume, fence pre-existing outbox rows for first snapshots, and
+  replay later persisted deltas even when their outbox sequence is lower than
+  the snapshot timestamp sequence. Snapshot-style reconnect cursors that are
+  larger than the current outbox sequence are clamped to the newest persisted
+  outbox row so legacy/spec-shaped `last_seq` values cannot suppress future
+  deltas. Validation passed with focused `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py -q` (`30 passed`), `uv run
+  ruff check sidecar scripts`, `uv run pytest` (`340 passed`), `uv run python
+  -m compileall -q sidecar scripts`, `npm run build --prefix
+  sidecar/autoskill/observatory`, `docker compose config --quiet`, and `git
+  diff --check`. A real Postgres smoke through `uv run python
+  scripts/autoskill_observatory_live_smoke.py` proved
+  `snapshot_seq=1780550603438`, `snapshot_cursor_seq=11`,
+  `stale_outbox_seq=11`, and `live_outbox_seq=12` before deleting the smoke rows.
 
 ## Next Gates
 
@@ -1167,9 +1185,6 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
    signal to validate the schema-backed v2 source-item locator layer under
    non-file ledgers and live source systems.
 4. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
-5. Add live-stream delta/outbox smoke coverage with real Postgres once the next
-   Observatory slice touches `admin_live_event_outbox` persistence or stream
-   replay/canary behavior.
 
 ## Known Risks
 

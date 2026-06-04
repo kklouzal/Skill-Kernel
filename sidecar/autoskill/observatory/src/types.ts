@@ -157,7 +157,8 @@ export type ObjectResponse = AdminEnvelope<{ object: Record<string, unknown> }> 
 export type LiveEnvelope = {
   schema_version: string;
   seq: number;
-  event_type: "snapshot" | "heartbeat";
+  cursor_seq?: number | null;
+  event_type: string;
   captured_at: string;
   requires_snapshot_reload: boolean;
   payload: ObservatorySnapshot | Record<string, unknown>;

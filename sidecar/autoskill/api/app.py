@@ -5084,8 +5084,19 @@ def create_app(
         snapshot: dict[str, object],
         *,
         last_seq: int | None,
+        cursor_seq: int | None = None,
     ) -> dict[str, object]:
-        return build_live_envelope(snapshot, last_seq=last_seq)
+        return build_live_envelope(snapshot, last_seq=last_seq, cursor_seq=cursor_seq)
+
+    async def _observatory_starting_outbox_seq(last_seq: int | None) -> int | None:
+        latest_seq = await observatory_admin.latest_live_event_seq()
+        if latest_seq is None:
+            return None
+        if last_seq is None:
+            return latest_seq
+        if last_seq > latest_seq:
+            return latest_seq
+        return last_seq
 
     def _observatory_action_target(
         action: str,
@@ -6809,25 +6820,35 @@ def create_app(
         await websocket.accept()
         workspace_id = websocket.query_params.get("workspace_id")
         last_seq_param = websocket.query_params.get("last_seq")
-        last_seq = int(last_seq_param) if last_seq_param and last_seq_param.isdigit() else None
+        last_outbox_seq = (
+            int(last_seq_param) if last_seq_param and last_seq_param.isdigit() else None
+        )
+        last_outbox_seq = await _observatory_starting_outbox_seq(last_outbox_seq)
+        last_snapshot_seq: int | None = None
         try:
             while True:
                 live_events = await observatory_admin.list_live_events(
-                    after_seq=last_seq,
+                    after_seq=last_outbox_seq,
                     limit=50,
                 )
                 if live_events:
                     for live_event in live_events:
-                        await websocket.send_json(live_event.to_json())
-                        last_seq = live_event.seq
+                        payload = live_event.to_json()
+                        payload["cursor_seq"] = live_event.seq
+                        await websocket.send_json(payload)
+                        last_outbox_seq = live_event.seq
                 else:
                     snapshot = await _observatory_snapshot(
                         workspace_id=workspace_id,
                         window_minutes=60,
                     )
-                    payload = _snapshot_live_fallback(snapshot, last_seq=last_seq)
+                    payload = _snapshot_live_fallback(
+                        snapshot,
+                        last_seq=last_snapshot_seq,
+                        cursor_seq=last_outbox_seq,
+                    )
                     await websocket.send_json(payload)
-                    last_seq = int(payload["seq"])
+                    last_snapshot_seq = int(payload["seq"])
                 await asyncio.sleep(5)
         except WebSocketDisconnect:
             return
@@ -6846,35 +6867,45 @@ def create_app(
         )
 
         async def stream() -> AsyncIterator[str]:
-            current_last_seq = last_seq
+            current_last_outbox_seq = await _observatory_starting_outbox_seq(last_seq)
+            current_last_snapshot_seq: int | None = None
             snapshot = await _observatory_snapshot(
                 workspace_id=workspace_id,
                 window_minutes=60,
             )
-            payload = _snapshot_live_fallback(snapshot, last_seq=current_last_seq)
+            payload = _snapshot_live_fallback(
+                snapshot,
+                last_seq=current_last_snapshot_seq,
+                cursor_seq=current_last_outbox_seq,
+            )
             yield f"event: {payload['event_type']}\n"
             yield f"data: {json.dumps(payload, sort_keys=True)}\n\n"
-            current_last_seq = int(payload["seq"])
+            current_last_snapshot_seq = int(payload["seq"])
             while True:
                 live_events = await observatory_admin.list_live_events(
-                    after_seq=current_last_seq,
+                    after_seq=current_last_outbox_seq,
                     limit=50,
                 )
                 if live_events:
                     for live_event in live_events:
                         payload = live_event.to_json()
+                        payload["cursor_seq"] = live_event.seq
                         yield f"event: {payload['event_type']}\n"
                         yield f"data: {json.dumps(payload, sort_keys=True)}\n\n"
-                        current_last_seq = live_event.seq
+                        current_last_outbox_seq = live_event.seq
                 else:
                     snapshot = await _observatory_snapshot(
                         workspace_id=workspace_id,
                         window_minutes=60,
                     )
-                    payload = _snapshot_live_fallback(snapshot, last_seq=current_last_seq)
+                    payload = _snapshot_live_fallback(
+                        snapshot,
+                        last_seq=current_last_snapshot_seq,
+                        cursor_seq=current_last_outbox_seq,
+                    )
                     yield f"event: {payload['event_type']}\n"
                     yield f"data: {json.dumps(payload, sort_keys=True)}\n\n"
-                    current_last_seq = int(payload["seq"])
+                    current_last_snapshot_seq = int(payload["seq"])
                 await asyncio.sleep(5)
 
         return StreamingResponse(

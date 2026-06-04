@@ -158,7 +158,7 @@ function App() {
     let closed = false;
     const controller = new AbortController();
     const applyEnvelope = (envelope: LiveEnvelope) => {
-      lastSeq.current = envelope.seq;
+      lastSeq.current = envelope.cursor_seq ?? envelope.seq;
       if (envelope.requires_snapshot_reload) {
         void queryClient.invalidateQueries({ queryKey: ["summary"] });
       }

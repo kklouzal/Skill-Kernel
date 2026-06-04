@@ -249,6 +249,9 @@ class ObservatoryAdminStore(Protocol):
     ) -> list[AdminLiveEventRecord]:
         """Return bounded UI-safe live events newer than the given outbox sequence."""
 
+    async def latest_live_event_seq(self) -> int | None:
+        """Return the newest outbox sequence without exposing event payloads."""
+
     async def record_action_audit(
         self,
         *,
@@ -377,6 +380,9 @@ class NullObservatoryAdminStore:
         if after_seq is not None:
             records = [record for record in records if record.seq > after_seq]
         return records[:bounded_limit]
+
+    async def latest_live_event_seq(self) -> int | None:
+        return self.live_events[-1].seq if self.live_events else None
 
     async def record_action_audit(
         self,
@@ -601,6 +607,14 @@ class AsyncpgObservatoryAdminStore(AsyncpgPoolOwner):
                 bounded_limit,
             )
         return [AdminLiveEventRecord.from_row(row) for row in rows]
+
+    async def latest_live_event_seq(self) -> int | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT max(seq) FROM autoskill.admin_live_event_outbox"
+            )
+        return int(value) if value is not None else None
 
     async def record_action_audit(
         self,

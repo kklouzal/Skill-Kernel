@@ -165,9 +165,11 @@ def test_observatory_live_fallback_uses_snapshot_sequence_for_heartbeats() -> No
     heartbeat = build_live_envelope(snapshot, last_seq=int(initial["seq"]))
 
     assert initial["seq"] == 42
+    assert initial["cursor_seq"] == 0
     assert initial["event_type"] == "snapshot"
     assert initial["payload"] == snapshot
     assert heartbeat["seq"] == 42
+    assert heartbeat["cursor_seq"] == 42
     assert heartbeat["event_type"] == "heartbeat"
     assert heartbeat["requires_snapshot_reload"] is False
     assert heartbeat["payload"] == {
@@ -391,15 +393,16 @@ def test_observatory_live_sse_starts_with_fresh_snapshot_when_events_exist() -> 
         event_chunk = await anext(response.body_iterator)
         data_chunk = await anext(response.body_iterator)
         await response.body_iterator.aclose()
-        return response, event_chunk, data_chunk
+        return response, event_chunk, data_chunk, stale_event
 
-    response, event_chunk, data_chunk = asyncio.run(run())
+    response, event_chunk, data_chunk, stale_event = asyncio.run(run())
     payload = json.loads(data_chunk.removeprefix("data: ").strip())
 
     assert response.headers["Cache-Control"] == "no-store, max-age=0"
     assert response.headers["Pragma"] == "no-cache"
     assert event_chunk == "event: snapshot\n"
     assert payload["event_type"] == "snapshot"
+    assert payload["cursor_seq"] == stale_event.seq - 1
     assert payload["payload"]["pipeline"]["stations"]
     scheduler = next(
         station
@@ -412,6 +415,157 @@ def test_observatory_live_sse_starts_with_fresh_snapshot_when_events_exist() -> 
         for issue in payload["payload"]["issue_board"]
         if issue["issue_id"] == "scheduler_jobs:failed-jobs-present"
     ]
+
+
+def test_observatory_live_sse_replays_outbox_after_timestamp_snapshot() -> None:
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        observatory_admin_store=observatory_admin,
+    )
+    route = _routes(app)[("/admin/live-sse", "GET")]
+
+    async def run():
+        response = await route.endpoint(workspace_id="dev-01")
+        snapshot_event_chunk = await anext(response.body_iterator)
+        snapshot_data_chunk = await anext(response.body_iterator)
+        live_event = await observatory_admin.append_live_event(
+            kind="component_health_changed",
+            component_id="broker_runtime",
+            payload={"health": "degraded", "reason_codes": ["broker-replay-stale"]},
+        )
+        live_event_chunk = await anext(response.body_iterator)
+        live_data_chunk = await anext(response.body_iterator)
+        await response.body_iterator.aclose()
+        return (
+            snapshot_event_chunk,
+            json.loads(snapshot_data_chunk.removeprefix("data: ").strip()),
+            live_event,
+            live_event_chunk,
+            json.loads(live_data_chunk.removeprefix("data: ").strip()),
+        )
+
+    (
+        snapshot_event_chunk,
+        snapshot_payload,
+        live_event,
+        live_event_chunk,
+        live_payload,
+    ) = asyncio.run(run())
+
+    assert snapshot_event_chunk == "event: snapshot\n"
+    assert snapshot_payload["event_type"] == "snapshot"
+    assert snapshot_payload["seq"] > live_event.seq
+    assert snapshot_payload["cursor_seq"] == 0
+    assert live_event_chunk == "event: component_health_changed\n"
+    assert live_payload["event_type"] == "component_health_changed"
+    assert live_payload["seq"] == live_event.seq
+    assert live_payload["cursor_seq"] == live_event.seq
+    assert live_payload["component_id"] == "broker_runtime"
+    assert live_payload["payload"]["reason_codes"] == ["broker-replay-stale"]
+
+
+def test_observatory_live_sse_clamps_snapshot_style_last_seq_to_outbox_cursor() -> None:
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        observatory_admin_store=observatory_admin,
+    )
+    route = _routes(app)[("/admin/live-sse", "GET")]
+
+    async def run():
+        stale_event = await observatory_admin.append_live_event(
+            kind="component_health_changed",
+            component_id="observatory_admin",
+            payload={"health": "healthy", "phase": "before-reconnect"},
+        )
+        response = await route.endpoint(
+            workspace_id="dev-01",
+            last_seq=9_999_999_999_999,
+        )
+        snapshot_event_chunk = await anext(response.body_iterator)
+        snapshot_data_chunk = await anext(response.body_iterator)
+        live_event = await observatory_admin.append_live_event(
+            kind="component_health_changed",
+            component_id="scheduler_jobs",
+            payload={"health": "degraded", "phase": "after-reconnect"},
+        )
+        live_event_chunk = await anext(response.body_iterator)
+        live_data_chunk = await anext(response.body_iterator)
+        await response.body_iterator.aclose()
+        return (
+            stale_event,
+            snapshot_event_chunk,
+            json.loads(snapshot_data_chunk.removeprefix("data: ").strip()),
+            live_event,
+            live_event_chunk,
+            json.loads(live_data_chunk.removeprefix("data: ").strip()),
+        )
+
+    (
+        stale_event,
+        snapshot_event_chunk,
+        snapshot_payload,
+        live_event,
+        live_event_chunk,
+        live_payload,
+    ) = asyncio.run(run())
+
+    assert snapshot_event_chunk == "event: snapshot\n"
+    assert snapshot_payload["cursor_seq"] == stale_event.seq
+    assert live_event_chunk == "event: component_health_changed\n"
+    assert live_payload["event_type"] == "component_health_changed"
+    assert live_payload["seq"] == live_event.seq
+    assert live_payload["cursor_seq"] == live_event.seq
+    assert live_payload["component_id"] == "scheduler_jobs"
+    assert live_payload["payload"]["phase"] == "after-reconnect"
+
+
+def test_observatory_live_sse_ignores_snapshot_style_last_seq_without_outbox_rows() -> None:
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        observatory_admin_store=observatory_admin,
+    )
+    route = _routes(app)[("/admin/live-sse", "GET")]
+
+    async def run():
+        response = await route.endpoint(
+            workspace_id="dev-01",
+            last_seq=9_999_999_999_999,
+        )
+        snapshot_event_chunk = await anext(response.body_iterator)
+        snapshot_data_chunk = await anext(response.body_iterator)
+        live_event = await observatory_admin.append_live_event(
+            kind="component_health_changed",
+            component_id="observatory_admin",
+            payload={"health": "degraded", "phase": "first-outbox-event"},
+        )
+        live_event_chunk = await anext(response.body_iterator)
+        live_data_chunk = await anext(response.body_iterator)
+        await response.body_iterator.aclose()
+        return (
+            snapshot_event_chunk,
+            json.loads(snapshot_data_chunk.removeprefix("data: ").strip()),
+            live_event,
+            live_event_chunk,
+            json.loads(live_data_chunk.removeprefix("data: ").strip()),
+        )
+
+    (
+        snapshot_event_chunk,
+        snapshot_payload,
+        live_event,
+        live_event_chunk,
+        live_payload,
+    ) = asyncio.run(run())
+
+    assert snapshot_event_chunk == "event: snapshot\n"
+    assert snapshot_payload["cursor_seq"] == 0
+    assert live_event_chunk == "event: component_health_changed\n"
+    assert live_payload["seq"] == live_event.seq
+    assert live_payload["cursor_seq"] == live_event.seq
+    assert live_payload["payload"]["phase"] == "first-outbox-event"
 
 
 def test_observatory_pipeline_component_and_search_routes_are_bounded() -> None:

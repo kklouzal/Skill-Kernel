@@ -552,12 +552,18 @@ def build_observatory_snapshot(
     }
 
 
-def build_live_envelope(snapshot: dict[str, Any], *, last_seq: int | None = None) -> dict[str, Any]:
+def build_live_envelope(
+    snapshot: dict[str, Any],
+    *,
+    last_seq: int | None = None,
+    cursor_seq: int | None = None,
+) -> dict[str, Any]:
     seq = int(snapshot["snapshot_seq"])
     event_type = "snapshot" if last_seq is None or last_seq < seq else "heartbeat"
     return {
         "schema_version": LIVE_SCHEMA_VERSION,
         "seq": seq,
+        "cursor_seq": int(cursor_seq) if cursor_seq is not None else int(last_seq or 0),
         "event_type": event_type,
         "captured_at": snapshot["captured_at"],
         "requires_snapshot_reload": bool(last_seq is not None and last_seq + 10_000 < seq),
