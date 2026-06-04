@@ -1195,6 +1195,8 @@ def _issue_board(
     if not static_available:
         issues.append(_issue("static-app-not-built", "medium", "observatory_admin"))
     for component in components:
+        if "missing-required-signal" in component.get("reason_codes", []):
+            issues.append(_missing_required_signal_issue(component))
         if component["health"] == "unknown" and component.get("reason_codes"):
             code = str(component["reason_codes"][0])
             issues.append(_issue(code, "low", str(component["component_id"])))
@@ -1203,20 +1205,91 @@ def _issue_board(
     return _dedupe_issues(issues)
 
 
-def _issue(reason_code: str, severity: str, component_id: str) -> dict[str, Any]:
+def _issue(
+    reason_code: str,
+    severity: str,
+    component_id: str,
+    *,
+    title: str | None = None,
+    summary: str | None = None,
+    evidence_refs: list[dict[str, Any]] | None = None,
+    safe_next_actions: list[dict[str, str]] | None = None,
+    diagnostics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     description = REASON_CODES.get(reason_code, "The Observatory detected a diagnostic condition.")
-    return {
+    issue = {
         "issue_id": f"{component_id}:{reason_code}",
         "severity": severity,
         "component_id": component_id,
         "subsystem_id": _primary_subsystem(component_id),
-        "title": reason_code.replace("-", " ").title(),
-        "summary": description,
+        "title": title or reason_code.replace("-", " ").title(),
+        "summary": summary or description,
         "reason_codes": [reason_code],
-        "evidence_refs": [{"object_type": "component", "object_id": component_id}],
-        "safe_next_actions": _safe_next_actions(reason_code),
+        "evidence_refs": evidence_refs
+        or [{"object_type": "component", "object_id": component_id}],
+        "safe_next_actions": safe_next_actions or _safe_next_actions(reason_code),
         "deep_link": f"/admin/components/{component_id}?issue={reason_code}",
     }
+    if diagnostics is not None:
+        issue["diagnostics"] = diagnostics
+    return issue
+
+
+def _missing_required_signal_issue(component: dict[str, Any]) -> dict[str, Any]:
+    missing_signals = list(component.get("data_quality", {}).get("missing_signals", []))
+    missing_metric_keys = list(
+        component.get("data_quality", {}).get("missing_signal_keys", [])
+    )
+    component_id = str(component["component_id"])
+    display_name = str(component.get("display_name") or component_id)
+    metric_summary = ", ".join(missing_metric_keys) if missing_metric_keys else "unknown metrics"
+    signal_summary = ", ".join(missing_signals) if missing_signals else "unknown signal classes"
+    evidence_refs: list[dict[str, Any]] = [
+        {
+            "object_type": "component",
+            "object_id": component_id,
+            "relationship": "affected_component",
+        },
+        *[
+            {
+                "object_type": "required_signal_metric",
+                "object_id": metric_key,
+                "relationship": "missing_metric_key",
+                "component_id": component_id,
+            }
+            for metric_key in missing_metric_keys
+        ],
+    ]
+    return _issue(
+        "missing-required-signal",
+        "low",
+        component_id,
+        title=f"{display_name} Missing Required Signal",
+        summary=(
+            f"{display_name} is missing required {signal_summary} telemetry "
+            f"from metric key(s): {metric_summary}."
+        ),
+        evidence_refs=evidence_refs,
+        diagnostics={
+            "component_id": component_id,
+            "component_display_name": display_name,
+            "missing_signals": missing_signals,
+            "missing_metric_keys": missing_metric_keys,
+            "coverage_state": component.get("data_quality", {}).get("coverage_state"),
+            "telemetry_freshness_seconds": component.get("data_quality", {}).get(
+                "telemetry_freshness_seconds"
+            ),
+        },
+        safe_next_actions=[
+            {
+                "action": "inspect_required_signal_contract",
+                "summary": (
+                    "Open the component cockpit and check the listed metric keys "
+                    "against the required signal contract."
+                ),
+            }
+        ],
+    )
 
 
 def _pipeline_invariants(

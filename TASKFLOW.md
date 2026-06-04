@@ -1361,6 +1361,15 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   schema, inserted one topology operation plus one planned trial through
   `AsyncpgTopologyStore`, read it back through the new detail method, verified
   `trial_count=1`, and cleaned the smoke rows.
+- Observatory required-signal issue evidence is implemented for Sections 5.5,
+  7.7, 12.6, and acceptance criterion 31: `missing-required-signal` issue-board
+  rows now carry exact missing signal classes, missing metric keys, component
+  evidence refs, and a specific safe next action; the generic issue microscope
+  exposes the same content-safe evidence path instead of leaving operators with
+  only a generic label. Validation passed with the focused Observatory API
+  regression (`3 passed`), focused ruff checks, full `uv run ruff check
+  sidecar`, full `uv run pytest` (`355 passed`), `uv run python -m compileall
+  -q sidecar`, and `git diff --check`.
 
 ## Next Gates
 

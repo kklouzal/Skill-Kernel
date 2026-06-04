@@ -26,7 +26,11 @@ from autoskill.db.observability import (
 from autoskill.db.observatory_admin import NullObservatoryAdminStore
 from autoskill.db.retrieval import RetrievalLog
 from autoskill.db.topology import NullTopologyStore
-from autoskill.services.observatory import build_live_envelope, build_observatory_snapshot
+from autoskill.services.observatory import (
+    build_live_envelope,
+    build_observatory_snapshot,
+    object_microscope,
+)
 from fastapi import HTTPException, Response
 
 
@@ -1569,6 +1573,88 @@ def test_observatory_stale_or_missing_telemetry_never_reports_healthy() -> None:
     assert any(
         "telemetry-stale" in issue["reason_codes"] for issue in snapshot["issue_board"]
     )
+
+
+def test_observatory_missing_required_signal_issue_cites_metric_contract() -> None:
+    settings = get_settings().model_copy(
+        update={
+            "database_url": "postgresql://autoskill:autoskill-dev@127.0.0.1/autoskill",
+            "control_token": "control-token",
+        }
+    )
+    metrics = {
+        "ingest": {"events_in_window": 1, "total_events": 1},
+        "redaction_counts": {},
+        "spool_backlog": {},
+        "retrieval_decisions": {},
+        "embedding_backlog": {},
+        "context_hint_injection_count": 0,
+        "context_hint_token_cost": 0,
+        "skill_creation_improvement_counts": {},
+        "skill_lifecycle_counts": {},
+        "scanner_reject_counts": {},
+        "evaluation_pass_fail_counts": {},
+        "rollback_freeze_counts": {},
+        "job_queue_depth": {},
+        "postgres_table_index_growth": [],
+        "audit": {},
+        "sidecar_latency_ms": {},
+    }
+    snapshot = build_observatory_snapshot(
+        settings=settings,
+        status={
+            "mode": "dev",
+            "database_configured": True,
+            "ingest_auth_configured": True,
+            "control_auth_configured": True,
+            "runtime_context_broker": {"enabled": True},
+            "jobs": {},
+            "workers": {},
+        },
+        operator_metrics={
+            "captured_at": datetime.now(UTC).isoformat(),
+            "metrics": metrics,
+            "dashboards": {},
+        },
+        worker_health={},
+        audit_chain_valid=True,
+        static_available=True,
+        workspace_id="dev-01",
+        window_minutes=10,
+    )
+
+    issue = next(
+        issue
+        for issue in snapshot["issue_board"]  # type: ignore[index]
+        if issue["issue_id"] == "context_compiler:missing-required-signal"
+    )
+    assert issue["diagnostics"]["missing_metric_keys"] == [
+        "context_hint_token_ledger_count"
+    ]
+    assert issue["evidence_refs"] == [
+        {
+            "object_type": "component",
+            "object_id": "context_compiler",
+            "relationship": "affected_component",
+        },
+        {
+            "object_type": "required_signal_metric",
+            "object_id": "context_hint_token_ledger_count",
+            "relationship": "missing_metric_key",
+            "component_id": "context_compiler",
+        },
+    ]
+
+    detail = object_microscope(
+        snapshot,
+        object_type="issue",
+        object_id="context_compiler:missing-required-signal",
+    )
+    assert detail["diagnostics"]["diagnostics"]["missing_signals"] == [
+        "evidence",
+        "quality",
+    ]
+    assert detail["provenance"]["upstream"][1]["object_type"] == "required_signal_metric"
 
 
 def test_observatory_action_records_audited_policy_receipt() -> None:

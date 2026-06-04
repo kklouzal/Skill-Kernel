@@ -935,6 +935,15 @@ Acceptance:
   Focused validation passed with the Observatory API/source assertions, `uv run
   ruff check` on edited Python files, and the Observatory frontend build; final
   validation evidence is recorded in `TASKFLOW.md`.
+- validation evidence for the Observatory required-signal issue-evidence slice
+  passed on the final tree: `missing-required-signal` issue-board records now
+  include exact missing signal classes, missing metric keys, component evidence
+  refs, and a dedicated safe next action, and the generic issue microscope
+  exposes the same content-safe evidence path. This advances Observatory
+  Sections 5.5, 7.7, 12.6, and acceptance criterion 31 without adding mutation
+  authority or raw-content access. Validation passed with the focused
+  Observatory API regression (`3 passed`), focused ruff, full sidecar ruff, full
+  pytest (`355 passed`), compileall, and diff-check gates.
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and
