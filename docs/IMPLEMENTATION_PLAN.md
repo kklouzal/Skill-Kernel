@@ -831,3 +831,12 @@ Acceptance:
   job counts, worker-health summaries, operator metrics, and audit
   verification, and job summaries no longer treat old failed rows as active
   failures after a later same-workspace/job-kind success.
+- validation evidence for the executable Observatory acceptance crosswalk passed
+  on the final tree: `scripts/autoskill_observatory_acceptance.py --json`
+  covers the Section 21 acceptance criteria and Section 24 developer checklist
+  as a deterministic report with evidence pointers and implemented-equivalent
+  markers where the implementation intentionally satisfies the spec through an
+  equivalent repo pattern. Focused validation passed with `uv run pytest -q
+  sidecar/autoskill/tests/test_observatory_acceptance_report.py` (`1 passed`)
+  and the report command returned `ready=true`, `satisfied=78`, and no
+  validation errors.

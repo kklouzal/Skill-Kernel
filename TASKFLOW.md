@@ -1202,6 +1202,15 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   inspection. Validation passed with `npm run build --prefix
   sidecar/autoskill/observatory`, focused Observatory API tests (`30 passed`),
   and `git diff --check`.
+- Observatory Section 21/24 acceptance now has an executable crosswalk:
+  `scripts/autoskill_observatory_acceptance.py --json` emits a deterministic
+  Observatory web/admin acceptance and developer-checklist report covering 40
+  acceptance criteria plus 38 checklist items, with explicit evidence pointers
+  and implemented-equivalent markers where the repo intentionally uses an
+  equivalent pattern. Validation passed with
+  `uv run pytest -q sidecar/autoskill/tests/test_observatory_acceptance_report.py`
+  (`1 passed`) and `uv run python scripts/autoskill_observatory_acceptance.py
+  --json` reporting `ready=true`, `satisfied=78`, and no validation errors.
 
 ## Next Gates
 

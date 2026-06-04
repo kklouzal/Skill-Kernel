@@ -106,6 +106,12 @@ Emit the production acceptance crosswalk:
 python scripts/autoskill_acceptance.py --json
 ```
 
+Emit the Observatory web/admin acceptance crosswalk:
+
+```bash
+python scripts/autoskill_observatory_acceptance.py --json
+```
+
 Emit the Section 32/33 risk and developer handoff crosswalk:
 
 ```bash
