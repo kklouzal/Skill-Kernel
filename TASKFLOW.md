@@ -16,7 +16,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
-- 2026-06-04: Implementation and Observatory specs were refreshed, revealing acceptance-crosswalk drift. The executable reports now cover the current main production criteria (`31.1`-`31.63`, plus seven context criteria) and Observatory criteria/checklist (`21.1`-`21.42`, `24.auto.1`-`24.auto.6`, `24.1`-`24.38`). Added automatic broker replay episode synthesis from eligible LLM-synthesized redacted telemetry through `/v1/broker/replay-episodes/synthesize`, with explicit hash-only/metadata-only skip reasons and no raw prompt exposure.
+- 2026-06-04: Implementation and Observatory specs were refreshed, revealing acceptance-crosswalk drift. The executable reports now cover the current main production criteria (`31.1`-`31.63`, plus seven context criteria) and Observatory criteria/checklist (`21.1`-`21.42`, `24.auto.1`-`24.auto.6`, `24.1`-`24.38`). Added automatic broker replay episode synthesis through `/v1/broker/replay-episodes/synthesize`: it records pre-adjudicated redacted telemetry, can synthesize missing redacted intent through the configured text LLM from content-safe retrieval context, repairs stale telemetry-derived episode expectations from source retrieval logs, stores deterministic validation/provenance, and returns explicit hash-only/metadata-only/no-safe-context skip reasons without raw prompt exposure. Live Dev-01 replay validation now matches the stored telemetry-derived corpus at 19/19 after synthesis/repair.
 - Project directory created.
 - Handoff saved and checksum-verified.
 - Project-local `AGENTS.md` added.

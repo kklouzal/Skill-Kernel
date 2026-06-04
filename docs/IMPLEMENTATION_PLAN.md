@@ -2,7 +2,7 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
-2026-06-04 update: the authoritative main and Observatory specs were refreshed. Acceptance crosswalks were expanded to the current main criteria (`31.1`-`31.63` plus context criteria) and Observatory criteria/checklist (`21.1`-`21.42`, `24.auto.1`-`24.auto.6`, `24.1`-`24.38`). The first newly exposed implementation gap was closed by adding automatic, content-safe broker replay episode synthesis from eligible LLM-synthesized redacted telemetry; hash-only and metadata-only telemetry now produces explicit skip reasons instead of being treated as full-autonomy replay evidence.
+2026-06-04 update: the authoritative main and Observatory specs were refreshed. Acceptance crosswalks were expanded to the current main criteria (`31.1`-`31.63` plus context criteria) and Observatory criteria/checklist (`21.1`-`21.42`, `24.auto.1`-`24.auto.6`, `24.1`-`24.38`). The newly exposed replay-corpus gap is closed by `/v1/broker/replay-episodes/synthesize`: it records pre-adjudicated redacted telemetry, can synthesize a redacted intent through the configured text LLM from content-safe retrieval context, repairs stale telemetry-derived episode expectations from source retrieval logs, stores deterministic validation/provenance, and returns explicit hash-only/metadata-only/no-safe-context skip reasons instead of treating degraded evidence as full-autonomy replay support. Live Dev-01 validation synthesized/repaired telemetry-derived episodes and replayed the stored corpus at 19/19 matches.
 
 ## Phase 0 - Confirm OpenClaw Seams
 
@@ -644,7 +644,9 @@ Deliverables:
 - content-safe broker replay corpus mining; implemented as
   `scripts/autoskill_replay_corpus.py`, which lists retrieval telemetry
   candidates by log ID/query hash/selected skill metadata and records replay
-  episodes only from an explicit operator plan containing redacted intents;
+  episodes from explicit operator redacted-intent plans, pre-adjudicated redacted
+  telemetry, or LLM-synthesized redacted intent derived only from content-safe
+  retrieval context;
 - production preflight remains sidecar-state-only and does not install the
   plugin, write runtime skills, activate autonomous apply, or mutate live
   OpenClaw configuration;
@@ -666,8 +668,9 @@ Acceptance:
   broker paraphrase validation, stored broker replay, production embedding
   validation, red-team smoke, and backup/restore dry-run.
 - telemetry-derived replay episode creation does not persist or reconstruct raw
-  prompts; operators must supply redacted replay intent text when promoting a
-  retrieval log into the replay corpus.
+  prompts; missing intents can be synthesized only from content-safe retrieval
+  context, and degraded hash-only/metadata-only/no-safe-context cases return
+  explicit skip reasons instead of entering the full-autonomy replay corpus.
 
 ## Phase 11 - Observatory Web Administration and Diagnostics
 

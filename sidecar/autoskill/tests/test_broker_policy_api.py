@@ -55,6 +55,7 @@ class TelemetryReplayRetrievalStore(MemoryBrokerRetrievalStore):
     ) -> None:
         super().__init__(candidates)
         self.logs = logs
+        self.recent_logs = logs
         self.list_calls: list[dict[str, object]] = []
 
     async def list_recent_logs(
@@ -64,7 +65,33 @@ class TelemetryReplayRetrievalStore(MemoryBrokerRetrievalStore):
         limit: int = 50,
     ) -> list[RetrievalLog]:
         self.list_calls.append({"workspace_key": workspace_key, "limit": limit})
-        return self.logs[:limit]
+        return self.recent_logs[:limit]
+
+    async def get_log(
+        self,
+        *,
+        workspace_key: str | None = None,
+        retrieval_log_id,
+    ) -> RetrievalLog | None:
+        for log in self.logs:
+            if log.retrieval_log_id == retrieval_log_id:
+                return log
+        return None
+
+
+class FakeReplayIntentLLM:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.calls: list[object] = []
+
+    async def complete(self, completion):
+        self.calls.append(completion)
+        return type("LLMResponse", (), {"text": self.text})()
+
+
+class FailingReplayIntentLLM:
+    async def complete(self, completion):
+        raise ValueError("unknown url type")
 
 
 def test_broker_policy_api_activates_policy_and_replay_uses_it() -> None:
@@ -234,6 +261,326 @@ def test_broker_policy_synthesizes_replay_episodes_from_redacted_telemetry() -> 
     assert episode["source_retrieval_log_id"] == str(retrieval_log_id)
     assert replayed.replay.total == 1
     assert replayed.replay.matched == 1
+
+
+def test_broker_policy_synthesizes_missing_intent_from_safe_retrieval_context() -> None:
+    policy_store = NullBrokerPolicyStore()
+    retrieval_log_id = uuid4()
+    skill_id = uuid4()
+    retrieval = TelemetryReplayRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=skill_id,
+                summary=(
+                    "WHEN tables in exported PDFs need deterministic repair, "
+                    "use the table repair workflow."
+                ),
+                rank=0.8,
+                metadata={"secret_scan_status": "passed", "lifecycle_state": "active"},
+            )
+        ],
+        [
+            RetrievalLog(
+                retrieval_log_id=retrieval_log_id,
+                trace_id=uuid4(),
+                span_id=uuid4(),
+                parent_span_id=None,
+                session_id="sess-redacted",
+                turn_id=None,
+                broker_policy_version_id=None,
+                decision="candidates_found",
+                candidate_skill_ids=[skill_id],
+                rendered_skill_ids=[skill_id],
+                no_skill_control=False,
+                metadata={"candidate_count": 1},
+                created_at=datetime.now(UTC),
+            )
+        ],
+    )
+    llm = FakeReplayIntentLLM(
+        '{"redacted_user_intent":"repair redacted pdf table export"}'
+    )
+    app = create_app(
+        broker_policy_store=policy_store,
+        retrieval_store=retrieval,
+        llm_client=llm,
+    )
+    synthesize = next(
+        route
+        for route in app.routes
+        if route.path == "/v1/broker/replay-episodes/synthesize"
+    )
+
+    response = asyncio.run(
+        synthesize.endpoint(
+            request=BrokerReplayEpisodeSynthesizeRequest(workspace_id="dev-01")
+        )
+    )
+
+    assert response.skipped == []
+    assert len(response.episodes) == 1
+    episode = response.episodes[0]
+    assert episode["redacted_user_intent"] == "repair redacted pdf table export"
+    assert episode["expected_decision"] == "skill_hint"
+    assert episode["expected_skill_ids"] == [str(skill_id)]
+    assert episode["metadata"]["evidence_fidelity"] == "redacted_derivative"
+    assert episode["metadata"]["redacted_intent_source"] == (
+        "llm_synthesized_from_content_safe_retrieval"
+    )
+    assert episode["metadata"]["deterministic_validation"]["status"] == "passed"
+    assert episode["metadata"]["raw_prompt_stored"] is False
+    assert llm.calls[0].purpose == "broker_replay.redacted_intent_synthesis"
+    assert retrieval.replay_context_calls[0]["retrieval_log_id"] == retrieval_log_id
+
+
+def test_broker_policy_synthesis_fails_closed_without_safe_context() -> None:
+    retrieval_log_id = uuid4()
+    retrieval = TelemetryReplayRetrievalStore(
+        [],
+        [
+            RetrievalLog(
+                retrieval_log_id=retrieval_log_id,
+                trace_id=None,
+                span_id=None,
+                parent_span_id=None,
+                session_id=None,
+                turn_id=None,
+                broker_policy_version_id=None,
+                decision="no_candidates",
+                candidate_skill_ids=[],
+                rendered_skill_ids=[],
+                no_skill_control=True,
+                metadata={},
+                created_at=datetime.now(UTC),
+            )
+        ],
+    )
+    llm = FakeReplayIntentLLM('{"redacted_user_intent":"should not be called"}')
+    app = create_app(
+        broker_policy_store=NullBrokerPolicyStore(),
+        retrieval_store=retrieval,
+        llm_client=llm,
+    )
+    synthesize = next(
+        route
+        for route in app.routes
+        if route.path == "/v1/broker/replay-episodes/synthesize"
+    )
+
+    response = asyncio.run(
+        synthesize.endpoint(
+            request=BrokerReplayEpisodeSynthesizeRequest(workspace_id="dev-01")
+        )
+    )
+
+    assert response.episodes == []
+    assert response.skipped == [
+        {
+            "retrieval_log_id": str(retrieval_log_id),
+            "reason": "missing-content-safe-replay-context",
+        }
+    ]
+    assert llm.calls == []
+
+
+def test_broker_policy_synthesis_preserves_defer_for_non_runtime_candidates() -> None:
+    retrieval_log_id = uuid4()
+    retrieval = TelemetryReplayRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="evidence_item",
+                object_id=uuid4(),
+                skill_id=None,
+                summary="Repeated redacted evidence indicates skill vetting intent.",
+                rank=0.7,
+                metadata={"source": "evidence_item"},
+            )
+        ],
+        [
+            RetrievalLog(
+                retrieval_log_id=retrieval_log_id,
+                trace_id=None,
+                span_id=None,
+                parent_span_id=None,
+                session_id=None,
+                turn_id=None,
+                broker_policy_version_id=None,
+                decision="candidates_found",
+                candidate_skill_ids=[],
+                rendered_skill_ids=[],
+                no_skill_control=True,
+                metadata={"candidate_count": 1},
+                created_at=datetime.now(UTC),
+            )
+        ],
+    )
+    llm = FakeReplayIntentLLM('{"redacted_user_intent":"check skill vetting"}')
+    app = create_app(
+        broker_policy_store=NullBrokerPolicyStore(),
+        retrieval_store=retrieval,
+        llm_client=llm,
+    )
+    synthesize = next(
+        route
+        for route in app.routes
+        if route.path == "/v1/broker/replay-episodes/synthesize"
+    )
+
+    response = asyncio.run(
+        synthesize.endpoint(
+            request=BrokerReplayEpisodeSynthesizeRequest(workspace_id="dev-01")
+        )
+    )
+
+    assert response.skipped == []
+    assert response.episodes[0]["expected_decision"] == "defer_skill"
+    assert response.episodes[0]["expected_skill_ids"] == []
+
+
+def test_broker_policy_synthesis_repairs_stale_telemetry_episode_decision() -> None:
+    policy_store = NullBrokerPolicyStore()
+    retrieval_log_id = uuid4()
+    retrieval = TelemetryReplayRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="evidence_item",
+                object_id=uuid4(),
+                skill_id=None,
+                summary="Repeated redacted evidence indicates skill vetting intent.",
+                rank=0.7,
+                metadata={"source": "evidence_item"},
+            )
+        ],
+        [
+            RetrievalLog(
+                retrieval_log_id=retrieval_log_id,
+                trace_id=None,
+                span_id=None,
+                parent_span_id=None,
+                session_id=None,
+                turn_id=None,
+                broker_policy_version_id=None,
+                decision="candidates_found",
+                candidate_skill_ids=[],
+                rendered_skill_ids=[],
+                no_skill_control=True,
+                metadata={},
+                created_at=datetime.now(UTC),
+            )
+        ],
+    )
+    retrieval.recent_logs = []
+    app = create_app(
+        broker_policy_store=policy_store,
+        retrieval_store=retrieval,
+        llm_client=FakeReplayIntentLLM('{"redacted_user_intent":"unused"}'),
+    )
+    record = next(
+        route
+        for route in app.routes
+        if route.path == "/v1/broker/replay-episodes"
+        and "POST" in getattr(route, "methods", set())
+    )
+    synthesize = next(
+        route
+        for route in app.routes
+        if route.path == "/v1/broker/replay-episodes/synthesize"
+    )
+
+    async def run():
+        stale = await record.endpoint(
+            request=BrokerReplayEpisodeRecordRequest(
+                workspace_id="dev-01",
+                episode_key=f"telemetry-{str(retrieval_log_id)[:12]}",
+                redacted_user_intent="check skill vetting",
+                expected_decision="no_skill",
+                tags=["telemetry-derived"],
+                metadata={
+                    "source": "automatic_replay_synthesis",
+                    "evidence_fidelity": "redacted_derivative",
+                    "redacted_intent_source": (
+                        "llm_synthesized_from_content_safe_retrieval"
+                    ),
+                    "deterministic_validation": {"status": "passed"},
+                },
+                source_retrieval_log_id=retrieval_log_id,
+            )
+        )
+        repaired = await synthesize.endpoint(
+            request=BrokerReplayEpisodeSynthesizeRequest(
+                workspace_id="dev-01",
+                repair_existing_telemetry_episodes=True,
+            )
+        )
+        return stale, repaired
+
+    stale, repaired = asyncio.run(run())
+
+    assert stale.episode["expected_decision"] == "no_skill"
+    assert repaired.skipped == []
+    assert len(repaired.episodes) == 1
+    assert repaired.episodes[0]["expected_decision"] == "defer_skill"
+    assert repaired.episodes[0]["redacted_user_intent"] == "check skill vetting"
+    assert repaired.episodes[0]["metadata"]["candidate_count"] == 1
+
+
+def test_broker_policy_synthesis_fails_closed_on_llm_provider_error() -> None:
+    retrieval_log_id = uuid4()
+    retrieval = TelemetryReplayRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="evidence_item",
+                object_id=uuid4(),
+                skill_id=None,
+                summary="Repeated redacted evidence indicates PDF table repair intent.",
+                rank=0.7,
+                metadata={"source": "evidence_item"},
+            )
+        ],
+        [
+            RetrievalLog(
+                retrieval_log_id=retrieval_log_id,
+                trace_id=None,
+                span_id=None,
+                parent_span_id=None,
+                session_id=None,
+                turn_id=None,
+                broker_policy_version_id=None,
+                decision="candidates_found",
+                candidate_skill_ids=[],
+                rendered_skill_ids=[],
+                no_skill_control=True,
+                metadata={"candidate_count": 1},
+                created_at=datetime.now(UTC),
+            )
+        ],
+    )
+    app = create_app(
+        broker_policy_store=NullBrokerPolicyStore(),
+        retrieval_store=retrieval,
+        llm_client=FailingReplayIntentLLM(),
+    )
+    synthesize = next(
+        route
+        for route in app.routes
+        if route.path == "/v1/broker/replay-episodes/synthesize"
+    )
+
+    response = asyncio.run(
+        synthesize.endpoint(
+            request=BrokerReplayEpisodeSynthesizeRequest(workspace_id="dev-01")
+        )
+    )
+
+    assert response.episodes == []
+    assert response.skipped == [
+        {
+            "retrieval_log_id": str(retrieval_log_id),
+            "reason": "llm-synthesis-failed:ValueError",
+        }
+    ]
 
 
 def test_broker_policy_synthesis_skips_degraded_evidence_fidelity_telemetry() -> None:

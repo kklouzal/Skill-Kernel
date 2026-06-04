@@ -34,6 +34,7 @@ class MemoryBrokerRetrievalStore:
         self.semantic_calls: list[dict[str, object]] = []
         self.graph_calls: list[dict[str, object]] = []
         self.records: list[dict[str, object]] = []
+        self.replay_context_calls: list[dict[str, object]] = []
 
     async def lexical_query(
         self,
@@ -143,6 +144,22 @@ class MemoryBrokerRetrievalStore:
                 "broker_policy_version_id": broker_policy_version_id,
             }
         )
+
+    async def replay_context_for_log(
+        self,
+        *,
+        workspace_key: str,
+        retrieval_log_id,
+        limit: int = 8,
+    ) -> list[RetrievalCandidate]:
+        self.replay_context_calls.append(
+            {
+                "workspace_key": workspace_key,
+                "retrieval_log_id": retrieval_log_id,
+                "limit": limit,
+            }
+        )
+        return self.candidates[:limit]
 
 
 class MemoryContextGovernanceStore:

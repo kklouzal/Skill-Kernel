@@ -423,9 +423,10 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         "31.45",
         "Replay-corpus candidates can be promoted automatically from eligible telemetry without requiring an operator-authored replay plan in the normal path.",
         (
-            "/v1/broker/replay-episodes/synthesize creates episodes from LLM-synthesized redacted telemetry",
+            "/v1/broker/replay-episodes/synthesize can synthesize redacted intent from content-safe retrieval telemetry",
             "synthesis requires eligible evidence fidelity and deterministic validation pass",
-            "sidecar/autoskill/tests/test_broker_policy_api.py",
+            "test_broker_policy_synthesizes_missing_intent_from_safe_retrieval_context",
+            "test_broker_policy_synthesis_repairs_stale_telemetry_episode_decision",
         ),
     ),
     AcceptanceCriterion(
@@ -569,7 +570,8 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         (
             "BrokerReplayEpisodeSynthesizeResponse returns episodes and skip reasons",
             "broker_replay_episodes.metadata includes source, evidence_fidelity, validation, and raw_prompt_stored=false",
-            "test_broker_policy_synthesizes_replay_episodes_from_redacted_telemetry",
+            "test_broker_policy_synthesizes_missing_intent_from_safe_retrieval_context",
+            "test_broker_policy_synthesis_repairs_stale_telemetry_episode_decision",
         ),
     ),
     AcceptanceCriterion(
@@ -577,8 +579,11 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         "Automatically synthesized replay episodes are immediately usable by normal broker replay/canary evaluation.",
         (
             "synthesized episodes are stored through BrokerPolicyStore.record_replay_episode",
+            "stale telemetry-derived episodes are repaired by source retrieval log on synthesis rerun",
             "BrokerPolicyReplayRequest include_stored_episodes consumes telemetry-derived tags",
             "test_broker_policy_synthesizes_replay_episodes_from_redacted_telemetry",
+            "test_broker_policy_synthesizes_missing_intent_from_safe_retrieval_context",
+            "test_broker_policy_synthesis_repairs_stale_telemetry_episode_decision",
         ),
     ),
     AcceptanceCriterion(

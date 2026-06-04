@@ -198,6 +198,15 @@ class RetrievalStore(Protocol):
     ) -> RetrievalLog | None:
         """Return one content-safe retrieval/broker decision for operator drill-down."""
 
+    async def replay_context_for_log(
+        self,
+        *,
+        workspace_key: str,
+        retrieval_log_id: UUID,
+        limit: int = 8,
+    ) -> list[RetrievalCandidate]:
+        """Return content-safe candidate summaries for replay intent synthesis."""
+
 
 class NullRetrievalStore:
     async def lexical_query(
@@ -284,6 +293,15 @@ class NullRetrievalStore:
         retrieval_log_id: UUID,
     ) -> RetrievalLog | None:
         return None
+
+    async def replay_context_for_log(
+        self,
+        *,
+        workspace_key: str,
+        retrieval_log_id: UUID,
+        limit: int = 8,
+    ) -> list[RetrievalCandidate]:
+        return []
 
 
 class AsyncpgRetrievalStore(AsyncpgPoolOwner):
@@ -860,6 +878,105 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
                 workspace_key,
             )
         return RetrievalLog.from_row(row) if row else None
+
+    async def replay_context_for_log(
+        self,
+        *,
+        workspace_key: str,
+        retrieval_log_id: UUID,
+        limit: int = 8,
+    ) -> list[RetrievalCandidate]:
+        pool = await self._get_pool()
+        bounded_limit = max(1, min(limit, 25))
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                WITH candidate_objects AS (
+                  SELECT
+                    (item->>'object_id')::uuid AS object_id,
+                    item->>'object_type' AS object_type,
+                    COALESCE((item->>'rank')::double precision, 0.0) AS rank,
+                    ordinality
+                  FROM autoskill.retrieval_logs rl
+                  JOIN autoskill.workspaces w ON w.workspace_id = rl.workspace_id
+                  CROSS JOIN LATERAL jsonb_array_elements(
+                    COALESCE(rl.metadata->'candidate_objects', '[]'::jsonb)
+                  ) WITH ORDINALITY AS expanded(item, ordinality)
+                  WHERE rl.retrieval_log_id = $1
+                    AND w.external_key = $2
+                ),
+                hydrated AS (
+                  SELECT
+                    co.object_type,
+                    co.object_id,
+                    b.skill_id,
+                    left(b.text_content, 700) AS summary,
+                    co.rank,
+                    jsonb_build_object(
+                      'source', 'body_index_document',
+                      'document_kind', b.document_kind,
+                      'secret_scan_status', b.secret_scan_status,
+                      'taint', b.taint
+                    ) AS metadata,
+                    co.ordinality
+                  FROM candidate_objects co
+                  JOIN autoskill.body_index_documents b
+                    ON b.body_index_document_id = co.object_id
+                  WHERE co.object_type = 'body_index_document'
+
+                  UNION ALL
+
+                  SELECT
+                    co.object_type,
+                    co.object_id,
+                    NULL::uuid AS skill_id,
+                    left(e.summary, 700) AS summary,
+                    co.rank,
+                    jsonb_build_object(
+                      'source', 'evidence_item',
+                      'kind', e.kind,
+                      'maturity', e.maturity,
+                      'trust', e.trust,
+                      'taint', e.taint
+                    ) AS metadata,
+                    co.ordinality
+                  FROM candidate_objects co
+                  JOIN autoskill.evidence_items e
+                    ON e.evidence_id = co.object_id
+                  WHERE co.object_type = 'evidence_item'
+                    AND e.revoked_at IS NULL
+
+                  UNION ALL
+
+                  SELECT
+                    co.object_type,
+                    co.object_id,
+                    NULL::uuid AS skill_id,
+                    left(concat_ws(' - ', ex.name, ex.description), 700) AS summary,
+                    co.rank,
+                    jsonb_build_object(
+                      'source', 'external_skill',
+                      'slug', ex.slug,
+                      'status', ex.status,
+                      'risk_summary', ex.risk_summary
+                    ) AS metadata,
+                    co.ordinality
+                  FROM candidate_objects co
+                  JOIN autoskill.external_skill_inventory ex
+                    ON ex.external_skill_id = co.object_id
+                  WHERE co.object_type = 'external_skill'
+                )
+                SELECT object_type, object_id, skill_id, summary, rank, metadata
+                FROM hydrated
+                WHERE summary IS NOT NULL AND btrim(summary) <> ''
+                ORDER BY ordinality
+                LIMIT $3
+                """,
+                retrieval_log_id,
+                workspace_key,
+                bounded_limit,
+            )
+        return [RetrievalCandidate.from_row(row) for row in rows]
 
 
 async def _insert_retrieval_log(

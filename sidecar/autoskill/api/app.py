@@ -134,7 +134,12 @@ from autoskill.services.evaluation_runner import run_pending_proposal_gates_with
 from autoskill.services.historical_bootstrap import consolidate_historical_bootstrap
 from autoskill.services.historical_discovery import discover_historical_sources
 from autoskill.services.historical_import import import_historical_sources
-from autoskill.services.llm import LLMClient
+from autoskill.services.llm import (
+    LLMClient,
+    LLMClientError,
+    LLMCompletionRequest,
+    LLMMessage,
+)
 from autoskill.services.matching import SkillMatchRequest, match_existing_skills
 from autoskill.services.observatory import (
     action_receipt,
@@ -1223,6 +1228,10 @@ class BrokerReplayEpisodeSynthesizeRequest(BaseModel):
     limit: int = 50
     tags: list[str] = Field(default_factory=list)
     min_intent_chars: int = 8
+    synthesize_missing_intents: bool = True
+    synthesis_profile_key: str = "default-text"
+    synthesis_context_limit: int = 8
+    repair_existing_telemetry_episodes: bool = True
 
 
 class BrokerReplayEpisodeSynthesizeResponse(BaseModel):
@@ -3257,8 +3266,11 @@ def _broker_replay_synthesis_candidate(
     log: Any,
     *,
     min_intent_chars: int,
+    metadata_overlay: dict[str, Any] | None = None,
 ) -> tuple[dict[str, object] | None, str]:
     metadata = log.metadata if isinstance(log.metadata, dict) else {}
+    if metadata_overlay:
+        metadata = {**metadata, **metadata_overlay}
     intent, intent_source = _redacted_replay_intent(metadata)
     if intent is None or len(intent) < min_intent_chars:
         return None, "missing-redacted-intent"
@@ -3302,7 +3314,7 @@ def _broker_replay_synthesis_candidate(
         return None, f"deterministic-validation-not-passed:{validation_status or 'missing'}"
 
     expected_skill_ids = list(log.rendered_skill_ids or log.candidate_skill_ids or [])
-    expected_decision = _expected_replay_decision(log)
+    expected_decision = _expected_replay_decision(log, metadata=metadata)
     metadata_payload = {
         "source": "automatic_replay_synthesis",
         "source_retrieval_log_id": str(log.retrieval_log_id),
@@ -3317,6 +3329,11 @@ def _broker_replay_synthesis_candidate(
         "operator_plan_required": False,
         "normal_path": True,
     }
+    if isinstance(metadata.get("candidate_count"), int):
+        metadata_payload["candidate_count"] = metadata["candidate_count"]
+    context_object_types = metadata.get("context_object_types")
+    if isinstance(context_object_types, list):
+        metadata_payload["context_object_types"] = context_object_types
     return (
         {
             "episode_key": f"telemetry-{str(log.retrieval_log_id)[:12]}",
@@ -3362,10 +3379,17 @@ def _metadata_path(metadata: dict[str, Any], path: str) -> Any:
     return current
 
 
-def _expected_replay_decision(log: Any) -> str:
+def _expected_replay_decision(log: Any, *, metadata: dict[str, Any] | None = None) -> str:
     if log.rendered_skill_ids:
         return "skill_hint"
     decision = str(log.decision or "")
+    if metadata is None:
+        metadata = log.metadata if isinstance(log.metadata, dict) else {}
+    candidate_count = metadata.get("candidate_count")
+    if log.candidate_skill_ids:
+        return "skill_hint"
+    if isinstance(candidate_count, int) and candidate_count > 0:
+        return "defer_skill"
     if log.no_skill_control or decision in {
         "no_skill",
         "no_candidates",
@@ -3375,7 +3399,177 @@ def _expected_replay_decision(log: Any) -> str:
         return "no_skill"
     if decision in {"defer_skill", "evidence_only", "evidence-only"}:
         return "defer_skill"
-    return "skill_hint" if log.candidate_skill_ids else "no_skill"
+    return "no_skill"
+
+
+async def _synthesize_redacted_replay_intent(
+    *,
+    log: Any,
+    workspace_key: str,
+    context: list[Any],
+    text_llm: LLMClient,
+    profile_key: str,
+    min_intent_chars: int,
+) -> tuple[dict[str, Any] | None, str]:
+    safe_context = [
+        candidate
+        for candidate in context
+        if str(getattr(candidate, "summary", "")).strip()
+        and getattr(candidate, "object_type", "") in {
+            "body_index_document",
+            "evidence_item",
+            "external_skill",
+        }
+    ]
+    if not safe_context:
+        return None, "missing-content-safe-replay-context"
+    if not any(
+        getattr(candidate, "object_type", "") in {"body_index_document", "evidence_item"}
+        for candidate in safe_context
+    ):
+        return None, "unsupported-evidence-fidelity:metadata_only"
+
+    context_lines = []
+    for index, candidate in enumerate(safe_context[:8], start=1):
+        summary = " ".join(str(candidate.summary).split())
+        context_lines.append(
+            json.dumps(
+                {
+                    "rank": index,
+                    "object_type": candidate.object_type,
+                    "skill_id": str(candidate.skill_id) if candidate.skill_id else None,
+                    "summary": summary[:700],
+                },
+                sort_keys=True,
+            )
+        )
+    prompt = (
+        "You synthesize content-safe replay intents for SkillKernel broker canaries.\n"
+        "Use only the redacted/derived retrieval context below. Do not infer or invent "
+        "private raw content, names, secrets, or exact prompt wording. Return only JSON "
+        "with this shape: {\"redacted_user_intent\":\"short safe operator intent\"}.\n\n"
+        f"Broker decision: {getattr(log, 'decision', '')}\n"
+        f"Reason metadata: {json.dumps(_replay_reason_metadata(log), sort_keys=True)}\n"
+        "Content-safe retrieval context:\n"
+        + "\n".join(context_lines)
+    )
+    try:
+        response = await text_llm.complete(
+            LLMCompletionRequest(
+                workspace_key=workspace_key,
+                profile_key=profile_key,
+                purpose="broker_replay.redacted_intent_synthesis",
+                messages=[
+                    LLMMessage(
+                        role="system",
+                        content=(
+                            "Return strict JSON only. Never include raw user text, "
+                            "secrets, credentials, personal data, or markdown."
+                        ),
+                    ),
+                    LLMMessage(role="user", content=prompt),
+                ],
+                max_output_tokens=160,
+                temperature=0.0,
+                trace_id=getattr(log, "trace_id", None),
+                span_id=getattr(log, "span_id", None),
+            )
+        )
+    except (LLMClientError, ValueError, OSError) as exc:
+        return None, f"llm-synthesis-failed:{type(exc).__name__}"
+
+    parsed = _json_object_from_text(response.text)
+    intent = str(parsed.get("redacted_user_intent") or "").strip()
+    validation = _validate_synthesized_replay_intent(
+        intent,
+        min_intent_chars=min_intent_chars,
+        context_count=len(safe_context),
+    )
+    if validation["status"] != "passed":
+        return None, f"deterministic-validation-not-passed:{validation['reason']}"
+    context_metadata = _replay_context_metadata(safe_context)
+    return (
+        {
+            "redacted_user_intent": intent,
+            "redacted_intent_source": "llm_synthesized_from_content_safe_retrieval",
+            "evidence_fidelity": "redacted_derivative",
+            "deterministic_validation": validation,
+            **context_metadata,
+        },
+        "eligible",
+    )
+
+
+def _replay_reason_metadata(log: Any) -> dict[str, Any]:
+    metadata = log.metadata if isinstance(log.metadata, dict) else {}
+    return {
+        "reason_codes": metadata.get("reason_codes") or [],
+        "candidate_count": metadata.get("candidate_count"),
+        "rendered_skill_count": len(getattr(log, "rendered_skill_ids", []) or []),
+        "no_skill_control": bool(getattr(log, "no_skill_control", False)),
+    }
+
+
+def _json_object_from_text(text: str) -> dict[str, Any]:
+    try:
+        value = json.loads(text)
+        return value if isinstance(value, dict) else {}
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end <= start:
+            return {}
+        try:
+            value = json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            return {}
+        return value if isinstance(value, dict) else {}
+
+
+def _validate_synthesized_replay_intent(
+    intent: str,
+    *,
+    min_intent_chars: int,
+    context_count: int,
+) -> dict[str, Any]:
+    lowered = intent.lower()
+    if len(intent) < min_intent_chars:
+        return {"status": "failed", "reason": "too-short", "context_count": context_count}
+    if any(marker in lowered for marker in REPLAY_SYNTHESIS_SECRET_MARKERS):
+        return {
+            "status": "failed",
+            "reason": "secret-marker",
+            "context_count": context_count,
+        }
+    if "\n" in intent or "```" in intent:
+        return {
+            "status": "failed",
+            "reason": "non-compact-output",
+            "context_count": context_count,
+        }
+    return {
+        "status": "passed",
+        "schema": "redacted-intent.v1",
+        "context_count": context_count,
+        "checks": [
+            "minimum_length",
+            "secret_marker_absent",
+            "single_line",
+            "content_safe_context_only",
+        ],
+    }
+
+
+def _replay_context_metadata(context: list[Any]) -> dict[str, Any]:
+    object_types = [
+        str(getattr(candidate, "object_type", ""))
+        for candidate in context
+        if str(getattr(candidate, "object_type", "")).strip()
+    ]
+    return {
+        "candidate_count": len(object_types),
+        "context_object_types": sorted(set(object_types)),
+    }
 
 
 def create_app(
@@ -3924,11 +4118,39 @@ def create_app(
         tags = sorted(base_tags | {tag for tag in request.tags if tag.strip()})
         episodes: list[dict[str, object]] = []
         skipped: list[dict[str, object]] = []
+        processed_log_ids: set[UUID] = set()
         for log in logs:
+            processed_log_ids.add(log.retrieval_log_id)
             candidate, reason = _broker_replay_synthesis_candidate(
                 log,
                 min_intent_chars=max(1, request.min_intent_chars),
             )
+            if (
+                candidate is None
+                and reason == "missing-redacted-intent"
+                and request.synthesize_missing_intents
+            ):
+                context = await retrieval.replay_context_for_log(
+                    workspace_key=request.workspace_id,
+                    retrieval_log_id=log.retrieval_log_id,
+                    limit=max(1, min(request.synthesis_context_limit, 25)),
+                )
+                metadata_overlay, synthesis_reason = await _synthesize_redacted_replay_intent(
+                    log=log,
+                    workspace_key=request.workspace_id,
+                    context=context,
+                    text_llm=text_llm,
+                    profile_key=request.synthesis_profile_key,
+                    min_intent_chars=max(1, request.min_intent_chars),
+                )
+                if metadata_overlay is not None:
+                    candidate, reason = _broker_replay_synthesis_candidate(
+                        log,
+                        min_intent_chars=max(1, request.min_intent_chars),
+                        metadata_overlay=metadata_overlay,
+                    )
+                else:
+                    reason = synthesis_reason
             if candidate is None:
                 skipped.append(
                     {
@@ -3948,6 +4170,68 @@ def create_app(
                 source_retrieval_log_id=candidate["source_retrieval_log_id"],
             )
             episodes.append(episode.to_json())
+        if request.repair_existing_telemetry_episodes:
+            existing = await broker_policies.list_replay_episodes(
+                workspace_key=request.workspace_id,
+                tags=["telemetry-derived"],
+                limit=500,
+            )
+            for record in existing:
+                if (
+                    record.source_retrieval_log_id is None
+                    or record.source_retrieval_log_id in processed_log_ids
+                    or record.metadata.get("source") != "automatic_replay_synthesis"
+                ):
+                    continue
+                processed_log_ids.add(record.source_retrieval_log_id)
+                log = await retrieval.get_log(
+                    workspace_key=request.workspace_id,
+                    retrieval_log_id=record.source_retrieval_log_id,
+                )
+                if log is None:
+                    skipped.append(
+                        {
+                            "retrieval_log_id": str(record.source_retrieval_log_id),
+                            "episode_key": record.episode_key,
+                            "reason": "source-retrieval-log-missing",
+                        }
+                    )
+                    continue
+                context = await retrieval.replay_context_for_log(
+                    workspace_key=request.workspace_id,
+                    retrieval_log_id=record.source_retrieval_log_id,
+                    limit=max(1, min(request.synthesis_context_limit, 25)),
+                )
+                metadata_overlay = {
+                    **record.metadata,
+                    "redacted_user_intent": record.redacted_user_intent,
+                    **_replay_context_metadata(context),
+                }
+                candidate, reason = _broker_replay_synthesis_candidate(
+                    log,
+                    min_intent_chars=max(1, request.min_intent_chars),
+                    metadata_overlay=metadata_overlay,
+                )
+                if candidate is None:
+                    skipped.append(
+                        {
+                            "retrieval_log_id": str(record.source_retrieval_log_id),
+                            "episode_key": record.episode_key,
+                            "reason": reason,
+                        }
+                    )
+                    continue
+                episode = await broker_policies.record_replay_episode(
+                    workspace_key=request.workspace_id,
+                    episode_key=str(candidate["episode_key"]),
+                    redacted_user_intent=str(candidate["redacted_user_intent"]),
+                    expected_decision=str(candidate["expected_decision"]),
+                    expected_skill_ids=list(candidate["expected_skill_ids"]),
+                    tags=tags,
+                    metadata=dict(candidate["metadata"]),
+                    source_retrieval_log_id=candidate["source_retrieval_log_id"],
+                )
+                episodes.append(episode.to_json())
         return BrokerReplayEpisodeSynthesizeResponse(
             episodes=episodes,
             skipped=skipped,
