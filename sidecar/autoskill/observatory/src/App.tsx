@@ -55,6 +55,7 @@ function App() {
     token: storedToken,
     roles: "admin,operator,auditor,viewer"
   });
+  const [tokenDraft, setTokenDraft] = useState("");
   const [workspaceId, setWorkspaceId] = useState(initialParams.get("workspace") ?? "dev-01");
   const [windowMinutes, setWindowMinutes] = useState(initialWindowMinutes);
   const [view, setView] = useState<View>(initialView);
@@ -128,7 +129,14 @@ function App() {
     queryClient.removeQueries({ queryKey: ["summary"] });
     queryClient.removeQueries({ queryKey: ["object"] });
     queryClient.removeQueries({ queryKey: ["search"] });
-    setSession({ ...session, token });
+    setSession((current) => ({ ...current, token }));
+  }
+
+  function commitTokenDraft() {
+    const nextToken = tokenDraft.trim();
+    if (!nextToken) return;
+    updateToken(nextToken);
+    setTokenDraft("");
   }
 
   useEffect(() => {
@@ -273,8 +281,16 @@ function App() {
             Token
             <input
               type="password"
-              value={session.token}
-              onChange={(event) => updateToken(event.target.value)}
+              autoComplete="off"
+              placeholder={session.token ? "Token stored" : "Paste token"}
+              value={tokenDraft}
+              onBlur={commitTokenDraft}
+              onChange={(event) => setTokenDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.currentTarget.blur();
+                }
+              }}
             />
           </label>
           <button

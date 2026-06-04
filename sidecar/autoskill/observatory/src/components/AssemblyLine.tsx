@@ -3,6 +3,7 @@ import {
   Background,
   Controls,
   MiniMap,
+  MarkerType,
   Position,
   ReactFlow,
   type Edge,
@@ -35,6 +36,12 @@ function healthColor(health: string) {
   }
 }
 
+function pressureLabel(edge: PipelineEdge) {
+  const pressure = Math.round(edge.backpressure * 100);
+  if (pressure > 0) return `${edge.dominant_item_kind} / ${pressure}%`;
+  return edge.dominant_item_kind;
+}
+
 export function AssemblyLine({ stations, edges, selectedId, onSelect }: Props) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const stationById = useMemo(
@@ -55,13 +62,35 @@ export function AssemblyLine({ stations, edges, selectedId, onSelect }: Props) {
         id: edge.edge_id,
         source: edge.from,
         target: edge.to,
+        type: "smoothstep",
         animated: edge.event_rate_1m > 0 || edge.backpressure > 0,
-        label: edge.dominant_item_kind,
+        label: pressureLabel(edge),
+        className: `pipeline-edge health-${edge.health}`,
         style: {
           stroke: healthColor(edge.health),
-          strokeWidth: Math.max(1.5, Math.min(8, edge.event_rate_1m + edge.backpressure * 8))
+          strokeWidth: Math.max(1.4, Math.min(5.5, 1.4 + edge.event_rate_1m * 0.28 + edge.backpressure * 5)),
+          opacity: edge.health === "healthy" ? 0.78 : 0.92
         },
-        labelStyle: { fill: "#cdd6e3", fontSize: 10 }
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color: healthColor(edge.health),
+          width: 18,
+          height: 18
+        },
+        labelStyle: {
+          fill: "#e8eef6",
+          fontSize: 10,
+          fontWeight: 720,
+          letterSpacing: 0
+        },
+        labelBgStyle: {
+          fill: "rgba(13, 17, 20, 0.88)",
+          stroke: "rgba(255, 255, 255, 0.12)",
+          strokeWidth: 1
+        },
+        labelBgPadding: [7, 4],
+        labelBgBorderRadius: 6,
+        interactionWidth: 18
       })),
     [edges]
   );
@@ -77,13 +106,14 @@ export function AssemblyLine({ stations, edges, selectedId, onSelect }: Props) {
         layoutOptions: {
           "elk.algorithm": "layered",
           "elk.direction": "RIGHT",
-          "elk.layered.spacing.nodeNodeBetweenLayers": "68",
-          "elk.spacing.nodeNode": "38"
+          "elk.edgeRouting": "ORTHOGONAL",
+          "elk.layered.spacing.nodeNodeBetweenLayers": "104",
+          "elk.spacing.nodeNode": "52"
         },
         children: stations.map((station) => ({
           id: station.component_id,
-          width: 230,
-          height: 116
+          width: 264,
+          height: 136
         })),
         edges: edges.map((edge) => ({
           id: edge.edge_id,
@@ -149,7 +179,7 @@ export function AssemblyLine({ stations, edges, selectedId, onSelect }: Props) {
       <ReactFlow
         nodes={nodes}
         edges={flowEdges}
-        fitView
+        defaultViewport={{ x: 28, y: 92, zoom: 0.42 }}
         minZoom={0.2}
         maxZoom={1.4}
         onNodeClick={handleNodeClick}
@@ -159,10 +189,12 @@ export function AssemblyLine({ stations, edges, selectedId, onSelect }: Props) {
         <MiniMap
           pannable
           zoomable
+          maskColor="rgba(5, 9, 12, 0.62)"
+          style={{ width: 150, height: 104, background: "rgba(13, 17, 20, 0.84)" }}
           nodeColor={(node) => healthColor((node.data as { station: Station }).station.health)}
         />
         <Controls showInteractive={false} />
-        <Background color="#30404f" gap={28} />
+        <Background color="#2d3944" gap={32} />
       </ReactFlow>
     </div>
   );
@@ -172,14 +204,26 @@ function StationCard({ station }: { station: Station }) {
   return (
     <div className="station-card">
       <div className="station-card__top">
-        <span className={`status-dot health-${station.health}`} />
-        <strong>{station.display_name}</strong>
+        <span className={`status-dot health-${station.health}`} aria-hidden="true" />
+        <div>
+          <strong>{station.display_name}</strong>
+          <span>{station.mode}</span>
+        </div>
       </div>
       <p>{station.purpose}</p>
       <div className="station-card__metrics">
-        <span>{station.input_rate_1m.toFixed(1)} in/min</span>
-        <span>{station.queue_depth} queued</span>
-        <span>{station.p95_latency_ms.toFixed(0)} ms p95</span>
+        <span>
+          <strong>{station.input_rate_1m.toFixed(1)}</strong>
+          <small>in/min</small>
+        </span>
+        <span>
+          <strong>{station.queue_depth}</strong>
+          <small>queued</small>
+        </span>
+        <span>
+          <strong>{station.p95_latency_ms.toFixed(0)}</strong>
+          <small>ms p95</small>
+        </span>
       </div>
     </div>
   );
