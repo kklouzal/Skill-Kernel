@@ -43,7 +43,12 @@ import type {
   ObservatorySnapshot,
   Station,
   Subsystem,
+  TraceReplayBadge,
+  TraceReplayDiffPanel,
+  TraceReplayStationHighlight,
+  TraceReplayWaterfallRow,
   TraceSpan,
+  TraceTimelineEntry,
   TraceSummary
 } from "./types";
 import { AssemblyLine } from "./components/AssemblyLine";
@@ -1072,25 +1077,46 @@ function TraceAndInspector({
 }) {
   const [activeIndex, setActiveIndex] = useState(0);
   const spans = useMemo(() => traceSpansFromReplay(replayObject), [replayObject]);
-  const activeSpan = spans[Math.min(activeIndex, Math.max(0, spans.length - 1))];
+  const waterfall = useMemo(() => traceWaterfallFromReplay(replayObject, spans), [replayObject, spans]);
+  const stationHighlights = useMemo(() => traceStationHighlightsFromReplay(replayObject), [replayObject]);
+  const activeRow = waterfall[Math.min(activeIndex, Math.max(0, waterfall.length - 1))];
+  const activeSpan = spans.find((span) => span.span_id === activeRow?.span_id) ??
+    spans[Math.min(activeIndex, Math.max(0, spans.length - 1))];
+  const activeDetailDrawer = detailDrawerForSpan(replayObject, activeRow?.span_id);
   const touchedStationIds = useMemo(() => {
-    const ids = new Set(spans.map((span) => stationIdForOperation(span.operation_kind)).filter(Boolean));
+    const highlightIds = stationHighlights
+      .filter((highlight) => highlight.highlight)
+      .map((highlight) => highlight.component_id);
+    const ids = new Set(
+      highlightIds.length
+        ? highlightIds
+        : spans.map((span) => stationIdForOperation(span.operation_kind)).filter(Boolean)
+    );
     return ids as Set<string>;
-  }, [spans]);
-  const activeStationId = activeSpan ? stationIdForOperation(activeSpan.operation_kind) : undefined;
+  }, [spans, stationHighlights]);
+  const stationHighlightById = useMemo(
+    () => new Map(stationHighlights.map((highlight) => [highlight.component_id, highlight])),
+    [stationHighlights]
+  );
+  const activeStationId =
+    activeRow?.component_id ?? (activeSpan ? stationIdForOperation(activeSpan.operation_kind) : undefined);
   const selectedTrace = traces.find((trace) => trace.trace_id === selectedTraceId);
   const replaySafety = replayObject?.replay_safety as Record<string, unknown> | undefined;
-  const diffPanels = diffPanelPayload(activeSpan);
+  const replayDiagnostics = replayObject?.diagnostics as Record<string, unknown> | undefined;
+  const exportBundle = replayObject?.redacted_export_bundle as Record<string, unknown> | undefined;
+  const provenance = replayObject?.provenance as Record<string, unknown> | undefined;
+  const diffPanels = traceDiffPanelsFromReplay(replayObject, activeRow?.span_id, activeSpan);
+  const activeBadges = traceBadgesFromReplay(replayObject, activeRow?.span_id, activeSpan);
 
   useEffect(() => {
     setActiveIndex(0);
   }, [selectedTraceId]);
 
   useEffect(() => {
-    if (activeIndex >= spans.length) {
-      setActiveIndex(Math.max(0, spans.length - 1));
+    if (activeIndex >= waterfall.length) {
+      setActiveIndex(Math.max(0, waterfall.length - 1));
     }
-  }, [activeIndex, spans.length]);
+  }, [activeIndex, waterfall.length]);
 
   return (
     <section className="trace-page">
@@ -1128,6 +1154,8 @@ function TraceAndInspector({
             <div className="trace-badges">
               <span>{String(replaySafety?.reexecutes_work === false ? "read-only replay" : "replay state unknown")}</span>
               <span>{String(replaySafety?.raw_content_included === false ? "redacted bundle" : "content policy unknown")}</span>
+              <span>{String(replayDiagnostics?.span_count ?? spans.length)} spans</span>
+              <span>{String(replayDiagnostics?.station_count ?? stationHighlights.length)} stations</span>
               {activeSpan ? <span>{activeSpan.status}</span> : null}
             </div>
           </div>
@@ -1136,6 +1164,7 @@ function TraceAndInspector({
             {snapshot.pipeline.stations.map((station) => {
               const touched = touchedStationIds.has(station.component_id);
               const active = activeStationId === station.component_id;
+              const highlight = stationHighlightById.get(station.component_id);
               return (
                 <div
                   key={station.component_id}
@@ -1143,7 +1172,11 @@ function TraceAndInspector({
                 >
                   <span className={`status-dot health-${station.health}`} />
                   <strong>{station.display_name}</strong>
-                  <small>{station.reason_codes[0] ?? "within bounds"}</small>
+                  <small>
+                    {highlight
+                      ? `${highlight.span_count} spans / ${highlight.statuses.join(", ")}`
+                      : station.reason_codes[0] ?? "within bounds"}
+                  </small>
                 </div>
               );
             })}
@@ -1155,29 +1188,29 @@ function TraceAndInspector({
               <input
                 type="range"
                 min={0}
-                max={Math.max(0, spans.length - 1)}
-                value={Math.min(activeIndex, Math.max(0, spans.length - 1))}
-                disabled={spans.length === 0}
+                max={Math.max(0, waterfall.length - 1)}
+                value={Math.min(activeIndex, Math.max(0, waterfall.length - 1))}
+                disabled={waterfall.length === 0}
                 onChange={(event) => setActiveIndex(Number(event.target.value))}
               />
             </label>
             <span>
-              {spans.length ? activeIndex + 1 : 0} / {spans.length}
+              {waterfall.length ? activeIndex + 1 : 0} / {waterfall.length}
             </span>
           </div>
 
           <div className="span-waterfall">
-            {spans.map((span, index) => (
+            {waterfall.map((row, index) => (
               <button
-                key={span.span_id}
+                key={row.span_id}
                 className={index === activeIndex ? "is-active" : ""}
                 type="button"
                 onClick={() => setActiveIndex(index)}
-                title={`${span.operation_kind}: ${span.operation_name}`}
+                title={`${row.operation_kind}: ${row.operation_name}`}
               >
-                <span className={`span-bar status-${span.status}`} style={{ width: `${spanWidth(span)}%` }} />
-                <strong>{span.operation_kind}</strong>
-                <small>{span.status}</small>
+                <span className={`span-bar status-${row.status}`} style={{ width: `${spanWidth(row)}%` }} />
+                <strong>{row.operation_kind}</strong>
+                <small>{row.duration_ms}ms / {row.status}</small>
               </button>
             ))}
           </div>
@@ -1185,13 +1218,19 @@ function TraceAndInspector({
           <div className="trace-detail-grid">
             <section>
               <h3>Span Detail</h3>
-              <Inspector value={activeSpan ?? replayObject ?? { state: "empty" }} />
+              <Inspector
+                value={{
+                  timeline: activeSpan ?? null,
+                  waterfall: activeRow ?? null,
+                  detail_drawer: activeDetailDrawer ?? null
+                }}
+              />
             </section>
             <section>
               <h3>Object Links</h3>
               <div className="trace-link-list">
-                {activeSpan?.object_refs.length ? (
-                  activeSpan.object_refs.map((ref, index) => (
+                {traceObjectRefs(activeSpan, activeDetailDrawer).length ? (
+                  traceObjectRefs(activeSpan, activeDetailDrawer).map((ref, index) => (
                     <a
                       key={`${String(ref.object_type)}:${String(ref.object_id)}:${index}`}
                       href={`/admin?view=trace&workspace=${encodeURIComponent(
@@ -1213,7 +1252,7 @@ function TraceAndInspector({
             <section>
               <h3>Gate And Policy Badges</h3>
               <div className="trace-badges">
-                {gateBadges(activeSpan).map((badge) => (
+                {activeBadges.map((badge) => (
                   <span key={badge}>{badge}</span>
                 ))}
               </div>
@@ -1223,15 +1262,104 @@ function TraceAndInspector({
               <Inspector value={diffPanels} />
             </section>
           </div>
+
+          <div className="trace-detail-grid">
+            <section>
+              <h3>Redacted Export Bundle</h3>
+              <Inspector
+                value={
+                  exportBundle ?? {
+                    state: "export-bundle-unavailable",
+                    raw_content_included: false
+                  }
+                }
+              />
+            </section>
+            <section>
+              <h3>Replay Provenance</h3>
+              <Inspector value={provenance ?? { upstream: [], downstream: [] }} />
+            </section>
+          </div>
         </section>
       </div>
     </section>
   );
 }
 
-function traceSpansFromReplay(replayObject?: Record<string, unknown>): TraceSpan[] {
+function traceSpansFromReplay(replayObject?: Record<string, unknown>): TraceTimelineEntry[] {
   const timeline = replayObject?.timeline;
-  return Array.isArray(timeline) ? (timeline as TraceSpan[]) : [];
+  return Array.isArray(timeline) ? (timeline as TraceTimelineEntry[]) : [];
+}
+
+function traceWaterfallFromReplay(
+  replayObject: Record<string, unknown> | undefined,
+  spans: TraceTimelineEntry[]
+): TraceReplayWaterfallRow[] {
+  const waterfall = replayObject?.span_waterfall;
+  if (Array.isArray(waterfall)) {
+    return waterfall as TraceReplayWaterfallRow[];
+  }
+  return spans.map((span) => ({
+    span_id: span.span_id,
+    parent_span_id: span.parent_span_id,
+    component_id: span.component_id ?? stationIdForOperation(span.operation_kind),
+    operation_name: span.operation_name,
+    operation_kind: span.operation_kind,
+    status: span.status,
+    started_at: span.started_at,
+    ended_at: span.ended_at,
+    duration_ms: span.duration_ms ?? spanDurationMs(span)
+  }));
+}
+
+function traceStationHighlightsFromReplay(
+  replayObject?: Record<string, unknown>
+): TraceReplayStationHighlight[] {
+  const highlights = replayObject?.station_highlights;
+  return Array.isArray(highlights) ? (highlights as TraceReplayStationHighlight[]) : [];
+}
+
+function traceBadgesFromReplay(
+  replayObject: Record<string, unknown> | undefined,
+  spanId: string | undefined,
+  span?: TraceSpan
+) {
+  const badges = replayObject?.policy_gate_badges;
+  if (Array.isArray(badges)) {
+    const matching = (badges as TraceReplayBadge[]).filter((badge) => !spanId || badge.span_id === spanId);
+    if (matching.length) {
+      return matching.map((badge) => {
+        const value = badge.value === undefined ? "" : `:${String(badge.value)}`;
+        return `${badge.status}:${badge.label}${value}`;
+      });
+    }
+  }
+  return gateBadges(span);
+}
+
+function traceDiffPanelsFromReplay(
+  replayObject: Record<string, unknown> | undefined,
+  spanId: string | undefined,
+  span?: TraceSpan
+) {
+  const panels = replayObject?.diff_panels;
+  if (Array.isArray(panels)) {
+    const matching = (panels as TraceReplayDiffPanel[]).filter((panel) => !spanId || panel.span_id === spanId);
+    if (matching.length) return matching;
+  }
+  return diffPanelPayload(span);
+}
+
+function detailDrawerForSpan(replayObject: Record<string, unknown> | undefined, spanId?: string) {
+  const drawer = replayObject?.detail_drawer;
+  if (!Array.isArray(drawer)) return undefined;
+  return (drawer as Array<Record<string, unknown>>).find((item) => item.span_id === spanId);
+}
+
+function traceObjectRefs(span?: TraceSpan, detailDrawer?: Record<string, unknown>) {
+  const refs = detailDrawer?.object_refs;
+  if (Array.isArray(refs)) return refs as Array<Record<string, unknown>>;
+  return span?.object_refs ?? [];
 }
 
 function traceTitle(trace: TraceSummary) {
@@ -1270,7 +1398,17 @@ function stationIdForOperation(operationKind: string) {
   return map[operationKind] ?? "audit_trace";
 }
 
-function spanWidth(span: TraceSpan) {
+function spanDurationMs(span: Pick<TraceSpan, "started_at" | "ended_at">) {
+  const started = Date.parse(span.started_at);
+  const ended = Date.parse(span.ended_at ?? span.started_at);
+  if (!Number.isFinite(started) || !Number.isFinite(ended)) return 1;
+  return Math.max(1, ended - started);
+}
+
+function spanWidth(span: TraceReplayWaterfallRow | TraceSpan) {
+  if ("duration_ms" in span && Number.isFinite(span.duration_ms)) {
+    return Math.max(18, Math.min(100, 18 + Math.log10(Math.max(1, span.duration_ms) + 1) * 22));
+  }
   const started = Date.parse(span.started_at);
   const ended = Date.parse(span.ended_at ?? span.started_at);
   if (!Number.isFinite(started) || !Number.isFinite(ended)) return 18;

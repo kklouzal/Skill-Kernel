@@ -122,6 +122,25 @@ def test_observatory_frontend_broker_replay_corpus_is_visible() -> None:
     assert "replay-layout" in styles
 
 
+def test_observatory_frontend_trace_replay_read_model_is_visible() -> None:
+    app_source = (
+        REPO_ROOT / "sidecar/autoskill/observatory/src/App.tsx"
+    ).read_text(encoding="utf-8")
+    types_source = (
+        REPO_ROOT / "sidecar/autoskill/observatory/src/types.ts"
+    ).read_text(encoding="utf-8")
+
+    assert "traceWaterfallFromReplay" in app_source
+    assert "traceStationHighlightsFromReplay" in app_source
+    assert "traceBadgesFromReplay" in app_source
+    assert "traceDiffPanelsFromReplay" in app_source
+    assert "Redacted Export Bundle" in app_source
+    assert "Replay Provenance" in app_source
+    assert "TraceReplayWaterfallRow" in types_source
+    assert "TraceReplayStationHighlight" in types_source
+    assert "TraceReplayBadge" in types_source
+
+
 def test_observatory_guarded_action_dialog_is_present() -> None:
     app_source = (
         REPO_ROOT / "sidecar/autoskill/observatory/src/App.tsx"

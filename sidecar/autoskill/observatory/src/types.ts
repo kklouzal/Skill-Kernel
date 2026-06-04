@@ -230,6 +230,49 @@ export type TraceSpan = {
   ended_at?: string | null;
 };
 
+export type TraceTimelineEntry = TraceSpan & {
+  index?: number;
+  at?: string;
+  event?: string;
+  component_id?: string;
+  duration_ms?: number;
+  policy_gate_badges?: Array<Record<string, unknown>>;
+};
+
+export type TraceReplayWaterfallRow = {
+  span_id: string;
+  parent_span_id?: string | null;
+  component_id: string;
+  operation_name: string;
+  operation_kind: string;
+  status: string;
+  started_at: string;
+  ended_at?: string | null;
+  duration_ms: number;
+};
+
+export type TraceReplayStationHighlight = {
+  component_id: string;
+  span_count: number;
+  statuses: string[];
+  highlight: boolean;
+};
+
+export type TraceReplayBadge = {
+  span_id?: string;
+  component_id?: string;
+  label: string;
+  value?: unknown;
+  status: string;
+};
+
+export type TraceReplayDiffPanel = {
+  span_id?: string;
+  title?: string;
+  metadata?: Record<string, unknown>;
+  raw_diff_available?: boolean;
+};
+
 export type LiveEnvelope = {
   schema_version: string;
   seq: number;

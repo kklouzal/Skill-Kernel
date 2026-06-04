@@ -891,6 +891,20 @@ Acceptance:
   `docker compose config --quiet` passed, and `git diff --check` passed. No
   compose/Postgres smoke was needed because this is a read-model shaping change
   over already-tested trace store data.
+- validation evidence for the Observatory trace replay frontend enrichment
+  slice passed on the final tree: the Trace tab now consumes the enriched
+  replay read model directly, rendering span waterfall rows, station
+  highlights, policy/gate badges, detail-drawer object refs, safe diff/hash
+  panels, the redacted export-bundle descriptor, and downstream provenance from
+  the sidecar-hosted API without exposing raw content or adding a second control
+  plane. Focused Observatory acceptance assertions passed with `8 passed`,
+  `npm run build --prefix sidecar/autoskill/observatory` passed,
+  `uv run ruff check sidecar` passed, `uv run pytest` passed with 350 tests,
+  `uv run python -m compileall -q sidecar` passed, `npm test --prefix
+  plugin/autoskill` passed with 18 tests, `docker compose config --quiet`
+  passed, and `git diff --check` passed. No compose/Postgres smoke was needed
+  because this is a frontend/read-model consumption change over the already
+  validated Trace Replay API.
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and

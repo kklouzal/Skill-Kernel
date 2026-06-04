@@ -1301,6 +1301,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   diff --check`. No compose/Postgres smoke was needed because the slice only
   reshapes already-covered trace-span read data and adds no schema or
   asyncpg-store behavior.
+- Observatory trace replay frontend enrichment is implemented for Section 11
+  and Sections 1.4/1.8 causal-investigation journeys: the Trace tab now
+  renders the backend replay read model's span waterfall, station highlights,
+  policy/gate badges, detail-drawer object refs, safe diff/hash panels,
+  redacted export bundle descriptor, and downstream provenance instead of
+  deriving those views only from the selected raw timeline span. Validation
+  passed with focused Observatory acceptance source assertions (`8 passed`),
+  `npm run build --prefix sidecar/autoskill/observatory`, `uv run ruff check
+  sidecar`, `uv run pytest` (`350 passed`), `uv run python -m compileall -q
+  sidecar`, `npm test --prefix plugin/autoskill` (`18 passed`), `docker compose
+  config --quiet`, and `git diff --check`. No compose/Postgres smoke was needed
+  because this is a frontend/read-model consumption change over the already
+  validated trace replay API.
 
 ## Next Gates
 
