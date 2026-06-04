@@ -434,7 +434,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         (
             "replay synthesis skips hash_only and metadata_only evidence-fidelity tiers",
             "synthesis skip reasons are returned to the caller",
-            "test_broker_policy_synthesis_skips_hash_only_telemetry",
+            "test_broker_policy_synthesis_skips_degraded_evidence_fidelity_telemetry",
         ),
     ),
     AcceptanceCriterion(

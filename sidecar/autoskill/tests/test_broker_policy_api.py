@@ -236,13 +236,14 @@ def test_broker_policy_synthesizes_replay_episodes_from_redacted_telemetry() -> 
     assert replayed.replay.matched == 1
 
 
-def test_broker_policy_synthesis_skips_hash_only_telemetry() -> None:
-    retrieval_log_id = uuid4()
+def test_broker_policy_synthesis_skips_degraded_evidence_fidelity_telemetry() -> None:
+    hash_only_log_id = uuid4()
+    metadata_only_log_id = uuid4()
     retrieval = TelemetryReplayRetrievalStore(
         [],
         [
             RetrievalLog(
-                retrieval_log_id=retrieval_log_id,
+                retrieval_log_id=hash_only_log_id,
                 trace_id=None,
                 span_id=None,
                 parent_span_id=None,
@@ -260,7 +261,27 @@ def test_broker_policy_synthesis_skips_hash_only_telemetry() -> None:
                     "deterministic_validation": {"status": "passed"},
                 },
                 created_at=datetime.now(UTC),
-            )
+            ),
+            RetrievalLog(
+                retrieval_log_id=metadata_only_log_id,
+                trace_id=None,
+                span_id=None,
+                parent_span_id=None,
+                session_id=None,
+                turn_id=None,
+                broker_policy_version_id=None,
+                decision="no_candidates",
+                candidate_skill_ids=[],
+                rendered_skill_ids=[],
+                no_skill_control=True,
+                metadata={
+                    "evidence_fidelity": "metadata_only",
+                    "redacted_user_intent": "repair redacted pdf table",
+                    "redacted_intent_source": "llm_synthesized_redacted_intent",
+                    "deterministic_validation": {"status": "passed"},
+                },
+                created_at=datetime.now(UTC),
+            ),
         ],
     )
     app = create_app(
@@ -282,9 +303,13 @@ def test_broker_policy_synthesis_skips_hash_only_telemetry() -> None:
     assert response.episodes == []
     assert response.skipped == [
         {
-            "retrieval_log_id": str(retrieval_log_id),
+            "retrieval_log_id": str(hash_only_log_id),
             "reason": "unsupported-evidence-fidelity:hash_only",
-        }
+        },
+        {
+            "retrieval_log_id": str(metadata_only_log_id),
+            "reason": "unsupported-evidence-fidelity:metadata_only",
+        },
     ]
 
 
