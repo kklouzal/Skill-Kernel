@@ -22,7 +22,7 @@ CORE_DEFAULT_SCHEDULES = (
         job_kind="evidence.derive",
         interval_seconds=10 * 60,
         misfire_policy="coalesce",
-        payload={"limit": 100},
+        payload={"limit": 500},
     ),
     DefaultSchedule(
         name="audit.verify",
@@ -36,7 +36,7 @@ CORE_DEFAULT_SCHEDULES = (
         job_kind="embeddings.generate",
         interval_seconds=5 * 60,
         misfire_policy="coalesce",
-        payload={"limit": 100},
+        payload={"limit": 500},
     ),
     DefaultSchedule(
         name="opportunities.mine",
@@ -85,7 +85,7 @@ CORE_DEFAULT_SCHEDULES = (
         job_kind="historical_import.parse",
         interval_seconds=30 * 60,
         misfire_policy="coalesce",
-        payload={"limit": 25},
+        payload={"max_files": 5000, "max_bytes": 536_870_912, "max_chunks": 20_000},
     ),
     DefaultSchedule(
         name="historical_bootstrap.consolidate",

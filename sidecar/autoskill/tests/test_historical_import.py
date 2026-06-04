@@ -29,6 +29,7 @@ from autoskill.db.scheduler import ScheduleRecord, ScheduleUpsertResult
 from autoskill.services.historical_discovery import (
     discover_historical_sources,
     ensure_historical_discovery_schedule,
+    resolve_historical_import_roots,
 )
 from autoskill.services.historical_import import import_historical_sources
 from autoskill.services.worker import WorkerStores, run_worker_once
@@ -859,6 +860,58 @@ def test_historical_discovery_schedule_is_bounded_without_raw_roots(tmp_path) ->
         "max_files": 25,
         "max_bytes": 4096,
     }
+
+
+def test_historical_root_resolution_discovers_openclaw_defaults(
+    tmp_path, monkeypatch
+) -> None:
+    openclaw_root = tmp_path / ".openclaw"
+    agents = openclaw_root / "agents"
+    workspace = openclaw_root / "workspace"
+    internal_runs = openclaw_root / "internal-agent-runs"
+    agents.mkdir(parents=True)
+    workspace.mkdir()
+    internal_runs.mkdir()
+    monkeypatch.setenv("OPENCLAW_STATE_DIR", str(openclaw_root))
+
+    class Settings:
+        openclaw_state_dir_env = "OPENCLAW_STATE_DIR"
+        openclaw_home_env = "OPENCLAW_HOME"
+        openclaw_state_dir_default = "~/.openclaw"
+        workspace_roots: list[str] = []
+        session_store_roots: list[str] = []
+        trajectory_roots: list[str] = []
+        transcript_corpus_roots: list[str] = []
+
+    roots = resolve_historical_import_roots(
+        Settings(),
+        workspace_root=workspace,
+    )
+
+    assert roots == [agents, workspace, internal_runs]
+
+
+def test_historical_root_resolution_respects_explicit_roots(tmp_path) -> None:
+    explicit = tmp_path / "selected"
+    ignored = tmp_path / ".openclaw" / "agents"
+    explicit.mkdir()
+    ignored.mkdir(parents=True)
+
+    class Settings:
+        openclaw_state_dir_env = "OPENCLAW_STATE_DIR"
+        openclaw_home_env = "OPENCLAW_HOME"
+        openclaw_state_dir_default = str(tmp_path / ".openclaw")
+        workspace_roots: list[str] = []
+        session_store_roots: list[str] = []
+        trajectory_roots: list[str] = []
+        transcript_corpus_roots: list[str] = []
+
+    roots = resolve_historical_import_roots(
+        Settings(),
+        explicit_roots=[explicit],
+    )
+
+    assert roots == [explicit]
 
 
 def test_historical_discovery_worker_job_records_inventory(tmp_path) -> None:

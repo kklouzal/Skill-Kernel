@@ -28,7 +28,10 @@ from autoskill.db.topology import AsyncpgTopologyStore
 from autoskill.db.utility import AsyncpgUtilityStore
 from autoskill.services.embedding_generation import build_text_embedder_from_settings
 from autoskill.services.external_inventory import ensure_external_skill_scan_schedule
-from autoskill.services.historical_discovery import ensure_historical_discovery_schedule
+from autoskill.services.historical_discovery import (
+    ensure_historical_discovery_schedule,
+    resolve_historical_import_roots,
+)
 from autoskill.services.scheduler_defaults import ensure_core_schedules
 from autoskill.services.worker import WorkerLoopConfig, WorkerPool, WorkerStores, run_worker_loop
 
@@ -125,6 +128,17 @@ async def run_worker(args: argparse.Namespace) -> int:
 
     try:
         workspace_root, archive_root = _writer_worker_roots(settings, args.workspace_root)
+        historical_import_roots = resolve_historical_import_roots(
+            settings,
+            explicit_roots=args.historical_import_root,
+            workspace_root=workspace_root,
+        )
+        historical_import_max_files = (
+            args.historical_import_max_files or settings.historical_import_max_files_per_run
+        )
+        historical_import_max_bytes = (
+            args.historical_import_max_bytes or settings.historical_import_max_bytes_per_run
+        )
         utility.set_writer_roots(
             workspace_root=workspace_root,
             archive_root=archive_root,
@@ -144,10 +158,10 @@ async def run_worker(args: argparse.Namespace) -> int:
         await ensure_historical_discovery_schedule(
             scheduler,
             workspace_key=args.workspace_id,
-            roots=args.historical_import_root,
+            roots=historical_import_roots,
             interval_seconds=args.historical_import_scan_interval_seconds,
-            max_files=args.historical_import_max_files,
-            max_bytes=args.historical_import_max_bytes,
+            max_files=historical_import_max_files,
+            max_bytes=historical_import_max_bytes,
         )
         summary = await run_worker_loop(
             WorkerStores(
@@ -175,7 +189,7 @@ async def run_worker(args: argparse.Namespace) -> int:
                 workspace_root=workspace_root,
                 archive_root=archive_root,
                 external_skill_roots=args.external_skill_root,
-                historical_import_roots=args.historical_import_root,
+                historical_import_roots=historical_import_roots,
             ),
             WorkerLoopConfig(
                 worker_id=args.worker_id,
@@ -254,8 +268,8 @@ def parse_args() -> argparse.Namespace:
         default=12 * 60 * 60,
         help="Default durable scan cadence for configured historical import roots.",
     )
-    parser.add_argument("--historical-import-max-files", type=int, default=500)
-    parser.add_argument("--historical-import-max-bytes", type=int, default=25_000_000)
+    parser.add_argument("--historical-import-max-files", type=int, default=None)
+    parser.add_argument("--historical-import-max-bytes", type=int, default=None)
     return parser.parse_args()
 
 

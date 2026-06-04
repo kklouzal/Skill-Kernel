@@ -1100,6 +1100,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   keys, 24 rendered graph labels, 24 stations, 24 edges, all `/admin/assets`
   returning 200, and the remaining visible issue limited to
   `embedding-backlog-present`.
+- Historical deployment bootstrap root resolution is implemented for Phase 4.75
+  and Observatory historical-ingestion readiness: worker startup now resolves
+  explicit historical import roots first, otherwise falls back to existing
+  bounded OpenClaw state subroots plus the configured workspace root; local
+  compose mounts OpenClaw state read-only and no longer schedules broad
+  `/workspace` import as the only default root. Scheduler defaults now carry
+  bounded bootstrap parse limits. Validation passed with focused historical
+  import/scheduler tests `23 passed`, `uv run ruff check sidecar`, full `uv run
+  pytest` with 324 tests, `uv run python -m compileall -q sidecar`, `docker
+  compose config --quiet`, and `git diff --check`. A compose/Postgres smoke
+  reran migrations, resolved eight existing bounded OpenClaw roots from
+  `OPENCLAW_STATE_DIR`, registered expected historical discovery/parse schedule
+  payloads, then deleted the smoke workspace and schedules from the persistent
+  dev DB.
 
 ## Next Gates
 
@@ -1138,8 +1152,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   source-rooted revocation traversal/invalidation. Plugin manifests/hooks/source
   files, media artifacts, and observability exports now have metadata-only
   source/chunk coverage. Historical chunks now also carry schema-backed v2
-  source-item locator hashes beyond file/section/line references; historical
-  imports still cannot activate candidates without the normal gates.
+  source-item locator hashes beyond file/section/line references; worker
+  bootstrap resolves bounded mounted OpenClaw state subroots when explicit roots
+  are absent; historical imports still cannot activate candidates without the
+  normal gates.
 - Embedding generation defaults to deterministic local hash embeddings unless an active qualified embedding profile is configured; storage now supports profile-scoped variable dimensions, with the default 1536-dimensional path retaining the indexed HNSW fast path.
 - Runtime context broker is still conservative: vector fusion is available through the active qualified embedding profile when present, with deterministic hash fallback for local tests; policy artifact replay/canary primitives exist, and stored redacted replay episodes can drive policy replay. Production replay quality still depends on deployment telemetry being populated and operator-reviewed replay episodes staying representative.
 - Deployment readiness is a deterministic sidecar/state preflight, not a

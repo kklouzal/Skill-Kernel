@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +18,18 @@ HISTORICAL_DISCOVERY_VERSION = "historical-discovery.v1"
 HISTORICAL_PARSER_VERSION = "historical-import.v1"
 HISTORICAL_REDACTION_VERSION = "redaction.v1"
 DEFAULT_HISTORICAL_DISCOVERY_INTERVAL_SECONDS = 12 * 60 * 60
+DEFAULT_HISTORICAL_ROOT_NAMES = (
+    "agents",
+    "workspace",
+    "internal-agent-runs",
+    "backups",
+    "subagents",
+    "tasks",
+    "flows",
+    "memory",
+    "transcripts",
+    "trajectory-exports",
+)
 
 WORKSPACE_CONTEXT_FILES = {
     "AGENTS.md",
@@ -185,6 +198,33 @@ async def ensure_historical_discovery_schedule(
     )
 
 
+def resolve_historical_import_roots(
+    settings: Any,
+    *,
+    explicit_roots: list[Path] | None = None,
+    workspace_root: Path | None = None,
+) -> list[Path]:
+    """Resolve configured historical roots, defaulting to bounded OpenClaw roots."""
+
+    candidates: list[Path] = []
+    candidates.extend(explicit_roots or [])
+    for key in (
+        "workspace_roots",
+        "session_store_roots",
+        "trajectory_roots",
+        "transcript_corpus_roots",
+    ):
+        candidates.extend(Path(value) for value in getattr(settings, key, []) or [])
+
+    if not candidates:
+        state_dir = _openclaw_state_dir(settings)
+        candidates.extend(state_dir / name for name in DEFAULT_HISTORICAL_ROOT_NAMES)
+        if workspace_root is not None:
+            candidates.append(workspace_root)
+
+    return _existing_unique_dirs(candidates)
+
+
 def _discover_roots(
     *,
     roots: list[Path],
@@ -261,6 +301,31 @@ def _discover_roots(
         source_counts=source_counts,
         items=items,
     )
+
+
+def _openclaw_state_dir(settings: Any) -> Path:
+    state_env = str(getattr(settings, "openclaw_state_dir_env", "OPENCLAW_STATE_DIR"))
+    home_env = str(getattr(settings, "openclaw_home_env", "OPENCLAW_HOME"))
+    default = str(getattr(settings, "openclaw_state_dir_default", "~/.openclaw"))
+    return Path(os.environ.get(state_env) or os.environ.get(home_env) or default).expanduser()
+
+
+def _existing_unique_dirs(paths: list[Path]) -> list[Path]:
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        expanded = path.expanduser()
+        if not expanded.exists() or not expanded.is_dir():
+            continue
+        try:
+            key = expanded.resolve().as_posix()
+        except OSError:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(expanded)
+    return roots
 
 
 def _discovery_item(

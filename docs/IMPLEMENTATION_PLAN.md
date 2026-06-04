@@ -170,6 +170,11 @@ Deliverables:
 - imported chunk downstream readiness; implemented by existing evidence and
   embedding source discovery paths consuming observed historical chunks only
   after storage-time redaction and taint labeling.
+- deployment bootstrap root resolution; implemented so worker startup resolves
+  explicit historical roots first, otherwise falls back to existing bounded
+  OpenClaw state subroots plus the configured workspace root, and the local
+  compose path mounts OpenClaw state read-only instead of treating `/workspace`
+  as the import universe.
 
 Acceptance:
 
@@ -204,6 +209,9 @@ Acceptance:
   external matching before proposal, and optionally persists inactive candidate
   rows through the normal governance transaction/probe path without writing
   runtime skill files;
+- worker default discovery/import scheduling now uses bounded deployment-level
+  limits for historical bootstrap over mounted OpenClaw state roots, while
+  preserving explicit root overrides and avoiding raw path persistence;
 - remaining historical ingestion work is sustained validation of richer
   non-file ledgers and live source systems beyond the current hashed
   file/item/chunk locator model.
