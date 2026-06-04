@@ -1344,6 +1344,23 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `git diff --check`. No compose/Postgres smoke was needed because this is a
   read-model shaping and frontend consumption change over the already-validated
   topology store metrics surface.
+- Observatory topology operation microscope visibility is implemented for
+  Sections 1.9, 7.7, 8.9, 9.3, 12.6, and 21.38: recent topology operation
+  aggregates now drill into a content-safe operation object with trial rows,
+  evidence/transaction/subject/output provenance refs, effect coverage,
+  trial-summary metadata, and raw-content-disabled policy through
+  `/admin/api/v1/topology/operations/{operation_id}` and the generic object
+  microscope resolver. The React Skills/Topology view exposes selectable recent
+  operations plus an Operation Evidence inspector without adding mutation
+  authority. Focused validation passed with Observatory API/frontend source
+  assertions (`2 passed`), generated OpenAPI client check, focused ruff, and
+  `npm run build --prefix sidecar/autoskill/observatory`; full validation
+  passed with `uv run ruff check sidecar`, `uv run pytest` (`354 passed`),
+  `uv run python -m compileall -q sidecar`, `docker compose config --quiet`,
+  `git diff --check`, and a real compose/Postgres smoke that migrated the
+  schema, inserted one topology operation plus one planned trial through
+  `AsyncpgTopologyStore`, read it back through the new detail method, verified
+  `trial_count=1`, and cleaned the smoke rows.
 
 ## Next Gates
 

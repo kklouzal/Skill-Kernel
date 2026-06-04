@@ -156,6 +156,19 @@ class TopologyPersistenceRecord:
 
 
 @dataclass(frozen=True)
+class TopologyOperationDetailRecord:
+    operation: SkillGraphOperationRecord
+    trials: list[PlannedTopologyTrialRecord]
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "operation": self.operation.to_json(),
+            "trials": [trial.to_json() for trial in self.trials],
+            "trial_count": len(self.trials),
+        }
+
+
+@dataclass(frozen=True)
 class TopologyApplyResult:
     allowed: bool
     operation: SkillGraphOperationRecord | None
@@ -284,6 +297,14 @@ class TopologyStore(Protocol):
         limit: int = 100,
     ) -> list[SkillGraphOperationRecord]:
         """List topology proposals and operations for operator review."""
+
+    async def get_operation_detail(
+        self,
+        *,
+        workspace_key: str | None,
+        skill_graph_operation_id: UUID,
+    ) -> TopologyOperationDetailRecord | None:
+        """Return one topology operation with its planned trials for drill-down."""
 
     async def metrics(
         self,
@@ -620,6 +641,33 @@ class NullTopologyStore:
             reverse=True,
         )[: max(1, min(limit, 250))]
 
+    async def get_operation_detail(
+        self,
+        *,
+        workspace_key: str | None,
+        skill_graph_operation_id: UUID,
+    ) -> TopologyOperationDetailRecord | None:
+        operation = next(
+            (
+                item
+                for item in self.operations
+                if item.skill_graph_operation_id == skill_graph_operation_id
+                and (workspace_key is None or item.workspace_key == workspace_key)
+            ),
+            None,
+        )
+        if operation is None:
+            return None
+        trials = sorted(
+            [
+                trial
+                for trial in self.trials
+                if trial.skill_graph_operation_id == skill_graph_operation_id
+            ],
+            key=lambda item: (item.created_at, item.planned_topology_trial_id),
+        )
+        return TopologyOperationDetailRecord(operation=operation, trials=trials)
+
     async def metrics(
         self,
         *,
@@ -702,6 +750,49 @@ class AsyncpgTopologyStore(AsyncpgPoolOwner):
             max(1, min(limit, 250)),
         )
         return [SkillGraphOperationRecord.from_row(row) for row in rows]
+
+    async def get_operation_detail(
+        self,
+        *,
+        workspace_key: str | None,
+        skill_graph_operation_id: UUID,
+    ) -> TopologyOperationDetailRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            workspace_id = (
+                await ensure_workspace(conn, workspace_key)
+                if workspace_key is not None
+                else None
+            )
+            operation_row = await conn.fetchrow(
+                """
+                SELECT o.*, w.external_key AS workspace_key
+                FROM autoskill.skill_graph_operations o
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE ($1::uuid IS NULL OR o.workspace_id = $1)
+                  AND o.skill_graph_operation_id = $2
+                """,
+                workspace_id,
+                skill_graph_operation_id,
+            )
+            if operation_row is None:
+                return None
+            trial_rows = await conn.fetch(
+                """
+                SELECT t.*, w.external_key AS workspace_key
+                FROM autoskill.planned_topology_trials t
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE ($1::uuid IS NULL OR t.workspace_id = $1)
+                  AND t.skill_graph_operation_id = $2
+                ORDER BY t.created_at ASC, t.planned_topology_trial_id ASC
+                """,
+                workspace_id,
+                skill_graph_operation_id,
+            )
+        return TopologyOperationDetailRecord(
+            operation=SkillGraphOperationRecord.from_row(operation_row),
+            trials=[PlannedTopologyTrialRecord.from_row(row) for row in trial_rows],
+        )
 
     async def record_operation(
         self,

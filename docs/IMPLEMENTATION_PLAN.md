@@ -455,6 +455,12 @@ Deliverables:
   `/v1/topology/metrics` surface that reports create/improve/compose/decompose
   operation counts separately, trial status breakdowns by operation and trial
   kind, and bounded recent operation samples for operator dashboards;
+- topology operation drill-down; implemented as a content-safe Observatory
+  operation microscope over persisted SkillGraphIR operations and planned trials,
+  exposing evidence, transaction, subject/output skill, effect-coverage, and
+  trial-status refs through `/admin/api/v1/topology/operations/{operation_id}`,
+  the generic object microscope resolver, and the Skills/Topology Operation
+  Evidence panel without adding mutation authority;
 - attribution ledger and action-attribution checks; implemented for attribution events, runtime blocked-tool action checks, and revocation invalidation of derived attribution records.
 
 Acceptance:
@@ -496,6 +502,15 @@ Acceptance:
   focused utility tests passed with `7 passed`, focused ruff checks passed, and
   the final validation ladder for the committed slice recorded the exact full
   gate results in `TASKFLOW.md`.
+- validation evidence for topology operation drill-down visibility: focused
+  Observatory API/frontend source assertions passed with `2 passed`; generated
+  OpenAPI client check, focused ruff, `npm run build --prefix
+  sidecar/autoskill/observatory`, full `uv run ruff check sidecar`, full
+  `uv run pytest` with `354 passed`, `uv run python -m compileall -q sidecar`,
+  `docker compose config --quiet`, and `git diff --check` passed; a real
+  compose/Postgres smoke inserted one topology operation plus one planned trial,
+  read it back through `AsyncpgTopologyStore.get_operation_detail`, verified
+  `trial_count=1`, and cleaned the smoke rows.
 - historical source-item lineage; implemented as v2 content-safe lineage
   metadata on every parsed historical chunk, including source-item locator hash,
   item-key hash, item kind, chunk kind/index, optional record index, and optional

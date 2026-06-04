@@ -151,11 +151,15 @@ def test_observatory_frontend_topology_metrics_are_visible() -> None:
 
     assert "topologyOperationRows" in app_source
     assert "topologyTrialRows" in app_source
+    assert "topologyOperationIdentifier" in app_source
+    assert "Operation Evidence" in app_source
+    assert '"topology_operation"' in app_source
     assert "Topology operation metrics" in app_source
     assert "Topology trial matrix" in app_source
     assert "Recent Operations" in app_source
     assert "topology-metrics-grid" in styles
     assert "topology-trial-matrix" in styles
+    assert "topology-operation-detail" in styles
 
 
 def test_observatory_guarded_action_dialog_is_present() -> None:

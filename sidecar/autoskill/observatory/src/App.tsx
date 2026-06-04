@@ -117,6 +117,9 @@ function App() {
   const [selectedSkillId, setSelectedSkillId] = useState<string | undefined>(
     initialParams.get("skill") ?? undefined
   );
+  const [selectedTopologyOperationId, setSelectedTopologyOperationId] = useState<string | undefined>(
+    initialParams.get("topology_operation") ?? undefined
+  );
   const [selectedSubsystemId, setSelectedSubsystemId] = useState<string | undefined>(
     initialParams.get("subsystem") ?? undefined
   );
@@ -227,6 +230,23 @@ function App() {
     queryFn: () => fetchTopology(session, workspaceId, windowMinutes),
     retry: false
   });
+  const topologyOperationItems = topologyRecentOperations(topologyQuery.data?.object);
+  const effectiveTopologyOperationId =
+    selectedTopologyOperationId ??
+    topologyOperationIdentifier(topologyOperationItems[0]);
+  const topologyOperationDetailQuery = useQuery({
+    queryKey: [
+      "topology-operation-detail",
+      session.token,
+      session.roles,
+      workspaceId,
+      effectiveTopologyOperationId
+    ],
+    enabled: hasAdminToken && view === "skills" && Boolean(effectiveTopologyOperationId),
+    queryFn: () =>
+      fetchObject(session, "topology_operation", effectiveTopologyOperationId!, workspaceId),
+    retry: false
+  });
   const contextArtifactsQuery = useQuery({
     queryKey: ["context-artifacts", session.token, session.roles, workspaceId],
     enabled: hasAdminToken && view === "skills",
@@ -297,6 +317,7 @@ function App() {
     if (selectedReplayEpisodeId) params.set("episode", selectedReplayEpisodeId);
     if (replayTag.trim()) params.set("replay_tag", replayTag.trim());
     if (selectedSkillId) params.set("skill", selectedSkillId);
+    if (selectedTopologyOperationId) params.set("topology_operation", selectedTopologyOperationId);
     if (query.trim()) params.set("q", query.trim());
     window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
   }, [
@@ -306,6 +327,7 @@ function App() {
     selectedTraceId,
     selectedReplayEpisodeId,
     selectedSkillId,
+    selectedTopologyOperationId,
     replayTag,
     view,
     windowMinutes,
@@ -334,6 +356,13 @@ function App() {
       setSelectedSkillId(firstSkillId);
     }
   }, [selectedSkillId, skillItems]);
+
+  useEffect(() => {
+    const firstOperationId = topologyOperationIdentifier(topologyOperationItems[0]);
+    if (!selectedTopologyOperationId && firstOperationId) {
+      setSelectedTopologyOperationId(firstOperationId);
+    }
+  }, [selectedTopologyOperationId, topologyOperationItems]);
 
   useEffect(() => {
     if (!hasAdminToken) {
@@ -614,20 +643,25 @@ function App() {
               selectedSkillId={effectiveSkillId}
               skillDetail={skillDetailQuery.data?.object}
               topology={topologyQuery.data?.object}
+              selectedTopologyOperationId={effectiveTopologyOperationId}
+              topologyOperationDetail={topologyOperationDetailQuery.data?.object}
               contextArtifacts={contextArtifactsQuery.data?.collection.items ?? []}
               loading={
                 skillsQuery.isLoading ||
                 skillDetailQuery.isLoading ||
                 topologyQuery.isLoading ||
+                topologyOperationDetailQuery.isLoading ||
                 contextArtifactsQuery.isLoading
               }
               error={
                 skillsQuery.error ??
                 skillDetailQuery.error ??
                 topologyQuery.error ??
+                topologyOperationDetailQuery.error ??
                 contextArtifactsQuery.error
               }
               onSelectSkill={setSelectedSkillId}
+              onSelectTopologyOperation={setSelectedTopologyOperationId}
             />
           )}
           {view === "trace" && (
@@ -920,20 +954,26 @@ function SkillsAndTopology({
   selectedSkillId,
   skillDetail,
   topology,
+  selectedTopologyOperationId,
+  topologyOperationDetail,
   contextArtifacts,
   loading,
   error,
-  onSelectSkill
+  onSelectSkill,
+  onSelectTopologyOperation
 }: {
   snapshot: ObservatorySnapshot;
   skills: Array<Record<string, unknown>>;
   selectedSkillId?: string;
   skillDetail?: Record<string, unknown>;
   topology?: Record<string, unknown>;
+  selectedTopologyOperationId?: string;
+  topologyOperationDetail?: Record<string, unknown>;
   contextArtifacts: Array<Record<string, unknown>>;
   loading: boolean;
   error: unknown;
   onSelectSkill: (skillId: string) => void;
+  onSelectTopologyOperation: (operationId: string) => void;
 }) {
   const skillStations = snapshot.pipeline.stations.filter((station) =>
     ["skill_ir_graph_ir", "topology_operations", "activation_curation", "context_compiler"].includes(
@@ -1039,15 +1079,35 @@ function SkillsAndTopology({
               <div className="topology-recent-operations" aria-label="Recent topology operations">
                 <strong>Recent Operations</strong>
                 {recentOperations.length ? (
-                  recentOperations.slice(0, 4).map((operation) => (
-                    <small key={String(operation.skill_graph_operation_id ?? JSON.stringify(operation))}>
-                      {String(operation.operation_kind ?? "unknown")} /{" "}
-                      {String(operation.status ?? "unknown")}
-                    </small>
-                  ))
+                  recentOperations.slice(0, 4).map((operation) => {
+                    const operationId = topologyOperationIdentifier(operation);
+                    return (
+                      <button
+                        key={operationId ?? JSON.stringify(operation)}
+                        className={operationId === selectedTopologyOperationId ? "is-selected" : ""}
+                        disabled={!operationId}
+                        type="button"
+                        onClick={() => operationId && onSelectTopologyOperation(operationId)}
+                      >
+                        <span>{String(operation.operation_kind ?? "unknown")}</span>
+                        <small>{String(operation.status ?? "unknown")}</small>
+                      </button>
+                    );
+                  })
                 ) : (
                   <small>No recent SkillGraphIR operations.</small>
                 )}
+              </div>
+              <div className="topology-operation-detail" aria-label="Topology operation detail">
+                <strong>Operation Evidence</strong>
+                <Inspector
+                  value={
+                    topologyOperationDetail ?? {
+                      state: "topology-operation-read-model-unavailable",
+                      selected_topology_operation_id: selectedTopologyOperationId
+                    }
+                  }
+                />
               </div>
               <Inspector value={topology ?? { state: "topology-read-model-unavailable" }} />
             </section>
@@ -1107,6 +1167,12 @@ function topologyRecentOperations(topology?: Record<string, unknown>) {
   const metrics = topology?.operation_metrics as Record<string, unknown> | undefined;
   const recent = metrics?.recent_operations;
   return Array.isArray(recent) ? (recent as Array<Record<string, unknown>>) : [];
+}
+
+function topologyOperationIdentifier(operation?: Record<string, unknown>) {
+  if (!operation) return undefined;
+  const value = operation.skill_graph_operation_id ?? operation.object_id;
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function numericCount(value: unknown) {

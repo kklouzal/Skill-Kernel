@@ -1057,6 +1057,79 @@ def test_topology_metrics_endpoint_reports_operation_kinds_separately() -> None:
     assert len(response.recent_operations) == 1
 
 
+def test_observatory_topology_operation_detail_exposes_trials_and_provenance() -> None:
+    topology = NullTopologyStore()
+    transaction_id = uuid4()
+    evidence_id = uuid4()
+    subject_skill_id = uuid4()
+    output_skill_id = uuid4()
+
+    async def seed():
+        operation = await topology.record_operation(
+            workspace_key="dev-01",
+            operation_kind="decompose",
+            status="candidate",
+            subject_skill_ids=[subject_skill_id],
+            output_skill_ids=[output_skill_id],
+            skill_graph_ir={"nodes": [{"id": "successor-a"}]},
+            evidence_ids=[evidence_id],
+            effect_coverage={"coverage": "planned"},
+            trial_summary={"reason_codes": ["context-waste"]},
+            evolution_transaction_id=transaction_id,
+        )
+        await topology.record_planned_trial(
+            workspace_key="dev-01",
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+            trial_kind="broker_replay",
+            objective="prove decomposed successors route without stealing broad tasks",
+            expected={"must_not_shadow": True},
+            evolution_transaction_id=transaction_id,
+        )
+        return operation
+
+    operation = asyncio.run(seed())
+    app = create_app(topology_store=topology)
+    detail_route = next(
+        route
+        for route in app.routes
+        if route.path == "/admin/api/v1/topology/operations/{operation_id}"
+    )
+    object_route = next(
+        route
+        for route in app.routes
+        if route.path == "/admin/api/v1/objects/{object_type}/{object_id}"
+    )
+
+    async def run():
+        detail = await detail_route.endpoint(
+            operation_id=str(operation.skill_graph_operation_id),
+            workspace_id="dev-01",
+        )
+        generic = await object_route.endpoint(
+            object_type="topology_operation",
+            object_id=str(operation.skill_graph_operation_id),
+            workspace_id="dev-01",
+        )
+        return detail, generic
+
+    detail, generic = asyncio.run(run())
+
+    assert detail.object["schema_version"] == "skillkernel.observatory.topology-operation.v1"
+    assert detail.object["object_type"] == "topology_operation"
+    assert detail.object["diagnostics"]["trial_count"] == 1
+    assert detail.object["diagnostics"]["trial_kinds"] == {"broker_replay": 1}
+    assert detail.object["content_policy"]["raw_available"] is False
+    assert {"object_type": "evidence", "object_id": str(evidence_id)} in detail.object[
+        "provenance"
+    ]["upstream"]
+    assert {
+        "object_type": "evolution_transaction",
+        "object_id": str(transaction_id),
+    } in detail.object["provenance"]["upstream"]
+    assert generic.object["object_id"] == str(operation.skill_graph_operation_id)
+    assert generic.object["trials"][0]["trial_kind"] == "broker_replay"
+
+
 def test_topology_proposal_endpoint_records_blocked_trials() -> None:
     topology = NullTopologyStore()
     app = create_app(topology_store=topology)

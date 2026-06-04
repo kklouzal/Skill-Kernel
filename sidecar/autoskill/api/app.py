@@ -5036,6 +5036,98 @@ def create_app(
             "audit": {"links": [], "chain_visible": True},
         }
 
+    def _topology_operation_microscope(detail: Any) -> dict[str, Any]:
+        payload = detail.to_json()
+        operation = payload["operation"]
+        trials = payload["trials"]
+        operation_id = str(operation["skill_graph_operation_id"])
+        evidence_refs = [
+            {"object_type": "evidence", "object_id": str(evidence_id)}
+            for evidence_id in operation.get("evidence_ids", [])
+        ]
+        transaction_id = operation.get("evolution_transaction_id")
+        transaction_refs = (
+            [{"object_type": "evolution_transaction", "object_id": transaction_id}]
+            if transaction_id
+            else []
+        )
+        subject_refs = [
+            {"object_type": "skill", "object_id": str(skill_id)}
+            for skill_id in operation.get("subject_skill_ids", [])
+        ]
+        output_refs = [
+            {"object_type": "skill", "object_id": str(skill_id)}
+            for skill_id in operation.get("output_skill_ids", [])
+        ]
+        trial_refs = [
+            {
+                "object_type": "planned_topology_trial",
+                "object_id": trial["planned_topology_trial_id"],
+            }
+            for trial in trials
+        ]
+        trial_statuses = _count_by(trials, "status")
+        trial_kinds = _count_by(trials, "trial_kind")
+        return {
+            **operation,
+            "schema_version": "skillkernel.observatory.topology-operation.v1",
+            "object_type": "topology_operation",
+            "object_id": operation_id,
+            "title": (
+                f"{operation['operation_kind']} topology operation "
+                f"{operation_id}"
+            ),
+            "summary": (
+                f"{operation['operation_kind']} / {operation['status']}; "
+                f"trials={len(trials)}; evidence={len(evidence_refs)}"
+            ),
+            "details_url": f"/admin/topology/operations/{operation_id}",
+            "timeline": [
+                {
+                    "at": operation["created_at"],
+                    "event": "topology_operation_recorded",
+                    "operation_kind": operation["operation_kind"],
+                    "status": operation["status"],
+                },
+                {
+                    "at": operation["updated_at"],
+                    "event": "topology_operation_updated",
+                    "status": operation["status"],
+                },
+            ],
+            "provenance": {
+                "upstream": [*evidence_refs, *transaction_refs, *subject_refs],
+                "downstream": [*output_refs, *trial_refs],
+            },
+            "effects": {
+                "subject_skill_ids": operation.get("subject_skill_ids", []),
+                "output_skill_ids": operation.get("output_skill_ids", []),
+                "effect_coverage": operation.get("effect_coverage", {}),
+                "trial_summary": operation.get("trial_summary", {}),
+            },
+            "trials": trials,
+            "diagnostics": {
+                "supporting_component": "topology_operations",
+                "operation_kind": operation["operation_kind"],
+                "status": operation["status"],
+                "trial_count": len(trials),
+                "trial_statuses": trial_statuses,
+                "trial_kinds": trial_kinds,
+                "skill_graph_ir_keys": sorted(
+                    str(key) for key in operation.get("skill_graph_ir", {})
+                ),
+                "effect_coverage_keys": sorted(
+                    str(key) for key in operation.get("effect_coverage", {})
+                ),
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "content_safe_topology_metadata",
+            },
+            "audit": {"links": transaction_refs, "chain_visible": True},
+        }
+
     async def _record_observatory_action(
         request: ObservatoryActionRequest,
         authorization: str | None,
@@ -6111,6 +6203,16 @@ def create_app(
                 return ObservatoryObjectResponse(
                     object=_broker_replay_episode_microscope(episode)
                 )
+        if object_type in {"topology_operation", "skill_graph_operation"}:
+            operation_id = _uuid_or_404(object_id, "topology operation")
+            operation = await topology.get_operation_detail(
+                workspace_key=workspace_id,
+                skill_graph_operation_id=operation_id,
+            )
+            if operation is not None:
+                return ObservatoryObjectResponse(
+                    object=_topology_operation_microscope(operation)
+                )
         if object_type in {"memory_quarantine", "quarantined_memory"}:
             quarantine_id = _uuid_or_404(object_id, "memory quarantine")
             memory = await memory_governance.get_memory_quarantine(
@@ -6578,6 +6680,31 @@ def create_app(
                     "raw_reason": "raw-content-disabled",
                 },
             }
+        )
+
+    @app.get(
+        "/admin/api/v1/topology/operations/{operation_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_topology_operation_detail(
+        operation_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_operation_id = _uuid_or_404(operation_id, "topology operation")
+        operation = await topology.get_operation_detail(
+            workspace_key=workspace_id,
+            skill_graph_operation_id=parsed_operation_id,
+        )
+        if operation is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="topology operation not found",
+            )
+        return ObservatoryObjectResponse(
+            object=_topology_operation_microscope(operation)
         )
 
     @app.get("/admin/api/v1/candidates", response_model=ObservatoryCollectionResponse)

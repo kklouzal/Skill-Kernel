@@ -970,6 +970,43 @@ h3 {
   margin-bottom: 10px;
 }
 
+.topology-recent-operations button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 7px 8px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+}
+
+.topology-recent-operations button:hover,
+.topology-recent-operations button:focus-visible,
+.topology-recent-operations button.is-selected {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.topology-recent-operations button span {
+  overflow-wrap: anywhere;
+}
+
+.topology-operation-detail {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.topology-operation-detail > strong {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
 .trace-layout {
   display: grid;
   grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
