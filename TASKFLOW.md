@@ -1276,6 +1276,18 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   sidecar/autoskill/observatory`, `uv run ruff check sidecar`, `uv run pytest
   -q` (`348 passed`), `uv run python -m compileall -q sidecar`, and `git diff
   --check`.
+- Observatory memory/control-flow read-model visibility is implemented for
+  Sections 8.5, 12.6, and 16.1/16.3: `/admin/api/v1/memory/quarantine` and
+  `/admin/api/v1/control-flow/events` now expose bounded list/detail surfaces
+  plus generic object-microscope resolution over existing memory-governance
+  stores, returning memory hashes/keys, taint/status, provenance, and
+  content-safe decision metadata without returning proposed memory content or
+  creating a second mutation path. Validation passed with focused Observatory
+  API tests (`2 passed`), generated client `--check`, `uv run ruff check
+  sidecar`, `uv run pytest` (`349 passed`), `uv run python -m compileall -q
+  sidecar`, `npm test --prefix plugin/autoskill` (`18 passed`), `npm run build
+  --prefix sidecar/autoskill/observatory`, `docker compose config --quiet`, and
+  `git diff --check`.
 
 ## Next Gates
 

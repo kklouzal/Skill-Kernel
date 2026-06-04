@@ -4735,6 +4735,131 @@ def create_app(
             "audit": {"links": [], "chain_visible": False},
         }
 
+    def _memory_quarantine_admin_record(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        proposed_memory = payload.get("proposed_memory")
+        proposed_memory_keys = (
+            sorted(str(key) for key in proposed_memory)
+            if isinstance(proposed_memory, dict)
+            else []
+        )
+        scanner_findings = payload.get("scanner_findings")
+        scanner_finding_keys = (
+            sorted(str(key) for key in scanner_findings)
+            if isinstance(scanner_findings, dict)
+            else []
+        )
+        source_ref = {
+            "object_type": str(payload["source_object_type"]),
+            "object_id": str(payload["source_object_id"]),
+        }
+        quarantine_id = str(payload["quarantine_id"])
+        return {
+            "schema_version": "skillkernel.observatory.memory-quarantine.v1",
+            "object_type": "memory_quarantine",
+            "object_id": quarantine_id,
+            "quarantine_id": quarantine_id,
+            "workspace_id": payload.get("workspace_id"),
+            "workspace_key": payload.get("workspace_key"),
+            "title": f"Memory quarantine {quarantine_id}",
+            "summary": (
+                f"{payload['status']} memory candidate from "
+                f"{payload['source_object_type']}"
+            ),
+            "status": payload["status"],
+            "source_object_type": payload["source_object_type"],
+            "source_object_id": payload["source_object_id"],
+            "proposed_memory_hash": (
+                "sha256:"
+                + sha256_text(json.dumps(proposed_memory, sort_keys=True, default=str))
+            ),
+            "proposed_memory_keys": proposed_memory_keys,
+            "taint": payload.get("taint") or {},
+            "scanner_finding_keys": scanner_finding_keys,
+            "created_at": payload["created_at"],
+            "decided_at": payload.get("decided_at"),
+            "details_url": f"/admin/memory/quarantine/{quarantine_id}",
+            "timeline": [
+                {"at": payload["created_at"], "event": "memory_quarantined"},
+                *(
+                    [{"at": payload["decided_at"], "event": f"memory_{payload['status']}"}]
+                    if payload.get("decided_at")
+                    else []
+                ),
+            ],
+            "provenance": {"upstream": [source_ref], "downstream": []},
+            "effects": {
+                "runtime_loaded": False,
+                "embedded": False,
+                "mutation_input": payload["status"] == "approved",
+                "memory_content_returned": False,
+            },
+            "diagnostics": {
+                "supporting_component": "evidence_memory",
+                "scanner_finding_keys": scanner_finding_keys,
+                "taint_keys": sorted(str(key) for key in (payload.get("taint") or {})),
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "redacted_or_not_applicable",
+                "memory_content_returned": False,
+            },
+            "audit": {"links": [], "chain_visible": True},
+        }
+
+    def _control_flow_event_admin_record(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        event_id = str(payload["control_flow_event_id"])
+        upstream = []
+        if payload.get("source_id"):
+            upstream.append(
+                {
+                    "object_type": payload["source_kind"],
+                    "object_id": payload["source_id"],
+                }
+            )
+        decision = payload.get("decision") or {}
+        return {
+            "schema_version": "skillkernel.observatory.control-flow-event.v1",
+            "object_type": "control_flow_event",
+            "object_id": event_id,
+            "control_flow_event_id": event_id,
+            "workspace_id": payload.get("workspace_id"),
+            "workspace_key": payload.get("workspace_key"),
+            "title": f"Control-flow event {event_id}",
+            "summary": (
+                f"{payload['source_kind']} influenced {payload['influence_kind']}"
+            ),
+            "run_id": payload.get("run_id"),
+            "source_kind": payload["source_kind"],
+            "source_id": payload.get("source_id"),
+            "influence_kind": payload["influence_kind"],
+            "decision": decision,
+            "decision_keys": sorted(str(key) for key in decision),
+            "created_at": payload["created_at"],
+            "details_url": f"/admin/control-flow/events/{event_id}",
+            "timeline": [
+                {"at": payload["created_at"], "event": "control_flow_recorded"}
+            ],
+            "provenance": {"upstream": upstream, "downstream": []},
+            "effects": {
+                "decision_recorded": True,
+                "policy_mutated": False,
+                "runtime_content_returned": False,
+            },
+            "diagnostics": {
+                "supporting_component": "evidence_memory",
+                "decision_keys": sorted(str(key) for key in decision),
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "content_safe_decision_metadata",
+            },
+            "audit": {"links": [], "chain_visible": True},
+        }
+
     def _comparison_microscope(record: Any) -> dict[str, Any]:
         payload = record.to_json()
         return {
@@ -5717,6 +5842,34 @@ def create_app(
                 return ObservatoryObjectResponse(
                     object=_broker_replay_episode_microscope(episode)
                 )
+        if object_type in {"memory_quarantine", "quarantined_memory"}:
+            quarantine_id = _uuid_or_404(object_id, "memory quarantine")
+            memory = await memory_governance.get_memory_quarantine(
+                workspace_key=workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+                quarantine_id=quarantine_id,
+            )
+            if memory is not None:
+                return ObservatoryObjectResponse(
+                    object=_memory_quarantine_admin_record(memory)
+                )
+        if object_type in {"control_flow_event", "control-flow-event"}:
+            event_id = _uuid_or_404(object_id, "control-flow event")
+            control_flow_events = await memory_governance.list_control_flow_events(
+                workspace_key=workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+                limit=500,
+            )
+            event = next(
+                (
+                    item
+                    for item in control_flow_events
+                    if item.control_flow_event_id == event_id
+                ),
+                None,
+            )
+            if event is not None:
+                return ObservatoryObjectResponse(
+                    object=_control_flow_event_admin_record(event)
+                )
         snapshot = await _observatory_snapshot(
             workspace_id=workspace_id,
             window_minutes=window_minutes,
@@ -5761,6 +5914,131 @@ def create_app(
                 "raw_payload_available": False,
             },
         )
+
+    @app.get(
+        "/admin/api/v1/memory/quarantine",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_memory_quarantine(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        effective_workspace_id = workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID
+        records = await memory_governance.list_memory_quarantine(
+            workspace_key=effective_workspace_id,
+            status=status,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="memory_quarantine",
+            title="Memory quarantine",
+            items=[_memory_quarantine_admin_record(record) for record in records],
+            limit=limit,
+            cursor=cursor,
+            source="memory_governance_store.list_memory_quarantine",
+            diagnostics={
+                "supporting_component": "evidence_memory",
+                "filter": {
+                    "workspace_id": effective_workspace_id,
+                    "status": status,
+                },
+                "memory_content_returned": False,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/memory/quarantine/{quarantine_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_memory_quarantine_detail(
+        quarantine_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_quarantine_id = _uuid_or_404(quarantine_id, "memory quarantine")
+        memory = await memory_governance.get_memory_quarantine(
+            workspace_key=workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+            quarantine_id=parsed_quarantine_id,
+        )
+        if memory is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="memory quarantine record not found",
+            )
+        return ObservatoryObjectResponse(object=_memory_quarantine_admin_record(memory))
+
+    @app.get(
+        "/admin/api/v1/control-flow/events",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_control_flow_events(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        source_kind: str | None = None,
+        influence_kind: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        effective_workspace_id = workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID
+        records = await memory_governance.list_control_flow_events(
+            workspace_key=effective_workspace_id,
+            source_kind=source_kind,
+            influence_kind=influence_kind,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="control_flow_event",
+            title="Control-flow integrity events",
+            items=[_control_flow_event_admin_record(record) for record in records],
+            limit=limit,
+            cursor=cursor,
+            source="memory_governance_store.list_control_flow_events",
+            diagnostics={
+                "supporting_component": "evidence_memory",
+                "filter": {
+                    "workspace_id": effective_workspace_id,
+                    "source_kind": source_kind,
+                    "influence_kind": influence_kind,
+                },
+                "content_safe_decisions_only": True,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/control-flow/events/{control_flow_event_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_control_flow_event_detail(
+        control_flow_event_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_event_id = _uuid_or_404(control_flow_event_id, "control-flow event")
+        records = await memory_governance.list_control_flow_events(
+            workspace_key=workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+            limit=500,
+        )
+        event = next(
+            (record for record in records if record.control_flow_event_id == parsed_event_id),
+            None,
+        )
+        if event is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="control-flow event not found",
+            )
+        return ObservatoryObjectResponse(object=_control_flow_event_admin_record(event))
 
     @app.get("/admin/api/v1/traces", response_model=ObservatoryCollectionResponse)
     async def observatory_traces(

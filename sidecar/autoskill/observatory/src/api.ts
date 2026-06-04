@@ -182,6 +182,38 @@ export function fetchBrokerReplayEpisodeDetail(
   );
 }
 
+export function fetchMemoryQuarantine(
+  session: ApiSession,
+  workspaceId: string,
+  status = "",
+  limit = 50
+) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  if (status) params.set("status", status);
+  return fetchJson<CollectionResponse>(
+    `${adminApiPath("/memory/quarantine")}?${params}`,
+    session
+  );
+}
+
+export function fetchControlFlowEvents(
+  session: ApiSession,
+  workspaceId: string,
+  sourceKind = "",
+  influenceKind = "",
+  limit = 50
+) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  if (sourceKind) params.set("source_kind", sourceKind);
+  if (influenceKind) params.set("influence_kind", influenceKind);
+  return fetchJson<CollectionResponse>(
+    `${adminApiPath("/control-flow/events")}?${params}`,
+    session
+  );
+}
+
 export function postAction(
   session: ApiSession,
   body: {

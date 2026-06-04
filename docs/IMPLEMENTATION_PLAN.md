@@ -681,7 +681,12 @@ Deliverables:
   stored replay episodes plus generic `broker_replay_episode` object microscope
   support, exposing only operator-redacted replay intent text, hashes, expected
   skill IDs, source broker-decision links, metadata-key summaries, and explicit
-  `raw_prompt_stored=false` policy metadata;
+  `raw_prompt_stored=false` policy metadata. Memory quarantine and control-flow
+  integrity visibility is implemented with bounded admin list/detail routes over
+  existing memory-governance stores plus generic object-microscope support,
+  exposing memory hashes/keys, taint/status, provenance links, and
+  content-safe decision metadata without returning proposed memory text or
+  bypassing the governed `/v1/memory/*` mutation surfaces;
 - live updates; implemented with `/admin/live` WebSocket and `/admin/live-sse`
   fallback, frontend fallback logic, snapshot reload handling, and persisted
   `admin_live_event_outbox` events for audited operator actions, diagnostic
@@ -864,6 +869,16 @@ Acceptance:
   sidecar/autoskill/observatory` passed, `uv run ruff check sidecar` passed,
   `uv run pytest -q` passed with `348 passed`, `uv run python -m compileall -q
   sidecar` passed, and `git diff --check` passed.
+- validation evidence for the Observatory memory/control-flow read-model slice
+  passed on the final tree: focused Observatory API tests proved route-matrix
+  coverage, list/detail routes, generic object-microscope lookup, filter
+  handling, and content-safe shaping that returns proposed-memory hash/keys
+  without proposed memory content. Validation passed with focused tests
+  (`2 passed`), generated client `--check`, `uv run ruff check sidecar`,
+  `uv run pytest` (`349 passed`), `uv run python -m compileall -q sidecar`,
+  `npm test --prefix plugin/autoskill` (`18 passed`), `npm run build --prefix
+  sidecar/autoskill/observatory`, `docker compose config --quiet`, and
+  `git diff --check`.
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and

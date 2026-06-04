@@ -17,6 +17,7 @@ from autoskill.core.hashing import sha256_text
 from autoskill.db.broker_policy import NullBrokerPolicyStore
 from autoskill.db.events import NullEventStore
 from autoskill.db.jobs import JobQueueSummary
+from autoskill.db.memory import NullMemoryGovernanceStore
 from autoskill.db.observability import (
     TraceSpanRecord,
     TraceSummaryRecord,
@@ -670,6 +671,116 @@ def test_observatory_collection_routes_return_bounded_content_safe_envelopes() -
     assert ready.object["ready"] is False
 
 
+def test_observatory_memory_and_control_flow_read_models_are_content_safe() -> None:
+    memory = NullMemoryGovernanceStore()
+    source_object_id = uuid4()
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        memory_governance_store=memory,
+    )
+    routes = _routes(app)
+
+    async def run():
+        pending = await memory.quarantine_memory(
+            workspace_key="dev-01",
+            source_object_type="evidence_item",
+            source_object_id=source_object_id,
+            proposed_memory={
+                "summary": "redacted operator preference should not render here",
+                "support_ids": ["ev-1"],
+            },
+            taint={"raw_content": False, "trust": "derived"},
+            scanner_findings={"codes": ["passed"], "secret_count": 0},
+        )
+        approved = await memory.decide_memory_quarantine(
+            workspace_key="dev-01",
+            quarantine_id=pending.quarantine_id,
+            status="approved",
+            operator_id="operator-1",
+            rationale="redacted approval rationale",
+        )
+        assert approved is not None
+        control_event = await memory.record_control_flow_event(
+            workspace_key="dev-01",
+            source_kind="memory",
+            source_id=pending.quarantine_id,
+            influence_kind="retrieval",
+            run_id="broker-run-1",
+            decision={
+                "decision": "approved_memory_influence",
+                "cache_status": "miss",
+            },
+        )
+        memories = await routes[("/admin/api/v1/memory/quarantine", "GET")].endpoint(
+            workspace_id="dev-01",
+            status="approved",
+            limit=10,
+        )
+        memory_detail = await routes[
+            ("/admin/api/v1/memory/quarantine/{quarantine_id}", "GET")
+        ].endpoint(
+            quarantine_id=str(pending.quarantine_id),
+            workspace_id="dev-01",
+        )
+        events = await routes[("/admin/api/v1/control-flow/events", "GET")].endpoint(
+            workspace_id="dev-01",
+            source_kind="memory",
+            influence_kind="retrieval",
+            limit=10,
+        )
+        event_detail = await routes[
+            ("/admin/api/v1/control-flow/events/{control_flow_event_id}", "GET")
+        ].endpoint(
+            control_flow_event_id=str(control_event.control_flow_event_id),
+            workspace_id="dev-01",
+        )
+        memory_object = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="memory_quarantine",
+            object_id=str(pending.quarantine_id),
+            workspace_id="dev-01",
+        )
+        event_object = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="control_flow_event",
+            object_id=str(control_event.control_flow_event_id),
+            workspace_id="dev-01",
+        )
+        return memories, memory_detail, events, event_detail, memory_object, event_object
+
+    memories, memory_detail, events, event_detail, memory_object, event_object = asyncio.run(
+        run()
+    )
+
+    memory_item = memories.collection["items"][0]
+    assert memories.collection["source"] == "memory_governance_store.list_memory_quarantine"
+    assert memories.collection["object_type"] == "memory_quarantine"
+    assert memories.collection["diagnostics"]["memory_content_returned"] is False
+    assert memory_item["status"] == "approved"
+    assert memory_item["source_object_type"] == "evidence_item"
+    assert memory_item["proposed_memory_hash"].startswith("sha256:")
+    assert memory_item["proposed_memory_keys"] == ["summary", "support_ids"]
+    assert "proposed_memory" not in memory_item
+    assert "redacted operator preference" not in str(memory_item)
+    assert memory_detail.object["object_id"] == memory_item["object_id"]
+    assert memory_detail.object["effects"]["runtime_loaded"] is False
+    assert memory_detail.object["content_policy"]["memory_content_returned"] is False
+    assert memory_object.object["object_type"] == "memory_quarantine"
+
+    event_item = events.collection["items"][0]
+    assert events.collection["source"] == "memory_governance_store.list_control_flow_events"
+    assert events.collection["object_type"] == "control_flow_event"
+    assert events.collection["diagnostics"]["content_safe_decisions_only"] is True
+    assert event_item["source_kind"] == "memory"
+    assert event_item["influence_kind"] == "retrieval"
+    assert event_item["decision_keys"] == ["cache_status", "decision"]
+    assert event_detail.object["provenance"]["upstream"][0]["object_type"] == "memory"
+    assert event_detail.object["effects"]["policy_mutated"] is False
+    assert event_object.object["object_type"] == "control_flow_event"
+
+
 def test_observatory_admin_routes_include_browser_security_headers() -> None:
     app = create_app(audit_store=MemoryAuditStore())
 
@@ -696,6 +807,10 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/components", "GET"),
         ("/admin/api/v1/components/{component_id}/metrics", "GET"),
         ("/admin/api/v1/events", "GET"),
+        ("/admin/api/v1/memory/quarantine", "GET"),
+        ("/admin/api/v1/memory/quarantine/{quarantine_id}", "GET"),
+        ("/admin/api/v1/control-flow/events", "GET"),
+        ("/admin/api/v1/control-flow/events/{control_flow_event_id}", "GET"),
         ("/admin/api/v1/traces", "GET"),
         ("/admin/api/v1/traces/{trace_id}", "GET"),
         ("/admin/api/v1/jobs", "GET"),
