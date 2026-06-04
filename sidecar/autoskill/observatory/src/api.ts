@@ -34,8 +34,10 @@ async function fetchJson<T>(
 ): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
+    cache: "no-store",
     headers: {
       ...headers(session),
+      "Cache-Control": "no-cache",
       ...(init.body ? { "Content-Type": "application/json" } : {}),
       ...init.headers
     }
@@ -115,6 +117,7 @@ export async function streamLive(
   if (workspaceId) url.searchParams.set("workspace_id", workspaceId);
   if (lastSeq) url.searchParams.set("last_seq", String(lastSeq));
   const response = await fetch(url, {
+    cache: "no-store",
     headers: headers(session),
     signal
   });

@@ -11,6 +11,8 @@ import asyncpg
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 
+EVALUATION_FAILURE_STATUSES = {"blocked", "failed"}
+
 TraceStatus = Literal["running", "ok", "error", "timeout", "denied", "quarantined", "rolled_back"]
 
 
@@ -943,7 +945,7 @@ def _operator_metrics_payload(
     evaluator_failures = sum(
         int(row["count"])
         for row in skill_version_counts
-        if row.get("evaluator_status") not in {"passed", "pending"}
+        if row.get("evaluator_status") in EVALUATION_FAILURE_STATUSES
     )
     active_skill_count = skill_lifecycle_counts.get("active", 0)
     archived_skill_count = skill_lifecycle_counts.get("archived", 0)

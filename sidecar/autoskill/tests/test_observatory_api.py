@@ -16,11 +16,15 @@ from autoskill.core.events import EventEnvelope
 from autoskill.core.hashing import sha256_text
 from autoskill.db.events import NullEventStore
 from autoskill.db.jobs import JobQueueSummary
-from autoskill.db.observability import TraceSpanRecord, TraceSummaryRecord
+from autoskill.db.observability import (
+    TraceSpanRecord,
+    TraceSummaryRecord,
+    _operator_metrics_payload,
+)
 from autoskill.db.observatory_admin import NullObservatoryAdminStore
 from autoskill.db.retrieval import RetrievalLog
 from autoskill.services.observatory import build_live_envelope, build_observatory_snapshot
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 
 
 class MemoryAuditStore:
@@ -268,13 +272,20 @@ async def _asgi_post(
 def test_observatory_summary_exposes_all_pipeline_stations_and_truth_states() -> None:
     app = create_app(audit_store=MemoryAuditStore())
     route = _routes(app)[("/admin/api/v1/summary", "GET")]
+    http_response = Response()
 
     async def run():
-        return await route.endpoint(workspace_id="dev-01", window_minutes=30)
+        return await route.endpoint(
+            workspace_id="dev-01",
+            window_minutes=30,
+            response=http_response,
+        )
 
     response = asyncio.run(run())
     snapshot = response.snapshot
 
+    assert http_response.headers["Cache-Control"] == "no-store, max-age=0"
+    assert http_response.headers["Pragma"] == "no-cache"
     assert response.ok is True
     assert response.data["snapshot"]["schema_version"] == "skillkernel.observatory.v1"
     assert str(response.meta["request_id"]).startswith("req_")
@@ -309,12 +320,14 @@ def test_observatory_summary_defaults_to_effective_workspace(
         audit_store=audit,
     )
     route = _routes(app)[("/admin/api/v1/summary", "GET")]
+    http_response = Response()
 
     async def run():
-        return await route.endpoint(window_minutes=30)
+        return await route.endpoint(window_minutes=30, response=http_response)
 
     response = asyncio.run(run())
 
+    assert http_response.headers["Cache-Control"] == "no-store, max-age=0"
     assert response.snapshot["workspace_id"] == "prod-ops"
     assert jobs.summary_calls == ["prod-ops", "prod-ops"]
     assert observability.operator_metric_calls[0]["workspace_key"] == "prod-ops"
@@ -358,6 +371,47 @@ def test_observatory_live_sse_fallback_preserves_snapshot_sequence() -> None:
     assert payload["event_type"] == "snapshot"
     assert payload["seq"] == payload["payload"]["snapshot_seq"]
     assert payload["seq"] > 0
+
+
+def test_observatory_live_sse_starts_with_fresh_snapshot_when_events_exist() -> None:
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        observatory_admin_store=observatory_admin,
+    )
+    route = _routes(app)[("/admin/live-sse", "GET")]
+
+    async def run():
+        stale_event = await observatory_admin.append_live_event(
+            kind="component_health_changed",
+            component_id="scheduler_jobs",
+            payload={"reason_codes": ["failed-jobs-present"]},
+        )
+        response = await route.endpoint(workspace_id="dev-01", last_seq=stale_event.seq - 1)
+        event_chunk = await anext(response.body_iterator)
+        data_chunk = await anext(response.body_iterator)
+        await response.body_iterator.aclose()
+        return response, event_chunk, data_chunk
+
+    response, event_chunk, data_chunk = asyncio.run(run())
+    payload = json.loads(data_chunk.removeprefix("data: ").strip())
+
+    assert response.headers["Cache-Control"] == "no-store, max-age=0"
+    assert response.headers["Pragma"] == "no-cache"
+    assert event_chunk == "event: snapshot\n"
+    assert payload["event_type"] == "snapshot"
+    assert payload["payload"]["pipeline"]["stations"]
+    scheduler = next(
+        station
+        for station in payload["payload"]["pipeline"]["stations"]
+        if station["component_id"] == "scheduler_jobs"
+    )
+    assert "failed-jobs-present" not in scheduler["reason_codes"]
+    assert not [
+        issue
+        for issue in payload["payload"]["issue_board"]
+        if issue["issue_id"] == "scheduler_jobs:failed-jobs-present"
+    ]
 
 
 def test_observatory_pipeline_component_and_search_routes_are_bounded() -> None:
@@ -899,6 +953,45 @@ def test_observatory_planned_evaluations_are_not_failures() -> None:
         if station["component_id"] == "evaluator_probes"
     )
     assert "evaluation-failures-present" in evaluator["reason_codes"]
+
+
+def test_operator_metrics_do_not_count_needs_intervention_as_evaluator_failure() -> None:
+    payload = _operator_metrics_payload(
+        workspace_key="dev-01",
+        window_minutes=10,
+        storage_limit=10,
+        ingest={},
+        redaction_counts={},
+        latency={},
+        latency_by_operation_kind={},
+        job_status_counts={},
+        job_kind_counts={},
+        embedding_backlog={},
+        retrieval_decisions={},
+        context={},
+        context_hints={},
+        skill_lifecycle_counts={},
+        skill_version_counts=[
+            {"scanner_status": "passed", "evaluator_status": "needs_intervention", "count": 3},
+            {"scanner_status": "passed", "evaluator_status": "failed", "count": 1},
+        ],
+        transaction_counts={},
+        evaluation_counts={"needs_intervention": 3, "failed": 1},
+        curation_counts={},
+        revocation_counts={},
+        freeze={},
+        canary_counts={},
+        drift={},
+        utility={},
+        audit={},
+        storage=[],
+    )
+
+    assert payload["dashboards"]["scanner_evaluator_failures"]["evaluator_failures"] == 1
+    assert payload["metrics"]["evaluation_pass_fail_counts"] == {
+        "needs_intervention": 3,
+        "failed": 1,
+    }
 
 
 def test_observatory_station_latency_uses_operation_specific_samples() -> None:

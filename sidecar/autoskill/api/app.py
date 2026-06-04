@@ -174,13 +174,26 @@ from autoskill.services.writer import (
     resolve_contained,
     rollback_active_skill_with_governance,
 )
-from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi import status as http_status
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 DEFAULT_OBSERVATORY_WORKSPACE_ID = "dev-01"
+NO_STORE_HEADERS = {
+    "Cache-Control": "no-store, max-age=0",
+    "Pragma": "no-cache",
+}
 
 
 def _admin_response_meta() -> dict[str, object]:
@@ -5231,12 +5244,14 @@ def create_app(
 
     @app.get("/admin/api/v1/summary", response_model=ObservatorySnapshotResponse)
     async def observatory_summary(
+        response: Response,
         authorization: Annotated[str | None, Header()] = None,
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
         workspace_id: str | None = None,
         window_minutes: int = 60,
     ) -> ObservatorySnapshotResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
+        response.headers.update(NO_STORE_HEADERS)
         return ObservatorySnapshotResponse(
             snapshot=await _observatory_snapshot(
                 workspace_id=workspace_id,
@@ -6832,6 +6847,14 @@ def create_app(
 
         async def stream() -> AsyncIterator[str]:
             current_last_seq = last_seq
+            snapshot = await _observatory_snapshot(
+                workspace_id=workspace_id,
+                window_minutes=60,
+            )
+            payload = _snapshot_live_fallback(snapshot, last_seq=current_last_seq)
+            yield f"event: {payload['event_type']}\n"
+            yield f"data: {json.dumps(payload, sort_keys=True)}\n\n"
+            current_last_seq = int(payload["seq"])
             while True:
                 live_events = await observatory_admin.list_live_events(
                     after_seq=current_last_seq,
@@ -6854,7 +6877,11 @@ def create_app(
                     current_last_seq = int(payload["seq"])
                 await asyncio.sleep(5)
 
-        return StreamingResponse(stream(), media_type="text/event-stream")
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers=NO_STORE_HEADERS,
+        )
 
     @app.post("/v1/diagnostics/momentum", response_model=DiagnosticMomentumResponse)
     async def record_diagnostic_signal(
