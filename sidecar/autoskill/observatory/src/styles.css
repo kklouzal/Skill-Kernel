@@ -827,10 +827,28 @@ h3 {
   width: 100%;
   height: 420px;
   min-height: 320px;
-  overflow: hidden;
+  overflow: auto;
   border: 1px solid var(--line);
   border-radius: 6px;
   margin-top: 12px;
+  background: #10161b;
+}
+
+.inspector pre {
+  min-height: 100%;
+  max-height: none;
+  margin: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  padding: 12px;
+  color: #dce7f3;
+  background: transparent;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .topology-page,
