@@ -1018,9 +1018,13 @@ Acceptance:
   `21.23`, `21.24`, `21.40`, `24.auto.1`, `24.auto.3`, and `24.auto.6`
   without exposing raw evidence, raw-vault records, or LLM verdict payloads and
   without adding mutation authority. Focused validation passed with
-  Observatory API tests (`37 passed`), generated OpenAPI client `--check`, and
-  focused ruff on edited files; full cron validation is recorded in
-  `TASKFLOW.md`.
+  Observatory API tests (`37 passed`), generated OpenAPI client `--check`,
+  `uv run ruff check sidecar`, `uv run pytest` (`367 passed`), `uv run python
+  -m compileall -q sidecar`, `npm run build --prefix
+  sidecar/autoskill/observatory`, `docker compose config --quiet`, `git diff
+  --check`, and a real compose/Postgres smoke that applied migrations,
+  inserted/listed/detail-read the four read-model families, and deleted smoke
+  rows.
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and
