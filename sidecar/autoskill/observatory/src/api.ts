@@ -1,4 +1,11 @@
-import type { LiveEnvelope, ObjectResponse, SearchResponse, SnapshotResponse } from "./types";
+import type {
+  CollectionResponse,
+  LiveEnvelope,
+  ObjectResponse,
+  SearchResponse,
+  SnapshotResponse,
+  TraceSummary
+} from "./types";
 
 const API_BASE = import.meta.env.VITE_ADMIN_API_BASE ?? "/admin/api/v1";
 const CSRF_HEADER = "X-SkillKernel-CSRF";
@@ -76,6 +83,26 @@ export function search(session: ApiSession, query: string, workspaceId: string) 
   return fetchJson<SearchResponse>(`/search?${params}`, session);
 }
 
+export function fetchTraces(session: ApiSession, workspaceId: string, limit = 25) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  return fetchJson<CollectionResponse<TraceSummary>>(`/traces?${params}`, session);
+}
+
+export function fetchTraceReplay(
+  session: ApiSession,
+  traceId: string,
+  workspaceId: string,
+  limit = 100
+) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  return fetchJson<ObjectResponse>(
+    `/replay/traces/${encodeURIComponent(traceId)}?${params}`,
+    session
+  );
+}
+
 export function postAction(
   session: ApiSession,
   body: {
@@ -89,12 +116,12 @@ export function postAction(
 ) {
   return csrfToken(session).then((token) =>
     fetchJson<{ receipt: Record<string, unknown> }>("/actions", session, {
-    method: "POST",
-    headers: {
-      [BROWSER_SESSION_HEADER]: "true",
-      [CSRF_HEADER]: token
-    },
-    body: JSON.stringify({ dry_run: true, target: {}, metadata: {}, ...body })
+      method: "POST",
+      headers: {
+        [BROWSER_SESSION_HEADER]: "true",
+        [CSRF_HEADER]: token
+      },
+      body: JSON.stringify({ dry_run: true, target: {}, metadata: {}, ...body })
     })
   );
 }

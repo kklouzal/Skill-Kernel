@@ -888,6 +888,11 @@ def test_observatory_event_and_trace_read_models_are_bounded_and_content_safe() 
             workspace_id="dev-01",
             limit=10,
         )
+        replay = await routes[("/admin/api/v1/replay/traces/{trace_id}", "GET")].endpoint(
+            trace_id=trace_id,
+            workspace_id="dev-01",
+            limit=10,
+        )
         object_detail = await routes[
             ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
         ].endpoint(
@@ -895,9 +900,9 @@ def test_observatory_event_and_trace_read_models_are_bounded_and_content_safe() 
             object_id=str(event.event_id),
             workspace_id="dev-01",
         )
-        return events, traces, detail, object_detail
+        return events, traces, detail, replay, object_detail
 
-    events, traces, detail, object_detail = asyncio.run(run())
+    events, traces, detail, replay, object_detail = asyncio.run(run())
 
     assert events.collection["source"] == "event_store.list_events"
     assert events.collection["items"][0]["event_id"] == str(event.event_id)
@@ -907,6 +912,10 @@ def test_observatory_event_and_trace_read_models_are_bounded_and_content_safe() 
     assert traces.collection["source"] == "observability_store.list_traces"
     assert traces.collection["items"][0]["trace_id"] == str(trace_id)
     assert detail.object["timeline"][0]["object_refs"][0]["object_id"] == str(event.event_id)
+    assert replay.object["schema_version"] == "skillkernel.observatory.trace-replay.v1"
+    assert replay.object["timeline"][0]["object_refs"][0]["object_id"] == str(event.event_id)
+    assert replay.object["replay_safety"]["reexecutes_work"] is False
+    assert replay.object["replay_safety"]["raw_content_included"] is False
     assert object_detail.object["object_type"] == "captured_event"
     assert object_detail.object["effects"]["payload_hash"] == event.payload_hash
     assert object_detail.object["content_policy"]["raw_available"] is False

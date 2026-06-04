@@ -154,6 +154,66 @@ export type ObjectResponse = AdminEnvelope<{ object: Record<string, unknown> }> 
   object: Record<string, unknown>;
 };
 
+export type CollectionResponse<TItem extends Record<string, unknown> = Record<string, unknown>> =
+  AdminEnvelope<{
+    collection: {
+      object_type: string;
+      title: string;
+      items: TItem[];
+      count: number;
+      limit: number;
+      cursor?: string | null;
+      next_cursor?: string | null;
+      source: string;
+      diagnostics: Record<string, unknown>;
+    };
+  }> & {
+    collection: {
+      object_type: string;
+      title: string;
+      items: TItem[];
+      count: number;
+      limit: number;
+      cursor?: string | null;
+      next_cursor?: string | null;
+      source: string;
+      diagnostics: Record<string, unknown>;
+    };
+  };
+
+export type TraceSummary = {
+  object_type: "trace";
+  object_id: string;
+  trace_id: string;
+  workspace_key?: string | null;
+  span_count: number;
+  statuses: string[];
+  operation_kinds: string[];
+  object_refs: Array<Record<string, unknown>>;
+  started_at: string;
+  last_event_at: string;
+  status: string;
+  title: string;
+  summary: string;
+  details_url: string;
+  content_policy: Record<string, unknown>;
+};
+
+export type TraceSpan = {
+  trace_id: string;
+  span_id: string;
+  parent_span_id?: string | null;
+  workspace_id?: string | null;
+  workspace_key?: string | null;
+  operation_name: string;
+  operation_kind: string;
+  status: string;
+  safe_attributes: Record<string, unknown>;
+  object_refs: Array<Record<string, unknown>>;
+  started_at: string;
+  ended_at?: string | null;
+};
+
 export type LiveEnvelope = {
   schema_version: string;
   seq: number;

@@ -1171,6 +1171,18 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   scripts/autoskill_observatory_live_smoke.py` proved
   `snapshot_seq=1780550603438`, `snapshot_cursor_seq=11`,
   `stale_outbox_seq=11`, and `live_outbox_seq=12` before deleting the smoke rows.
+- Observatory trace replay frontend remediation is implemented for Section 11:
+  the React Trace view now consumes `/admin/api/v1/traces` and
+  `/admin/api/v1/replay/traces/{trace_id}`, preserves a deep-linkable
+  `trace=` URL parameter, lists trace summaries, highlights touched pipeline
+  stations, exposes a span scrubber/waterfall, shows policy/gate badges,
+  object refs, diff metadata panels, and read-only replay safety flags without
+  adding a second control path. Validation passed with focused
+  `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py::test_observatory_event_and_trace_read_models_are_bounded_and_content_safe
+  -q`, full focused Observatory API tests (`30 passed`), `uv run ruff check
+  sidecar/autoskill/tests/test_observatory_api.py`, `npm run build --prefix
+  sidecar/autoskill/observatory`, and `git diff --check`.
 
 ## Next Gates
 

@@ -21,13 +21,24 @@ import type { EChartsOption } from "echarts";
 import {
   fetchObject,
   fetchSummary,
+  fetchTraceReplay,
+  fetchTraces,
   isSnapshotPayload,
   postAction,
   search,
   streamLive
 } from "./api";
 import type { ApiSession } from "./api";
-import type { Issue, LiveEnvelope, ObservatorySnapshot, Station, Subsystem } from "./types";
+import type {
+  HealthState,
+  Issue,
+  LiveEnvelope,
+  ObservatorySnapshot,
+  Station,
+  Subsystem,
+  TraceSpan,
+  TraceSummary
+} from "./types";
 import { AssemblyLine } from "./components/AssemblyLine";
 import { EChartPanel } from "./components/EChartPanel";
 import { Inspector } from "./components/Inspector";
@@ -61,6 +72,9 @@ function App() {
   const [view, setView] = useState<View>(initialView);
   const [selectedStationId, setSelectedStationId] = useState<string | undefined>(
     initialParams.get("station") ?? undefined
+  );
+  const [selectedTraceId, setSelectedTraceId] = useState<string | undefined>(
+    initialParams.get("trace") ?? undefined
   );
   const [selectedSubsystemId, setSelectedSubsystemId] = useState<string | undefined>(
     initialParams.get("subsystem") ?? undefined
@@ -100,6 +114,21 @@ function App() {
     queryKey: ["search", session.token, workspaceId, query],
     enabled: hasAdminToken && query.trim().length > 1,
     queryFn: () => search(session, query, workspaceId)
+  });
+
+  const tracesQuery = useQuery({
+    queryKey: ["traces", session.token, session.roles, workspaceId],
+    enabled: hasAdminToken && view === "trace",
+    queryFn: () => fetchTraces(session, workspaceId, 50),
+    retry: false
+  });
+  const traceItems = tracesQuery.data?.collection.items ?? [];
+  const effectiveTraceId = selectedTraceId ?? traceItems[0]?.trace_id;
+  const traceReplayQuery = useQuery({
+    queryKey: ["trace-replay", session.token, session.roles, workspaceId, effectiveTraceId],
+    enabled: hasAdminToken && view === "trace" && Boolean(effectiveTraceId),
+    queryFn: () => fetchTraceReplay(session, effectiveTraceId!, workspaceId, 150),
+    retry: false
   });
 
   const actionMutation = useMutation({
@@ -146,9 +175,24 @@ function App() {
     params.set("window", String(windowMinutes));
     if (selectedStationId) params.set("station", selectedStationId);
     if (selectedSubsystemId) params.set("subsystem", selectedSubsystemId);
+    if (selectedTraceId) params.set("trace", selectedTraceId);
     if (query.trim()) params.set("q", query.trim());
     window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
-  }, [query, selectedStationId, selectedSubsystemId, view, windowMinutes, workspaceId]);
+  }, [
+    query,
+    selectedStationId,
+    selectedSubsystemId,
+    selectedTraceId,
+    view,
+    windowMinutes,
+    workspaceId
+  ]);
+
+  useEffect(() => {
+    if (!selectedTraceId && traceItems[0]?.trace_id) {
+      setSelectedTraceId(traceItems[0].trace_id);
+    }
+  }, [selectedTraceId, traceItems]);
 
   useEffect(() => {
     if (!hasAdminToken) {
@@ -353,6 +397,9 @@ function App() {
                       if (result.object_type === "component") {
                         setSelectedStationId(result.object_id);
                         setView("cockpit");
+                      } else if (result.object_type === "trace") {
+                        setSelectedTraceId(result.object_id);
+                        setView("trace");
                       }
                     }}
                   >
@@ -390,7 +437,17 @@ function App() {
             />
           )}
           {view === "skills" && <SkillsAndTopology snapshot={snapshot} />}
-          {view === "trace" && <TraceAndInspector snapshot={snapshot} object={objectQuery.data?.object} />}
+          {view === "trace" && (
+            <TraceAndInspector
+              snapshot={snapshot}
+              traces={traceItems}
+              selectedTraceId={effectiveTraceId}
+              replayObject={traceReplayQuery.data?.object}
+              loading={tracesQuery.isLoading || traceReplayQuery.isLoading}
+              error={tracesQuery.error ?? traceReplayQuery.error}
+              onSelectTrace={setSelectedTraceId}
+            />
+          )}
           {view === "admin" && (
             <Admin
               snapshot={snapshot}
@@ -680,23 +737,252 @@ function SkillsAndTopology({ snapshot }: { snapshot: ObservatorySnapshot }) {
 
 function TraceAndInspector({
   snapshot,
-  object
+  traces,
+  selectedTraceId,
+  replayObject,
+  loading,
+  error,
+  onSelectTrace
 }: {
   snapshot: ObservatorySnapshot;
-  object?: Record<string, unknown>;
+  traces: TraceSummary[];
+  selectedTraceId?: string;
+  replayObject?: Record<string, unknown>;
+  loading: boolean;
+  error: unknown;
+  onSelectTrace: (traceId: string) => void;
 }) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const spans = useMemo(() => traceSpansFromReplay(replayObject), [replayObject]);
+  const activeSpan = spans[Math.min(activeIndex, Math.max(0, spans.length - 1))];
+  const touchedStationIds = useMemo(() => {
+    const ids = new Set(spans.map((span) => stationIdForOperation(span.operation_kind)).filter(Boolean));
+    return ids as Set<string>;
+  }, [spans]);
+  const activeStationId = activeSpan ? stationIdForOperation(activeSpan.operation_kind) : undefined;
+  const selectedTrace = traces.find((trace) => trace.trace_id === selectedTraceId);
+  const replaySafety = replayObject?.replay_safety as Record<string, unknown> | undefined;
+  const diffPanels = diffPanelPayload(activeSpan);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [selectedTraceId]);
+
+  useEffect(() => {
+    if (activeIndex >= spans.length) {
+      setActiveIndex(Math.max(0, spans.length - 1));
+    }
+  }, [activeIndex, spans.length]);
+
   return (
     <section className="trace-page">
-      <div>
-        <h2>Trace Replay And Object Microscope</h2>
-        <p>
-          Replays use recorded spans and read models only. They do not re-run jobs, mutate skills, or reveal
-          raw content.
-        </p>
+      <div className="trace-layout">
+        <aside className="trace-list" aria-label="Trace list">
+          <h2>Trace Replay</h2>
+          {loading ? <p>Loading traces.</p> : null}
+          {error ? <p>{error instanceof Error ? error.message : "Trace replay unavailable."}</p> : null}
+          {traces.length ? (
+            traces.map((trace) => (
+              <button
+                key={trace.trace_id}
+                className={trace.trace_id === selectedTraceId ? "is-selected" : ""}
+                type="button"
+                onClick={() => onSelectTrace(trace.trace_id)}
+              >
+                <span className={`status-dot health-${traceHealth(trace.status)}`} />
+                <strong>{traceTitle(trace)}</strong>
+                <small>
+                  {trace.span_count} spans / {trace.operation_kinds.slice(0, 3).join(", ") || "unknown"}
+                </small>
+              </button>
+            ))
+          ) : (
+            <p>No traces in this workspace window.</p>
+          )}
+        </aside>
+
+        <section className="trace-replay">
+          <div className="trace-replay__header">
+            <div>
+              <h2>{selectedTrace ? traceTitle(selectedTrace) : "No Trace Selected"}</h2>
+              <p>{String(replayObject?.summary ?? selectedTrace?.summary ?? "Select a trace to inspect recorded spans.")}</p>
+            </div>
+            <div className="trace-badges">
+              <span>{String(replaySafety?.reexecutes_work === false ? "read-only replay" : "replay state unknown")}</span>
+              <span>{String(replaySafety?.raw_content_included === false ? "redacted bundle" : "content policy unknown")}</span>
+              {activeSpan ? <span>{activeSpan.status}</span> : null}
+            </div>
+          </div>
+
+          <div className="replay-station-strip">
+            {snapshot.pipeline.stations.map((station) => {
+              const touched = touchedStationIds.has(station.component_id);
+              const active = activeStationId === station.component_id;
+              return (
+                <div
+                  key={station.component_id}
+                  className={`replay-station ${touched ? "is-touched" : ""} ${active ? "is-active" : ""}`}
+                >
+                  <span className={`status-dot health-${station.health}`} />
+                  <strong>{station.display_name}</strong>
+                  <small>{station.reason_codes[0] ?? "within bounds"}</small>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="trace-scrubber">
+            <label>
+              Span
+              <input
+                type="range"
+                min={0}
+                max={Math.max(0, spans.length - 1)}
+                value={Math.min(activeIndex, Math.max(0, spans.length - 1))}
+                disabled={spans.length === 0}
+                onChange={(event) => setActiveIndex(Number(event.target.value))}
+              />
+            </label>
+            <span>
+              {spans.length ? activeIndex + 1 : 0} / {spans.length}
+            </span>
+          </div>
+
+          <div className="span-waterfall">
+            {spans.map((span, index) => (
+              <button
+                key={span.span_id}
+                className={index === activeIndex ? "is-active" : ""}
+                type="button"
+                onClick={() => setActiveIndex(index)}
+                title={`${span.operation_kind}: ${span.operation_name}`}
+              >
+                <span className={`span-bar status-${span.status}`} style={{ width: `${spanWidth(span)}%` }} />
+                <strong>{span.operation_kind}</strong>
+                <small>{span.status}</small>
+              </button>
+            ))}
+          </div>
+
+          <div className="trace-detail-grid">
+            <section>
+              <h3>Span Detail</h3>
+              <Inspector value={activeSpan ?? replayObject ?? { state: "empty" }} />
+            </section>
+            <section>
+              <h3>Object Links</h3>
+              <div className="trace-link-list">
+                {activeSpan?.object_refs.length ? (
+                  activeSpan.object_refs.map((ref, index) => (
+                    <a
+                      key={`${String(ref.object_type)}:${String(ref.object_id)}:${index}`}
+                      href={`/admin?view=trace&workspace=${encodeURIComponent(
+                        snapshot.workspace_id ?? ""
+                      )}&trace=${encodeURIComponent(selectedTraceId ?? "")}`}
+                    >
+                      <span>{String(ref.object_type ?? "object")}</span>
+                      <strong>{String(ref.object_id ?? "unknown")}</strong>
+                    </a>
+                  ))
+                ) : (
+                  <p>No object refs recorded for this span.</p>
+                )}
+              </div>
+            </section>
+          </div>
+
+          <div className="trace-detail-grid">
+            <section>
+              <h3>Gate And Policy Badges</h3>
+              <div className="trace-badges">
+                {gateBadges(activeSpan).map((badge) => (
+                  <span key={badge}>{badge}</span>
+                ))}
+              </div>
+            </section>
+            <section>
+              <h3>Diff Panels</h3>
+              <Inspector value={diffPanels} />
+            </section>
+          </div>
+        </section>
       </div>
-      <Inspector value={object ?? snapshot.pipeline.invariants} />
     </section>
   );
+}
+
+function traceSpansFromReplay(replayObject?: Record<string, unknown>): TraceSpan[] {
+  const timeline = replayObject?.timeline;
+  return Array.isArray(timeline) ? (timeline as TraceSpan[]) : [];
+}
+
+function traceTitle(trace: TraceSummary) {
+  return trace.trace_id.slice(0, 8);
+}
+
+function traceHealth(status: string): HealthState {
+  if (["ok", "healthy"].includes(status)) return "healthy";
+  if (["running", "unknown"].includes(status)) return "unknown";
+  return "degraded";
+}
+
+function stationIdForOperation(operationKind: string) {
+  const map: Record<string, string> = {
+    archive: "activation_curation",
+    broker: "broker_runtime",
+    compiler: "context_compiler",
+    embedding_call: "model_embedding",
+    evaluator: "evaluator_probes",
+    evidence: "evidence_memory",
+    evolution: "topology_operations",
+    ingest: "spool_ingest",
+    job: "scheduler_jobs",
+    llm_call: "model_embedding",
+    memory: "evidence_memory",
+    plugin_capture: "openclaw_live_capture",
+    promotion: "activation_curation",
+    redaction: "redaction_taint",
+    retrieval: "retrieval_indexing",
+    rollback: "canary_rollback",
+    scanner: "scanner_security",
+    scheduler: "scheduler_jobs",
+    tool_attribution: "audit_trace",
+    writer: "deterministic_writer"
+  };
+  return map[operationKind] ?? "audit_trace";
+}
+
+function spanWidth(span: TraceSpan) {
+  const started = Date.parse(span.started_at);
+  const ended = Date.parse(span.ended_at ?? span.started_at);
+  if (!Number.isFinite(started) || !Number.isFinite(ended)) return 18;
+  const ms = Math.max(1, ended - started);
+  return Math.max(18, Math.min(100, 18 + Math.log10(ms + 1) * 22));
+}
+
+function gateBadges(span?: TraceSpan) {
+  if (!span) return ["no-span-selected"];
+  const badges = new Set<string>([span.operation_kind, span.status]);
+  for (const [key, value] of Object.entries(span.safe_attributes ?? {})) {
+    if (key.includes("policy") || key.includes("gate") || key.includes("verdict")) {
+      badges.add(`${key}:${String(value)}`);
+    }
+  }
+  if (!badges.size) badges.add("no-gate-metadata");
+  return Array.from(badges);
+}
+
+function diffPanelPayload(span?: TraceSpan) {
+  const attributes = span?.safe_attributes ?? {};
+  const diffEntries = Object.entries(attributes).filter(([key]) => key.toLowerCase().includes("diff"));
+  if (!diffEntries.length) {
+    return {
+      available: false,
+      reason: "no-diff-metadata-for-selected-span",
+      span_id: span?.span_id ?? null
+    };
+  }
+  return Object.fromEntries(diffEntries);
 }
 
 function Admin({
