@@ -13,6 +13,10 @@ from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 
 EMBEDDING_DIM = 1536
+EMBEDDING_OBJECT_TYPE_BODY_INDEX_DOCUMENT = "body_index_document"
+EMBEDDING_OBJECT_TYPE_EVIDENCE_ITEM = "evidence_item"
+EMBEDDING_OBJECT_TYPE_EXTERNAL_SKILL = "external_skill"
+EMBEDDING_OBJECT_TYPE_HISTORICAL_IMPORT_CHUNK = "historical_import_chunk"
 
 
 @dataclass(frozen=True)

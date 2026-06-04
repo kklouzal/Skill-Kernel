@@ -8,6 +8,12 @@ from uuid import UUID
 
 import asyncpg
 
+from autoskill.db.embeddings import (
+    EMBEDDING_OBJECT_TYPE_BODY_INDEX_DOCUMENT,
+    EMBEDDING_OBJECT_TYPE_EVIDENCE_ITEM,
+    EMBEDDING_OBJECT_TYPE_EXTERNAL_SKILL,
+    EMBEDDING_OBJECT_TYPE_HISTORICAL_IMPORT_CHUNK,
+)
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 
@@ -393,6 +399,15 @@ class AsyncpgObservabilityStore(AsyncpgPoolOwner):
                 return []
             rows = await conn.fetch(
                 """
+                WITH active_embedding_profile AS (
+                  SELECT embedding_profile_id
+                  FROM autoskill.embedding_profiles
+                  WHERE $1::uuid IS NOT NULL
+                    AND workspace_id = $1
+                    AND status = 'active'
+                  ORDER BY updated_at DESC
+                  LIMIT 1
+                )
                 SELECT
                   ts.trace_id,
                   $3::text AS workspace_key,
@@ -545,6 +560,15 @@ class AsyncpgObservabilityStore(AsyncpgPoolOwner):
             )
             embedding_backlog = await conn.fetchrow(
                 """
+                WITH active_embedding_profile AS (
+                  SELECT embedding_profile_id
+                  FROM autoskill.embedding_profiles
+                  WHERE $1::uuid IS NOT NULL
+                    AND workspace_id = $1
+                    AND status = 'active'
+                  ORDER BY updated_at DESC
+                  LIMIT 1
+                )
                 SELECT
                   (
                     SELECT count(*)::int
@@ -561,8 +585,20 @@ class AsyncpgObservabilityStore(AsyncpgPoolOwner):
                         SELECT 1
                         FROM autoskill.embeddings e
                         WHERE e.workspace_id = ei.workspace_id
-                          AND e.object_type = 'evidence'
+                          AND e.object_type = $2
                           AND e.object_id = ei.evidence_id
+                          AND (
+                            (
+                              EXISTS (SELECT 1 FROM active_embedding_profile)
+                              AND e.embedding_profile_id = (
+                                SELECT embedding_profile_id FROM active_embedding_profile
+                              )
+                            )
+                            OR (
+                              NOT EXISTS (SELECT 1 FROM active_embedding_profile)
+                              AND e.embedding_profile_id IS NULL
+                            )
+                          )
                       )
                   ) AS evidence_items_unembedded,
                   (
@@ -573,12 +609,79 @@ class AsyncpgObservabilityStore(AsyncpgPoolOwner):
                         SELECT 1
                         FROM autoskill.embeddings e
                         WHERE e.workspace_id = d.workspace_id
-                          AND e.object_type = 'body_index_document'
+                          AND e.object_type = $3
                           AND e.object_id = d.body_index_document_id
+                          AND (
+                            (
+                              EXISTS (SELECT 1 FROM active_embedding_profile)
+                              AND e.embedding_profile_id = (
+                                SELECT embedding_profile_id FROM active_embedding_profile
+                              )
+                            )
+                            OR (
+                              NOT EXISTS (SELECT 1 FROM active_embedding_profile)
+                              AND e.embedding_profile_id IS NULL
+                            )
+                          )
                       )
-                  ) AS body_documents_unembedded
+                  ) AS body_documents_unembedded,
+                  (
+                    SELECT count(*)::int
+                    FROM autoskill.external_skill_inventory x
+                    WHERE ($1::uuid IS NULL OR x.workspace_id = $1)
+                      AND x.status IN ('visible', 'changed')
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM autoskill.embeddings e
+                        WHERE e.workspace_id = x.workspace_id
+                          AND e.object_type = $4
+                          AND e.object_id = x.external_skill_id
+                          AND (
+                            (
+                              EXISTS (SELECT 1 FROM active_embedding_profile)
+                              AND e.embedding_profile_id = (
+                                SELECT embedding_profile_id FROM active_embedding_profile
+                              )
+                            )
+                            OR (
+                              NOT EXISTS (SELECT 1 FROM active_embedding_profile)
+                              AND e.embedding_profile_id IS NULL
+                            )
+                          )
+                      )
+                  ) AS external_skills_unembedded,
+                  (
+                    SELECT count(*)::int
+                    FROM autoskill.historical_import_chunks c
+                    WHERE ($1::uuid IS NULL OR c.workspace_id = $1)
+                      AND c.status = 'observed'
+                      AND trim(c.redacted_text) <> ''
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM autoskill.embeddings e
+                        WHERE e.workspace_id = c.workspace_id
+                          AND e.object_type = $5
+                          AND e.object_id = c.historical_import_chunk_id
+                          AND (
+                            (
+                              EXISTS (SELECT 1 FROM active_embedding_profile)
+                              AND e.embedding_profile_id = (
+                                SELECT embedding_profile_id FROM active_embedding_profile
+                              )
+                            )
+                            OR (
+                              NOT EXISTS (SELECT 1 FROM active_embedding_profile)
+                              AND e.embedding_profile_id IS NULL
+                            )
+                          )
+                      )
+                  ) AS historical_chunks_unembedded
                 """,
                 workspace_id,
+                EMBEDDING_OBJECT_TYPE_EVIDENCE_ITEM,
+                EMBEDDING_OBJECT_TYPE_BODY_INDEX_DOCUMENT,
+                EMBEDDING_OBJECT_TYPE_EXTERNAL_SKILL,
+                EMBEDDING_OBJECT_TYPE_HISTORICAL_IMPORT_CHUNK,
             )
             retrieval_rows = await conn.fetch(
                 """

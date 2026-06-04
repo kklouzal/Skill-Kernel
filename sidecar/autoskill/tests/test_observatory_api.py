@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -14,7 +15,14 @@ from autoskill.core.config import get_settings
 from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope
 from autoskill.core.hashing import sha256_text
+from autoskill.db import observability as observability_module
 from autoskill.db.broker_policy import NullBrokerPolicyStore
+from autoskill.db.embeddings import (
+    EMBEDDING_OBJECT_TYPE_BODY_INDEX_DOCUMENT,
+    EMBEDDING_OBJECT_TYPE_EVIDENCE_ITEM,
+    EMBEDDING_OBJECT_TYPE_EXTERNAL_SKILL,
+    EMBEDDING_OBJECT_TYPE_HISTORICAL_IMPORT_CHUNK,
+)
 from autoskill.db.evaluations import EvaluationReviewRecord, NullEvaluationStore
 from autoskill.db.events import NullEventStore
 from autoskill.db.jobs import JobQueueSummary
@@ -1610,6 +1618,24 @@ def test_observatory_zero_count_read_models_are_not_missing_required_signals() -
         for station in stations
         if station["component_id"] == "spool_ingest"
     )
+
+
+def test_observatory_embedding_backlog_uses_canonical_embedding_object_types() -> None:
+    operator_metrics_source = inspect.getsource(
+        observability_module.AsyncpgObservabilityStore.operator_metrics
+    )
+
+    assert "active_embedding_profile AS" in operator_metrics_source
+    assert "e.embedding_profile_id = (" in operator_metrics_source
+    assert "e.object_type = $2" in operator_metrics_source
+    assert "e.object_type = $3" in operator_metrics_source
+    assert "e.object_type = $4" in operator_metrics_source
+    assert "e.object_type = $5" in operator_metrics_source
+    assert "e.object_type = 'evidence'" not in operator_metrics_source
+    assert EMBEDDING_OBJECT_TYPE_EVIDENCE_ITEM == "evidence_item"
+    assert EMBEDDING_OBJECT_TYPE_BODY_INDEX_DOCUMENT == "body_index_document"
+    assert EMBEDDING_OBJECT_TYPE_EXTERNAL_SKILL == "external_skill"
+    assert EMBEDDING_OBJECT_TYPE_HISTORICAL_IMPORT_CHUNK == "historical_import_chunk"
 
 
 def test_observatory_planned_evaluations_are_not_failures() -> None:
