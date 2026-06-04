@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import type { EChartsOption } from "echarts";
 import {
+  fetchActionAudits,
   fetchContextArtifacts,
   fetchObject,
   fetchSkillDetail,
@@ -167,15 +168,24 @@ function App() {
     queryFn: () => fetchContextArtifacts(session, workspaceId, 75),
     retry: false
   });
+  const actionAuditsQuery = useQuery({
+    queryKey: ["action-audits", session.token, session.roles, workspaceId],
+    enabled: hasAdminToken && view === "admin",
+    queryFn: () => fetchActionAudits(session, workspaceId, 50),
+    retry: false
+  });
 
   const actionMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (action: string) =>
       postAction(session, {
         workspace_id: workspaceId,
-        action: "verify_audit_chain",
-        idempotency_key: `observatory-ui-${Date.now()}`,
-        reason: "operator requested Observatory UI audit proof"
-      })
+        action,
+        idempotency_key: `observatory-ui-${action}-${Date.now()}`,
+        reason: `operator requested Observatory UI dry-run for ${action}`
+      }),
+    onSuccess: () => {
+      void actionAuditsQuery.refetch();
+    }
   });
 
   useEffect(() => {
@@ -524,7 +534,9 @@ function App() {
               snapshot={snapshot}
               actionPending={actionMutation.isPending}
               actionResult={actionMutation.data?.receipt}
-              onAction={() => actionMutation.mutate()}
+              actionAudits={actionAuditsQuery.data?.collection.items ?? []}
+              auditsLoading={actionAuditsQuery.isLoading}
+              onAction={(action) => actionMutation.mutate(action)}
             />
           )}
         </>
@@ -1175,22 +1187,47 @@ function Admin({
   snapshot,
   actionPending,
   actionResult,
+  actionAudits,
+  auditsLoading,
   onAction
 }: {
   snapshot: ObservatorySnapshot;
   actionPending: boolean;
   actionResult?: Record<string, unknown>;
-  onAction: () => void;
+  actionAudits: Array<Record<string, unknown>>;
+  auditsLoading: boolean;
+  onAction: (action: string) => void;
 }) {
+  const operatorActions = [
+    "verify_audit_chain",
+    "refresh_read_models",
+    "verify_live_stream",
+    "storage_health_check",
+    "retention_dry_run",
+    "model_profile_qualify",
+    "embedding_profile_qualify",
+    "broker_calibrate"
+  ];
+
   return (
     <section className="admin-page">
       <div className="admin-actions">
         <h2>Operator Action Gateway</h2>
         <p>Actions are role-checked, idempotency-keyed, policy-receipted, and written to audit.</p>
-        <button type="button" onClick={onAction} disabled={actionPending}>
-          <ShieldCheck aria-hidden="true" />
-          <span>{actionPending ? "Recording..." : "Audit Verify Action"}</span>
-        </button>
+        <div className="action-button-grid">
+          {operatorActions.map((action) => (
+            <button
+              key={action}
+              type="button"
+              onClick={() => onAction(action)}
+              disabled={actionPending}
+              title={`${action} dry-run`}
+            >
+              <ShieldCheck aria-hidden="true" />
+              <span>{actionPending ? "Recording..." : action.replaceAll("_", " ")}</span>
+            </button>
+          ))}
+        </div>
       </div>
       <div className="admin-columns">
         <section>
@@ -1207,6 +1244,23 @@ function Admin({
           <Inspector value={actionResult ?? snapshot.auth} />
         </section>
       </div>
+      <section>
+        <h3>Action Audit</h3>
+        {auditsLoading ? <p>Loading action audit records.</p> : null}
+        <div className="audit-row-grid">
+          {actionAudits.length ? (
+            actionAudits.map((audit) => (
+              <div key={String(audit.object_id ?? audit.action_id ?? JSON.stringify(audit))} className="audit-row">
+                <strong>{String(audit.action_kind ?? audit.title ?? "operator action")}</strong>
+                <span>{String(audit.result ?? "unknown")}</span>
+                <small>{String(audit.created_at ?? audit.summary ?? "")}</small>
+              </div>
+            ))
+          ) : (
+            <p>No action audit records in the current workspace.</p>
+          )}
+        </div>
+      </section>
     </section>
   );
 }

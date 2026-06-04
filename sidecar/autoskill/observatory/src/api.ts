@@ -116,6 +116,12 @@ export function fetchContextArtifacts(session: ApiSession, workspaceId: string, 
   return fetchJson<CollectionResponse>(`/context/artifacts?${params}`, session);
 }
 
+export function fetchActionAudits(session: ApiSession, workspaceId: string, limit = 25) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  return fetchJson<CollectionResponse>(`/actions/audit?${params}`, session);
+}
+
 export function fetchTraceReplay(
   session: ApiSession,
   traceId: string,

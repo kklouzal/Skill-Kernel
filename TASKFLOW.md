@@ -1194,6 +1194,14 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   --prefix sidecar/autoskill/observatory`, focused Observatory API tests
   (`30 passed`), `uv run ruff check
   sidecar/autoskill/tests/test_observatory_api.py`, and `git diff --check`.
+- Observatory operator action frontend remediation is implemented for Sections
+  4.3/16.3/21: the React Admin view now exposes multiple dry-run operator
+  actions through the existing `/admin/api/v1/actions` policy/audit gateway,
+  refreshes `/admin/api/v1/actions/audit` after accepted receipts, and shows
+  persisted action audit rows beside command-palette navigation and receipt
+  inspection. Validation passed with `npm run build --prefix
+  sidecar/autoskill/observatory`, focused Observatory API tests (`30 passed`),
+  and `git diff --check`.
 
 ## Next Gates
 

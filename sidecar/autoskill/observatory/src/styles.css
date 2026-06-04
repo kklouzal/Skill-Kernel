@@ -1105,6 +1105,12 @@ h3 {
   padding: 0 12px;
 }
 
+.action-button-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .admin-actions button:disabled {
   cursor: wait;
   opacity: 0.6;
@@ -1114,6 +1120,30 @@ h3 {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(360px, 1.1fr);
   gap: 12px;
+}
+
+.audit-row-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.audit-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.6fr) minmax(80px, 0.25fr) minmax(0, 1fr);
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+}
+
+.audit-row span {
+  color: var(--cyan);
+}
+
+.audit-row small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .login-shell,
