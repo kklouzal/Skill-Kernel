@@ -89,3 +89,18 @@ def test_observatory_frontend_render_diagnostics_are_visible() -> None:
     assert "duplicate_snapshot_suppression_count" in app_source
     assert "sequence_gap_reload_count" in app_source
     assert "Frontend Diagnostics" in app_source
+
+
+def test_observatory_guarded_action_dialog_is_present() -> None:
+    app_source = (
+        REPO_ROOT / "sidecar/autoskill/observatory/src/App.tsx"
+    ).read_text(encoding="utf-8")
+    styles = (
+        REPO_ROOT / "sidecar/autoskill/observatory/src/styles.css"
+    ).read_text(encoding="utf-8")
+
+    assert "pendingAction" in app_source
+    assert 'role="dialog"' in app_source
+    assert "aria-modal" in app_source
+    assert "Confirm dry-run" in app_source
+    assert "action-dialog" in styles

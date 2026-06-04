@@ -1116,6 +1116,48 @@ h3 {
   opacity: 0.6;
 }
 
+.action-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgb(7 14 18 / 0.72);
+}
+
+.action-dialog {
+  display: grid;
+  gap: 14px;
+  width: min(540px, 100%);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 18px;
+  background: var(--panel);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 0.4);
+}
+
+.action-dialog h3 {
+  margin: 0;
+  text-transform: capitalize;
+}
+
+.action-dialog textarea {
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+}
+
+.action-dialog__buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.action-dialog__buttons button {
+  min-height: 38px;
+}
+
 .admin-columns {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(360px, 1.1fr);

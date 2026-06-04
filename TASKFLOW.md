@@ -1234,6 +1234,12 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   Admin view. Validation passed with focused pytest (`4 passed`), ruff,
   `npm run build --prefix sidecar/autoskill/observatory`, `git diff --check`,
   and the Observatory acceptance report showing `implemented_equivalent=3`.
+- Observatory guarded action dialog remediation is implemented for Section
+  24.31: Admin action buttons now open an explicit modal confirmation with an
+  operator reason before submitting any dry-run action to the audited action
+  gateway. Validation passed with focused pytest (`5 passed`), ruff,
+  `npm run build --prefix sidecar/autoskill/observatory`, `git diff --check`,
+  and the Observatory acceptance report showing `implemented_equivalent=2`.
 
 ## Next Gates
 

@@ -854,3 +854,6 @@ Acceptance:
   diagnostics: render count, session mount count, live snapshot application
   count, duplicate snapshot suppression count, summary seed count, and
   sequence-gap reload count are visible beside the operator action/audit tools.
+- guarded Observatory operator actions now require an explicit confirmation
+  dialog and reason before the frontend submits the dry-run action request to
+  the audited action gateway.

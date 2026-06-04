@@ -102,7 +102,7 @@ DEVELOPER_CHECKLIST: tuple[ObservatoryItem, ...] = (
     ObservatoryItem("24.28", "Build model/embedding profile pages.", ("model_embedding cockpit and profile routes",)),
     ObservatoryItem("24.29", "Build storage/read-model pages.", ("storage_db cockpit and storage route",)),
     ObservatoryItem("24.30", "Build Observatory self-health page.", ("observatory_admin cockpit and route",)),
-    ObservatoryItem("24.31", "Add guarded action dialogs.", ("Admin dry-run action gateway buttons and policy receipts",), "implemented_equivalent"),
+    ObservatoryItem("24.31", "Add guarded action dialogs.", ("Admin action-dialog confirmation flow in observatory/src/App.tsx", "Admin dry-run action gateway buttons and policy receipts", "action audit route coverage")),
     ObservatoryItem("24.32", "Add audit chain verification UI.", ("Admin verify_audit_chain action",)),
     ObservatoryItem("24.33", "Add PixiJS particle overlay.", ("ParticleLayer component",)),
     ObservatoryItem("24.34", "Add reduced-motion, low-power, keyboard, and accessibility modes.", ("reduced motion toggle and semantic controls",)),

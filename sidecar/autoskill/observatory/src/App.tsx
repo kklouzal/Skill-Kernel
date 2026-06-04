@@ -208,12 +208,12 @@ function App() {
   });
 
   const actionMutation = useMutation({
-    mutationFn: (action: string) =>
+    mutationFn: ({ action, reason }: { action: string; reason: string }) =>
       postAction(session, {
         workspace_id: workspaceId,
         action,
         idempotency_key: `observatory-ui-${action}-${Date.now()}`,
-        reason: `operator requested Observatory UI dry-run for ${action}`
+        reason
       }),
     onSuccess: () => {
       void actionAuditsQuery.refetch();
@@ -598,7 +598,7 @@ function App() {
               actionResult={actionMutation.data?.receipt}
               actionAudits={actionAuditsQuery.data?.collection.items ?? []}
               auditsLoading={actionAuditsQuery.isLoading}
-              onAction={(action) => actionMutation.mutate(action)}
+              onAction={(action, reason) => actionMutation.mutate({ action, reason })}
             />
           )}
         </>
@@ -1260,8 +1260,10 @@ function Admin({
   actionResult?: Record<string, unknown>;
   actionAudits: Array<Record<string, unknown>>;
   auditsLoading: boolean;
-  onAction: (action: string) => void;
+  onAction: (action: string, reason: string) => void;
 }) {
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [actionReason, setActionReason] = useState("");
   const operatorActions = [
     "verify_audit_chain",
     "refresh_read_models",
@@ -1272,6 +1274,9 @@ function Admin({
     "embedding_profile_qualify",
     "broker_calibrate"
   ];
+  const defaultReason = pendingAction
+    ? `operator confirmed Observatory UI dry-run for ${pendingAction}`
+    : "";
 
   return (
     <section className="admin-page">
@@ -1283,7 +1288,10 @@ function Admin({
             <button
               key={action}
               type="button"
-              onClick={() => onAction(action)}
+              onClick={() => {
+                setPendingAction(action);
+                setActionReason(`operator confirmed Observatory UI dry-run for ${action}`);
+              }}
               disabled={actionPending}
               title={`${action} dry-run`}
             >
@@ -1293,6 +1301,41 @@ function Admin({
           ))}
         </div>
       </div>
+      {pendingAction ? (
+        <div className="action-dialog-backdrop" role="presentation">
+          <section
+            className="action-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="action-dialog-title"
+          >
+            <h3 id="action-dialog-title">{pendingAction.replaceAll("_", " ")}</h3>
+            <label>
+              Reason
+              <textarea
+                value={actionReason}
+                placeholder={defaultReason}
+                onChange={(event) => setActionReason(event.target.value)}
+              />
+            </label>
+            <div className="action-dialog__buttons">
+              <button type="button" onClick={() => setPendingAction(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={actionPending}
+                onClick={() => {
+                  onAction(pendingAction, actionReason.trim() || defaultReason);
+                  setPendingAction(null);
+                }}
+              >
+                {actionPending ? "Recording..." : "Confirm dry-run"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
       <div className="admin-columns">
         <section>
           <h3>Command Palette</h3>
