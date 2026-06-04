@@ -19,8 +19,12 @@ import {
 } from "lucide-react";
 import type { EChartsOption } from "echarts";
 import {
+  fetchContextArtifacts,
   fetchObject,
+  fetchSkillDetail,
+  fetchSkills,
   fetchSummary,
+  fetchTopology,
   fetchTraceReplay,
   fetchTraces,
   isSnapshotPayload,
@@ -76,6 +80,9 @@ function App() {
   const [selectedTraceId, setSelectedTraceId] = useState<string | undefined>(
     initialParams.get("trace") ?? undefined
   );
+  const [selectedSkillId, setSelectedSkillId] = useState<string | undefined>(
+    initialParams.get("skill") ?? undefined
+  );
   const [selectedSubsystemId, setSelectedSubsystemId] = useState<string | undefined>(
     initialParams.get("subsystem") ?? undefined
   );
@@ -130,6 +137,36 @@ function App() {
     queryFn: () => fetchTraceReplay(session, effectiveTraceId!, workspaceId, 150),
     retry: false
   });
+  const skillsQuery = useQuery({
+    queryKey: ["skills", session.token, session.roles, workspaceId],
+    enabled: hasAdminToken && view === "skills",
+    queryFn: () => fetchSkills(session, workspaceId, 100),
+    retry: false
+  });
+  const skillItems = skillsQuery.data?.collection.items ?? [];
+  const effectiveSkillId =
+    selectedSkillId ??
+    skillIdentifier(skillItems[0]) ??
+    snapshot?.pipeline.stations.find((station) => station.component_id === "skill_ir_graph_ir")
+      ?.component_id;
+  const skillDetailQuery = useQuery({
+    queryKey: ["skill-detail", session.token, session.roles, workspaceId, effectiveSkillId],
+    enabled: hasAdminToken && view === "skills" && Boolean(effectiveSkillId),
+    queryFn: () => fetchSkillDetail(session, effectiveSkillId!, workspaceId),
+    retry: false
+  });
+  const topologyQuery = useQuery({
+    queryKey: ["topology", session.token, session.roles, workspaceId, windowMinutes],
+    enabled: hasAdminToken && view === "skills",
+    queryFn: () => fetchTopology(session, workspaceId, windowMinutes),
+    retry: false
+  });
+  const contextArtifactsQuery = useQuery({
+    queryKey: ["context-artifacts", session.token, session.roles, workspaceId],
+    enabled: hasAdminToken && view === "skills",
+    queryFn: () => fetchContextArtifacts(session, workspaceId, 75),
+    retry: false
+  });
 
   const actionMutation = useMutation({
     mutationFn: () =>
@@ -176,6 +213,7 @@ function App() {
     if (selectedStationId) params.set("station", selectedStationId);
     if (selectedSubsystemId) params.set("subsystem", selectedSubsystemId);
     if (selectedTraceId) params.set("trace", selectedTraceId);
+    if (selectedSkillId) params.set("skill", selectedSkillId);
     if (query.trim()) params.set("q", query.trim());
     window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
   }, [
@@ -183,6 +221,7 @@ function App() {
     selectedStationId,
     selectedSubsystemId,
     selectedTraceId,
+    selectedSkillId,
     view,
     windowMinutes,
     workspaceId
@@ -193,6 +232,13 @@ function App() {
       setSelectedTraceId(traceItems[0].trace_id);
     }
   }, [selectedTraceId, traceItems]);
+
+  useEffect(() => {
+    const firstSkillId = skillIdentifier(skillItems[0]);
+    if (!selectedSkillId && firstSkillId) {
+      setSelectedSkillId(firstSkillId);
+    }
+  }, [selectedSkillId, skillItems]);
 
   useEffect(() => {
     if (!hasAdminToken) {
@@ -400,6 +446,9 @@ function App() {
                       } else if (result.object_type === "trace") {
                         setSelectedTraceId(result.object_id);
                         setView("trace");
+                      } else if (result.object_type === "skill") {
+                        setSelectedSkillId(result.object_id);
+                        setView("skills");
                       }
                     }}
                   >
@@ -436,7 +485,29 @@ function App() {
               object={objectQuery.data?.object}
             />
           )}
-          {view === "skills" && <SkillsAndTopology snapshot={snapshot} />}
+          {view === "skills" && (
+            <SkillsAndTopology
+              snapshot={snapshot}
+              skills={skillItems}
+              selectedSkillId={effectiveSkillId}
+              skillDetail={skillDetailQuery.data?.object}
+              topology={topologyQuery.data?.object}
+              contextArtifacts={contextArtifactsQuery.data?.collection.items ?? []}
+              loading={
+                skillsQuery.isLoading ||
+                skillDetailQuery.isLoading ||
+                topologyQuery.isLoading ||
+                contextArtifactsQuery.isLoading
+              }
+              error={
+                skillsQuery.error ??
+                skillDetailQuery.error ??
+                topologyQuery.error ??
+                contextArtifactsQuery.error
+              }
+              onSelectSkill={setSelectedSkillId}
+            />
+          )}
           {view === "trace" && (
             <TraceAndInspector
               snapshot={snapshot}
@@ -706,33 +777,148 @@ function Cockpit({
   );
 }
 
-function SkillsAndTopology({ snapshot }: { snapshot: ObservatorySnapshot }) {
+function SkillsAndTopology({
+  snapshot,
+  skills,
+  selectedSkillId,
+  skillDetail,
+  topology,
+  contextArtifacts,
+  loading,
+  error,
+  onSelectSkill
+}: {
+  snapshot: ObservatorySnapshot;
+  skills: Array<Record<string, unknown>>;
+  selectedSkillId?: string;
+  skillDetail?: Record<string, unknown>;
+  topology?: Record<string, unknown>;
+  contextArtifacts: Array<Record<string, unknown>>;
+  loading: boolean;
+  error: unknown;
+  onSelectSkill: (skillId: string) => void;
+}) {
   const skillStations = snapshot.pipeline.stations.filter((station) =>
     ["skill_ir_graph_ir", "topology_operations", "activation_curation", "context_compiler"].includes(
       station.component_id
     )
   );
+  const selectedSkill = skills.find((skill) => skillIdentifier(skill) === selectedSkillId);
+  const diagnostics = (skillDetail?.diagnostics as Record<string, unknown> | undefined) ?? selectedSkill;
+  const contextForSkill = contextArtifacts.filter((artifact) =>
+    selectedSkillId ? JSON.stringify(artifact).includes(selectedSkillId) : true
+  );
+
   return (
     <section className="topology-page">
-      <div>
-        <h2>Skill And Topology Lens</h2>
-        <p>
-          SkillIR, SkillGraphIR, package planning, context budget, activation, curation, and rollback
-          surfaces are linked through the component cockpits below.
-        </p>
-      </div>
-      <div className="station-grid">
-        {skillStations.map((station) => (
-          <div key={station.component_id} className="topology-tile">
-            <span className={`status-dot health-${station.health}`} />
-            <strong>{station.display_name}</strong>
-            <small>{station.object_kinds.join(" / ")}</small>
+      <div className="skill-layout">
+        <aside className="skill-list" aria-label="Skill library">
+          <h2>Skill Library</h2>
+          {loading ? <p>Loading skill read models.</p> : null}
+          {error ? <p>{error instanceof Error ? error.message : "Skill surfaces unavailable."}</p> : null}
+          {skills.length ? (
+            skills.map((skill) => {
+              const id = skillIdentifier(skill);
+              return (
+                <button
+                  key={id ?? JSON.stringify(skill)}
+                  className={id === selectedSkillId ? "is-selected" : ""}
+                  disabled={!id}
+                  type="button"
+                  onClick={() => id && onSelectSkill(id)}
+                >
+                  <span className={`status-dot health-${skillHealth(skill)}`} />
+                  <strong>{skillLabel(skill)}</strong>
+                  <small>
+                    {String(skill.lifecycle_state ?? skill.status ?? "unknown")} /{" "}
+                    {String(skill.active_version_id ?? skill.version_id ?? "no-version")}
+                  </small>
+                </button>
+              );
+            })
+          ) : (
+            <p>No SkillKernel-owned skills are visible for this workspace.</p>
+          )}
+        </aside>
+
+        <section className="skill-detail">
+          <div className="trace-replay__header">
+            <div>
+              <h2>{skillDetail ? String(skillDetail.title ?? selectedSkillId) : "Skill Detail"}</h2>
+              <p>{String(skillDetail?.summary ?? "Select a skill to inspect lifecycle and artifact evidence.")}</p>
+            </div>
+            <div className="trace-badges">
+              <span>{String(diagnostics?.lifecycle_state ?? "lifecycle unknown")}</span>
+              <span>{String(diagnostics?.scanner_status ?? diagnostics?.scan_status ?? "scanner unknown")}</span>
+              <span>{String(diagnostics?.evaluator_status ?? "evaluator unknown")}</span>
+            </div>
           </div>
-        ))}
+
+          <div className="skill-evidence-grid">
+            <section>
+              <h3>SkillIR / Version</h3>
+              <Inspector value={diagnostics ?? skillDetail ?? { state: "empty" }} />
+            </section>
+            <section>
+              <h3>Artifacts / Context Budget</h3>
+              <Inspector
+                value={{
+                  selected_skill_id: selectedSkillId,
+                  context_artifacts: contextForSkill,
+                  artifact_count: contextForSkill.length
+                }}
+              />
+            </section>
+          </div>
+
+          <div className="skill-evidence-grid">
+            <section>
+              <h3>Topology</h3>
+              <Inspector value={topology ?? { state: "topology-read-model-unavailable" }} />
+            </section>
+            <section>
+              <h3>Routing Stations</h3>
+              <div className="station-grid">
+                {skillStations.map((station) => (
+                  <div key={station.component_id} className="topology-tile">
+                    <span className={`status-dot health-${station.health}`} />
+                    <strong>{station.display_name}</strong>
+                    <small>{station.object_kinds.join(" / ")}</small>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        </section>
       </div>
-      <Inspector value={snapshot.pipeline.edges.filter((edge) => edge.dominant_item_kind.includes("skill"))} />
     </section>
   );
+}
+
+function skillIdentifier(skill?: Record<string, unknown>) {
+  if (!skill) return undefined;
+  for (const key of ["skill_id", "object_id", "slug", "active_version_id", "version_id"]) {
+    const value = skill[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return undefined;
+}
+
+function skillLabel(skill: Record<string, unknown>) {
+  for (const key of ["name", "slug", "title", "skill_id", "object_id"]) {
+    const value = skill[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return "Unnamed skill";
+}
+
+function skillHealth(skill: Record<string, unknown>): HealthState {
+  const state = String(skill.lifecycle_state ?? skill.status ?? "").toLowerCase();
+  if (["active", "published", "ok", "healthy"].includes(state)) return "healthy";
+  if (["frozen", "revoked"].includes(state)) return "frozen";
+  if (["failed", "blocked"].includes(state)) return "blocked";
+  if (["archived", "inactive", "candidate"].includes(state)) return "unknown";
+  return "degraded";
 }
 
 function TraceAndInspector({

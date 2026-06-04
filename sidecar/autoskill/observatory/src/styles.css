@@ -858,6 +858,53 @@ h3 {
   gap: 14px;
 }
 
+.skill-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.skill-list {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.skill-list button {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 68px;
+  padding: 10px;
+  text-align: left;
+}
+
+.skill-list button.is-selected {
+  border-color: var(--focus);
+}
+
+.skill-list button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.skill-list small {
+  grid-column: 2;
+  color: var(--muted);
+}
+
+.skill-detail {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.skill-evidence-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.8fr);
+  gap: 12px;
+}
+
 .trace-layout {
   display: grid;
   grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
@@ -1097,7 +1144,12 @@ h3 {
 
   .overview-grid,
   .cockpit-layout,
-  .admin-columns {
+  .admin-columns,
+  .skill-layout,
+  .skill-evidence-grid,
+  .trace-layout,
+  .trace-replay__header,
+  .trace-detail-grid {
     grid-template-columns: 1fr;
   }
 

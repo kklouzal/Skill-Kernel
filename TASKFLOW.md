@@ -1183,6 +1183,17 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   -q`, full focused Observatory API tests (`30 passed`), `uv run ruff check
   sidecar/autoskill/tests/test_observatory_api.py`, `npm run build --prefix
   sidecar/autoskill/observatory`, and `git diff --check`.
+- Observatory skill/topology frontend remediation is implemented for Sections
+  9 and 21: the React Skills view now consumes `/admin/api/v1/skills`,
+  `/admin/api/v1/skills/{skill_id}`, `/admin/api/v1/topology`, and
+  `/admin/api/v1/context/artifacts`, preserves a deep-linkable `skill=` URL
+  parameter, lists SkillKernel-owned skills, shows lifecycle/scanner/evaluator
+  badges, exposes SkillIR/version diagnostics, context-artifact budget evidence,
+  topology read-model detail, and routing stations without relying on static
+  station tiles as the whole surface. Validation passed with `npm run build
+  --prefix sidecar/autoskill/observatory`, focused Observatory API tests
+  (`30 passed`), `uv run ruff check
+  sidecar/autoskill/tests/test_observatory_api.py`, and `git diff --check`.
 
 ## Next Gates
 

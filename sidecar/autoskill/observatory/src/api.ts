@@ -89,6 +89,33 @@ export function fetchTraces(session: ApiSession, workspaceId: string, limit = 25
   return fetchJson<CollectionResponse<TraceSummary>>(`/traces?${params}`, session);
 }
 
+export function fetchSkills(session: ApiSession, workspaceId: string, limit = 100) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  return fetchJson<CollectionResponse>(`/skills?${params}`, session);
+}
+
+export function fetchSkillDetail(session: ApiSession, skillId: string, workspaceId: string) {
+  const params = new URLSearchParams();
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  return fetchJson<ObjectResponse>(
+    `/skills/${encodeURIComponent(skillId)}?${params}`,
+    session
+  );
+}
+
+export function fetchTopology(session: ApiSession, workspaceId: string, windowMinutes: number) {
+  const params = new URLSearchParams({ window_minutes: String(windowMinutes) });
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  return fetchJson<ObjectResponse>(`/topology?${params}`, session);
+}
+
+export function fetchContextArtifacts(session: ApiSession, workspaceId: string, limit = 50) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  return fetchJson<CollectionResponse>(`/context/artifacts?${params}`, session);
+}
+
 export function fetchTraceReplay(
   session: ApiSession,
   traceId: string,
