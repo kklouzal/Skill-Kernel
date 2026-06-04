@@ -345,12 +345,50 @@ input:focus-visible {
   filter: drop-shadow(0 0 10px rgba(255, 107, 107, 0.24));
 }
 
+.assembly-line .pipeline-edge__path.health-degraded {
+  filter: drop-shadow(0 0 10px rgba(246, 197, 111, 0.22));
+}
+
+.assembly-line .pipeline-edge__path.health-blocked {
+  filter: drop-shadow(0 0 10px rgba(255, 107, 107, 0.24));
+}
+
 .assembly-line .react-flow__edge-textbg {
   paint-order: stroke;
 }
 
 .assembly-line .react-flow__edge-text {
   text-transform: uppercase;
+}
+
+.pipeline-edge-label {
+  position: absolute;
+  display: block;
+  max-width: 166px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  padding: 4px 9px;
+  color: #f2f6fb;
+  background: rgba(13, 17, 20, 0.91);
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  font-size: 0.64rem;
+  font-weight: 760;
+  line-height: 1;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.pipeline-edge-label.health-degraded {
+  border-color: rgba(246, 197, 111, 0.28);
+}
+
+.pipeline-edge-label.health-blocked {
+  border-color: rgba(255, 107, 107, 0.32);
 }
 
 .assembly-line .react-flow__controls,

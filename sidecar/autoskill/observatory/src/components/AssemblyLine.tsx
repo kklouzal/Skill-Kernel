@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Background,
+  BaseEdge,
   Controls,
+  EdgeLabelRenderer,
   MiniMap,
   MarkerType,
   Position,
   ReactFlow,
   type Edge,
+  type EdgeProps,
+  type EdgeTypes,
   type Node,
-  type NodeMouseHandler
+  type NodeMouseHandler,
+  getSmoothStepPath
 } from "@xyflow/react";
 import type { PipelineEdge, Station } from "../types";
 
@@ -42,6 +47,75 @@ function pressureLabel(edge: PipelineEdge) {
   return edge.dominant_item_kind;
 }
 
+const labelLaneOffsets = [-18, 18, -32, 32, -46, 46];
+
+function labelOffsetForEdge(index: number) {
+  return {
+    x: index % 2 === 0 ? -8 : 8,
+    y: labelLaneOffsets[index % labelLaneOffsets.length]
+  };
+}
+
+type PipelineFlowEdgeData = Record<string, unknown> & {
+  health: string;
+  label: string;
+  labelOffsetX: number;
+  labelOffsetY: number;
+};
+
+type PipelineFlowEdgeType = Edge<PipelineFlowEdgeData, "pipeline">;
+
+function PipelineFlowEdge({
+  data,
+  id,
+  interactionWidth,
+  markerEnd,
+  sourcePosition,
+  sourceX,
+  sourceY,
+  style,
+  targetPosition,
+  targetX,
+  targetY
+}: EdgeProps<PipelineFlowEdgeType>) {
+  const [edgePath, , labelY] = getSmoothStepPath({
+    sourcePosition,
+    sourceX,
+    sourceY,
+    targetPosition,
+    targetX,
+    targetY,
+    borderRadius: 18
+  });
+  const label = data?.label ?? "";
+  const labelX = sourceX + (targetX - sourceX) / 2 + (data?.labelOffsetX ?? 0);
+  const adjustedLabelY = labelY + (data?.labelOffsetY ?? 0);
+
+  return (
+    <>
+      <BaseEdge
+        className={`pipeline-edge__path health-${data?.health ?? "unknown"}`}
+        id={id}
+        interactionWidth={interactionWidth}
+        markerEnd={markerEnd}
+        path={edgePath}
+        style={style}
+      />
+      <EdgeLabelRenderer>
+        <div
+          className={`pipeline-edge-label health-${data?.health ?? "unknown"}`}
+          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${adjustedLabelY}px)` }}
+          title={label}
+        >
+          {label}
+        </div>
+      </EdgeLabelRenderer>
+    </>
+  );
+}
+
+const edgeTypes = { pipeline: PipelineFlowEdge } satisfies EdgeTypes;
+
 export function AssemblyLine({ stations, edges, selectedId, onSelect }: Props) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const stationById = useMemo(
@@ -58,40 +132,35 @@ export function AssemblyLine({ stations, edges, selectedId, onSelect }: Props) {
   );
   const flowEdges = useMemo<Edge[]>(
     () =>
-      edges.map((edge) => ({
-        id: edge.edge_id,
-        source: edge.from,
-        target: edge.to,
-        type: "smoothstep",
-        animated: edge.event_rate_1m > 0 || edge.backpressure > 0,
-        label: pressureLabel(edge),
-        className: `pipeline-edge health-${edge.health}`,
-        style: {
-          stroke: healthColor(edge.health),
-          strokeWidth: Math.max(1.4, Math.min(5.5, 1.4 + edge.event_rate_1m * 0.28 + edge.backpressure * 5)),
-          opacity: edge.health === "healthy" ? 0.78 : 0.92
-        },
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: healthColor(edge.health),
-          width: 18,
-          height: 18
-        },
-        labelStyle: {
-          fill: "#e8eef6",
-          fontSize: 10,
-          fontWeight: 720,
-          letterSpacing: 0
-        },
-        labelBgStyle: {
-          fill: "rgba(13, 17, 20, 0.88)",
-          stroke: "rgba(255, 255, 255, 0.12)",
-          strokeWidth: 1
-        },
-        labelBgPadding: [7, 4],
-        labelBgBorderRadius: 6,
-        interactionWidth: 18
-      })),
+      edges.map((edge, index) => {
+        const labelOffset = labelOffsetForEdge(index);
+        return {
+          id: edge.edge_id,
+          source: edge.from,
+          target: edge.to,
+          type: "pipeline",
+          animated: edge.event_rate_1m > 0 || edge.backpressure > 0,
+          data: {
+            health: edge.health,
+            label: pressureLabel(edge),
+            labelOffsetX: labelOffset.x,
+            labelOffsetY: labelOffset.y
+          },
+          className: `pipeline-edge health-${edge.health}`,
+          style: {
+            stroke: healthColor(edge.health),
+            strokeWidth: Math.max(1.4, Math.min(5.5, 1.4 + edge.event_rate_1m * 0.28 + edge.backpressure * 5)),
+            opacity: edge.health === "healthy" ? 0.78 : 0.92
+          },
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: healthColor(edge.health),
+            width: 18,
+            height: 18
+          },
+          interactionWidth: 18
+        };
+      }),
     [edges]
   );
 
@@ -107,8 +176,12 @@ export function AssemblyLine({ stations, edges, selectedId, onSelect }: Props) {
           "elk.algorithm": "layered",
           "elk.direction": "RIGHT",
           "elk.edgeRouting": "ORTHOGONAL",
-          "elk.layered.spacing.nodeNodeBetweenLayers": "104",
-          "elk.spacing.nodeNode": "52"
+          "elk.layered.spacing.edgeEdgeBetweenLayers": "26",
+          "elk.layered.spacing.edgeNodeBetweenLayers": "34",
+          "elk.layered.spacing.nodeNodeBetweenLayers": "184",
+          "elk.spacing.edgeEdge": "18",
+          "elk.spacing.edgeNode": "28",
+          "elk.spacing.nodeNode": "66"
         },
         children: stations.map((station) => ({
           id: station.component_id,
@@ -179,6 +252,7 @@ export function AssemblyLine({ stations, edges, selectedId, onSelect }: Props) {
       <ReactFlow
         nodes={nodes}
         edges={flowEdges}
+        edgeTypes={edgeTypes}
         defaultViewport={{ x: 28, y: 92, zoom: 0.42 }}
         minZoom={0.2}
         maxZoom={1.4}
