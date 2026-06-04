@@ -657,9 +657,12 @@ Deliverables:
   now reads bounded redacted `raw_events` metadata, trace search reads bounded
   `trace_spans` summaries, saved comparisons persist in
   `admin_comparison_runs`, and diagnostic bundles persist redacted descriptors
-  in `admin_diagnostic_bundles`. The generic object microscope route now
-  resolves captured events, saved baseline comparisons, and diagnostic bundles
-  from those stores instead of falling back to placeholder snapshot objects;
+  in `admin_diagnostic_bundles`. Operator action audit receipts now have
+  workspace-filtered bounded collection/detail read models over
+  `admin_action_audit`. The generic object microscope route now resolves
+  captured events, saved baseline
+  comparisons, diagnostic bundles, and operator action receipts from those
+  stores instead of falling back to placeholder snapshot objects;
 - live updates; implemented with `/admin/live` WebSocket and `/admin/live-sse`
   fallback, frontend fallback logic, snapshot reload handling, and persisted
   `admin_live_event_outbox` events for audited operator actions, diagnostic
@@ -702,7 +705,9 @@ Acceptance:
   confirmation-required high-impact denial, plus event/trace read models,
   persisted comparisons, persisted diagnostic bundle retrieval, and generic
   object microscope routing for persisted captured-event/comparison/bundle
-  records;
+  records. Operator action audit receipt tests cover bounded filtering, detail
+  retrieval, content-policy metadata, linked audit references, and generic
+  object microscope routing for `admin_action` objects;
 - validation evidence for the broker-decision drill-down slice passed on the
   final tree: focused Observatory tests `9 passed`, `uv run ruff check sidecar`,
   `uv run pytest` with 312 tests, `uv run python -m compileall -q sidecar`, a
@@ -742,6 +747,16 @@ Acceptance:
   `admin_action_audit` row links to `audit_records` and contains only redacted
   request metadata, deleted the smoke rows, and stopped Postgres while
   preserving the dev volume.
+- validation evidence for the Observatory operator-action audit read-model
+  slice passed on the final tree: Observatory API tests `17 passed`, `uv run
+  ruff check sidecar` passed, `uv run pytest -q` passed with 320 tests, `uv run
+  python -m compileall -q sidecar` passed, `npm test --prefix plugin/autoskill`
+  passed with 18 tests, `npm run build --prefix
+  sidecar/autoskill/observatory` passed, `docker compose config --quiet` passed,
+  and `git diff --check` passed. A compose/Postgres smoke applied migrations
+  idempotently, inserted one `admin_action_audit` receipt, verified
+  workspace-filtered list/detail asyncpg reads, deleted the smoke row, and left
+  the pre-existing Postgres container running.
 - validation evidence for the cursor/security/live-outbox slice passed on the
   final tree: Observatory API tests `14 passed`, `uv run ruff check sidecar
   scripts` passed, `uv run pytest -q` passed with 317 tests,

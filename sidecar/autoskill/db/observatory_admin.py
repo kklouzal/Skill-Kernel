@@ -266,6 +266,24 @@ class ObservatoryAdminStore(Protocol):
     ) -> AdminActionAuditRecord:
         """Persist a content-safe Observatory operator action audit row."""
 
+    async def list_action_audits(
+        self,
+        *,
+        workspace_key: str | None = None,
+        actor_id: str | None = None,
+        action_kind: str | None = None,
+        result: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminActionAuditRecord]:
+        """Return bounded content-safe Observatory operator action audit rows."""
+
+    async def get_action_audit(
+        self,
+        *,
+        action_id: UUID,
+    ) -> AdminActionAuditRecord | None:
+        """Fetch one content-safe Observatory operator action audit row."""
+
     async def list_comparisons(
         self,
         *,
@@ -401,6 +419,40 @@ class NullObservatoryAdminStore:
         )
         self.actions.append(record)
         return record
+
+    async def list_action_audits(
+        self,
+        *,
+        workspace_key: str | None = None,
+        actor_id: str | None = None,
+        action_kind: str | None = None,
+        result: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminActionAuditRecord]:
+        records = list(reversed(self.actions))
+        if workspace_key is not None:
+            records = [
+                record
+                for record in records
+                if record.request_payload_redacted.get("workspace_id") == workspace_key
+            ]
+        if actor_id is not None:
+            records = [record for record in records if record.actor_id == actor_id]
+        if action_kind is not None:
+            records = [record for record in records if record.action_kind == action_kind]
+        if result is not None:
+            records = [record for record in records if record.result == result]
+        return records[: max(1, min(limit, 500))]
+
+    async def get_action_audit(
+        self,
+        *,
+        action_id: UUID,
+    ) -> AdminActionAuditRecord | None:
+        for record in reversed(self.actions):
+            if record.action_id == action_id:
+                return record
+        return None
 
     async def list_comparisons(
         self,
@@ -626,6 +678,54 @@ class AsyncpgObservatoryAdminStore(AsyncpgPoolOwner):
                 linked_audit_id,
             )
         return AdminActionAuditRecord.from_row(row)
+
+    async def list_action_audits(
+        self,
+        *,
+        workspace_key: str | None = None,
+        actor_id: str | None = None,
+        action_kind: str | None = None,
+        result: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminActionAuditRecord]:
+        bounded_limit = max(1, min(limit, 500))
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT *
+                FROM autoskill.admin_action_audit
+                WHERE ($1::text IS NULL OR request_payload_redacted->>'workspace_id' = $1)
+                  AND ($2::text IS NULL OR actor_id = $2)
+                  AND ($3::text IS NULL OR action_kind = $3)
+                  AND ($4::text IS NULL OR result = $4)
+                ORDER BY created_at DESC, action_id DESC
+                LIMIT $5
+                """,
+                workspace_key,
+                actor_id,
+                action_kind,
+                result,
+                bounded_limit,
+            )
+        return [AdminActionAuditRecord.from_row(row) for row in rows]
+
+    async def get_action_audit(
+        self,
+        *,
+        action_id: UUID,
+    ) -> AdminActionAuditRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT *
+                FROM autoskill.admin_action_audit
+                WHERE action_id = $1
+                """,
+                action_id,
+            )
+        return AdminActionAuditRecord.from_row(row) if row else None
 
     async def list_comparisons(
         self,

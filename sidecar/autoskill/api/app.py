@@ -4762,6 +4762,65 @@ def create_app(
             "audit": {"links": [], "chain_visible": True},
         }
 
+    def _admin_action_microscope(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        request_payload = payload["request_payload_redacted"]
+        upstream = []
+        if payload.get("linked_audit_id"):
+            upstream.append(
+                {
+                    "object_type": "audit_record",
+                    "object_id": payload["linked_audit_id"],
+                }
+            )
+        if payload.get("linked_job_id"):
+            upstream.append({"object_type": "job", "object_id": payload["linked_job_id"]})
+        return {
+            **payload,
+            "title": f"Operator action {payload['action_kind']}",
+            "summary": (
+                "Content-safe Observatory operator action receipt with policy "
+                "result and linked audit/job references."
+            ),
+            "timeline": [
+                {
+                    "at": payload["created_at"],
+                    "event": "operator_action_recorded",
+                    "action_kind": payload["action_kind"],
+                    "result": payload["result"],
+                }
+            ],
+            "provenance": {
+                "upstream": upstream,
+                "downstream": [
+                    {
+                        "object_type": payload["target_type"],
+                        "object_id": payload["target_id"],
+                    }
+                ],
+            },
+            "effects": {
+                "result": payload["result"],
+                "target_type": payload["target_type"],
+                "target_id": payload["target_id"],
+                "dry_run": request_payload.get("dry_run"),
+                "confirmation_present": request_payload.get("confirmation_present"),
+            },
+            "diagnostics": {
+                "actor_id": payload["actor_id"],
+                "actor_roles": payload["actor_roles"],
+                "request_id": request_payload.get("request_id"),
+                "source": request_payload.get("source", {}),
+                "metadata_keys": request_payload.get("metadata_keys", []),
+                "has_confirmation_hash": bool(request_payload.get("confirmation_hash")),
+                "raw_content_included": False,
+            },
+            "audit": {
+                "links": upstream,
+                "chain_visible": payload.get("linked_audit_id") is not None,
+            },
+        }
+
     async def _record_observatory_action(
         request: ObservatoryActionRequest,
         authorization: str | None,
@@ -5544,6 +5603,11 @@ def create_app(
             )
             if bundle is not None:
                 return ObservatoryObjectResponse(object=_diagnostic_bundle_microscope(bundle))
+        if object_type in {"admin_action", "operator_action", "action_audit"}:
+            action_id = _uuid_or_404(object_id, "operator action")
+            action = await observatory_admin.get_action_audit(action_id=action_id)
+            if action is not None:
+                return ObservatoryObjectResponse(object=_admin_action_microscope(action))
         snapshot = await _observatory_snapshot(
             workspace_id=workspace_id,
             window_minutes=window_minutes,
@@ -6348,6 +6412,63 @@ def create_app(
                 )
             },
         )
+
+    @app.get("/admin/api/v1/actions/audit", response_model=ObservatoryCollectionResponse)
+    async def observatory_action_audits(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        actor_id: str | None = None,
+        action_kind: str | None = None,
+        result: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        action_audits = await observatory_admin.list_action_audits(
+            workspace_key=workspace_id,
+            actor_id=actor_id,
+            action_kind=action_kind,
+            result=result,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="admin_action",
+            title="Operator action audit",
+            items=[_admin_action_microscope(action) for action in action_audits],
+            limit=limit,
+            cursor=cursor,
+            source="observatory_admin_store.list_action_audits",
+            diagnostics={
+                "supporting_component": "operator_action_gateway",
+                "raw_content_available": False,
+                "filter": {
+                    "workspace_id": workspace_id,
+                    "actor_id": actor_id,
+                    "action_kind": action_kind,
+                    "result": result,
+                },
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/actions/audit/{action_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_action_audit_detail(
+        action_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_action_id = _uuid_or_404(action_id, "operator action")
+        action = await observatory_admin.get_action_audit(action_id=parsed_action_id)
+        if action is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="operator action not found",
+            )
+        return ObservatoryObjectResponse(object=_admin_action_microscope(action))
 
     @app.get("/admin/api/v1/comparisons", response_model=ObservatoryCollectionResponse)
     async def observatory_comparisons(

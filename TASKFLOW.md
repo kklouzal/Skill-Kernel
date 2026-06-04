@@ -1068,6 +1068,22 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   migrated the schema, accepted one admin raw-reveal grant, verified DB audit
   hash-only persistence, deleted the smoke rows, and stopped compose without
   removing the persistent volume.
+- Observatory operator-action audit read models are implemented for the Phase
+  12.1/16.3 aggregate-to-evidence gap: `/admin/api/v1/actions/audit` lists
+  bounded content-safe `admin_action_audit` receipts with workspace/actor/action/
+  result filters, `/admin/api/v1/actions/audit/{action_id}` returns one receipt,
+  and the generic object microscope resolves `admin_action` objects with linked
+  audit/job provenance, request ID, source identity, metadata-key summary,
+  confirmation-hash presence, and `raw_available=false` policy metadata.
+  Validation passed with focused Observatory API tests `17 passed`, `uv run
+  ruff check sidecar`, `uv run pytest -q` with 320 tests, `uv run python -m
+  compileall -q sidecar`, `npm test --prefix plugin/autoskill` with 18 tests,
+  `npm run build --prefix sidecar/autoskill/observatory`, `docker compose
+  config --quiet`, and `git diff --check`; a real compose/Postgres smoke
+  applied migrations idempotently, recorded one smoke `admin_action_audit` row,
+  verified workspace-filtered list/detail reads through the new asyncpg store
+  methods, deleted the smoke row, and left the pre-existing Postgres container
+  running.
 
 ## Next Gates
 

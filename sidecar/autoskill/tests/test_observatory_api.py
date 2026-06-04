@@ -397,6 +397,8 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/diagnostics/bundles", "POST"),
         ("/admin/api/v1/diagnostics/bundles/{bundle_id}", "GET"),
         ("/admin/api/v1/actions/jobs/{id}/retry", "POST"),
+        ("/admin/api/v1/actions/audit", "GET"),
+        ("/admin/api/v1/actions/audit/{action_id}", "GET"),
         ("/admin/api/v1/actions/skills/{id}/freeze", "POST"),
         ("/admin/api/v1/actions/revocation/revoke-source", "POST"),
     }
@@ -710,6 +712,69 @@ def test_observatory_action_records_audited_policy_receipt() -> None:
         response.receipt["action_audit"]["action_id"].replace("-", "")
     )
     assert audit_store.records[0].action == "observatory.verify_audit_chain"
+
+
+def test_observatory_action_audit_read_model_exposes_receipts_without_raw_content() -> None:
+    audit_store = MemoryAuditStore()
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(audit_store=audit_store, observatory_admin_store=observatory_admin)
+    routes = _routes(app)
+
+    async def run():
+        first = await routes[("/admin/api/v1/actions", "POST")].endpoint(
+            http_request=None,
+            request=ObservatoryActionRequest(
+                workspace_id="dev-01",
+                action="verify_audit_chain",
+                idempotency_key="obs-audit-list-1",
+                reason="operator requested audit proof",
+                metadata={"ticket": "INC-1"},
+            ),
+        )
+        await routes[("/admin/api/v1/actions", "POST")].endpoint(
+            http_request=None,
+            request=ObservatoryActionRequest(
+                workspace_id="dev-01",
+                action="refresh_read_models",
+                idempotency_key="obs-audit-list-2",
+                reason="operator requested read model refresh",
+            ),
+        )
+        collection = await routes[("/admin/api/v1/actions/audit", "GET")].endpoint(
+            workspace_id="dev-01",
+            action_kind="verify_audit_chain",
+            limit=1,
+        )
+        detail = await routes[
+            ("/admin/api/v1/actions/audit/{action_id}", "GET")
+        ].endpoint(action_id=first.receipt["action_audit"]["action_id"])
+        microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="admin_action",
+            object_id=first.receipt["action_audit"]["action_id"],
+        )
+        return first, collection, detail, microscope
+
+    first, collection, detail, microscope = asyncio.run(run())
+
+    assert collection.collection["source"] == "observatory_admin_store.list_action_audits"
+    assert collection.collection["object_type"] == "admin_action"
+    assert collection.collection["count"] == 1
+    assert collection.collection["diagnostics"]["filter"]["workspace_id"] == "dev-01"
+    assert collection.collection["items"][0]["action_kind"] == "verify_audit_chain"
+    assert collection.collection["items"][0]["diagnostics"]["metadata_keys"] == ["ticket"]
+    assert collection.collection["items"][0]["content_policy"]["raw_available"] is False
+    assert detail.object["object_id"] == first.receipt["action_audit"]["action_id"]
+    assert detail.object["provenance"]["upstream"][0]["object_type"] == "audit_record"
+    assert detail.object["diagnostics"]["request_id"].startswith("req_")
+    assert detail.object["effects"]["dry_run"] is True
+    assert detail.object["content_policy"]["raw_available"] is False
+    assert "operator requested audit proof" in detail.object["reason"]
+    assert detail.object["request_payload_redacted"]["confirmation_hash"] is None
+    assert "INC-1" not in str(detail.object["request_payload_redacted"])
+    assert microscope.object["object_type"] == "admin_action"
+    assert microscope.object["audit"]["chain_visible"] is True
 
 
 def test_observatory_high_impact_action_requires_confirmation() -> None:
