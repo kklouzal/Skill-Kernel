@@ -4,7 +4,7 @@
 **Project:** SkillKernel Observatory web administration and observability interface  
 **Deployment target:** SkillKernel Python sidecar container  
 **Audience:** implementation engineers, frontend engineers, sidecar/backend engineers, operators, security reviewers  
-**Relationship to core SkillKernel specification:** this document adds the sidecar-hosted web interface that exposes SkillKernel’s runtime state, lifecycle operations, evidence flow, component health, and diagnostic surfaces. It does not change the core autonomous skill-management architecture.
+**Relationship to core SkillKernel specification:** this document adds the sidecar-hosted Observatory interface that exposes SkillKernel’s runtime state, calibrated autonomy, evidence-fidelity posture, raw-vault policy state, semantic adjudication, lifecycle operations, evidence flow, component health, and diagnostic surfaces. It does not change the core autonomous skill-management architecture or grant the UI independent authority over SkillKernel decisions.
 
 ---
 
@@ -12,19 +12,22 @@
 
 Build a sidecar-hosted web interface named **SkillKernel Observatory**.
 
-The Observatory is a multi-resolution diagnostic, observability, and administration layer for SkillKernel. It gives operators a bird’s-eye view of the entire autonomous skill-management pipeline and allows drill-down into every station in the system: live OpenClaw capture, historical ingestion, redaction, evidence extraction, memory derivation, retrieval, skill topology operations, context compilation, scanner/evaluator gates, deterministic artifact writing, activation, broker behavior, curation, rollback, scheduler health, database/index health, and audit trails.
+The Observatory is a multi-resolution diagnostic, observability, and administration layer for SkillKernel. It gives operators a bird’s-eye view of the entire autonomous skill-management pipeline and allows drill-down into every station in the system: live OpenClaw capture, historical ingestion, redaction, raw-evidence vault handling, evidence-fidelity classification, memory derivation, LLM semantic adjudication, calibrated selective-trust decisions, replay/canary corpus generation, retrieval, skill topology operations, context compilation, scanner/evaluator gates, deterministic artifact writing, activation, broker behavior, curation, rollback, scheduler health, database/index health, and audit trails.
 
-The interface is not a second autonomous control plane. It is an inspectable operating console over the existing deterministic sidecar control plane. Operator actions exposed through the UI must call the same authenticated sidecar APIs, pass the same policy checks, and write the same audit/evolution records as command-line or plugin-triggered actions.
+The interface is not a second autonomous control plane. It is an inspectable operating console over the existing sidecar control plane: LLM adjudication, deterministic admissibility checks, threshold policy, scanner/evaluator gates, activation, rollback, revocation, and administrative escalation state remain owned by SkillKernel services. Administrative actions exposed through the UI must call the same authenticated sidecar APIs, pass the same policy checks, and write the same audit/evolution records as command-line or plugin-triggered actions.
 
 The visual concept is an **interactive assembly line** with four reliable zoom depths: full system, subsystem workcell, station cockpit, and object microscope:
 
 ```text
-[OpenClaw live capture] ─▶ [Historical bootstrap] ─▶ [Redaction + taint]
+[OpenClaw live capture] ─▶ [Historical bootstrap] ─▶ [Redaction + taint + raw-vault policy]
         │                         │                         │
         ▼                         ▼                         ▼
-[Ingest + normalization] ─▶ [Evidence + memory] ─▶ [Retrieval + broker calibration]
-        │                                                   │
-        ▼                                                   ▼
+[Spool + normalization] ─▶ [Evidence fidelity + memory] ─▶ [LLM semantic adjudication]
+        │                         │                         │
+        ▼                         ▼                         ▼
+[Retrieval + broker] ─▶ [Autonomy decision orchestrator] ─▶ [Replay/canary corpus]
+        │                         │                         │
+        ▼                         ▼                         ▼
 [Topology operations: create | improve | compose | decompose] ─▶ [SkillIR / SkillGraphIR]
         │                                                   │
         ▼                                                   ▼
@@ -33,10 +36,10 @@ The visual concept is an **interactive assembly line** with four reliable zoom d
         ▼                                      ▼             ▼
 [Deterministic writer] ─▶ [Activation / archive / rollback] ─▶ [Canary + runtime telemetry]
         │                                                                    │
-        └──────────────────────────▶ [Audit + trace spine + read models] ◀────┘
+        └────────────────────▶ [Audit + trace spine + read models + calibration corpus] ◀────┘
 ```
 
-Each bracketed station is a visual node. Each node shows live health, throughput, backlog, latency, error/freeze state, and selected key metrics. Clicking a node transitions into a component-level cockpit with comprehensive internals, trace/event lists, local subgraphs, artifacts, jobs, warnings, and operator-safe actions.
+Each bracketed station is a visual node. Each node shows live health, throughput, backlog, latency, error/freeze state, and selected key metrics. Clicking a node transitions into a component-level cockpit with comprehensive internals, trace/event lists, local subgraphs, artifacts, jobs, warnings, and safe administrative actions.
 
 The interface must be visually rich enough to make system behavior legible at a glance while remaining precise enough for debugging production failures. The implementation stack is:
 
@@ -68,16 +71,22 @@ The Observatory must answer these questions without requiring an engineer to ins
 2. What is currently moving through the pipeline?
 3. Where are jobs, events, candidates, or skill operations blocked?
 4. Which autonomous operations are being proposed, evaluated, accepted, rejected, archived, promoted, rolled back, or frozen?
-5. Which skills are active, archived, shadowing each other, stale, harmful-risky, high-value, token-expensive, underused, or failing?
-6. Which historical sources have been ingested, skipped, redacted, quarantined, or converted into evidence?
-7. Which model and embedding profiles are configured, qualified, unhealthy, or producing failures?
-8. What evidence caused a skill operation?
-9. What scanner/evaluator gates accepted or rejected an operation?
-10. What context did the runtime broker render, and why?
-11. How much agent context is being spent on each skill, broker hint, or compiled artifact?
-12. Which deterministic writer transaction created or changed files?
-13. Can this change be rolled back, and what derived data must be revoked with it?
-14. Which component owns a failure, and what is the safest next action?
+5. Which semantic decisions were adjudicated by the configured LLM, what evidence supported them, and what deterministic admissibility checks bounded them?
+6. Which soft thresholds, confidence components, calibration policy versions, and fallback ladders affected an autonomous decision?
+7. Which decisions are operating with `raw_vault_linked`, `declassified_summary`, `redacted_derivative`, `metadata_only`, or `hash_only` evidence?
+8. Which decisions are degraded because evidence is insufficient for autonomy, and what autonomous evidence-repair actions are in progress?
+9. Which skills are active, archived, shadowing each other, stale, harmful-risky, high-value, token-expensive, underused, or failing?
+10. Which historical sources have been ingested, skipped, redacted, quarantined, or converted into evidence?
+11. Which replay/canary episodes were synthesized from real telemetry, what redacted intent was produced, and what provenance supports it?
+12. Which model and embedding profiles are configured, qualified, unhealthy, or producing failures?
+13. What evidence caused a skill operation?
+14. What scanner/evaluator gates accepted or rejected an operation?
+15. What context did the runtime broker render, and why?
+16. How much agent context is being spent on each skill, broker hint, or compiled artifact?
+17. Which deterministic writer transaction created or changed files?
+18. Can this change be rolled back, and what derived data must be revoked with it?
+19. Which administrative escalations exist, what hard boundary caused them, and what autonomous alternatives were already attempted?
+20. Which component owns a failure, and what is the safest next action?
 
 ### 1.2 Visual goals
 
@@ -94,9 +103,9 @@ The interface presents a command center for an autonomous skill factory:
 - provenance graph views that show source → evidence → memory → candidate → SkillIR → artifact → activation → runtime outcome;
 - dark command-center aesthetic with restrained motion, high contrast, keyboard navigation, and reduced-motion mode.
 
-Visual richness must never obscure correctness. Every animated element must be backed by a concrete event, aggregate, or read model. Decorative effects may exist, but they must not imply system state.
+Visual richness must never obscure correctness, evidence quality, or autonomy state. Every animated element must be backed by a concrete event, aggregate, or read model. Decorative effects may exist, but they must not imply system state.
 
-The command-center aesthetic must expose causality, not only status. The desired visual effect is a living, inspectable factory: material enters, gets transformed, passes gates, becomes artifacts, activates, generates runtime outcomes, and feeds back into future topology decisions. The operator must be able to move from a glowing overview edge to the exact records responsible for that glow.
+The command-center aesthetic must expose causality and autonomy, not only status. The desired visual effect is a living, inspectable factory: material enters, gets transformed, passes gates, becomes artifacts, activates, generates runtime outcomes, and feeds back into future topology decisions. The operator must be able to move from a glowing overview edge to the exact records responsible for that glow.
 
 ### 1.3 Operational goals
 
@@ -108,7 +117,10 @@ The Observatory must support soak testing and production monitoring:
 - component health and freeze-state visibility;
 - low-content diagnostic telemetry by default;
 - raw/redacted content controls with role-based access;
-- auditability for every operator action;
+- raw-vault access visibility without casual raw exposure;
+- evidence-fidelity visibility for every decision family;
+- calibrated-autonomy visibility for LLM adjudications, threshold policy, and fallback ladders;
+- auditability for every administrative action and every autonomous semantic decision;
 - safe deep links for sharing an exact trace, job, candidate, skill version, evaluation, scanner finding, or transaction;
 - exportable diagnostic bundles that redact content by default.
 
@@ -119,7 +131,7 @@ The Observatory must make SkillKernel intelligible at four depths:
 | Depth | Purpose | Primary UI surface |
 |---|---|---|
 | System map | Determine whether the full SkillKernel machine is healthy, moving work, and producing useful outcomes. | Assembly-line overview, KPI ribbon, issue board, timeline replay. |
-| Subsystem lens | Inspect a coherent group of components that jointly perform a larger function. | Workcell pages such as ingestion, learning, topology, runtime context, gates, mutation, lifecycle, and control. |
+| Subsystem lens | Inspect a coherent group of components that jointly perform a larger function. | Workcell pages such as capture/bootstrap, learning/memory, autonomy/adjudication, runtime context, topology design, quality gates, artifact mutation, lifecycle governance, and control/storage. |
 | Station cockpit | Inspect one component in detail. | Component cockpit with local subgraph, metrics, records, traces, artifacts, config, audit, and help. |
 | Object microscope | Inspect one concrete record. | Trace, job, candidate, skill version, scanner finding, evaluation, artifact, broker decision, source item, or evolution transaction detail. |
 
@@ -133,7 +145,7 @@ What changed recently?
 Where is work accumulating?
 Which upstream inputs and downstream outputs are affected?
 Which evidence, trace, job, or artifact proves the conclusion?
-What is the safest next diagnostic or operator action?
+What is the safest next diagnostic or administrative action?
 ```
 
 The UI must treat missing telemetry as a diagnostic state. A quiet component is not automatically healthy. It is healthy only when expected inputs, outputs, heartbeats, read-model freshness, and coverage signals are within policy bounds.
@@ -148,6 +160,11 @@ The Observatory must expose every major SkillKernel domain through at least one 
 | Live OpenClaw capture | live capture health, event rate, source coverage | capture + bootstrap | hook matrix, session coverage, captured event detail |
 | Historical ingestion | bootstrap progress, source yield, quarantine count | capture + bootstrap | import run, source item, parser finding, derived evidence |
 | Redaction and taint | raw/redacted eligibility, taint pressure | capture + bootstrap | taint graph, redaction finding, revocation path |
+| Raw-evidence vault | retained raw windows, declassification queue, raw-access denials, retention/revocation pressure | capture + bootstrap; autonomy + adjudication | raw vault record, declassification report, access audit, derived-data traversal |
+| Evidence fidelity | fidelity distribution, degraded-autonomy count, `evidence_insufficient_for_autonomy` count | capture + bootstrap; learning + memory; autonomy + adjudication | source item, evidence packet, fidelity tag, unsupported decision family |
+| Semantic adjudication | verdict count, confidence components, contradiction rate, re-adjudication rate | autonomy + adjudication | adjudication record, evidence bundle, LLM output, deterministic admissibility result |
+| Autonomy orchestration | autonomous accept/reject/quarantine/canary/no-op rates, soft-threshold misses, fallback ladder progress | autonomy + adjudication; lifecycle governance | autonomy decision, threshold policy, calibration record, fallback action |
+| Replay and canary corpus | synthesized replay episodes, intent-redaction quality, corpus coverage, canary eligibility | autonomy + adjudication; quality gates | replay episode, redacted intent, expected decision, trace window, canary result |
 | Evidence and memory | evidence maturity, memory quarantine, diagnostic momentum | learning + memory | cluster, memory record, provenance path |
 | Retrieval and indexing | embedding backlog, recall audit, lexical/vector health | learning + memory; runtime context | retrieval audit, embedding profile, exact-rerank example |
 | Runtime broker | no-skill decisions, loaded/suppressed counts, shadowing | runtime context | broker decision, scoring waterfall, rendered hint |
@@ -212,6 +229,10 @@ The Observatory must support the following operator journeys without requiring m
 | Harm/regression investigation | Security, regression, or canary issue | scanner/evaluator → broker replay → action attribution → rollback/revocation graph | Operator can identify whether a skill, memory, broker hint, tool failure, external skill, or user context caused a bad runtime outcome. |
 | Historical bootstrap validation | Historical bootstrap lens | source inventory → parser results → taint/quarantine → evidence yield → seeded candidates | Operator can determine whether an existing deployment’s history was discovered, parsed, redacted, deduplicated, and converted into useful evidence. |
 | Skill package inspection | Skill library or artifact mutation workcell | skill detail → SkillIR/SkillGraphIR → package planner → context compiler → manifest → scanner/evaluator | Operator can see why a skill exists, what files it contains, why each artifact is present, what can enter context, and what gates accepted it. |
+| Autonomous adjudication audit | Autonomy issue, adjudication KPI, or topology decision | autonomy workcell → adjudication record → evidence bundle → deterministic checks → outcome/canary | Operator can see what the LLM decided, why it was trusted or rejected, which hard invariants applied, and which fallback ladder was used. |
+| Evidence-fidelity investigation | Evidence fidelity lens or `evidence_insufficient_for_autonomy` issue | source inventory → raw-vault policy → evidence packet → decision family matrix → evidence-repair jobs | Operator can tell whether autonomy is blocked by insufficient semantic evidence, disabled raw retention, parser loss, redaction signal loss, or missing trajectory/transcript windows. |
+| Replay-corpus validation | Replay/canary corpus KPI | retrieval log → raw/declassified source window → synthesized `redacted_user_intent` → replay trial → canary linkage | Operator can determine whether real telemetry became safe replay evidence autonomously and whether the resulting episode is trustworthy. |
+| Administrative escalation investigation | Administrative escalation issue | escalation record → hard-boundary reason → attempted autonomous alternatives → affected object → safe next action | Operator can distinguish true authority-boundary escalation from an autonomy defect or soft-threshold deadlock. |
 | Infrastructure health check | Control + storage workcell | scheduler/jobs → model/embedding profiles → storage/read models → Observatory self-health | Operator can determine whether SkillKernel itself is running, whether the dashboard is fresh, and whether UI telemetry is trustworthy. |
 
 A journey is complete only when it exposes a deterministic explanation, supporting record links, affected objects, missing telemetry warnings, and safe next actions.
@@ -224,12 +245,14 @@ The Observatory must be visually impressive, but it is primarily a truth-preserv
 2. Every health state includes freshness, coverage, and confidence indicators. A green status without telemetry freshness is forbidden.
 3. Every object page shows upstream cause, local processing state, downstream effects, audit links, and redaction/taint status.
 4. Every graph edge represents a real relationship from a read model, provenance link, trace span, dependency edge, or catalog entry.
-5. Every operator action is visible as a normal audited sidecar action with policy result, idempotency key, linked job, and outcome.
+5. Every administrative action is visible as a normal audited sidecar action with policy result, idempotency key, linked job, and outcome.
 6. Every page provides a plain-language diagnostic summary and a machine-readable reason-code panel.
 7. Every empty state distinguishes healthy idleness, missing telemetry, disabled subsystem, permission restriction, and real data absence.
 8. Every lens and filter is reflected in the URL so a testing observation can be shared and reproduced.
 9. The UI never presents estimated dollar cost, model-price advice, or cost optimization recommendations.
 10. The interface remains useful with animations disabled, WebGL unavailable, slow read models, disconnected live stream, or partial telemetry.
+11. A semantic decision is not considered explainable until the UI can show its evidence-fidelity tier, LLM adjudication artifact when applicable, deterministic admissibility result, threshold policy version, fallback ladder, and downstream outcome.
+12. Administrative escalation is presented as an exceptional authority-boundary state, not as the ordinary path for semantic uncertainty.
 
 
 ### 1.10 Live-update and render-stability invariant
@@ -314,6 +337,18 @@ The design goal is continuity: the operator must be able to stare at one station
 
 ### 1.11 Alignment with core SkillKernel architecture
 
+The Observatory must mirror SkillKernel’s governing distinction between semantic autonomy and deterministic authority. The UI must show that the LLM can adjudicate meaning-heavy decisions while deterministic services retain control over hard invariants, filesystem writes, scheduler state, activation, rollback, scanner hard-denies, raw exposure policy, and audit.
+
+The Observatory must expose the following core architecture surfaces as first-class diagnostic objects:
+
+- evidence-fidelity tier and raw-vault/declassification state for each semantic decision family;
+- LLM adjudication records, including evidence IDs, confidence components, contradiction flags, and structured verdicts;
+- deterministic admissibility checks that accepted, rejected, narrowed, quarantined, or canaried the LLM verdict;
+- soft-threshold policy versions, calibration support, threshold-deadlock findings, and fallback ladders;
+- administrative escalation records, limited to hard authority boundaries and unresolved contradiction after autonomous fallback;
+- replay/canary corpus episodes synthesized from real telemetry, including redacted intent, expected decision, provenance, and trial outcomes.
+
+
 Observatory must model the real SkillKernel machine rather than an approximate dashboard abstraction. The UI presents the same architectural boundaries used by the SkillKernel implementation:
 
 ```text
@@ -357,11 +392,14 @@ runtime load -> broker decision, context excerpt, selected/suppressed/no-skill r
 failure      -> reason code, owner component, impacted objects, and safe next action
 ```
 
-A beautiful graph that cannot explain why a station is green, red, idle, stale, or blocked is not acceptable. A plain diagnostic table that answers the question but is visually disconnected from the system map is also incomplete. Observatory must connect system-level orientation, subsystem reasoning, station detail, and object-level evidence into one coherent diagnostic flow.
+A beautiful graph that cannot explain why a station is green, red, idle, freshness-stale, or blocked is not acceptable. A plain diagnostic table that answers the question but is visually disconnected from the system map is also incomplete. Observatory must connect system-level orientation, subsystem reasoning, station detail, and object-level evidence into one coherent diagnostic flow.
 
 ---
 
 ## 2. Non-goals and boundary rules
+
+The Observatory must not convert autonomy diagnostics into a hidden administrative-escalation queue. It may display administrative escalations, raw-vault policy denials, and threshold-deadlock findings, but ordinary replay intent synthesis, memory declassification, topology choice, context equivalence, and broker adjudication remain autonomous SkillKernel workflows when evidence fidelity and hard invariants permit them.
+
 
 The web interface must not blur SkillKernel’s core architecture.
 
@@ -407,7 +445,7 @@ Postgres autoskill schema
   ├─ component catalog and read-model views
   ├─ materialized rollups for dashboard performance
   ├─ event notification/outbox table when required by the configured deployment
-  └─ audit records for every operator action
+  └─ audit records for every administrative action
 ```
 
 The admin API is a sidecar feature, not a separate deployment. The default bind address is loopback. Remote access requires explicit configuration through a private network, mTLS, or a trusted reverse proxy.
@@ -434,6 +472,8 @@ React Flow’s `ReactFlow` component is designed to render interactive nodes and
 ### 3.3 Data access principle
 
 The UI reads **dashboard read models**, not raw operational tables directly.
+
+Raw-vault records are never read directly by the frontend. The backend may expose a redacted preview, a declassification report, or a policy-denied placeholder. Authorized raw reveal uses a short-lived server-side reveal token, audited purpose, minimum-necessary scope, and explicit role checks; the live stream never carries raw-vault payloads.
 
 ```text
 Core tables → dashboard views/materialized views → admin API → frontend
@@ -552,7 +592,7 @@ web_admin:
 
 The admin interface must not be publicly exposed without an explicit operator decision. Health liveness may be unauthenticated only when configured; readiness, metrics, records, traces, jobs, actions, artifacts, and raw-content endpoints require authentication.
 
-### 4.3 Operator action confirmation
+### 4.3 Administrative action confirmation
 
 High-impact actions require confirmation:
 
@@ -564,8 +604,11 @@ High-impact actions require confirmation:
 | Delete/revoke retained data | typed source/candidate/skill ID and reason |
 | Force retry after hard scanner failure | not allowed unless policy explicitly supports exception workflow |
 | Raw content reveal | role check, reason, short-lived reveal token, audit record |
+| Change raw-vault retention or exposure policy | typed policy ID and reason |
+| Change threshold policy outside normal calibration workflow | typed policy ID and reason |
+| Resolve administrative escalation | hard-boundary reason, disposition, and linked audit record |
 
-All actions write `autoskill.admin_action_audit` and link to the underlying `autoskill.audit_log` or evolution transaction.
+All actions write `autoskill.admin_action_audit` and link to the underlying `autoskill.audit_log`, `autoskill.autonomy_decisions`, `autoskill.administrative_escalation_events`, or evolution transaction.
 
 ---
 
@@ -580,9 +623,14 @@ The main overview renders these first-class stations. Station IDs are stable API
 | `openclaw_live_capture` | OpenClaw live capture | Plugin hook and SDK-event capture from active OpenClaw sessions. |
 | `historical_ingestion` | Historical bootstrap | Discovery and ingestion of existing transcripts, trajectories, memory/context files, task records, and existing skills. |
 | `redaction_taint` | Redaction + taint | Sensitive-content reduction, taint propagation, source confidence, storage eligibility. |
+| `raw_evidence_vault` | Raw-evidence vault | Encrypted full-fidelity evidence retention, raw/declassified access policy, raw access audit, retention, revocation, and derived-data traversal. |
+| `evidence_fidelity` | Evidence fidelity | Classifies records as `raw_vault_linked`, `declassified_summary`, `redacted_derivative`, `metadata_only`, or `hash_only` and declares which decision families they can support. |
 | `spool_ingest` | Spool + ingest | Local plugin spool, batch forwarding, sidecar ingest API, idempotency, normalization. |
 | `event_normalization` | Event normalization | Converts live/historical records into canonical events, chunks, spans, and evidence inputs. |
 | `evidence_memory` | Evidence + memory | Evidence extraction, memory derivation, provenance, maturity ladder, poisoning defenses. |
+| `semantic_adjudication` | LLM semantic adjudication | Structured LLM verdicts for intent reconstruction, replay intent synthesis, memory declassification, topology choice, context equivalence, broker misses, and ambiguous evidence. |
+| `autonomy_orchestrator` | Autonomy decision orchestrator | Combines LLM verdicts, evidence fidelity, hard invariants, soft thresholds, calibration, reversibility, and fallback ladders into autonomous next actions. |
+| `replay_corpus` | Replay + canary corpus | Converts real telemetry into safe replay/canary episodes with redacted intent, expected decisions, provenance, and trial outcomes. |
 | `retrieval_indexing` | Retrieval + indexing | Lexical/vector indexing, pgvector status, re-embedding, exact rerank, graph expansion indexes. |
 | `broker_runtime` | Runtime broker | Skill-context selection, no-skill decision, shadowing control, context hint rendering. |
 | `opportunity_mining` | Opportunity miner | Candidate discovery from clustered evidence, repeated workflows, failures, corrections, co-use, partial use. |
@@ -595,11 +643,12 @@ The main overview renders these first-class stations. Station IDs are stable API
 | `deterministic_writer` | Deterministic writer | Path-contained staging, manifest hashing, file writes, activation locks, transactionality. |
 | `activation_curation` | Activation + curation | Active/archive/promotion lifecycle, active budget, utility rollups, skill technical debt. |
 | `canary_rollback` | Canary + rollback | Runtime canary observation, rollback, freeze, derived-data revocation. |
+| `administrative_escalation` | Administrative escalation | Exceptional authority-boundary events, attempted autonomous alternatives, escalation reason codes, and resolution state. |
 | `scheduler_jobs` | Scheduler + jobs | Sidecar-owned schedules, jobs, leases, attempts, backoff, queue pressure. |
 | `model_embedding` | Model + embedding profiles | Configured text LLM profile, embedding profile, qualification gates, invocation health. |
 | `storage_db` | Postgres + pgvector | DB health, migrations, index health, materialized views, partitions, retention. |
 | `audit_trace` | Audit + trace spine | Correlation across events, jobs, actions, model calls, evaluations, artifacts, and mutations. |
-| `operator_action_gateway` | Operator action gateway | Role checks, confirmations, idempotency, guarded action dispatch, and action audit links. |
+| `administrative_action_gateway` | Administrative action gateway | Role checks, confirmations, idempotency, guarded action dispatch, and action audit links. |
 | `observatory_admin` | Observatory self-health | Admin API, frontend serving, live stream, read-model freshness, browser diagnostics, and dashboard performance. |
 
 ### 5.2 Subsystem workcells
@@ -609,12 +658,13 @@ Subsystem workcells provide the required intermediate zoom level between the glo
 | Subsystem ID | Display name | Stations |
 |---|---|---|
 | `capture_bootstrap` | Capture + bootstrap workcell | `openclaw_live_capture`, `historical_ingestion`, `redaction_taint`, `spool_ingest`, `event_normalization` |
-| `learning_memory` | Learning + memory workcell | `evidence_memory`, `retrieval_indexing`, `opportunity_mining` |
+| `learning_memory` | Learning + memory workcell | `evidence_memory`, `evidence_fidelity`, `semantic_adjudication`, `retrieval_indexing`, `opportunity_mining` |
+| `autonomy_adjudication` | Autonomy + adjudication workcell | `raw_evidence_vault`, `evidence_fidelity`, `semantic_adjudication`, `autonomy_orchestrator`, `replay_corpus`, `administrative_escalation`, `model_embedding`, `audit_trace` |
 | `runtime_context` | Runtime context workcell | `retrieval_indexing`, `broker_runtime`, `context_compiler`, `canary_rollback` |
 | `topology_design` | Topology design workcell | `opportunity_mining`, `topology_operations`, `skill_ir_graph_ir`, `artifact_planner` |
-| `quality_gates` | Quality gates workcell | `scanner_security`, `evaluator_probes`, `model_embedding` |
+| `quality_gates` | Quality gates workcell | `scanner_security`, `evaluator_probes`, `replay_corpus`, `model_embedding` |
 | `artifact_mutation` | Artifact mutation workcell | `artifact_planner`, `context_compiler`, `scanner_security`, `evaluator_probes`, `deterministic_writer`, `activation_curation`, `canary_rollback` |
-| `lifecycle_governance` | Lifecycle governance workcell | `activation_curation`, `canary_rollback`, `audit_trace`, `operator_action_gateway` |
+| `lifecycle_governance` | Lifecycle governance workcell | `activation_curation`, `canary_rollback`, `autonomy_orchestrator`, `administrative_escalation`, `audit_trace`, `administrative_action_gateway` |
 | `control_storage` | Control + storage workcell | `scheduler_jobs`, `model_embedding`, `storage_db`, `audit_trace`, `observatory_admin` |
 
 Each subsystem page shows:
@@ -820,6 +870,13 @@ ROLLBACK_REVOCATION_BACKLOG
 SCHEDULER_LEASE_STALE
 MODEL_PROFILE_UNQUALIFIED
 EMBEDDING_DIMENSION_MISMATCH
+RAW_VAULT_ACCESS_DENIED
+EVIDENCE_INSUFFICIENT_FOR_AUTONOMY
+REPLAY_INTENT_SYNTHESIS_LOW_CONFIDENCE
+SEMANTIC_ADJUDICATION_CONTRADICTION
+AUTONOMY_SOFT_THRESHOLD_DEADLOCK
+AUTONOMY_POLICY_CALIBRATION_STALE
+ADMINISTRATIVE_ESCALATION_REQUIRED
 READ_MODEL_STALE
 LIVE_STREAM_SEQUENCE_GAP
 OBSERVATORY_FRONTEND_ERROR
@@ -845,9 +902,9 @@ The default route `/admin` opens the Observatory overview.
 │                                                                              │
 │                 Interactive Assembly-Line Graph + Subsystem Lanes             │
 │                                                                              │
-│      [Live] → [Hist] → [Redact] → [Ingest] → [Evidence] → [Retrieve]          │
+│      [Live] → [Hist] → [Redact/Vault] → [Ingest] → [Evidence] → [Adjudicate] │
 │         \                                                ↘                    │
-│          └──────────────────────────────────────→ [Broker] → [Runtime]        │
+│          └──────────────→ [Broker] → [Orchestrate] → [Runtime]               │
 │                         [Mine] → [Create/Improve/Compose/Decompose]           │
 │                                  → [SkillIR] → [Compile] → [Scan] → [Eval]    │
 │                                  → [Write] → [Activate] → [Canary/Rollback]   │
@@ -896,7 +953,7 @@ Required visual treatment:
 | Canvas background | Layered command-surface background with subtle grid, lane rails, depth gradients, and clear contrast against nodes and edges. |
 | Subsystem lanes | Distinct horizontal or grouped workcell regions with soft boundaries, lane titles, health badges, and throughput/backpressure summary. |
 | Station nodes | Custom React Flow nodes with compact metric cells, status halo, station icon/glyph, freshness indicator, queue/latency/error mini-readouts, and selected/hover/focus states. |
-| Station status | Consistent shape/color/text grammar for healthy, degraded, blocked, frozen, offline, stale, and unknown states. |
+| Station status | Consistent shape/color/text grammar for healthy, degraded, blocked, frozen, offline, and unknown health states; stale data is communicated through the freshness badge. |
 | Edges | Custom semantic edges with direction, stable labels, purpose chips, flow thickness/intensity, state-specific stroke style, and smooth selection/hover emphasis. |
 | Edge labels | Readable label chips pinned to the edge path, with short purpose text and optional metric badge. Labels must not collide excessively at default zoom. |
 | Animated flow | Subtle pulse/ribbon/particle movement representing actual event/job/candidate flow. Animation must be data-backed and rate-limited. |
@@ -1264,14 +1321,14 @@ Required object microscope panels:
 | Panel | Purpose |
 |---|---|
 | Summary | Type, ID, state, health, confidence, timestamps, owner component, dominant reason code. |
-| Timeline | Ordered state transitions, attempts, spans, gate results, and operator actions. |
+| Timeline | Ordered state transitions, attempts, spans, gate results, and administrative actions. |
 | Provenance | Upstream source records, evidence, memory, candidate, SkillIR, artifact, activation, and runtime outcome links. |
 | Effects | Downstream objects affected by this record, including derived memories, embeddings, artifacts, broker caches, issues, and rollback/revocation paths. |
 | Content | Redacted preview by default; raw reveal only through policy. |
 | Diagnostics | Reason codes, supporting metrics, missing telemetry, likely causes, and safe next views. |
 | Audit | Immutable audit records, actor/action links, manifest hashes, and policy decisions. |
 
-Supported microscope object types include traces, jobs, schedules, candidates, skills, skill versions, SkillIR revisions, SkillGraphIR revisions, artifacts, manifests, scanner findings, evaluation runs, broker decisions, historical source items, evidence clusters, memory records, evolution transactions, issues, model-profile qualification runs, embedding-profile qualification runs, and admin actions.
+Supported microscope object types include traces, jobs, schedules, candidates, skills, skill versions, SkillIR revisions, SkillGraphIR revisions, artifacts, manifests, scanner findings, evaluation runs, broker decisions, replay/canary episodes, raw-vault records, declassification reports, evidence-fidelity records, LLM semantic adjudications, autonomy decisions, threshold policies, threshold-deadlock findings, administrative escalation events, historical source items, evidence clusters, memory records, evolution transactions, issues, model-profile qualification runs, embedding-profile qualification runs, and administrative actions.
 
 ### 7.7 Aggregate-to-evidence contract
 
@@ -1318,7 +1375,7 @@ Visuals:
 - agent/session coverage treemap;
 - capture-to-ingest latency histogram.
 
-Operator actions:
+Administrative actions:
 
 - pause/resume forwarding;
 - force spool flush;
@@ -1352,7 +1409,7 @@ Visuals:
 - quarantine reason treemap;
 - maturity funnel: observed → recurring → contrastive → intervention_validated → regression_validated → canaried → production_verified.
 
-Operator actions:
+Administrative actions:
 
 - run dry-run discovery;
 - start import for an allowlisted source scope;
@@ -1386,7 +1443,7 @@ Visuals:
 - source confidence distribution;
 - quarantine timeline.
 
-Operator actions:
+Administrative actions:
 
 - view redaction policy;
 - run redaction audit sample;
@@ -1414,7 +1471,7 @@ Visuals:
 - malformed-event examples with redaction;
 - retry/backoff timeline.
 
-Operator actions:
+Administrative actions:
 
 - retry failed batch;
 - drop quarantined malformed batch only through retention policy;
@@ -1442,13 +1499,108 @@ Visuals:
 - source-to-evidence provenance graph;
 - diagnostic momentum timeline.
 
-Operator actions:
+Administrative actions:
 
 - quarantine evidence cluster;
 - trigger cluster refresh;
 - show linked candidates;
 - show redacted examples;
 - revoke derived memories from a source.
+
+### 8.5.1 Raw-evidence vault and evidence-fidelity cockpit
+
+Purpose: inspect whether SkillKernel has enough governed semantic evidence to operate autonomously without exposing raw content casually.
+
+Shows:
+
+- raw-vault record counts by source type, sensitivity, retention policy, taint state, and decision family;
+- evidence-fidelity distribution: `raw_vault_linked`, `declassified_summary`, `redacted_derivative`, `metadata_only`, and `hash_only`;
+- decision-family support matrix showing which families can operate fully autonomously, degraded, or not at all from current evidence;
+- raw-access denials and reason codes;
+- declassification reports, redaction checks, secret-mask results, and minimum-necessary evidence windows;
+- derived-data traversal preview for retention, revocation, quarantine, rollback, and privacy-delete operations;
+- source-to-evidence lineage from live hooks, historical transcripts, trajectories, memory files, context files, tasks, and existing skills.
+
+Safe actions:
+
+- run evidence-fidelity audit;
+- retry declassification over a bounded source window;
+- schedule evidence-repair job;
+- open revocation preview;
+- generate a redacted diagnostic bundle.
+
+Forbidden actions:
+
+- bulk raw export;
+- browser-side raw caching;
+- raw-vault access through live stream;
+- using raw content as chart labels, search snippets, or graph node text.
+
+### 8.5.2 Autonomous semantic adjudication cockpit
+
+Purpose: inspect LLM-backed semantic decisions without granting the UI authority over those decisions.
+
+Shows:
+
+- adjudication records grouped by decision family: replay intent synthesis, memory declassification, topology choice, context equivalence, broker adjudication, skill-operation planning, and redaction uncertainty;
+- configured text model profile and qualification state;
+- evidence bundle IDs, fidelity tier, evidence coverage, contradiction indicators, and source windows;
+- structured LLM verdict, confidence decomposition, uncertainty notes, and evidence citations after redaction policy;
+- deterministic admissibility result and hard-invariant outcome;
+- chosen autonomous next action: accept, reject, quarantine, probe, canary, narrow scope, no-op/reschedule, or administrative escalation;
+- delayed outcome and calibration feedback when available.
+
+Safe actions:
+
+- rerun adjudication with a bounded evidence window;
+- request verifier adjudication;
+- create replay-only diagnostic bundle;
+- open linked threshold policy and calibration record.
+
+The cockpit must make clear that an LLM verdict can be semantically authoritative only within its decision family and evidence policy. It cannot directly write files, change scheduler state, reveal raw content, activate skills, or bypass scanner/evaluator gates.
+
+### 8.5.3 Autonomy decision orchestrator and threshold-governance cockpit
+
+Purpose: inspect how SkillKernel converts semantic verdicts and deterministic checks into autonomous next actions.
+
+Shows:
+
+- autonomy decisions by family, risk tier, reversibility, evidence fidelity, model profile, and policy version;
+- hard invariant pass/fail table;
+- soft-threshold bands, calibration support, and reason-code decomposition;
+- fallback ladder state, including additional evidence lookup, raw-vault lookup, re-adjudication, verifier adjudication, probe generation, ephemeral candidate, narrowed scope, canary-only activation, auto-reject, and no-op/reschedule;
+- threshold-deadlock findings and over-deferral/over-action trends;
+- administrative escalation events with hard-boundary reason and attempted autonomous alternatives;
+- outcome feedback used to recalibrate policy.
+
+Safe actions:
+
+- open policy version details;
+- run shadow evaluation for a threshold policy;
+- open calibration-support report;
+- trigger read-only threshold-deadlock diagnostic;
+- schedule bounded fallback attempt where policy permits.
+
+### 8.5.4 Replay and canary corpus cockpit
+
+Purpose: inspect how real telemetry becomes durable replay/canary evidence.
+
+Shows:
+
+- replay episode candidates, accepted episodes, rejected episodes, and degraded episodes;
+- synthesized `redacted_user_intent`, expected skill decision, avoided skill decision, broker context, and outcome;
+- source trace, retrieval log, raw/declassified evidence window, and redaction report;
+- replay coverage by decision family, skill, broker policy, executor profile, topology operation, and historical/live source;
+- canary eligibility and canary results;
+- silent-bypass audit: whether the skill was retrieved, rendered, visible, causally used, ignored, or bypassed.
+
+Safe actions:
+
+- run replay-corpus dry-run;
+- rerun redaction verification;
+- run replay trial;
+- exclude a poisoned or stale episode through normal sidecar policy;
+- export redacted corpus diagnostics.
 
 ### 8.6 Retrieval and indexing cockpit
 
@@ -1476,7 +1628,7 @@ Visuals:
 - vector/lexical overlap Venn-style summary;
 - top false-positive and false-negative examples.
 
-Operator actions:
+Administrative actions:
 
 - run retrieval calibration;
 - reindex lexical search;
@@ -1509,7 +1661,7 @@ Visuals:
 - context budget treemap;
 - shadowing graph overlay.
 
-Operator actions:
+Administrative actions:
 
 - run broker dry-run for selected trace;
 - compare broker policy versions;
@@ -1525,7 +1677,7 @@ Required views:
 
 - candidate counts by operation;
 - cluster sources;
-- evidence thresholds;
+- evidence maturity, fidelity, and calibrated decision bands;
 - deduplication decisions;
 - active/archived duplicate matches;
 - candidate maturity ladder;
@@ -1540,7 +1692,7 @@ Visuals:
 - genericity rejection treemap;
 - recurring workflow timeline.
 
-Operator actions:
+Administrative actions:
 
 - force candidate refresh;
 - quarantine candidate;
@@ -1569,7 +1721,7 @@ Visuals:
 - operation trial comparison matrix;
 - marginal-value-per-context-token chart.
 
-Operator actions:
+Administrative actions:
 
 - run operation dry-run;
 - freeze operation class;
@@ -1599,7 +1751,7 @@ Visuals:
 - contract/effect matrix;
 - dependency/conflict graph.
 
-Operator actions:
+Administrative actions:
 
 - open read-only SkillIR JSON;
 - compare revisions;
@@ -1629,7 +1781,7 @@ Visuals:
 - context-loadability map;
 - manifest hash chain.
 
-Operator actions:
+Administrative actions:
 
 - rescan artifact plan;
 - open read-only artifact preview;
@@ -1661,7 +1813,7 @@ Visuals:
 - runtime context assembly timeline;
 - context pressure over time.
 
-Operator actions:
+Administrative actions:
 
 - compile preview;
 - rerun semantic equivalence check;
@@ -1695,7 +1847,7 @@ Visuals:
 - taint-to-artifact path view;
 - scanner trend timeline.
 
-Operator actions:
+Administrative actions:
 
 - trigger rescan;
 - quarantine artifact/candidate/skill;
@@ -1727,7 +1879,7 @@ Visuals:
 - evaluation trace replay;
 - failure clustering chart.
 
-Operator actions:
+Administrative actions:
 
 - rerun evaluation;
 - mark probe stale through policy;
@@ -1756,7 +1908,7 @@ Visuals:
 - hash/provenance chain;
 - activation timeline.
 
-Operator actions:
+Administrative actions:
 
 - abort staged transaction;
 - request activation at maintenance window;
@@ -1785,7 +1937,7 @@ Visuals:
 - derived-data revocation graph;
 - freeze-state heatmap.
 
-Operator actions:
+Administrative actions:
 
 - freeze/unfreeze;
 - rollback transaction;
@@ -1817,7 +1969,7 @@ Visuals:
 - retry waterfall;
 - schedule calendar.
 
-Operator actions:
+Administrative actions:
 
 - pause/resume schedule;
 - retry failed job;
@@ -1851,7 +2003,7 @@ Visuals:
 - embedding sanity matrix;
 - structured-output failure examples with redaction.
 
-Operator actions:
+Administrative actions:
 
 - run text-profile qualification;
 - run embedding-profile qualification;
@@ -1886,7 +2038,7 @@ Visuals:
 - read-query latency chart;
 - retention backlog timeline.
 
-Operator actions:
+Administrative actions:
 
 - refresh read models;
 - run DB health check;
@@ -1901,13 +2053,14 @@ Required views:
 
 - trace search;
 - span graph;
-- operator actions;
+- administrative actions;
 - model invocations;
 - scanner/evaluator links;
 - job attempts;
 - artifact writes;
 - transaction boundaries;
 - action attribution records;
+- autonomy decisions and administrative escalation records;
 - audit hash-chain verification;
 - provenance traversal.
 
@@ -1919,14 +2072,44 @@ Visuals:
 - action-attribution causal map;
 - event replay animation.
 
-Operator actions:
+Administrative actions:
 
 - verify audit chain;
 - export redacted trace bundle;
 - open linked skill/candidate/job/evaluation;
 - revoke source-derived records through policy.
 
-### 8.21 Operator action gateway cockpit
+### 8.21 Administrative escalation cockpit
+
+Purpose: inspect exceptional cases where autonomous semantic adjudication and fallback paths cannot complete because a hard authority boundary, raw-exposure policy, external ownership boundary, or infrastructure failure requires administrative resolution.
+
+Required views:
+
+- open/resolved escalation events by hard-boundary category;
+- linked autonomy decision, semantic adjudication run, evidence-fidelity state, raw-vault access attempt, threshold policy, and affected object;
+- attempted autonomous alternatives before escalation;
+- reason-code history and recurrence analysis;
+- recommended resolution path: grant governed evidence access, adjust retention/exposure policy, fix model/profile qualification, reject external mutation, run infrastructure repair, or explicitly keep degraded mode;
+- audit receipt and downstream impact graph.
+
+Visuals:
+
+- escalation funnel from autonomous fallback to hard-boundary event;
+- recurrence heatmap by decision family;
+- affected skill/candidate/source graph;
+- hard-boundary taxonomy chart.
+
+Administrative actions:
+
+- acknowledge escalation;
+- resolve with reason;
+- reject unsafe request;
+- open linked policy/evidence/job records;
+- export redacted escalation bundle.
+
+An administrative escalation is not a default semantic review queue. A recurring escalation without a hard-boundary reason is an autonomy defect and must be visible as such.
+
+### 8.22 Administrative action gateway cockpit
 
 Purpose: show guarded UI/API actions and their policy/audit path.
 
@@ -1946,16 +2129,16 @@ Visuals:
 
 - action request → policy → job → audit flow;
 - rejection reason treemap;
-- operator action timeline;
+- administrative action timeline;
 - high-impact action matrix.
 
-Operator actions:
+Administrative actions:
 
 - open linked audit record;
 - retry safe idempotent request only when policy allows;
 - export redacted action report.
 
-### 8.22 Observatory self-health cockpit
+### 8.23 Observatory self-health cockpit
 
 Purpose: show the web administration surface itself.
 
@@ -1983,7 +2166,7 @@ Visuals:
 - browser error table;
 - active viewers by role, without exposing raw content.
 
-Operator actions:
+Administrative actions:
 
 - refresh read models;
 - download redacted Observatory diagnostic bundle;
@@ -2099,7 +2282,7 @@ Visual modes:
 - historical origin;
 - version lineage.
 
-Operator actions:
+Administrative actions:
 
 - open candidate;
 - compare composed vs component-only trial;
@@ -2227,7 +2410,38 @@ Required panels:
 
 Primary question: "Is the skill library improving over time without accumulating hidden debt?"
 
-### 10.8 Control + storage workcell
+### 10.8 Autonomy + adjudication workcell
+
+Primary question: "Is SkillKernel making semantic decisions autonomously, with enough evidence and calibrated trust?"
+
+Stations:
+
+```text
+raw_evidence_vault
+evidence_fidelity
+semantic_adjudication
+autonomy_orchestrator
+replay_corpus
+model_embedding
+audit_trace
+administrative_escalation
+```
+
+Required views:
+
+- decision-family matrix showing replay promotion, memory declassification, topology choice, context equivalence, broker adjudication, and skill-operation planning;
+- evidence-fidelity distribution by decision family: `raw_vault_linked`, `declassified_summary`, `redacted_derivative`, `metadata_only`, `hash_only`;
+- raw-vault policy state, raw-access denials, declassification reports, and revocation backlog without exposing raw content by default;
+- LLM adjudication records with evidence IDs, structured verdict, confidence decomposition, uncertainty fields, contradiction flags, model profile, and prompt-window policy;
+- deterministic admissibility results: schema, provenance, redaction, scanner, rollback, risk tier, ownership, context budget, and canary checks;
+- soft-threshold policy versions, calibration support, threshold-deadlock findings, and fallback-ladder progress;
+- replay/canary corpus episodes synthesized from real telemetry, including redacted intent, expected skill decision, avoided skill decision, provenance, and trial outcome;
+- administrative escalation records with hard-boundary reason, attempted autonomous alternatives, affected object, and safe next action;
+- autonomy-defect trend chart distinguishing over-action, over-deferral, low evidence fidelity, stale calibration, model-profile failure, and policy-denied raw access.
+
+Workcell health fails if semantic decision families repeatedly end in `administrative_escalation_required` without a hard authority-boundary reason, if `metadata_only` or `hash_only` evidence is being used for decisions that require user intent, if raw-vault access is denied for full-autonomy families without degraded-mode labeling, or if soft-threshold misses accumulate without autonomous fallback attempts.
+
+### 10.9 Control + storage workcell
 
 Shows whether the sidecar control plane, scheduler, model profiles, storage, read models, and Observatory itself are reliable.
 
@@ -2240,7 +2454,7 @@ Required panels:
 - retention backlog;
 - audit chain;
 - Observatory self-health;
-- operator action gateway.
+- administrative action gateway.
 
 Primary question: "Is the infrastructure supporting autonomy correctly?"
 
@@ -2333,6 +2547,20 @@ GET  /admin/api/v1/components        component list
 GET  /admin/api/v1/components/{id}   component detail
 GET  /admin/api/v1/components/{id}/metrics
 GET  /admin/api/v1/events            paginated redacted event query
+GET  /admin/api/v1/evidence/fidelity evidence-fidelity summary and unsupported decision families
+GET  /admin/api/v1/evidence/fidelity/{id} evidence-fidelity object detail
+GET  /admin/api/v1/raw-vault/summary redacted raw-vault policy and retention summary
+GET  /admin/api/v1/raw-vault/records/{id} policy-checked redacted record/declassification detail
+GET  /admin/api/v1/adjudications semantic adjudication query
+GET  /admin/api/v1/adjudications/{id} semantic adjudication detail
+GET  /admin/api/v1/autonomy/decisions autonomy decision query
+GET  /admin/api/v1/autonomy/decisions/{id} autonomy decision detail
+GET  /admin/api/v1/autonomy/policies threshold/calibration policy versions
+GET  /admin/api/v1/autonomy/threshold-deadlocks threshold-deadlock findings
+GET  /admin/api/v1/escalations administrative escalation query
+GET  /admin/api/v1/escalations/{id} administrative escalation detail
+GET  /admin/api/v1/replay-corpus replay/canary corpus query
+GET  /admin/api/v1/replay-corpus/{id} replay/canary episode detail
 GET  /admin/api/v1/traces            trace search
 GET  /admin/api/v1/traces/{id}       trace detail and graph
 GET  /admin/api/v1/jobs              job query
@@ -2390,6 +2618,12 @@ POST /admin/api/v1/actions/skills/{id}/rollback
 POST /admin/api/v1/actions/evaluations/{id}/rerun
 POST /admin/api/v1/actions/scanner/rescan
 POST /admin/api/v1/actions/broker/calibrate
+POST /admin/api/v1/actions/autonomy/evidence-audit
+POST /admin/api/v1/actions/autonomy/rerun-adjudication
+POST /admin/api/v1/actions/autonomy/threshold-diagnostic
+POST /admin/api/v1/actions/escalations/{id}/resolve
+POST /admin/api/v1/actions/replay-corpus/dry-run
+POST /admin/api/v1/actions/replay-corpus/rerun-trial
 POST /admin/api/v1/actions/model-profile/qualify
 POST /admin/api/v1/actions/embedding-profile/qualify
 POST /admin/api/v1/actions/storage/health-check
@@ -2539,7 +2773,9 @@ Rules:
 7. Action endpoints return an audited action record or an idempotent reference to an existing action record. The UI does not infer action success from HTTP success alone.
 8. Redacted fields remain structurally present where practical, using explicit redaction metadata, so layouts do not jump and users can understand why content is hidden.
 9. WebSocket/SSE deltas are advisory state updates. The browser reconciles them against stable entities and can recover from gaps by fetching the affected snapshot region.
-10. Backend responses are responsible for policy-safe data shaping. The frontend is not the security boundary for raw content, hidden actions, or unauthorized records.
+10. Semantic-decision endpoints include evidence-fidelity tier, adjudication status, deterministic admissibility result, policy version, fallback state, and escalation reason where applicable.
+11. Raw-vault endpoints never return raw content unless the request presents a valid reveal token, role, purpose, and audit reason; ordinary object details return redacted previews or denial metadata.
+12. Backend responses are responsible for policy-safe data shaping. The frontend is not the security boundary for raw content, hidden actions, or unauthorized records.
 
 ---
 
@@ -2662,7 +2898,7 @@ CREATE TABLE IF NOT EXISTS autoskill.admin_action_audit (
 CREATE TABLE IF NOT EXISTS autoskill.admin_diagnostic_issues (
   issue_id text PRIMARY KEY,
   severity text NOT NULL CHECK (severity IN ('info','warning','degraded','blocked','security','regression','freeze')),
-  scope_type text NOT NULL CHECK (scope_type IN ('system','subsystem','component','skill','candidate','job','trace')),
+  scope_type text NOT NULL CHECK (scope_type IN ('system','subsystem','component','skill','candidate','job','trace','autonomy_decision','evidence_fidelity','raw_vault','threshold_deadlock','administrative_escalation','replay_episode')),
   scope_id text NOT NULL,
   title text NOT NULL,
   symptom text NOT NULL,
@@ -2677,9 +2913,79 @@ CREATE TABLE IF NOT EXISTS autoskill.admin_diagnostic_issues (
 CREATE INDEX IF NOT EXISTS admin_diagnostic_issues_state_severity_idx
 ON autoskill.admin_diagnostic_issues(state, severity, opened_at DESC);
 
+
+CREATE TABLE IF NOT EXISTS autoskill.admin_autonomy_decision_snapshots (
+  snapshot_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  decision_id uuid NOT NULL,
+  decision_family text NOT NULL,
+  target_type text NOT NULL,
+  target_id text NOT NULL,
+  evidence_fidelity text NOT NULL CHECK (evidence_fidelity IN ('raw_vault_linked','declassified_summary','redacted_derivative','metadata_only','hash_only')),
+  llm_adjudication_state text NOT NULL CHECK (llm_adjudication_state IN ('not_required','pending','completed','failed','contradicted','policy_denied')),
+  deterministic_admissibility text NOT NULL CHECK (deterministic_admissibility IN ('pending','passed','failed','quarantined','narrowed','canary_only')),
+  selected_action text NOT NULL,
+  policy_version text NOT NULL,
+  confidence_components jsonb NOT NULL DEFAULT '{}',
+  reason_codes text[] NOT NULL DEFAULT '{}',
+  fallback_state jsonb NOT NULL DEFAULT '{}',
+  linked_trace_id text,
+  linked_issue_id text REFERENCES autoskill.admin_diagnostic_issues(issue_id),
+  captured_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS admin_autonomy_decision_family_time_idx
+ON autoskill.admin_autonomy_decision_snapshots(decision_family, captured_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.admin_evidence_fidelity_snapshots (
+  snapshot_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  scope_type text NOT NULL,
+  scope_id text NOT NULL,
+  fidelity_counts jsonb NOT NULL DEFAULT '{}',
+  unsupported_decision_families jsonb NOT NULL DEFAULT '[]',
+  evidence_repair_jobs jsonb NOT NULL DEFAULT '[]',
+  raw_vault_policy_state text NOT NULL DEFAULT 'unknown',
+  captured_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS admin_evidence_fidelity_scope_time_idx
+ON autoskill.admin_evidence_fidelity_snapshots(scope_type, scope_id, captured_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.admin_replay_corpus_snapshots (
+  snapshot_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  replay_episode_id uuid,
+  state text NOT NULL CHECK (state IN ('candidate','accepted','rejected','degraded','canary','quarantined')),
+  source_kind text NOT NULL,
+  evidence_fidelity text NOT NULL,
+  has_synthesized_redacted_intent boolean NOT NULL DEFAULT false,
+  redaction_status text NOT NULL DEFAULT 'unknown',
+  expected_decision_status text NOT NULL DEFAULT 'unknown',
+  canary_status text NOT NULL DEFAULT 'not_applicable',
+  reason_codes text[] NOT NULL DEFAULT '{}',
+  captured_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS admin_replay_corpus_state_time_idx
+ON autoskill.admin_replay_corpus_snapshots(state, captured_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.admin_administrative_escalation_snapshots (
+  snapshot_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  escalation_id uuid NOT NULL,
+  escalation_kind text NOT NULL,
+  hard_boundary_reason text NOT NULL,
+  target_type text NOT NULL,
+  target_id text NOT NULL,
+  attempted_autonomous_alternatives jsonb NOT NULL DEFAULT '[]',
+  current_state text NOT NULL CHECK (current_state IN ('open','resolved','superseded','cancelled')),
+  reason_codes text[] NOT NULL DEFAULT '{}',
+  captured_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS admin_escalation_state_time_idx
+ON autoskill.admin_administrative_escalation_snapshots(current_state, captured_at DESC);
+
 CREATE TABLE IF NOT EXISTS autoskill.admin_diagnostic_assertions (
   assertion_id text PRIMARY KEY,
-  scope_type text NOT NULL CHECK (scope_type IN ('system','subsystem','component','read_model','stream','security','storage')),
+  scope_type text NOT NULL CHECK (scope_type IN ('system','subsystem','component','read_model','stream','security','storage','autonomy','evidence_fidelity','raw_vault','threshold_policy','administrative_escalation')),
   scope_id text NOT NULL,
   assertion_kind text NOT NULL,
   severity_on_fail text NOT NULL CHECK (severity_on_fail IN ('info','warning','degraded','blocked','security','regression','freeze')),
@@ -2722,6 +3028,75 @@ CREATE TABLE IF NOT EXISTS autoskill.admin_diagnostic_bundles (
   storage_uri text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz
+);
+```
+
+### 13.3.1 Autonomy and evidence read models
+
+The Observatory uses read models for autonomy and evidence state. These tables summarize canonical SkillKernel records; they do not replace raw-evidence, adjudication, decision, threshold, or audit tables.
+
+```sql
+CREATE TABLE IF NOT EXISTS autoskill.admin_evidence_fidelity_status (
+  workspace_id text NOT NULL,
+  source_kind text NOT NULL,
+  decision_family text NOT NULL,
+  evidence_fidelity text NOT NULL CHECK (evidence_fidelity IN (
+    'raw_vault_linked','declassified_summary','redacted_derivative','metadata_only','hash_only','unavailable'
+  )),
+  item_count bigint NOT NULL DEFAULT 0,
+  autonomy_support_state text NOT NULL CHECK (autonomy_support_state IN (
+    'sufficient','degraded','evidence_insufficient_for_autonomy','policy_disallowed','not_applicable','unknown'
+  )),
+  dominant_reason_code text,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (workspace_id, source_kind, decision_family, evidence_fidelity)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.admin_autonomy_decision_status (
+  decision_id uuid PRIMARY KEY,
+  workspace_id text NOT NULL,
+  decision_family text NOT NULL,
+  target_kind text NOT NULL,
+  target_id text NOT NULL,
+  action_risk_tier text NOT NULL,
+  hard_invariant_state text NOT NULL,
+  soft_threshold_state text NOT NULL,
+  selected_action text NOT NULL,
+  confidence_band text NOT NULL,
+  evidence_fidelity text NOT NULL,
+  autonomy_support_state text NOT NULL,
+  dominant_reason_code text,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.admin_semantic_adjudication_status (
+  adjudication_run_id uuid PRIMARY KEY,
+  workspace_id text NOT NULL,
+  decision_family text NOT NULL,
+  model_profile_id uuid,
+  schema_status text NOT NULL,
+  confidence_band text NOT NULL,
+  evidence_fidelity text NOT NULL,
+  verifier_state text NOT NULL,
+  raw_vault_exposure_class text NOT NULL,
+  dominant_reason_code text,
+  started_at timestamptz NOT NULL,
+  completed_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.admin_administrative_escalation_status (
+  event_id uuid PRIMARY KEY,
+  workspace_id text NOT NULL,
+  hard_boundary_kind text NOT NULL,
+  decision_family text NOT NULL,
+  target_kind text NOT NULL,
+  target_id text NOT NULL,
+  attempted_autonomous_alternatives jsonb NOT NULL DEFAULT '[]'::jsonb,
+  resolution_state text NOT NULL CHECK (resolution_state IN ('open','acknowledged','resolved','rejected','expired')),
+  dominant_reason_code text NOT NULL,
+  opened_at timestamptz NOT NULL,
+  resolved_at timestamptz
 );
 ```
 
@@ -2808,14 +3183,15 @@ emit read_model_invalidated events after refresh
 INSERT INTO autoskill.admin_subsystem_catalog
 (subsystem_id, display_name, description, details_route, sort_order)
 VALUES
-('capture_bootstrap','Capture + bootstrap workcell','Live and historical source ingestion, redaction, taint, and canonical normalization.','/admin/subsystems/capture_bootstrap',10),
-('learning_memory','Learning + memory workcell','Evidence extraction, governed memory, indexing, and opportunity discovery.','/admin/subsystems/learning_memory',20),
-('runtime_context','Runtime context workcell','Retrieval, broker decisions, context compilation, runtime feedback, and canaries.','/admin/subsystems/runtime_context',30),
-('topology_design','Topology design workcell','Create, improve, compose, decompose, SkillIR, SkillGraphIR, and artifact planning.','/admin/subsystems/topology_design',40),
-('quality_gates','Quality gates workcell','Scanner, evaluator, model profile qualification, and probe coverage.','/admin/subsystems/quality_gates',50),
-('artifact_mutation','Artifact mutation workcell','Compiled packages, deterministic writes, activation locks, and rollback pointers.','/admin/subsystems/artifact_mutation',60),
-('lifecycle_governance','Lifecycle governance workcell','Curation, canaries, rollback, freezes, action attribution, and operator action control.','/admin/subsystems/lifecycle_governance',70),
-('control_storage','Control + storage workcell','Scheduler, profiles, Postgres, pgvector, audit, read models, and Observatory self-health.','/admin/subsystems/control_storage',80)
+('capture_bootstrap','Capture + bootstrap workcell','Live and historical source ingestion, redaction, taint, evidence-fidelity classification, and canonical normalization.','/admin/subsystems/capture_bootstrap',10),
+('autonomy_adjudication','Autonomy + adjudication workcell','Evidence fidelity, raw-vault/declassification state, autonomous semantic adjudication, threshold governance, replay/canary corpus, and administrative escalation visibility.','/admin/subsystems/autonomy_adjudication',20),
+('learning_memory','Learning + memory workcell','Evidence extraction, governed memory, indexing, semantic adjudication, and opportunity discovery.','/admin/subsystems/learning_memory',30),
+('runtime_context','Runtime context workcell','Retrieval, broker decisions, context compilation, runtime feedback, and canaries.','/admin/subsystems/runtime_context',40),
+('topology_design','Topology design workcell','Create, improve, compose, decompose, SkillIR, SkillGraphIR, and artifact planning.','/admin/subsystems/topology_design',50),
+('quality_gates','Quality gates workcell','Scanner, evaluator, model profile qualification, and probe coverage.','/admin/subsystems/quality_gates',60),
+('artifact_mutation','Artifact mutation workcell','Compiled packages, deterministic writes, activation locks, and rollback pointers.','/admin/subsystems/artifact_mutation',70),
+('lifecycle_governance','Lifecycle governance workcell','Curation, canaries, rollback, freezes, action attribution, calibrated thresholds, administrative escalation, and administrative action control.','/admin/subsystems/lifecycle_governance',80),
+('control_storage','Control + storage workcell','Scheduler, profiles, Postgres, pgvector, audit, read models, and Observatory self-health.','/admin/subsystems/control_storage',90)
 ON CONFLICT (subsystem_id) DO UPDATE SET
   display_name = EXCLUDED.display_name,
   description = EXCLUDED.description,
@@ -2828,28 +3204,34 @@ INSERT INTO autoskill.admin_component_catalog
 VALUES
 ('openclaw_live_capture','OpenClaw live capture','ingestion','Plugin hook and SDK-event capture from active OpenClaw sessions.','/admin/components/openclaw_live_capture',10),
 ('historical_ingestion','Historical bootstrap','ingestion','Discovery and ingestion of existing deployment data.','/admin/components/historical_ingestion',20),
-('redaction_taint','Redaction + taint','ingestion','Sensitive-data handling and trust labeling.','/admin/components/redaction_taint',30),
-('spool_ingest','Spool + ingest','ingestion','Plugin spool, batch forwarding, sidecar ingest, and idempotency.','/admin/components/spool_ingest',40),
-('event_normalization','Event normalization','ingestion','Canonical event and chunk normalization.','/admin/components/event_normalization',50),
-('evidence_memory','Evidence + memory','intelligence','Evidence extraction, memory derivation, maturity, and provenance.','/admin/components/evidence_memory',60),
-('retrieval_indexing','Retrieval + indexing','intelligence','Lexical/vector/metadata/graph indexing and retrieval calibration.','/admin/components/retrieval_indexing',70),
-('broker_runtime','Runtime broker','runtime','Skill-context selection, no-skill decisions, and shadowing control.','/admin/components/broker_runtime',80),
-('opportunity_mining','Opportunity miner','intelligence','Candidate discovery for skill topology operations.','/admin/components/opportunity_mining',90),
-('topology_operations','Topology operations','operations','Create, improve, compose, decompose, and lifecycle support operations.','/admin/components/topology_operations',100),
-('skill_ir_graph_ir','SkillIR / SkillGraphIR','operations','Canonical skill representation and graph workflow topology.','/admin/components/skill_ir_graph_ir',110),
-('artifact_planner','Skill package planner','artifact','Ancillary artifact selection and package planning.','/admin/components/artifact_planner',120),
-('context_compiler','Context compiler','artifact','AI-facing context compilation and token-budget governance.','/admin/components/context_compiler',130),
-('scanner_security','Scanner + security','gates','Static, semantic, capability, artifact, and bundle scanning.','/admin/components/scanner_security',140),
-('evaluator_probes','Evaluator + probes','gates','Regression-aware evaluation and probe-bank execution.','/admin/components/evaluator_probes',150),
-('deterministic_writer','Deterministic writer','artifact','Path-contained staged writes, manifests, and activation locks.','/admin/components/deterministic_writer',160),
-('activation_curation','Activation + curation','lifecycle','Active/archive/promotion and skill-library curation.','/admin/components/activation_curation',170),
-('canary_rollback','Canary + rollback','lifecycle','Post-activation observation, rollback, freeze, and revocation.','/admin/components/canary_rollback',180),
-('scheduler_jobs','Scheduler + jobs','control','Sidecar-owned schedules, leases, attempts, and queue health.','/admin/components/scheduler_jobs',190),
-('model_embedding','Model + embedding profiles','control','Configured text LLM and embedding profile health.','/admin/components/model_embedding',200),
-('storage_db','Postgres + pgvector','storage','Database, indexes, materialized views, retention, and pgvector health.','/admin/components/storage_db',210),
-('audit_trace','Audit + trace spine','control','Cross-system correlation, audit chain, provenance, and action attribution.','/admin/components/audit_trace',220),
-('operator_action_gateway','Operator action gateway','control','Role checks, confirmations, idempotency, guarded action dispatch, and action audit links.','/admin/components/operator_action_gateway',230),
-('observatory_admin','Observatory self-health','control','Admin API, frontend serving, live streams, read models, and dashboard performance.','/admin/components/observatory_admin',240)
+('redaction_taint','Redaction + taint','ingestion','Sensitive-data handling, taint propagation, trust labeling, and storage eligibility.','/admin/components/redaction_taint',30),
+('raw_evidence_vault','Raw-evidence vault','autonomy','Governed full-fidelity evidence retention, raw/declassified access policy, raw-access audit, retention, revocation, and derived-data traversal.','/admin/components/raw_evidence_vault',40),
+('evidence_fidelity','Evidence fidelity','autonomy','Evidence-fidelity tiers and supported decision-family matrix.','/admin/components/evidence_fidelity',45),
+('spool_ingest','Spool + ingest','ingestion','Plugin spool, batch forwarding, sidecar ingest, and idempotency.','/admin/components/spool_ingest',50),
+('event_normalization','Event normalization','ingestion','Canonical event and chunk normalization.','/admin/components/event_normalization',60),
+('evidence_memory','Evidence + memory','intelligence','Evidence extraction, memory derivation, maturity, and provenance.','/admin/components/evidence_memory',70),
+('semantic_adjudication','LLM semantic adjudication','autonomy','LLM semantic verdicts, intent synthesis, memory declassification, topology choice, external-skill relationships, and context-equivalence adjudication.','/admin/components/semantic_adjudication',80),
+('autonomy_orchestrator','Autonomy decision orchestrator','autonomy','Calibrated selective-trust decisions, soft-threshold policy, fallback ladders, policy trials, threshold-deadlock findings, and selected autonomous actions.','/admin/components/autonomy_orchestrator',90),
+('replay_corpus','Replay + canary corpus','autonomy','Replay episode synthesis, redacted intent, expected decisions, canary eligibility, and corpus evidence coverage.','/admin/components/replay_corpus',95),
+('retrieval_indexing','Retrieval + indexing','intelligence','Lexical/vector/metadata/graph indexing and retrieval calibration.','/admin/components/retrieval_indexing',100),
+('broker_runtime','Runtime broker','runtime','Skill-context selection, no-skill decisions, and shadowing control.','/admin/components/broker_runtime',110),
+('opportunity_mining','Opportunity miner','intelligence','Candidate discovery for skill topology operations.','/admin/components/opportunity_mining',120),
+('topology_operations','Topology operations','operations','Create, improve, compose, decompose, and lifecycle support operations.','/admin/components/topology_operations',130),
+('skill_ir_graph_ir','SkillIR / SkillGraphIR','operations','Canonical skill representation and graph workflow topology.','/admin/components/skill_ir_graph_ir',140),
+('artifact_planner','Skill package planner','artifact','Ancillary artifact selection and package planning.','/admin/components/artifact_planner',150),
+('context_compiler','Context compiler','artifact','AI-facing context compilation and token-budget governance.','/admin/components/context_compiler',160),
+('scanner_security','Scanner + security','gates','Static, semantic, capability, artifact, and bundle scanning.','/admin/components/scanner_security',170),
+('evaluator_probes','Evaluator + probes','gates','Regression-aware evaluation and probe-bank execution.','/admin/components/evaluator_probes',180),
+('deterministic_writer','Deterministic writer','artifact','Path-contained staged writes, manifests, and activation locks.','/admin/components/deterministic_writer',190),
+('activation_curation','Activation + curation','lifecycle','Active/archive/promotion and skill-library curation.','/admin/components/activation_curation',200),
+('canary_rollback','Canary + rollback','lifecycle','Post-activation observation, rollback, freeze, and revocation.','/admin/components/canary_rollback',210),
+('administrative_escalation','Administrative escalation','autonomy','Exceptional authority-boundary cases, attempted autonomous alternatives, escalation reason codes, and resolution state.','/admin/components/administrative_escalation',220),
+('scheduler_jobs','Scheduler + jobs','control','Sidecar-owned schedules, leases, attempts, and queue health.','/admin/components/scheduler_jobs',230),
+('model_embedding','Model + embedding profiles','control','Configured text LLM and embedding profile health.','/admin/components/model_embedding',240),
+('storage_db','Postgres + pgvector','storage','Database, indexes, materialized views, retention, and pgvector health.','/admin/components/storage_db',250),
+('audit_trace','Audit + trace spine','control','Cross-system correlation, audit chain, provenance, and action attribution.','/admin/components/audit_trace',260),
+('administrative_action_gateway','Administrative action gateway','control','Role checks, confirmations, idempotency, guarded action dispatch, and action audit links.','/admin/components/administrative_action_gateway',270),
+('observatory_admin','Observatory self-health','control','Admin API, frontend serving, live streams, read models, and dashboard performance.','/admin/components/observatory_admin',280)
 ON CONFLICT (component_id) DO UPDATE SET
   display_name = EXCLUDED.display_name,
   component_group = EXCLUDED.component_group,
@@ -2864,11 +3246,22 @@ VALUES
 ('capture_bootstrap','openclaw_live_capture',10,'source'),
 ('capture_bootstrap','historical_ingestion',20,'source'),
 ('capture_bootstrap','redaction_taint',30,'gate'),
+('capture_bootstrap','raw_evidence_vault',35,'vault'),
+('capture_bootstrap','evidence_fidelity',37,'fidelity'),
 ('capture_bootstrap','spool_ingest',40,'transport'),
 ('capture_bootstrap','event_normalization',50,'normalizer'),
 ('learning_memory','evidence_memory',10,'memory'),
+('learning_memory','evidence_fidelity',15,'fidelity'),
+('learning_memory','semantic_adjudication',18,'adjudicator'),
 ('learning_memory','retrieval_indexing',20,'index'),
 ('learning_memory','opportunity_mining',30,'miner'),
+('autonomy_adjudication','raw_evidence_vault',10,'vault'),
+('autonomy_adjudication','evidence_fidelity',20,'fidelity'),
+('autonomy_adjudication','semantic_adjudication',30,'adjudicator'),
+('autonomy_adjudication','autonomy_orchestrator',40,'orchestrator'),
+('autonomy_adjudication','replay_corpus',50,'corpus'),
+('autonomy_adjudication','model_embedding',60,'model_profile'),
+('autonomy_adjudication','audit_trace',70,'audit'),
 ('runtime_context','retrieval_indexing',10,'retriever'),
 ('runtime_context','broker_runtime',20,'broker'),
 ('runtime_context','context_compiler',30,'compiler'),
@@ -2879,6 +3272,7 @@ VALUES
 ('topology_design','artifact_planner',40,'package_planner'),
 ('quality_gates','scanner_security',10,'scanner'),
 ('quality_gates','evaluator_probes',20,'evaluator'),
+('quality_gates','replay_corpus',25,'corpus'),
 ('quality_gates','model_embedding',30,'profile_health'),
 ('artifact_mutation','artifact_planner',10,'package_planner'),
 ('artifact_mutation','context_compiler',20,'compiler'),
@@ -2889,8 +3283,10 @@ VALUES
 ('artifact_mutation','canary_rollback',70,'rollback'),
 ('lifecycle_governance','activation_curation',10,'curator'),
 ('lifecycle_governance','canary_rollback',20,'canary'),
+('lifecycle_governance','autonomy_orchestrator',25,'orchestrator'),
 ('lifecycle_governance','audit_trace',30,'audit'),
-('lifecycle_governance','operator_action_gateway',40,'action_gateway'),
+('lifecycle_governance','administrative_escalation',35,'escalation'),
+('lifecycle_governance','administrative_action_gateway',40,'action_gateway'),
 ('control_storage','scheduler_jobs',10,'scheduler'),
 ('control_storage','model_embedding',20,'profiles'),
 ('control_storage','storage_db',30,'storage'),
@@ -3497,15 +3893,16 @@ Rules:
 
 1. Redacted content is the default.
 2. Raw content endpoints are disabled by default.
-3. Raw reveal requires explicit config, admin role, reason, short-lived reveal token, and audit record.
-4. No secrets appear in frontend logs, browser storage, query strings, or chart labels.
-5. API keys, provider tokens, and filesystem paths are masked except for safe basename/path-class views.
-6. Artifacts are previewed through policy-checked API endpoints, not direct filesystem serving.
-7. Downloaded diagnostic bundles are redacted by default.
-8. HTML rendering of stored text must be escaped/sanitized; no stored Markdown/HTML from evidence is rendered as trusted HTML.
-9. Monaco previews render text/code only, not executable content.
-10. External links are disabled or opened with `rel="noopener noreferrer"` and explicit warning when enabled.
-11. Saved diagnostic views and operator annotations store redacted text and non-secret filter state only.
+3. Raw-vault records are displayed as metadata, redacted preview, or declassification report unless a policy-checked reveal token is issued.
+4. Raw reveal requires explicit config, admin role, reason, short-lived reveal token, minimum-necessary scope, and audit record.
+5. No secrets appear in frontend logs, browser storage, query strings, or chart labels.
+6. API keys, provider tokens, and filesystem paths are masked except for safe basename/path-class views.
+7. Artifacts are previewed through policy-checked API endpoints, not direct filesystem serving.
+8. Downloaded diagnostic bundles are redacted by default.
+9. HTML rendering of stored text must be escaped/sanitized; no stored Markdown/HTML from evidence is rendered as trusted HTML.
+10. Monaco previews render text/code only, not executable content.
+11. External links are disabled or opened with `rel="noopener noreferrer"` and explicit warning when enabled.
+12. Saved diagnostic views and operator annotations store redacted text and non-secret filter state only.
 
 ### 16.2 Browser-side storage
 
@@ -3529,7 +3926,7 @@ Not allowed:
 
 ### 16.3 Action audit
 
-Every operator action records:
+Every administrative action records:
 
 ```text
 actor identity
@@ -3702,6 +4099,17 @@ web_admin:
     enabled: false
     require_reason: true
     reveal_ttl_seconds: 300
+
+  evidence_and_autonomy:
+    show_evidence_fidelity_lens: true
+    show_raw_vault_policy_state: true
+    show_llm_adjudication_details: true
+    show_threshold_policy_versions: true
+    show_administrative_escalations: true
+    default_raw_vault_detail_mode: "redacted"   # redacted | metadata_only
+    raw_vault_reveal_requires_admin: true
+    adjudication_payload_mode: "redacted_structured"
+    replay_corpus_preview_enabled: true
 
   streams:
     websocket_enabled: true
@@ -3884,7 +4292,7 @@ Acceptance:
 - source → derived data → artifact → runtime outcome links are visible;
 - replay does not re-execute work.
 
-### Phase 7 — Guarded operator actions
+### Phase 7 — Guarded administrative actions
 
 Deliverables:
 
@@ -3991,7 +4399,7 @@ Acceptance:
 - rollback replay shows provenance graph;
 - skill topology graph shows composed/decomposed relationships;
 - raw-content access denied by default;
-- operator action writes audit and creates linked sidecar job.
+- administrative action writes audit and creates linked sidecar job.
 
 ### 20.4 Visual regression tests
 
@@ -4057,7 +4465,21 @@ These tests specifically prevent the polling-report behavior described by operat
 | Refresh React Flow node metrics. | Node `data` updates; React Flow instance, node IDs, viewport, and selection persist. |
 
 
-### 20.8 Overview visual-fidelity defect tests
+### 20.8 Autonomy and evidence diagnostic tests
+
+These tests prove that Observatory shows the calibrated-autonomy machine accurately rather than converting semantic work into an opaque administrative queue.
+
+| Test | Expected result |
+|---|---|
+| Hash-only retrieval telemetry enters replay synthesis. | UI marks the candidate `evidence_insufficient_for_autonomy`, shows evidence-repair attempts, and does not present it as a normal semantic task. |
+| Raw-vault-linked trajectory supports replay intent synthesis. | UI shows adjudication run, redacted intent report, deterministic validation, replay episode state, and calibration outcome. |
+| Semantic adjudication schema failure occurs. | UI shows schema failure reason code, affected decision family, retry/fallback path, and model-profile health. |
+| Soft threshold is missed while hard invariants pass. | UI shows fallback ladder rather than administrative escalation. |
+| Threshold deadlock is detected. | UI opens an issue with calibration support, stalled decision family, and suggested autonomous remediation. |
+| Administrative escalation is created. | UI shows hard authority boundary, attempted autonomous alternatives, linked decision/adjudication records, and audit receipt. |
+| Raw content reveal is denied. | UI keeps redacted preview, records denial, and does not leak raw content to browser state or live stream. |
+
+### 20.9 Overview visual-fidelity defect tests
 
 These tests prevent the centerpiece graph from regressing into an unpolished debugging diagram.
 
@@ -4080,6 +4502,18 @@ The implementation must include a small visual-regression fixture set for the ov
 ---
 
 ## 21. Acceptance criteria
+
+Autonomy/evidence acceptance criteria:
+
+- evidence-fidelity state is visible at system, subsystem, station, and object levels;
+- raw-vault linkage, declassification reports, and access audits are visible without exposing raw content by default;
+- semantic adjudication runs are inspectable through structured verdicts, evidence IDs, confidence decomposition, verifier state, and deterministic admissibility checks;
+- decision-orchestrator records distinguish hard invariant failures from soft-threshold fallback behavior;
+- replay-corpus synthesis shows the path from permitted evidence to redacted intent to replay/canary episode;
+- soft-threshold misses surface autonomous fallback ladders rather than generic review queues;
+- administrative escalation is exceptional, reason-coded, audited, and linked to attempted autonomous alternatives;
+- hash-only and metadata-only evidence modes are shown as degraded/correlation states and cannot appear as full-autonomy support.
+
 
 The Observatory implementation is acceptable when all criteria are true:
 
@@ -4105,24 +4539,26 @@ The Observatory implementation is acceptable when all criteria are true:
 20. Context budget pages make `SKILL.md`, broker hint, support-context, and ignored-skill token pressure visible.
 21. Historical ingestion pages show source discovery, dry-run, import progress, parser failures, taint/quarantine, evidence yielded, and candidates seeded.
 22. Scanner/evaluator pages expose hard findings, probe results, regression state, and canary state.
-23. Storage pages expose migration state, read-model freshness, pgvector/index status, and retention backlog.
-24. Model/embedding pages expose qualification and health without implementing dollar-cost analysis.
-25. Operator action pages expose action requests, policy checks, idempotency, confirmation state, linked jobs, and audit records.
-26. Observatory self-health pages expose admin API health, live-stream gaps, frontend diagnostics, and read-model staleness.
-27. Operator actions are role-checked, confirmation-gated when required by the configured deployment, idempotent, policy-controlled, and audited.
-28. The UI defaults to redacted content and does not expose raw content unless explicitly configured and authorized.
-29. Admin streaming and dashboard queries do not block core SkillKernel processing.
-30. Reduced-motion and low-power modes preserve full informational value.
-31. Component health is based on the required signal contract and never reports healthy when required telemetry is missing.
-32. Pipeline invariant failures create issue-board entries and deep links to supporting records.
-33. Baseline comparison supports bounded time-window and object-version comparisons without changing autonomous policy.
-34. Diagnostic bundles can be generated with redaction by default and audited access.
-35. The interface meets the configured accessibility, keyboard-navigation, reduced-motion, and low-power requirements.
-36. The visual design delivers the requested assembly-line bird’s-eye view, subsystem workcell views, station cockpits, and object microscope behavior.
-37. The overview graph passes the centerpiece acceptance rubric for visual finish, legibility across zoom, diagnostic honesty, spatial memory, clutter control, performance, accessibility, and theme coherence.
-38. Every core SkillKernel topology operation, lifecycle operation, artifact operation, broker decision, scanner/evaluator decision, scheduler state, and historical-ingestion state has a visible path from system overview to object-level evidence.
-39. The system triage summary can identify healthy, degraded, blocked, frozen, stale, and unknown states with a primary reason code and safe next action.
-40. Seeded high-load fixtures demonstrate that Observatory remains effective for large deployments with months of transcripts, many agents, historical imports, large skill libraries, and active soak-test telemetry.
+23. Autonomy pages expose evidence fidelity, raw-vault policy state, LLM semantic adjudications, deterministic admissibility checks, threshold policy versions, fallback ladders, threshold-deadlock findings, replay/canary corpus episodes, and administrative escalations.
+24. The UI distinguishes degraded evidence mode from full-autonomy mode and never implies that hash-only or metadata-only telemetry can support user-intent reconstruction.
+25. Storage pages expose migration state, read-model freshness, pgvector/index status, and retention backlog.
+26. Model/embedding pages expose qualification and health without implementing dollar-cost analysis.
+27. Administrative action pages expose action requests, policy checks, idempotency, confirmation state, linked jobs, and audit records.
+28. Observatory self-health pages expose admin API health, live-stream gaps, frontend diagnostics, and read-model staleness.
+29. Administrative actions are role-checked, confirmation-gated when required by the configured deployment, idempotent, policy-controlled, and audited.
+30. The UI defaults to redacted content and does not expose raw content unless explicitly configured and authorized.
+31. Admin streaming and dashboard queries do not block core SkillKernel processing.
+32. Reduced-motion and low-power modes preserve full informational value.
+33. Component health is based on the required signal contract and never reports healthy when required telemetry is missing.
+34. Pipeline invariant failures create issue-board entries and deep links to supporting records.
+35. Baseline comparison supports bounded time-window and object-version comparisons without changing autonomous policy.
+36. Diagnostic bundles can be generated with redaction by default and audited access.
+37. The interface meets the configured accessibility, keyboard-navigation, reduced-motion, and low-power requirements.
+38. The visual design delivers the requested assembly-line bird’s-eye view, subsystem workcell views, station cockpits, and object microscope behavior.
+39. The overview graph passes the centerpiece acceptance rubric for visual finish, legibility across zoom, diagnostic honesty, spatial memory, clutter control, performance, accessibility, and theme coherence.
+40. Every core SkillKernel topology operation, lifecycle operation, artifact operation, broker decision, scanner/evaluator decision, scheduler state, and historical-ingestion state has a visible path from system overview to object-level evidence.
+41. The system triage summary can identify healthy, degraded, blocked, frozen, stale, and unknown states with a primary reason code and safe next action.
+42. Seeded high-load fixtures demonstrate that Observatory remains effective for large deployments with months of transcripts, many agents, historical imports, large skill libraries, and active soak-test telemetry.
 ---
 
 ## 22. Implementation notes for “wow” without fragility
@@ -4150,6 +4586,17 @@ Do not let beauty hide failure. When the system is degraded, blocked, frozen, or
 
 ## 23. Implementation anti-patterns
 
+Autonomy/evidence anti-patterns are release blockers:
+
+- presenting `metadata_only` or `hash_only` records as sufficient for user-intent reconstruction;
+- using a generic ambiguous status where the real state is soft-threshold fallback, evidence-insufficient, hard-invariant failure, raw-vault policy disallow, or administrative escalation;
+- hiding LLM adjudication verdicts behind a pass/fail badge without showing evidence IDs, confidence decomposition, schema status, verifier state, and deterministic admissibility checks;
+- letting raw prompts, tool arguments, tool results, or memory text enter WebSocket payloads, browser persistence, logs, analytics, or URL parameters;
+- representing administrative escalation as a normal work queue for semantic decisions;
+- showing a healthy autonomy state when repeated soft-threshold misses are stalling decisions;
+- displaying model-profile health without qualification state, schema-adherence failures, timeout pressure, and verifier disagreement.
+
+
 These implementation choices are release-blocking because they undermine Observatory's purpose:
 
 | Anti-pattern | Why it is unacceptable |
@@ -4161,6 +4608,10 @@ These implementation choices are release-blocking because they undermine Observa
 | Charts with no object links | Turns diagnostics into decoration rather than investigation tools. |
 | UI-local action state | Creates a second control plane and breaks auditability. |
 | Raw-content convenience toggles | Risks exposing transcripts, memories, prompts, tool results, or artifacts without explicit authorization and audit. |
+| Hiding evidence insufficiency as ordinary review | Makes autonomy failures look like operator workflow; evidence insufficiency must appear as a diagnostic condition with repair attempts. |
+| Treating LLM verdicts as invisible magic | Prevents trust calibration; semantic adjudications must expose evidence, confidence components, deterministic checks, and outcome links. |
+| Showing raw-vault availability without policy state | Misleads users into thinking evidence exists and is usable; raw-vault records must show access policy, retention, declassification, and denial reasons. |
+| Confusing administrative escalation with semantic uncertainty | Routine semantic uncertainty belongs to autonomous adjudication and fallback ladders; escalation is reserved for hard authority boundaries. |
 | Broad query invalidation for small deltas | Causes avoidable remounts, flicker, network load, and state loss. |
 | Unbounded data fetches | Makes soak testing fragile under real deployment history and large skill libraries. |
 | Visual effects as source of truth | Creates attractive but untrustworthy animation detached from audited records. |
@@ -4170,6 +4621,16 @@ These implementation choices are release-blocking because they undermine Observa
 Every anti-pattern has a positive replacement elsewhere in this specification: stable entity reconciliation, custom visual components, freshness-aware health, aggregate-to-evidence drill-downs, action gateway auditing, redacted-by-default content policy, bounded APIs, data-backed effects, explicit disabled states, and seeded deterministic fixtures.
 
 ## 24. Developer checklist
+
+Autonomy/evidence checklist:
+
+- [ ] Add read models and routes for evidence fidelity, raw-vault audit, semantic adjudication, autonomy decisions, replay synthesis, threshold deadlocks, and administrative escalation.
+- [ ] Render evidence-fidelity and autonomy-support states in the system overview, subsystem workcells, station headers, object microscope pages, and issue board.
+- [ ] Implement autonomy decision object microscope pages with evidence links, hard invariants, soft thresholds, fallback ladder, and audit links.
+- [ ] Implement replay-corpus synthesis pages that show LLM-synthesized redacted intent and deterministic validation without requiring raw content exposure.
+- [ ] Ensure raw content is never emitted in live stream deltas, LISTEN/NOTIFY payloads, browser local storage, URLs, or console logs.
+- [ ] Add visual and end-to-end tests for evidence-insufficient, soft-threshold fallback, threshold deadlock, administrative escalation, and raw-reveal denial states.
+
 
 - [ ] Add admin API module to sidecar.
 - [ ] Add auth/role middleware.
@@ -4216,28 +4677,44 @@ Every anti-pattern has a positive replacement elsewhere in this specification: s
 
 These references support the implementation choices in this document.
 
+### 25.1 OpenClaw and SkillKernel platform boundaries
+
 - OpenClaw plugin hooks: in-process extension points for observing/changing agent runs, tool calls, message flow, session lifecycle, subagent routing, installs, and Gateway startup.  
   URL: https://docs.openclaw.ai/plugins/hooks
 
-- OpenClaw skills: `SKILL.md`-based skill directories loaded into agent context, including frontmatter, load roots, precedence, and gating behavior.  
+- OpenClaw configuration reference: trusted conversation-bearing plugin hook access requires explicit `plugins.entries.<id>.hooks.allowConversationAccess`.  
+  URL: https://docs.openclaw.ai/gateway/configuration-reference
+
+- OpenClaw skills: `SKILL.md`-based skill directories loaded into agent context, including frontmatter, load roots, precedence, `{baseDir}` references, and gating behavior.  
   URL: https://docs.openclaw.ai/tools/skills
 
 - OpenClaw session management and session tools: session routing, session history behavior, bounded/safety-filtered `sessions_history`, and transcript concepts used by Observatory drill-downs.  
   URL: https://docs.openclaw.ai/concepts/session
   URL: https://docs.openclaw.ai/concepts/session-tool
 
-- OpenClaw trajectory and transcript references: historical execution records, prompts, tools, errors, runtime settings, active skills, and transcript hygiene behavior used by historical and trace views.  
+- OpenClaw trajectory and transcript references: historical execution records, prompts, tools, errors, runtime settings, active skills, and transcript hygiene behavior used by historical, evidence-fidelity, and trace views.  
   URL: https://docs.openclaw.ai/tools/trajectory
   URL: https://docs.openclaw.ai/reference/transcript-hygiene
 
+- OpenClaw plugin SDK runtime helpers: simple model-completion seams, runtime helper boundaries, and model attribution relevant to Observatory model-profile and adjudication visibility.  
+  URL: https://docs.openclaw.ai/plugins/sdk-runtime
+
+### 25.2 Autonomy, security, and governance anchors
+
+- NIST AI Risk Management Framework and generative-AI profile: lifecycle risk management, governance, measurement, and monitoring concepts relevant to calibrated autonomy and issue surfacing.  
+  URL: https://www.nist.gov/itl/ai-risk-management-framework
+  URL: https://www.nist.gov/itl/ai-risk-management-framework/generative-artificial-intelligence
+
+- OWASP agentic/LLM guidance: excessive agency, sensitive-information disclosure, plugin/tool boundaries, and defense-in-depth requirements relevant to raw-vault views, administrative escalation, and UI action gates.  
+  URL: https://genai.owasp.org/
+
+- OWASP Top 10: web application security guidance relevant to admin-surface access control, injection, insecure design, security misconfiguration, logging, and SSRF protections.  
+  URL: https://owasp.org/Top10/
+
+### 25.3 Frontend rendering, live-update, and visual fidelity anchors
+
 - React state identity: React preserves or resets state based on component position and keys; stable domain keys are required for live dashboard continuity.  
   URL: https://react.dev/learn/preserving-and-resetting-state
-
-- CSS reduced-motion preference: `prefers-reduced-motion` detects a user preference to minimize nonessential motion and must be honored by animation-heavy views.  
-  URL: https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/At-rules/%40media/prefers-reduced-motion
-
-- Page Visibility API: document visibility changes let the UI pause or reduce animation work when the tab is hidden.  
-  URL: https://developer.mozilla.org/en-US/docs/Web/API/Page_Visibility_API
 
 - React memoization: `memo` can avoid child re-renders when props are unchanged, useful for station nodes and cockpit subcomponents after profiling.  
   URL: https://react.dev/reference/react/memo
@@ -4245,29 +4722,19 @@ These references support the implementation choices in this document.
 - React Flow / `@xyflow/react`: interactive node-edge diagrams, built-in MiniMap, Controls, custom node/edge support, and layouting examples with Dagre/ELK.  
   URL: https://reactflow.dev/
 
-- React Flow custom nodes and animated/custom edges: custom nodes are React components and custom edge examples show how the edge path can be styled/animated beyond defaults.  
+- React Flow custom nodes, custom edges, updating nodes, and performance guidance: required for a polished high-fidelity overview that updates in place rather than rebuilding.  
   URL: https://reactflow.dev/examples/nodes/custom-node
   URL: https://reactflow.dev/examples/edges/animating-edges
-
-- React Flow performance guidance: memoization, state design, and avoiding unnecessary re-renders are required for large interactive graphs.  
-  URL: https://reactflow.dev/learn/advanced-use/performance
-
-- React Flow updating nodes: node and edge properties can be updated through new arrays, and node `data` objects must be recreated for data changes to be detected.  
   URL: https://reactflow.dev/examples/nodes/update-node
+  URL: https://reactflow.dev/learn/advanced-use/performance
 
 - ELK.js / Eclipse Layout Kernel: layered graph layout for directed node-link diagrams and port-aware layouts.  
   URL: https://github.com/kieler/elkjs
 
-- Apache ECharts: charting library with many chart types, Canvas/SVG rendering, dynamic data, progressive rendering, and large data support.  
+- Apache ECharts: charting library with many chart types, Canvas/SVG rendering, dynamic data, progressive rendering, large data support, and transition/diff behavior through `setOption`.  
   URL: https://echarts.apache.org/
-
-- Apache ECharts dynamic data and transitions: initialized charts update through `setOption`, and data transitions use add/update/remove diffing when identifiers such as data names are stable.  
   URL: https://apache.github.io/echarts-handbook/en/how-to/data/dynamic-data/
   URL: https://echarts.apache.org/handbook/en/how-to/animation/transition/
-
-- Apache ECharts large-data/performance features: Canvas/SVG rendering, progressive rendering, stream loading, and dirty-rectangle rendering support dense dashboards without full redraws.  
-  URL: https://echarts.apache.org/
-  URL: https://apache.github.io/echarts-handbook/en/basics/release-note/v5-feature/
 
 - PixiJS: GPU-accelerated canvas rendering through WebGL/WebGL2/WebGPU-capable renderers.  
   URL: https://pixijs.com/
@@ -4275,10 +4742,8 @@ These references support the implementation choices in this document.
 - D3: low-level web-standard data visualization primitives useful for scales, shapes, and custom transforms when ECharts/React Flow do not cover a niche visualization.  
   URL: https://d3js.org/
 
-- TanStack Query: server-state fetching, caching, synchronization, invalidation, and async-state handling for React/TypeScript applications.  
+- TanStack Query: server-state fetching, caching, synchronization, invalidation, structural sharing, and async-state handling for React/TypeScript applications.  
   URL: https://tanstack.com/query/latest
-
-- TanStack Query important defaults: structural sharing preserves references for unchanged JSON-compatible data, which supports stable memoized views during background refetch.  
   URL: https://tanstack.com/query/v5/docs/framework/react/guides/important-defaults
 
 - Monaco Editor: browser editor powering VS Code, useful for read-only JSON, manifest, `SKILL.md`, and diff inspection.  
@@ -4287,10 +4752,14 @@ These references support the implementation choices in this document.
 - Playwright visual comparisons: screenshot baselines can detect accidental visual regressions in the overview graph and reduced-motion/low-power variants.  
   URL: https://playwright.dev/docs/test-snapshots
 
-- FastAPI: high-performance Python web framework with type-hinted APIs, OpenAPI generation, security utilities, static-file support, and WebSocket support.  
-  URL: https://fastapi.tiangolo.com/
+- CSS reduced-motion preference and Page Visibility API: required to prevent excessive motion and avoid wasting client resources when the dashboard is hidden.  
+  URL: https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/At-rules/%40media/prefers-reduced-motion
+  URL: https://developer.mozilla.org/en-US/docs/Web/API/Page_Visibility_API
 
-- FastAPI WebSockets: documented WebSocket endpoint support for live dashboard streams.  
+### 25.4 Backend API, observability, and database anchors
+
+- FastAPI and FastAPI WebSockets: type-hinted API framework, OpenAPI generation, static serving, security utilities, and WebSocket endpoint support for live dashboard streams.  
+  URL: https://fastapi.tiangolo.com/
   URL: https://fastapi.tiangolo.com/advanced/websockets/
 
 - OpenAPI Specification: standard API description format for generating typed clients and validating API contracts.  
@@ -4302,10 +4771,7 @@ These references support the implementation choices in this document.
 - WCAG 2.2: accessibility guidance for contrast, focus, keyboard interaction, text alternatives, and reduced-motion-friendly design.  
   URL: https://www.w3.org/TR/WCAG22/
 
-- OWASP Top 10: web application security guidance relevant to admin-surface access control, injection, insecure design, security misconfiguration, logging, and SSRF protections.  
-  URL: https://owasp.org/Top10/
-
-- PostgreSQL `LISTEN`/`NOTIFY`: built-in database notification mechanism for waking live dashboard streams and read-model invalidation.  
+- PostgreSQL `LISTEN`/`NOTIFY`: built-in database notification mechanism for waking live dashboard streams and read-model invalidation; notifications should carry invalidation IDs, not sensitive bodies.  
   URL: https://www.postgresql.org/docs/current/sql-notify.html
 
 - PostgreSQL materialized views: read-optimized query results refreshable by the sidecar for dashboard performance.  
@@ -4315,8 +4781,8 @@ These references support the implementation choices in this document.
 
 ## 26. Readiness statement
 
-The SkillKernel Observatory is the correct next subsystem for soak testing. SkillKernel’s autonomous control plane needs a high-fidelity visual interface because the system’s behavior is distributed across live capture, historical ingestion, storage, retrieval, topology operations, context compilation, scanner/evaluator gates, file transactions, broker decisions, and rollback logic.
+The SkillKernel Observatory is the correct next subsystem for soak testing. SkillKernel’s autonomous control plane needs a high-fidelity visual interface because the system’s behavior is distributed across live capture, historical ingestion, raw-vault and evidence-fidelity policy, autonomous semantic adjudication, calibrated decision orchestration, storage, retrieval, topology operations, context compilation, scanner/evaluator gates, file transactions, broker decisions, administrative escalation exceptions, and rollback logic.
 
-The Observatory makes those internals visible without weakening the control plane. It runs from the sidecar, consumes governed read models, streams safe deltas, defaults to redacted content, provides drill-down across subsystem workcells and every station, and exposes guarded operator actions only through existing sidecar policy and audit paths.
+The Observatory makes those internals visible without weakening the control plane. It runs from the sidecar, consumes governed read models, streams safe deltas, defaults to redacted content, provides drill-down across subsystem workcells and every station, and exposes guarded administrative actions only through existing sidecar policy and audit paths.
 
 Correctness, inspectability, continuity, and visual quality are all implementation requirements. The desired “wow” effect comes from a polished, high-fidelity rendering of the real SkillKernel machine, not from decorative animation detached from real state. A user must be able to start at the overview, identify whether SkillKernel is healthy or inefficient, follow the affected subsystem, inspect the responsible station, and open the exact object-level evidence without leaving the web interface.
