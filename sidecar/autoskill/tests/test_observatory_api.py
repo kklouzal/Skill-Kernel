@@ -15,6 +15,7 @@ from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope
 from autoskill.core.hashing import sha256_text
 from autoskill.db.broker_policy import NullBrokerPolicyStore
+from autoskill.db.evaluations import EvaluationReviewRecord, NullEvaluationStore
 from autoskill.db.events import NullEventStore
 from autoskill.db.jobs import JobQueueSummary
 from autoskill.db.memory import NullMemoryGovernanceStore
@@ -1730,6 +1731,78 @@ def test_observatory_missing_required_signal_issue_cites_metric_contract() -> No
         "quality",
     ]
     assert detail["provenance"]["upstream"][1]["object_type"] == "required_signal_metric"
+
+
+def test_observatory_evaluation_detail_exposes_autonomy_assurance() -> None:
+    evaluation_id = uuid4()
+    skill_version_id = uuid4()
+    evaluation_store = NullEvaluationStore()
+    evaluation_store.reviews = [
+        EvaluationReviewRecord(
+            workspace_id=uuid4(),
+            workspace_key="dev-01",
+            evaluation_id=evaluation_id,
+            skill_version_id=skill_version_id,
+            skill_slug="context-repair",
+            skill_version=2,
+            executor_profile_id=None,
+            category="proposal_gate",
+            status="needs_intervention",
+            result_summary={
+                "candidate_slug": "context-repair",
+                "status": "needs_intervention",
+                "reason_codes": ["intervention-required"],
+                "autonomy_assurance": {
+                    "decision_family": "skill_plan_semantic_adjudication",
+                    "policy_version": "proposal_gate_acceptance_policy.v1",
+                    "hard_invariant_failures": [],
+                    "soft_threshold_misses": ["intervention-required"],
+                    "autonomous_fallback_actions": [
+                        "assemble_richer_permitted_evidence",
+                        "generate_more_probes",
+                    ],
+                    "threshold_deadlock_candidate": True,
+                    "administrative_escalation_allowed": False,
+                    "calibration_support_status": "fixed_policy_pending_replay_calibration",
+                    "evidence_mode": "semantic_derivative_only",
+                },
+            },
+            created_at=datetime.now(UTC),
+        )
+    ]
+    app = create_app(evaluation_store=evaluation_store)
+    route = _routes(app)[("/admin/api/v1/evaluations/{evaluation_id}", "GET")]
+
+    async def run():
+        return await route.endpoint(evaluation_id=str(evaluation_id), workspace_id="dev-01")
+
+    response = asyncio.run(run())
+    detail = response.object
+    diagnostics = detail["diagnostics"]
+
+    assert detail["content_policy"]["raw_available"] is False
+    assert diagnostics["autonomy_decision"]["state"] == "soft_threshold_stalled"
+    assert diagnostics["autonomy_decision"]["threshold_deadlock_candidate"] is True
+    assert diagnostics["soft_threshold_misses"] == ["intervention-required"]
+    assert diagnostics["hard_invariant_failures"] == []
+    assert diagnostics["operator_next_actions"] == [
+        "assemble_richer_permitted_evidence",
+        "generate_more_probes",
+    ]
+    assert diagnostics["policy_blocked_actions"] == [
+        "raw_content_reveal_without_policy_reason",
+        "manual_override_of_hard_invariants",
+    ]
+    assert {
+        "object_type": "soft_threshold",
+        "object_id": "intervention-required",
+        "relationship": "calibrated_threshold_miss",
+    } in detail["provenance"]["upstream"]
+    assert {
+        "object_type": "skill_version",
+        "object_id": str(skill_version_id),
+        "relationship": "evaluated_artifact",
+    } in detail["provenance"]["upstream"]
 
 
 def test_observatory_action_records_audited_policy_receipt() -> None:

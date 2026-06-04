@@ -981,6 +981,18 @@ Acceptance:
   regression passed (`2 passed`); final validation passed with `uv run ruff
   check sidecar`, `uv run pytest`, `uv run python -m compileall -q sidecar`,
   `docker compose config --quiet`, and `git diff --check`.
+- validation evidence for the Observatory evaluator autonomy-assurance
+  microscope slice passed on the final tree: `/admin/api/v1/evaluations/{id}`
+  now expands content-safe proposal-gate assurance into hard-invariant failures,
+  calibrated soft-threshold misses, threshold-deadlock state, deterministic
+  fallback actions, explicit policy-blocked actions, and typed provenance refs
+  for evaluated skill versions plus threshold/invariant signals. This advances
+  core handoff Sections 5.1, 5.6, 5.10, and 12.8-12.10 plus Observatory
+  Sections 7.6, 7.7, 8.14, 12.6, and 16.1/16.3 without exposing raw probe
+  payloads or adding mutation authority. Focused Observatory API tests passed
+  (`36 passed`); final validation passed with `uv run ruff check sidecar`, `uv
+  run pytest` (`358 passed`), `uv run python -m compileall -q sidecar`,
+  `docker compose config --quiet`, and `git diff --check`.
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and

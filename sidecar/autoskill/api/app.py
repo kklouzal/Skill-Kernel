@@ -4688,6 +4688,125 @@ def create_app(
                 return item
         return None
 
+    def _evaluation_microscope(
+        evaluation_id: str,
+        evaluation: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if evaluation is None:
+            return {
+                "schema_version": "skillkernel.observatory.evaluation.v1",
+                "object_type": "evaluation",
+                "object_id": evaluation_id,
+                "title": f"Evaluation {evaluation_id}",
+                "summary": "Evaluation/probe review state.",
+                "diagnostics": _missing_read_model(
+                    "evaluation",
+                    supporting_component="evaluator_probes",
+                ),
+                "content_policy": {
+                    "raw_available": False,
+                    "raw_reason": "raw-content-disabled",
+                },
+            }
+        result_summary = evaluation.get("result_summary")
+        if not isinstance(result_summary, dict):
+            result_summary = {}
+        assurance = result_summary.get("autonomy_assurance")
+        if not isinstance(assurance, dict):
+            assurance = {}
+        hard_failures = [str(item) for item in assurance.get("hard_invariant_failures") or []]
+        soft_misses = [str(item) for item in assurance.get("soft_threshold_misses") or []]
+        fallback_actions = [
+            str(item) for item in assurance.get("autonomous_fallback_actions") or []
+        ]
+        evidence_refs: list[dict[str, Any]] = [
+            {
+                "object_type": "evaluation",
+                "object_id": str(evaluation.get("evaluation_id") or evaluation_id),
+                "relationship": "subject",
+            }
+        ]
+        skill_version_id = evaluation.get("skill_version_id")
+        if skill_version_id:
+            evidence_refs.append(
+                {
+                    "object_type": "skill_version",
+                    "object_id": str(skill_version_id),
+                    "relationship": "evaluated_artifact",
+                }
+            )
+        evidence_refs.extend(
+            {
+                "object_type": "autonomy_invariant",
+                "object_id": code,
+                "relationship": "hard_invariant_failure",
+            }
+            for code in hard_failures
+        )
+        evidence_refs.extend(
+            {
+                "object_type": "soft_threshold",
+                "object_id": code,
+                "relationship": "calibrated_threshold_miss",
+            }
+            for code in soft_misses
+        )
+        decision_state = "passed"
+        if hard_failures:
+            decision_state = "hard_invariant_blocked"
+        elif soft_misses:
+            decision_state = "soft_threshold_stalled"
+        elif evaluation.get("status") not in {"passed", "succeeded"}:
+            decision_state = "pending_or_unknown"
+        diagnostics = {
+            **evaluation,
+            "read_model": {
+                "source": "evaluation_store.list_evaluation_reviews",
+                "data_quality": "content-safe-derived",
+                "raw_probe_payload_available": False,
+            },
+            "autonomy_decision": {
+                "state": decision_state,
+                "decision_family": assurance.get("decision_family"),
+                "policy_version": assurance.get("policy_version"),
+                "evidence_mode": assurance.get("evidence_mode"),
+                "calibration_support_status": assurance.get(
+                    "calibration_support_status"
+                ),
+                "threshold_deadlock_candidate": bool(
+                    assurance.get("threshold_deadlock_candidate")
+                ),
+                "administrative_escalation_allowed": bool(
+                    assurance.get("administrative_escalation_allowed")
+                ),
+            },
+            "hard_invariant_failures": hard_failures,
+            "soft_threshold_misses": soft_misses,
+            "operator_next_actions": fallback_actions
+            or ["inspect_probe_results", "collect_more_evidence"],
+            "policy_blocked_actions": (
+                []
+                if assurance.get("administrative_escalation_allowed")
+                else [
+                    "raw_content_reveal_without_policy_reason",
+                    "manual_override_of_hard_invariants",
+                ]
+            ),
+        }
+        return {
+            "schema_version": "skillkernel.observatory.evaluation.v1",
+            "object_type": "evaluation",
+            "object_id": evaluation_id,
+            "title": f"Evaluation {evaluation_id}",
+            "summary": "Evaluation/probe review state and autonomy assurance.",
+            "diagnostics": diagnostics,
+            "provenance": {"upstream": evidence_refs, "downstream": []},
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+            },
+        }
+
     def _uuid_or_404(value: str, object_label: str) -> UUID:
         try:
             return UUID(value)
@@ -6793,19 +6912,7 @@ def create_app(
             ("evaluation_id", "skill_id", "skill_version_id"),
         )
         return ObservatoryObjectResponse(
-            object={
-                "schema_version": "skillkernel.observatory.evaluation.v1",
-                "object_type": "evaluation",
-                "object_id": evaluation_id,
-                "title": f"Evaluation {evaluation_id}",
-                "summary": "Evaluation/probe review state.",
-                "diagnostics": evaluation
-                or _missing_read_model("evaluation", supporting_component="evaluator_probes"),
-                "content_policy": {
-                    "raw_available": False,
-                    "raw_reason": "raw-content-disabled",
-                },
-            }
+            object=_evaluation_microscope(evaluation_id, evaluation)
         )
 
     @app.get("/admin/api/v1/scanner-findings", response_model=ObservatoryCollectionResponse)

@@ -1410,6 +1410,22 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `uv run ruff check sidecar scripts`, `uv run pytest` (`357 passed`),
   `uv run python -m compileall -q sidecar scripts`, `docker compose config
   --quiet`, and `git diff --check`.
+- Observatory evaluation microscopes now expose proposal-gate autonomy assurance
+  as content-safe operator evidence: `/admin/api/v1/evaluations/{id}` expands
+  hard invariant failures, soft threshold misses, threshold-deadlock state,
+  deterministic fallback actions, policy-blocked actions, and typed provenance
+  refs for evaluated skill versions and threshold/invariant signals without raw
+  probe payload access. This advances core handoff Sections 5.1, 5.6, 5.10,
+  12.8-12.10 and Observatory Sections 7.6, 7.7, 8.14, 12.6, and 16.1/16.3.
+  Focused validation passed with `uv run pytest -q
+  sidecar/autoskill/tests/test_observatory_api.py` (`36 passed`) and `uv run
+  ruff check sidecar/autoskill/api/app.py
+  sidecar/autoskill/tests/test_observatory_api.py`; final validation passed
+  with `uv run ruff check sidecar`, `uv run pytest` (`358 passed`), `uv run
+  python -m compileall -q sidecar`, `docker compose config --quiet`, and
+  `git diff --check`. No compose/Postgres smoke was needed because the slice
+  reshapes an existing content-safe evaluation review read model without
+  changing schema or worker persistence.
 
 ## Next Gates
 
