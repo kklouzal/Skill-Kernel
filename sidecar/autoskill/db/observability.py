@@ -504,8 +504,19 @@ class AsyncpgObservabilityStore(AsyncpgPoolOwner):
             job_status_rows = await conn.fetch(
                 """
                 SELECT status, count(*)::int AS count
-                FROM autoskill.jobs
+                FROM autoskill.jobs j
                 WHERE ($1::uuid IS NULL OR workspace_id = $1)
+                  AND NOT (
+                    j.status = 'failed'
+                    AND EXISTS (
+                      SELECT 1
+                      FROM autoskill.jobs newer
+                      WHERE newer.workspace_id = j.workspace_id
+                        AND newer.job_kind = j.job_kind
+                        AND newer.status = 'succeeded'
+                        AND newer.updated_at > j.updated_at
+                    )
+                  )
                 GROUP BY status
                 """,
                 workspace_id,
@@ -513,8 +524,19 @@ class AsyncpgObservabilityStore(AsyncpgPoolOwner):
             job_kind_rows = await conn.fetch(
                 """
                 SELECT job_kind, status, count(*)::int AS count
-                FROM autoskill.jobs
+                FROM autoskill.jobs j
                 WHERE ($1::uuid IS NULL OR workspace_id = $1)
+                  AND NOT (
+                    j.status = 'failed'
+                    AND EXISTS (
+                      SELECT 1
+                      FROM autoskill.jobs newer
+                      WHERE newer.workspace_id = j.workspace_id
+                        AND newer.job_kind = j.job_kind
+                        AND newer.status = 'succeeded'
+                        AND newer.updated_at > j.updated_at
+                    )
+                  )
                 GROUP BY job_kind, status
                 """,
                 workspace_id,

@@ -550,6 +550,17 @@ class AsyncpgJobStore(AsyncpgPoolOwner):
                 FROM autoskill.jobs j
                 JOIN autoskill.workspaces w USING (workspace_id)
                 WHERE ($1::text IS NULL OR w.external_key = $1)
+                  AND NOT (
+                    j.status = 'failed'
+                    AND EXISTS (
+                      SELECT 1
+                      FROM autoskill.jobs newer
+                      WHERE newer.workspace_id = j.workspace_id
+                        AND newer.job_kind = j.job_kind
+                        AND newer.status = 'succeeded'
+                        AND newer.updated_at > j.updated_at
+                    )
+                  )
                 GROUP BY status
                 """,
                 workspace_key,
@@ -560,6 +571,17 @@ class AsyncpgJobStore(AsyncpgPoolOwner):
                 FROM autoskill.jobs j
                 JOIN autoskill.workspaces w USING (workspace_id)
                 WHERE ($1::text IS NULL OR w.external_key = $1)
+                  AND NOT (
+                    j.status = 'failed'
+                    AND EXISTS (
+                      SELECT 1
+                      FROM autoskill.jobs newer
+                      WHERE newer.workspace_id = j.workspace_id
+                        AND newer.job_kind = j.job_kind
+                        AND newer.status = 'succeeded'
+                        AND newer.updated_at > j.updated_at
+                    )
+                  )
                 GROUP BY job_kind, status
                 ORDER BY job_kind, status
                 """,

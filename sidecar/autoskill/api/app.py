@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -178,6 +179,8 @@ from fastapi import status as http_status
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
+
+DEFAULT_OBSERVATORY_WORKSPACE_ID = "dev-01"
 
 
 def _admin_response_meta() -> dict[str, object]:
@@ -4531,8 +4534,13 @@ def create_app(
         audit_limit: int = 1000,
     ) -> dict[str, object]:
         settings = get_settings()
+        effective_workspace_id = (
+            workspace_id
+            or os.environ.get("AUTOSKILL_WORKSPACE_ID")
+            or DEFAULT_OBSERVATORY_WORKSPACE_ID
+        )
         bounded_window = max(1, min(window_minutes, 24 * 60))
-        job_summary = await jobs.summary(workspace_key=workspace_id)
+        job_summary = await jobs.summary(workspace_key=effective_workspace_id)
         worker_health = await build_worker_health(
             jobs,
             concurrency_by_pool={
@@ -4540,6 +4548,7 @@ def create_app(
                 "maintenance": settings.worker_maintenance_concurrency,
                 "mutation": settings.worker_mutation_concurrency,
             },
+            workspace_key=effective_workspace_id,
         )
         status_payload = {
             "mode": settings.mode.value,
@@ -4555,12 +4564,12 @@ def create_app(
             "workers": worker_health.to_json(),
         }
         metrics_snapshot = await observability.operator_metrics(
-            workspace_key=workspace_id,
+            workspace_key=effective_workspace_id,
             window_minutes=bounded_window,
             storage_limit=100,
         )
         audit_chain_valid = await audit.verify_chain(
-            workspace_key=workspace_id,
+            workspace_key=effective_workspace_id,
             limit=max(1, min(audit_limit, 10_000)),
         )
         static_available = (_admin_static_dir() / "index.html").exists()
@@ -4571,7 +4580,7 @@ def create_app(
             worker_health=worker_health.to_json(),
             audit_chain_valid=audit_chain_valid,
             static_available=static_available,
-            workspace_id=workspace_id,
+            workspace_id=effective_workspace_id,
             window_minutes=bounded_window,
         )
 

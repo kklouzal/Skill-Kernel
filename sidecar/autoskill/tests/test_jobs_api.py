@@ -18,6 +18,7 @@ from fastapi import HTTPException
 class MemoryJobStore:
     def __init__(self) -> None:
         self.jobs: dict[str, JobRecord] = {}
+        self.workspace_ids: dict[str, UUID] = {}
         self.heartbeats: dict[str, WorkerHeartbeatRecord] = {}
         self.heartbeat_events: list[WorkerHeartbeatRecord] = []
         self.renewals: list[dict[str, object]] = []
@@ -44,9 +45,10 @@ class MemoryJobStore:
         existing = self.jobs.get(idempotency_key)
         if existing:
             return JobEnqueueResult(job=existing, created=False)
+        workspace_id = self.workspace_ids.setdefault(workspace_key, uuid4())
         job = JobRecord(
             job_id=uuid4(),
-            workspace_id=uuid4(),
+            workspace_id=workspace_id,
             workspace_key=workspace_key,
             trace_id=trace_id or uuid4(),
             span_id=span_id or uuid4(),
@@ -160,6 +162,20 @@ class MemoryJobStore:
         jobs = list(self.jobs.values())
         if workspace_key is not None:
             jobs = [job for job in jobs if job.workspace_key == workspace_key]
+        jobs = [
+            job
+            for job in jobs
+            if not (
+                job.status == "failed"
+                and any(
+                    newer.workspace_id == job.workspace_id
+                    and newer.job_kind == job.job_kind
+                    and newer.status == "succeeded"
+                    and newer.updated_at > job.updated_at
+                    for newer in jobs
+                )
+            )
+        ]
         for job in jobs:
             counts[job.status] = counts.get(job.status, 0) + 1
             kind_counts = by_kind.setdefault(job.job_kind, {})
@@ -284,6 +300,57 @@ async def test_job_store_renews_held_lease() -> None:
     assert renewed.lease_expires_at is not None
     assert leased.lease_expires_at is not None
     assert renewed.lease_expires_at > leased.lease_expires_at
+
+
+@pytest.mark.asyncio
+async def test_job_summary_ignores_failed_kind_after_later_success() -> None:
+    store = MemoryJobStore()
+    await store.enqueue_job(
+        workspace_key="dev-01",
+        job_kind="observatory.refresh",
+        idempotency_key="refresh:failed",
+    )
+    failed_lease = await store.claim_next_job(worker_id="worker-1", lease_seconds=30)
+    assert failed_lease is not None
+    failed = await store.complete_job(
+        job_id=failed_lease.job_id,
+        worker_id="worker-1",
+        status="failed",
+    )
+    await store.enqueue_job(
+        workspace_key="dev-01",
+        job_kind="observatory.refresh",
+        idempotency_key="refresh:recovered",
+    )
+    succeeded_lease = await store.claim_next_job(worker_id="worker-1", lease_seconds=30)
+    assert succeeded_lease is not None
+    succeeded = await store.complete_job(
+        job_id=succeeded_lease.job_id,
+        worker_id="worker-1",
+        status="succeeded",
+    )
+    await store.enqueue_job(
+        workspace_key="other",
+        job_kind="observatory.refresh",
+        idempotency_key="refresh:other-failed",
+    )
+    other_lease = await store.claim_next_job(worker_id="worker-1", lease_seconds=30)
+    assert other_lease is not None
+    await store.complete_job(
+        job_id=other_lease.job_id,
+        worker_id="worker-1",
+        status="failed",
+    )
+
+    assert failed is not None
+    assert succeeded is not None
+    assert succeeded.updated_at > failed.updated_at
+    summary = await store.summary(workspace_key="dev-01")
+    global_summary = await store.summary()
+
+    assert summary.counts == {"succeeded": 1}
+    assert summary.by_kind == {"observatory.refresh": {"succeeded": 1}}
+    assert global_summary.counts == {"succeeded": 1, "failed": 1}
 
 
 def test_jobs_api_uses_job_store() -> None:

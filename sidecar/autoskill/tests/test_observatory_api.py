@@ -15,6 +15,7 @@ from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope
 from autoskill.core.hashing import sha256_text
 from autoskill.db.events import NullEventStore
+from autoskill.db.jobs import JobQueueSummary
 from autoskill.db.observability import TraceSpanRecord, TraceSummaryRecord
 from autoskill.db.observatory_admin import NullObservatoryAdminStore
 from autoskill.db.retrieval import RetrievalLog
@@ -100,6 +101,33 @@ class MemoryTraceStore:
         return summaries[:limit]
 
     async def operator_metrics(self, **_kwargs):
+        return {
+            "captured_at": datetime.now(UTC).isoformat(),
+            "metrics": {},
+            "dashboards": {},
+        }
+
+
+class MemorySummaryJobStore:
+    def __init__(self) -> None:
+        self.summary_calls: list[str | None] = []
+        self.heartbeat_calls = 0
+
+    async def summary(self, *, workspace_key: str | None = None) -> JobQueueSummary:
+        self.summary_calls.append(workspace_key)
+        return JobQueueSummary(counts={}, by_kind={})
+
+    async def list_worker_heartbeats(self, **_kwargs):
+        self.heartbeat_calls += 1
+        return []
+
+
+class CaptureObservabilityStore:
+    def __init__(self) -> None:
+        self.operator_metric_calls: list[dict[str, object]] = []
+
+    async def operator_metrics(self, **kwargs):
+        self.operator_metric_calls.append(kwargs)
         return {
             "captured_at": datetime.now(UTC).isoformat(),
             "metrics": {},
@@ -265,6 +293,33 @@ def test_observatory_summary_exposes_all_pipeline_stations_and_truth_states() ->
         )
         assert station["data_quality"]["raw_content_available"] is False
         assert station["details_url"].startswith("/admin/components/")
+
+
+def test_observatory_summary_defaults_to_effective_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_WORKSPACE_ID", "prod-ops")
+    get_settings.cache_clear()
+    jobs = MemorySummaryJobStore()
+    observability = CaptureObservabilityStore()
+    audit = MemoryAuditStore()
+    app = create_app(
+        job_store=jobs,
+        observability_store=observability,
+        audit_store=audit,
+    )
+    route = _routes(app)[("/admin/api/v1/summary", "GET")]
+
+    async def run():
+        return await route.endpoint(window_minutes=30)
+
+    response = asyncio.run(run())
+
+    assert response.snapshot["workspace_id"] == "prod-ops"
+    assert jobs.summary_calls == ["prod-ops", "prod-ops"]
+    assert observability.operator_metric_calls[0]["workspace_key"] == "prod-ops"
+
+    get_settings.cache_clear()
 
 
 def test_observatory_live_sse_fallback_preserves_snapshot_sequence() -> None:

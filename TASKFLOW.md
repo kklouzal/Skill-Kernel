@@ -1134,6 +1134,25 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `npm run build --prefix sidecar/autoskill/observatory`, `uv run ruff check
   sidecar`, full `uv run pytest` (`327 passed`), `uv run python -m compileall
   -q sidecar`, and `git diff --check`.
+- Observatory job-health scoping is implemented for the control/storage
+  workcell: `/admin/api/v1/summary` now resolves an effective workspace from
+  the query, `AUTOSKILL_WORKSPACE_ID`, then the `dev-01` deployment default,
+  passes that workspace through job counts, worker-health summaries,
+  operator metrics, and audit verification, and suppresses stale failed job
+  rows when the same workspace/job kind later succeeded. This prevents
+  recovered backlog runs from remaining as false `failed-jobs-present`
+  indicators while preserving newer failures and other-workspace failures.
+  Validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_jobs_api.py::test_job_summary_ignores_failed_kind_after_later_success
+  sidecar/autoskill/tests/test_observatory_api.py::test_observatory_summary_defaults_to_effective_workspace
+  -q` (`2 passed`), `uv run ruff check sidecar`, `uv run pytest`
+  (`334 passed`), `uv run python -m compileall -q sidecar`,
+  `docker compose config --quiet`, and `git diff --check`. A real
+  compose/Postgres smoke applied migrations, inserted an isolated terminal
+  failed job followed by a same-workspace/job-kind success through
+  `AsyncpgJobStore`, verified the job summary and Observatory
+  `operator_metrics.job_queue_depth` returned only `{"succeeded": 1}`, then
+  deleted the smoke workspace rows.
 
 ## Next Gates
 

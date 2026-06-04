@@ -497,8 +497,9 @@ async def build_worker_health(
     jobs: JobStore,
     *,
     concurrency_by_pool: dict[WorkerPool, int],
+    workspace_key: str | None = None,
 ) -> WorkerHealthSummary:
-    summary = await jobs.summary()
+    summary = await jobs.summary(workspace_key=workspace_key)
     heartbeats = await jobs.list_worker_heartbeats()
     pools = [
         WorkerPoolConfig(

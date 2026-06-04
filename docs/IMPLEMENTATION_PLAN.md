@@ -85,6 +85,10 @@ Acceptance:
 - maintenance worker can claim and complete deterministic evidence/embedding jobs.
 - worker loop supports bounded/configured concurrency, persistent heartbeat observation, and graceful process shutdown.
 - queued, leased, renewed, completed, API-enqueued, and scheduled jobs carry trace/span context; implemented and validated with focused tests plus compose/Postgres smoke coverage.
+- job health summaries are workspace-scoped where the caller supplies a
+  workspace and ignore stale failed rows once a later job with the same
+  workspace/job kind has succeeded, preserving current failures without leaving
+  recovered backlog runs as false blocked signals.
 
 ## Phase 4 - Evidence, Embeddings, Retrieval
 
@@ -810,3 +814,16 @@ Acceptance:
   the stream cursor after fallback delivery, and emit heartbeat payloads once
   the client is caught up, while the frontend inspector remains a read-only
   Monaco viewer with an explicit missing-payload state.
+- validation evidence for the Observatory job-health scoping slice passed on
+  the final tree: focused job/Observatory tests passed with `2 passed`,
+  `uv run ruff check sidecar` passed, `uv run pytest` passed with 334 tests,
+  `uv run python -m compileall -q sidecar` passed,
+  `docker compose config --quiet` passed, and `git diff --check` passed. A
+  compose/Postgres smoke applied migrations, inserted an isolated terminal
+  failed job followed by a same-workspace/job-kind success through the asyncpg
+  store, verified both the job summary and Observatory
+  `operator_metrics.job_queue_depth` returned only `{"succeeded": 1}`, and
+  deleted the smoke rows. The admin summary now uses one effective workspace for
+  job counts, worker-health summaries, operator metrics, and audit
+  verification, and job summaries no longer treat old failed rows as active
+  failures after a later same-workspace/job-kind success.
