@@ -845,3 +845,8 @@ Acceptance:
   creates and idempotently seeds `admin_component_catalog` and
   `admin_subsystem_catalog`, and focused tests verify every runtime station and
   subsystem ID appears in that seed.
+- the Observatory frontend API surface now has a generated route client:
+  `scripts/generate_observatory_openapi_client.py` derives the checked-in
+  `observatoryClient.ts` route map from FastAPI OpenAPI, frontend wrappers
+  consume generated admin route paths, and focused tests fail if the generated
+  file drifts from the current app schema.

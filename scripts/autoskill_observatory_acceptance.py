@@ -85,7 +85,7 @@ DEVELOPER_CHECKLIST: tuple[ObservatoryItem, ...] = (
     ObservatoryItem("24.11", "Add read-model refresh service.", ("refresh_read_models action and snapshot builders",)),
     ObservatoryItem("24.12", "Add WebSocket live stream.", ("/admin/live websocket route",)),
     ObservatoryItem("24.13", "Add optional SSE stream.", ("/admin/live-sse route",)),
-    ObservatoryItem("24.14", "Add OpenAPI-generated frontend client.", ("typed frontend API client in observatory/src/api.ts",), "implemented_equivalent"),
+    ObservatoryItem("24.14", "Add OpenAPI-generated frontend client.", ("scripts/generate_observatory_openapi_client.py", "sidecar/autoskill/observatory/src/generated/observatoryClient.ts", "typed frontend API wrappers in observatory/src/api.ts consume generated admin route paths")),
     ObservatoryItem("24.15", "Build React/Vite app shell.", ("observatory package.json and App.tsx",)),
     ObservatoryItem("24.16", "Build overview assembly-line graph with subsystem lanes.", ("AssemblyLine and Workcells components",)),
     ObservatoryItem("24.17", "Implement stable-identity live reconciliation.", ("snapshotContentSignature and AssemblyLine structuralKey",)),

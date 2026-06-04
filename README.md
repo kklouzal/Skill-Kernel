@@ -112,6 +112,12 @@ Emit the Observatory web/admin acceptance crosswalk:
 python scripts/autoskill_observatory_acceptance.py --json
 ```
 
+Regenerate the Observatory frontend admin API route client from FastAPI OpenAPI:
+
+```bash
+python scripts/generate_observatory_openapi_client.py
+```
+
 Emit the Section 32/33 risk and developer handoff crosswalk:
 
 ```bash

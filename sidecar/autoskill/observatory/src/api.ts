@@ -6,6 +6,7 @@ import type {
   SnapshotResponse,
   TraceSummary
 } from "./types";
+import { adminApiPath } from "./generated/observatoryClient";
 
 const API_BASE = import.meta.env.VITE_ADMIN_API_BASE ?? "/admin/api/v1";
 const CSRF_HEADER = "X-SkillKernel-CSRF";
@@ -60,7 +61,7 @@ export function fetchSummary(session: ApiSession, workspaceId: string, windowMin
   const params = new URLSearchParams();
   if (workspaceId) params.set("workspace_id", workspaceId);
   params.set("window_minutes", String(windowMinutes));
-  return fetchJson<SnapshotResponse>(`/summary?${params.toString()}`, session);
+  return fetchJson<SnapshotResponse>(`${adminApiPath("/summary")}?${params.toString()}`, session);
 }
 
 export function fetchObject(
@@ -72,7 +73,10 @@ export function fetchObject(
   const params = new URLSearchParams();
   if (workspaceId) params.set("workspace_id", workspaceId);
   return fetchJson<ObjectResponse>(
-    `/objects/${encodeURIComponent(objectType)}/${encodeURIComponent(objectId)}?${params}`,
+    `${adminApiPath("/objects/{object_type}/{object_id}", {
+      object_type: objectType,
+      object_id: objectId
+    })}?${params}`,
     session
   );
 }
@@ -80,26 +84,29 @@ export function fetchObject(
 export function search(session: ApiSession, query: string, workspaceId: string) {
   const params = new URLSearchParams({ query, limit: "20" });
   if (workspaceId) params.set("workspace_id", workspaceId);
-  return fetchJson<SearchResponse>(`/search?${params}`, session);
+  return fetchJson<SearchResponse>(`${adminApiPath("/search")}?${params}`, session);
 }
 
 export function fetchTraces(session: ApiSession, workspaceId: string, limit = 25) {
   const params = new URLSearchParams({ limit: String(limit) });
   if (workspaceId) params.set("workspace_id", workspaceId);
-  return fetchJson<CollectionResponse<TraceSummary>>(`/traces?${params}`, session);
+  return fetchJson<CollectionResponse<TraceSummary>>(
+    `${adminApiPath("/traces")}?${params}`,
+    session
+  );
 }
 
 export function fetchSkills(session: ApiSession, workspaceId: string, limit = 100) {
   const params = new URLSearchParams({ limit: String(limit) });
   if (workspaceId) params.set("workspace_id", workspaceId);
-  return fetchJson<CollectionResponse>(`/skills?${params}`, session);
+  return fetchJson<CollectionResponse>(`${adminApiPath("/skills")}?${params}`, session);
 }
 
 export function fetchSkillDetail(session: ApiSession, skillId: string, workspaceId: string) {
   const params = new URLSearchParams();
   if (workspaceId) params.set("workspace_id", workspaceId);
   return fetchJson<ObjectResponse>(
-    `/skills/${encodeURIComponent(skillId)}?${params}`,
+    `${adminApiPath("/skills/{skill_id}", { skill_id: skillId })}?${params}`,
     session
   );
 }
@@ -107,19 +114,25 @@ export function fetchSkillDetail(session: ApiSession, skillId: string, workspace
 export function fetchTopology(session: ApiSession, workspaceId: string, windowMinutes: number) {
   const params = new URLSearchParams({ window_minutes: String(windowMinutes) });
   if (workspaceId) params.set("workspace_id", workspaceId);
-  return fetchJson<ObjectResponse>(`/topology?${params}`, session);
+  return fetchJson<ObjectResponse>(`${adminApiPath("/topology")}?${params}`, session);
 }
 
 export function fetchContextArtifacts(session: ApiSession, workspaceId: string, limit = 50) {
   const params = new URLSearchParams({ limit: String(limit) });
   if (workspaceId) params.set("workspace_id", workspaceId);
-  return fetchJson<CollectionResponse>(`/context/artifacts?${params}`, session);
+  return fetchJson<CollectionResponse>(
+    `${adminApiPath("/context/artifacts")}?${params}`,
+    session
+  );
 }
 
 export function fetchActionAudits(session: ApiSession, workspaceId: string, limit = 25) {
   const params = new URLSearchParams({ limit: String(limit) });
   if (workspaceId) params.set("workspace_id", workspaceId);
-  return fetchJson<CollectionResponse>(`/actions/audit?${params}`, session);
+  return fetchJson<CollectionResponse>(
+    `${adminApiPath("/actions/audit")}?${params}`,
+    session
+  );
 }
 
 export function fetchTraceReplay(
@@ -131,7 +144,7 @@ export function fetchTraceReplay(
   const params = new URLSearchParams({ limit: String(limit) });
   if (workspaceId) params.set("workspace_id", workspaceId);
   return fetchJson<ObjectResponse>(
-    `/replay/traces/${encodeURIComponent(traceId)}?${params}`,
+    `${adminApiPath("/replay/traces/{trace_id}", { trace_id: traceId })}?${params}`,
     session
   );
 }
@@ -148,7 +161,7 @@ export function postAction(
   }
 ) {
   return csrfToken(session).then((token) =>
-    fetchJson<{ receipt: Record<string, unknown> }>("/actions", session, {
+    fetchJson<{ receipt: Record<string, unknown> }>(adminApiPath("/actions"), session, {
       method: "POST",
       headers: {
         [BROWSER_SESSION_HEADER]: "true",

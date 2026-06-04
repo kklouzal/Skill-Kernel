@@ -8,12 +8,23 @@ SCRIPT_PATH = (
     Path(__file__).resolve().parents[3] / "scripts" / "autoskill_observatory_acceptance.py"
 )
 REPO_ROOT = SCRIPT_PATH.parents[1]
+CLIENT_GENERATOR_PATH = REPO_ROOT / "scripts" / "generate_observatory_openapi_client.py"
 SPEC = importlib.util.spec_from_file_location("autoskill_observatory_acceptance", SCRIPT_PATH)
 assert SPEC is not None
 observatory_acceptance = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 sys.modules[SPEC.name] = observatory_acceptance
 SPEC.loader.exec_module(observatory_acceptance)
+
+CLIENT_GENERATOR_SPEC = importlib.util.spec_from_file_location(
+    "generate_observatory_openapi_client",
+    CLIENT_GENERATOR_PATH,
+)
+assert CLIENT_GENERATOR_SPEC is not None
+client_generator = importlib.util.module_from_spec(CLIENT_GENERATOR_SPEC)
+assert CLIENT_GENERATOR_SPEC.loader is not None
+sys.modules[CLIENT_GENERATOR_SPEC.name] = client_generator
+CLIENT_GENERATOR_SPEC.loader.exec_module(client_generator)
 
 
 def test_observatory_acceptance_report_maps_ui_spec_and_checklist() -> None:
@@ -47,3 +58,21 @@ def test_observatory_catalog_seed_migration_matches_runtime_catalog() -> None:
         assert f"('{station.component_id}'," in migration
     for subsystem in SUBSYSTEMS:
         assert f"('{subsystem['subsystem_id']}'," in migration
+
+
+def test_observatory_generated_openapi_client_is_fresh() -> None:
+    generated_path = (
+        REPO_ROOT / "sidecar/autoskill/observatory/src/generated/observatoryClient.ts"
+    )
+    generated = generated_path.read_text(encoding="utf-8")
+    schema = client_generator.load_openapi_schema()
+    routes = client_generator._admin_routes(schema)
+    route_paths = {route["path"] for route in routes}
+    expected = client_generator.build_client_source(schema)
+
+    assert generated == expected
+    assert len(routes) >= 70
+    assert len(route_paths) >= 70
+    assert "/summary" in generated
+    assert "/actions/audit" in generated
+    assert "/replay/traces/{trace_id}" in generated

@@ -1219,6 +1219,14 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   IDs back to the SQL seed. Validation passed with the Observatory acceptance
   report showing `implemented_equivalent=5`, focused pytest (`2 passed`),
   ruff, `docker compose config --quiet`, and `git diff --check`.
+- Observatory OpenAPI client remediation is implemented for Section 24.14:
+  `scripts/generate_observatory_openapi_client.py` exports the FastAPI
+  `/admin/api/v1` OpenAPI route surface into the checked-in TypeScript client
+  at `sidecar/autoskill/observatory/src/generated/observatoryClient.ts`, and
+  `api.ts` consumes the generated route helper for every direct admin API call.
+  Validation passed with generator `--check`, focused pytest (`3 passed`),
+  ruff, `npm run build --prefix sidecar/autoskill/observatory`, and the
+  Observatory acceptance report showing `implemented_equivalent=4`.
 
 ## Next Gates
 
