@@ -54,6 +54,8 @@ PostgreSQL read models, materialized summaries, and LISTEN/NOTIFY invalidation w
 
 The design uses progressive disclosure. The overview shows the entire machine. Drill-down pages expose component details. Trace replay animates an individual event, job, candidate, skill change, or rollback through the pipeline. The UI supports both live operation and historical time-window replay.
 
+Live operation must feel continuous. After a page or tab is mounted, routine telemetry changes reconcile into existing components in place. The interface must not clear and rebuild the visible route, graph, charts, or station cards on ordinary refresh cycles. Full replacement is reserved for intentional navigation, incompatible schema changes, sequence-gap recovery, or explicit operator reload.
+
 ---
 
 ## 1. Product goals
@@ -229,6 +231,134 @@ The Observatory must be visually impressive, but it is primarily a truth-preserv
 9. The UI never presents estimated dollar cost, model-price advice, or cost optimization recommendations.
 10. The interface remains useful with animations disabled, WebGL unavailable, slow read models, disconnected live stream, or partial telemetry.
 
+
+### 1.10 Live-update and render-stability invariant
+
+The Observatory is a live diagnostic interface, not a periodically rebuilt report. When the operator is viewing a route, tab, subsystem, graph, station cockpit, chart, table, timeline, or object microscope, routine data updates must reconcile into the mounted UI tree without clearing the visible surface.
+
+Required behavior:
+
+```text
+initial navigation mounts the selected route
+live deltas patch existing entity records
+background snapshots reconcile by stable identity
+new entities are inserted
+removed entities are removed
+changed entities update in place
+unchanged entities preserve object identity where practical
+selection, viewport, zoom, scroll, expanded panels, filters, and open drawers remain stable
+```
+
+The implementation must avoid full-route remounts during ordinary telemetry refresh. The visible symptom to prevent is a periodic flash where station cards disappear, graphs re-layout from scratch, charts blank/reinitialize, and then the same components reappear. That behavior is a defect because it breaks operator focus and makes the dashboard feel like a polling report instead of a live control-room instrument.
+
+Allowed full replacement cases:
+
+| Case | Required behavior |
+|---|---|
+| User changes top-level route or primary tab | The old route body may unmount and the new route body may mount. Persistent shell, auth state, command palette, theme, and live connection remain stable. |
+| User explicitly presses reload/reset view | Route may reload intentionally and must indicate that the operator requested it. |
+| WebSocket sequence gap cannot be patched | Reload only the affected read model or route region where practical; show a self-health warning and preserve viewport/selection if the affected objects still exist. |
+| Major API/schema incompatibility | Stop live patching, show incompatible-version state, and require reload or upgrade. |
+| Graph topology genuinely changes | Insert/remove/re-layout affected nodes and edges; metric-only changes must not trigger graph reconstruction. |
+
+Prohibited ordinary-refresh behavior:
+
+```text
+using snapshot_seq, Date.now(), lastUpdatedAt, or polling counters as React keys
+clearing arrays to [] before replacing them with new data
+showing a full-page spinner during background refetch when previous data exists
+disposing and reinitializing charts every poll interval
+recreating React Flow node/edge types inside render
+re-running full graph layout for metric-only updates
+resetting viewport, selection, expanded panels, scroll position, or filters on data refresh
+invalidating broad query families when an entity-level patch is available
+```
+
+Stable identity is mandatory. Use domain identifiers as UI identity keys:
+
+```text
+component_id
+subsystem_id
+station_id
+edge_id
+trace_id
+job_id
+skill_id
+skill_version_id
+candidate_id
+artifact_id
+issue_id
+import_run_id
+source_item_id
+evaluation_id
+scanner_finding_id
+broker_decision_id
+evolution_transaction_id
+```
+
+Snapshot sequence numbers, timestamps, read-model refresh times, and polling counters are synchronization metadata. They are never React keys for visible operational components.
+
+Every live surface must distinguish:
+
+| State | UI behavior |
+|---|---|
+| initial loading | Skeleton or loading state is allowed because no prior data exists. |
+| background syncing | Existing data remains visible; show subtle sync indicator. |
+| stale | Existing data remains visible with stale/freshness warning. |
+| degraded stream | Existing data remains visible; show sequence-gap/reconnect warning and reconcile safely. |
+| unavailable | Show degraded/unavailable state only for affected region, not the entire application shell. |
+
+The design goal is continuity: the operator must be able to stare at one station, chart, graph edge, or object timeline while values change around it without the UI blinking, losing focus, or resetting spatial memory.
+
+
+
+### 1.11 Alignment with core SkillKernel architecture
+
+Observatory must model the real SkillKernel machine rather than an approximate dashboard abstraction. The UI presents the same architectural boundaries used by the SkillKernel implementation:
+
+```text
+OpenClaw-facing plugin capture
+sidecar-owned ingestion and scheduler
+Postgres autoskill schema and read models
+pgvector-backed retrieval and recall audits
+SkillIR and SkillGraphIR source-of-truth records
+context compiler and token budget governor
+runtime skill-context broker
+scanner and evaluator gates
+deterministic writer and activation locks
+evolution transactions, rollback, revocation, and audit
+```
+
+The UI must not collapse these boundaries into generic status cards. A station, subsystem, issue, trace, or action visible in Observatory must correspond to a concrete SkillKernel component, read-model row, job, event, candidate, artifact, transaction, policy decision, or audited action.
+
+The overview and drill-downs must make SkillKernel's four autonomous topology operations visible as first-class activity:
+
+```text
+create      = missing useful skill becomes a SkillIR candidate and staged package
+improve     = existing skill version receives a guarded patch or support artifact change
+compose     = repeatedly co-used skills become a higher-order SkillGraphIR workflow candidate
+decompose   = broad or clunky skill splits into sharper successor skills
+```
+
+Observatory must also expose supporting lifecycle operations without conflating them with topology operations:
+
+```text
+retrieve, route, suppress, load, ignore, canary, freeze, archive, promote, merge, deduplicate, rollback, revoke, rescan, reevaluate
+```
+
+The UI is allowed to simplify visual presentation, but it must not simplify away causality. Every high-level statement must be traceable to an underlying source:
+
+```text
+health       -> component signals and freshness checks
+flow         -> jobs/events/traces/read-model counters
+candidate    -> evidence cluster, operation type, maturity state, and trials
+skill change -> SkillIR/SkillGraphIR revision, artifact plan, manifest, gates, transaction
+runtime load -> broker decision, context excerpt, selected/suppressed/no-skill rationale
+failure      -> reason code, owner component, impacted objects, and safe next action
+```
+
+A beautiful graph that cannot explain why a station is green, red, idle, stale, or blocked is not acceptable. A plain diagnostic table that answers the question but is visually disconnected from the system map is also incomplete. Observatory must connect system-level orientation, subsystem reasoning, station detail, and object-level evidence into one coherent diagnostic flow.
+
 ---
 
 ## 2. Non-goals and boundary rules
@@ -313,18 +443,36 @@ This prevents expensive ad hoc dashboard queries from disturbing autonomous proc
 
 ### 3.4 Real-time principle
 
-The live UI uses a snapshot-plus-delta model:
+The live UI uses a snapshot-plus-delta model with stable entity reconciliation:
 
-1. Browser loads an initial snapshot with a monotonic `snapshot_seq`.
-2. Browser opens `/admin/live` WebSocket with `last_seq=snapshot_seq`.
-3. Sidecar streams compact deltas.
-4. Browser applies deltas optimistically to the UI state.
-5. Browser periodically reconciles with a fresh snapshot.
-6. If sequence gaps occur, the browser discards deltas and reloads the affected read model.
+1. Browser loads an initial route snapshot with a monotonic `snapshot_seq`.
+2. Browser normalizes snapshot entities by stable IDs.
+3. Browser opens `/admin/live` WebSocket with `last_seq=snapshot_seq`.
+4. Sidecar streams compact entity deltas.
+5. Browser applies deltas through pure reducers that upsert, update, delete, or invalidate specific entities.
+6. Browser periodically reconciles with a fresh snapshot by merging entities by stable ID.
+7. Browser preserves unchanged object references where practical so memoized components and charts do not rebuild.
+8. Browser shows background-sync state without replacing the visible route with loading UI.
+9. If sequence gaps occur, the browser reloads the smallest affected read model and preserves local view state where possible.
 
 Postgres `LISTEN`/`NOTIFY` payloads carry record IDs or invalidation keys, not large event bodies. Notification payloads never contain raw prompts, transcript content, secrets, artifacts, or other sensitive data. The sidecar fetches the details, enforces authorization/redaction, and emits UI-safe events.
 
-Live deltas use explicit schema versions and monotonic sequence numbers. The frontend treats unknown delta schema versions as non-applicable, requests a fresh snapshot, and records a self-health warning. WebSocket messages are transport hints, not authoritative state; snapshots and bounded API reads remain authoritative.
+Live deltas use explicit schema versions and monotonic sequence numbers. The frontend treats unknown delta schema versions as non-applicable, requests a fresh snapshot for the affected scope, and records a self-health warning. WebSocket messages are transport hints, not authoritative state; snapshots and bounded API reads remain authoritative.
+
+A reconciliation cycle is not a render-reset cycle. The UI must not briefly clear visible content just because a five-second read-model refresh completed. Reconciliation updates the existing application state graph; it does not replace the mounted route tree, React Flow instance, chart instances, or cockpit component hierarchy unless a genuine navigation, topology, schema, or recovery event requires it.
+
+Deltas are scoped:
+
+| Delta scope | Example | Frontend handling |
+|---|---|---|
+| entity patch | station metric changed | Update only that entity and derived aggregate. |
+| entity insert | new issue, job, candidate, trace event | Insert by stable ID without resetting lists or graph viewport. |
+| entity delete/archive | issue resolved, skill archived | Remove or mark state transition; preserve unrelated state. |
+| aggregate patch | subsystem health changed | Update aggregate and reason code without reloading child entities unless needed. |
+| invalidation | evaluator summary stale | Refetch affected query key; keep previous visible data until replacement arrives. |
+| topology change | new station, removed edge, skill graph changed | Recompute affected layout region; do not reset metrics-only nodes. |
+| sequence gap | missed delta range | Reload affected read model, record self-health issue, preserve UI state where possible. |
+
 
 ---
 
@@ -725,6 +873,100 @@ The graph must support:
 - click particle → trace/job/candidate detail when backed by a concrete record;
 - timeline scrubber for replay mode.
 
+
+### 6.1.1 Overview centerpiece visual-design contract
+
+The main overview graph is the visual centerpiece of Observatory. It must not look like an unfinished developer diagram or a default library demo. The graph is the operator’s command-room map of the SkillKernel machine, so it needs a deliberate visual language that is polished, legible, and consistent with the rest of the UI.
+
+Required aesthetic goals:
+
+- the overview canvas feels like a live operations console, not a static flowchart;
+- nodes look like instrumented stations with meaningful state, not plain boxes;
+- edges look like governed material flow between stations, not generic connector lines;
+- labels are integrated visual chips with clear hierarchy, not floating unstyled text;
+- motion communicates real flow, pressure, or state transition, not decorative noise;
+- severity, throughput, context pressure, security risk, and freshness are visually distinguishable without overwhelming the operator;
+- the graph uses the same typography, spacing, radius, elevation, border, color, and shadow tokens as the rest of the admin UI;
+- the graph remains useful and attractive in light, dark, reduced-motion, and low-power modes.
+
+Required visual treatment:
+
+| Element | Required treatment |
+|---|---|
+| Canvas background | Layered command-surface background with subtle grid, lane rails, depth gradients, and clear contrast against nodes and edges. |
+| Subsystem lanes | Distinct horizontal or grouped workcell regions with soft boundaries, lane titles, health badges, and throughput/backpressure summary. |
+| Station nodes | Custom React Flow nodes with compact metric cells, status halo, station icon/glyph, freshness indicator, queue/latency/error mini-readouts, and selected/hover/focus states. |
+| Station status | Consistent shape/color/text grammar for healthy, degraded, blocked, frozen, offline, stale, and unknown states. |
+| Edges | Custom semantic edges with direction, stable labels, purpose chips, flow thickness/intensity, state-specific stroke style, and smooth selection/hover emphasis. |
+| Edge labels | Readable label chips pinned to the edge path, with short purpose text and optional metric badge. Labels must not collide excessively at default zoom. |
+| Animated flow | Subtle pulse/ribbon/particle movement representing actual event/job/candidate flow. Animation must be data-backed and rate-limited. |
+| Event particles | Optional PixiJS particles for traces, jobs, candidates, scanner findings, activation, rollback, freeze, and quarantine. Particles augment the graph but do not carry exclusive meaning. |
+| KPI integration | The KPI ribbon and issue board visually relate to the graph through shared colors, reason codes, and selected-object context. |
+| Focus state | Selecting a node or edge dims unrelated flow, highlights upstream/downstream dependencies, and opens a bottom or side details panel without resetting viewport. |
+| Empty/idle state | A quiet system still looks intentional: subdued lanes, explicit idle badges, and no misleading fake activity. |
+| Error/degraded state | Degraded stations and blocked edges are visually prominent enough to notice immediately, with direct drill-down affordances. |
+
+Default React Flow nodes, default bezier edges, unthemed labels, plain gray boxes, library-demo styling, and raw debug layouts are not acceptable for the main overview. The implementation may use React Flow as the interaction substrate, but the visual system must be custom-designed for Observatory.
+
+### 6.1.2 Performance-safe visual fidelity
+
+The overview must have a high-fidelity visual treatment without becoming a resource hog. Use the right rendering layer for each responsibility:
+
+```text
+React Flow / SVG / DOM = interaction, selection, accessible nodes, edge geometry, labels, focus, menus
+CSS = theme tokens, node polish, transitions, shadows, gradients, reduced-motion behavior
+PixiJS canvas/WebGL/WebGPU = optional high-density particles, glow layers, flow effects, burst effects
+ECharts = charts and dense metric panels outside the central structural graph
+```
+
+Performance rules:
+
+- graph structure is mounted once per route and updated by stable entity identity;
+- metric-only updates patch node/edge data in place and do not re-run layout;
+- expensive glow, blur, particle, and shadow effects have adaptive quality levels;
+- particles are pooled/reused and capped by viewport and device capability;
+- animations run through `requestAnimationFrame` and pause when the tab is hidden;
+- offscreen or hidden subsystem effects are disabled or sampled;
+- low-priority high-frequency events aggregate into edge intensity instead of spawning one particle per event;
+- reduced-motion mode disables particle motion, edge pulses, camera fly-throughs, and nonessential transitions;
+- low-power mode disables PixiJS effects and uses static CSS/SVG status cues;
+- the dashboard never uses animation to represent state that is not also represented by text, shape, label, tooltip, or drill-down data.
+
+Target performance envelope:
+
+| Scenario | Target |
+|---|---|
+| Initial overview render with warm read models | under 3 seconds on a normal local deployment |
+| Pan/zoom on expected graph size | visually smooth, with no sustained frame drops under ordinary load |
+| Five-second metric refresh | no graph blanking, no full-route flash, no viewport reset, no broad remount |
+| Particle overlay active | does not materially affect core dashboard interactivity |
+| WebGL unavailable | graph remains complete and polished using DOM/SVG/CSS fallbacks |
+| Reduced-motion enabled | all meaning remains visible without motion |
+
+Visual quality and performance are both release criteria. The correct outcome is a polished live map that feels rich because it accurately visualizes the machine, not because it burns CPU/GPU on unrelated decoration.
+
+
+### 6.1.3 Overview centerpiece acceptance rubric
+
+The overview graph is complete only when it satisfies all of these visual and diagnostic checks:
+
+| Check | Requirement |
+|---|---|
+| Visual finish | The graph uses custom nodes, custom edges, custom labels, subsystem lanes, cohesive spacing, polished hover/focus/selection states, and theme tokens. No default React Flow styling is visible in the shipped centerpiece. |
+| Information density | At default zoom, every station exposes status, freshness, backlog or throughput, and one station-specific metric without requiring a click. |
+| Legibility across zoom | At far zoom, subsystem lanes and station status remain legible. At normal zoom, edge labels and station metrics are readable. At close zoom, station internals provide useful diagnostic cues without opening a cockpit. |
+| Diagnostic honesty | Visual intensity reflects real data. Glow, pulse, particle rate, edge thickness, and status halos are data-backed and degrade to static equivalents when motion is disabled. |
+| Spatial memory | Stable station positions are preserved across live updates. Layout changes occur only when topology changes or the operator requests relayout. |
+| Clutter control | Labels, particles, and metric badges use collision avoidance, aggregation, dimming, and lens-based filtering so busy systems remain understandable. |
+| Performance envelope | The graph remains responsive with representative high-load fixtures, reduced-motion mode, low-power mode, and WebGL unavailable. |
+| Drill-down continuity | Clicking a station, edge, particle, issue, or metric opens the relevant cockpit/object without losing overview viewport state. |
+| Accessibility | Keyboard navigation, focus rings, non-color severity encoding, text alternatives, and reduced-motion behavior work in the centerpiece. |
+| Thematic coherence | The graph feels like the central control-room surface of the same application, not an embedded third-party demo. |
+
+The centerpiece must be designed and tested with seeded states that cover healthy idle, busy throughput, historical bootstrap, candidate drought, scanner hard finding, evaluator regression, context pressure, broker shadowing, rollback/freeze, stale telemetry, stream gap, low-power mode, and WebGL fallback.
+
+Implementation teams must treat the overview graph as a product surface with visual acceptance criteria, not as a temporary debugging diagram. The graph is the first thing operators use to decide whether SkillKernel is functioning as a system.
+
 ### 6.2 KPI ribbon
 
 The KPI ribbon shows bounded, high-signal metrics:
@@ -878,6 +1120,26 @@ The overview and every cockpit must distinguish:
 | Degraded silence | No work is flowing but work is expected. | Issue card and subsystem/station degradation. |
 
 This prevents operators from mistaking missing data for successful operation.
+
+
+### 6.8 System triage summary
+
+The overview page must include a compact system triage summary that turns the visual map into an immediate operational conclusion. It is not a replacement for the graph; it is the graph's textual diagnosis.
+
+Required summary fields:
+
+```text
+system_state: healthy | degraded | blocked | frozen | stale | unknown
+primary_bottleneck: subsystem_id | component_id | null
+primary_reason_code: reason_code | null
+telemetry_freshness: fresh | lagging | stale | partial | unavailable
+candidate_flow_state: active | quiet_expected | drought | gate_blocked | unknown
+runtime_context_state: efficient | pressure | shadowing | stale_policy | unknown
+security_state: clear | findings | hard_block | quarantine | unknown
+safe_next_action: none | inspect_issue | run_playbook | retry_job | rescan | reevaluate | freeze | rollback | restore_stream
+```
+
+The summary must be generated from the same read models and reason codes used by the visual graph. It must link to the issue board, subsystem lens, or object microscope that explains the conclusion. This prevents the overview from being visually impressive but operationally ambiguous.
 
 ---
 
@@ -2261,6 +2523,24 @@ Every admin response and live-stream event includes:
 
 The frontend refuses to operate against an incompatible major `api_version`. Minor additive fields are ignored safely. Unknown enum values render as `unknown` with a self-health warning instead of crashing a view.
 
+
+### 12.6 API truth and stability contract
+
+The admin API must preserve UI stability and diagnostic truth.
+
+Rules:
+
+1. Entity identifiers are stable for the life of the entity. A refresh must not mint new IDs for the same component, station, edge, issue, job, trace, candidate, skill version, artifact, or transaction.
+2. API responses include `schema_version`, `read_model_version`, `generated_at`, and `freshness` metadata where the frontend needs to distinguish stale data from healthy idle state.
+3. List endpoints support cursor pagination and server-side filtering. Large tables, traces, and artifact lists are never dumped wholesale into the browser.
+4. Snapshot endpoints return complete objects for the requested view. Delta endpoints return patches keyed by stable IDs.
+5. If a backend cannot determine a status, it returns `unknown` with a reason code rather than manufacturing a healthy state.
+6. All aggregate values that are approximate, sampled, redacted, or derived from stale read models include an explicit `data_quality` field.
+7. Action endpoints return an audited action record or an idempotent reference to an existing action record. The UI does not infer action success from HTTP success alone.
+8. Redacted fields remain structurally present where practical, using explicit redaction metadata, so layouts do not jump and users can understand why content is hidden.
+9. WebSocket/SSE deltas are advisory state updates. The browser reconciles them against stable entities and can recover from gaps by fetching the affected snapshot region.
+10. Backend responses are responsible for policy-safe data shaping. The frontend is not the security boundary for raw content, hidden actions, or unauthorized records.
+
 ---
 
 ## 13. Read models and database additions
@@ -2689,11 +2969,27 @@ sidecar/
         app.css
 ```
 
-### 14.2 State management
+### 14.2 State management and incremental reconciliation
 
-Use TanStack Query for API snapshots and cache invalidation.
+Use TanStack Query for authenticated API snapshots, cache ownership, retries, background synchronization, and explicit query invalidation. Use a normalized frontend entity layer for hot live dashboard state. This layer may be implemented with TanStack Query `setQueryData`, a small reducer/store, or another minimal observable store, but it must obey the same identity and patching rules.
 
-Live deltas update local stores with narrow patches and invalidate query keys when the delta cannot be applied safely.
+Live updates are applied as narrow patches:
+
+```text
+snapshot -> normalize by entity type and stable ID
+live delta -> validate sequence/schema -> patch normalized entities
+background snapshot -> entity-level merge -> preserve unchanged references
+view selectors -> derive route-specific arrays/graphs/charts
+visible components -> receive stable IDs and memoized data slices
+```
+
+The state layer must separate three concerns:
+
+| State class | Examples | Persistence rule |
+|---|---|---|
+| Server state | station metrics, jobs, issues, skills, traces, evaluations, read-model freshness | Owned by API snapshot/delta cache. |
+| View state | selected tab, selected node, graph viewport, filters, expanded cards, scroll position, drawer state, replay cursor | Owned by route/local UI state and preserved across ordinary data refresh. |
+| Ephemeral animation state | particles, pulse timers, transition progress, hover state | Owned by visual layer and never authoritative. |
 
 Example query keys:
 
@@ -2713,6 +3009,84 @@ Example query keys:
 ['storage']
 ```
 
+Query behavior requirements:
+
+- keep previous data visible during background refetch;
+- show loading skeletons only for first load or truly unavailable data;
+- apply `queryClient.setQueryData` or equivalent entity patches for deltas that can be applied safely;
+- invalidate only the smallest affected query scope when a delta cannot be patched;
+- avoid broad invalidations such as “invalidate all dashboard queries” for ordinary station metric changes;
+- preserve structural sharing for JSON-compatible unchanged subtrees;
+- avoid transforming API results into new object graphs on every render;
+- memoize derived arrays, graph nodes, chart series, and table rows from normalized state;
+- never use `snapshot_seq`, refresh timestamp, polling counter, or random value as a React `key` for visible operational components.
+
+Selector requirements:
+
+- components subscribe only to the data slices they display;
+- high-frequency metrics use narrow selectors and throttled visual updates;
+- route shells do not subscribe to all dashboard entities;
+- graph nodes receive stable `componentId` and changed metric props only;
+- unrelated station updates do not force every station cockpit, chart, or object microscope to remount.
+
+A background read-model refresh is represented as a data-change event, not a navigation event. The currently selected route remains mounted, and the reducer reconciles records into the existing view.
+
+### 14.2.1 Live delta reducer contract
+
+Every delta reducer must be pure, deterministic, and testable.
+
+Delta envelope handling:
+
+```ts
+export type LiveDeltaEnvelope<T> = {
+  api_version: string;
+  delta_version: number;
+  seq: number;
+  emitted_at: string;
+  scope: 'global' | 'subsystem' | 'component' | 'object' | 'topology' | 'read_model';
+  entity_type: string;
+  entity_id?: string;
+  operation: 'upsert' | 'patch' | 'delete' | 'invalidate' | 'topology_change' | 'sequence_gap';
+  payload: T;
+};
+```
+
+Reducer behavior:
+
+```text
+upsert       -> add new entity or merge changed fields into existing entity
+patch        -> update only listed fields; preserve unchanged nested references where practical
+delete       -> remove entity or mark terminal state according to object type
+invalidate  -> mark affected query/read model stale and refetch without clearing prior data
+topology_change -> recompute graph structure only for affected topology scope
+sequence_gap -> request scoped snapshot reload and preserve view state
+```
+
+Reducers must never implement a refresh by setting the visible entity collection to empty before loading replacement data. Empty arrays are valid only when the authoritative response says the collection is empty.
+
+### 14.2.2 Render identity contract
+
+Visible components must use stable keys and stable component types. React component identity is based on position and key; changing keys intentionally resets state, so keys are reserved for true identity changes, not refresh metadata.
+
+Correct patterns:
+
+```tsx
+<StationNode key={component.componentId} componentId={component.componentId} />
+<SkillRow key={skill.skillId} skillId={skill.skillId} />
+<IssueCard key={issue.issueId} issueId={issue.issueId} />
+```
+
+Incorrect patterns:
+
+```tsx
+<StationNode key={`${component.componentId}:${snapshotSeq}`} />
+<PipelineGraph key={lastRefreshAt} />
+<OverviewPage key={Date.now()} />
+```
+
+Custom node types, chart option factories, column definitions, and route component definitions must be module-level constants or memoized values. Recreating component types inside render can cause remount behavior and visible flashes.
+
+
 ### 14.3 Global search and command palette implementation
 
 The command palette is keyboard-accessible and available from every route.
@@ -2731,7 +3105,105 @@ The search palette is a navigation and filtering surface, not an alternate actio
 
 ### 14.4 React Flow graph implementation
 
-Use React Flow for structural graph interaction:
+Use React Flow for structural graph interaction. The React Flow instance is a long-lived view object for the current route, not a disposable rendering target that is recreated on every refresh. React Flow supplies the interaction substrate; Observatory supplies the visual design.
+
+The main overview must use custom node and edge renderers. Custom nodes are normal React components, which allows station cards to render the exact compact diagnostics, icons, status halos, badges, micro-metrics, and accessibility labels required by Observatory. Custom edges and labels are used to distinguish flow purpose, pressure, selection, warnings, and trace replay without relying on default diagram styling.
+
+#### 14.4.1 Overview theme tokens
+
+The graph must consume deterministic theme tokens instead of hardcoded colors scattered through node components. Required token families:
+
+```text
+--sk-bg-canvas
+--sk-bg-canvas-grid
+--sk-bg-lane
+--sk-bg-node
+--sk-bg-node-muted
+--sk-border-node
+--sk-border-selected
+--sk-edge-default
+--sk-edge-active
+--sk-edge-muted
+--sk-edge-label-bg
+--sk-health-healthy
+--sk-health-degraded
+--sk-health-blocked
+--sk-health-frozen
+--sk-health-offline
+--sk-health-unknown
+--sk-risk-security
+--sk-risk-regression
+--sk-risk-context
+--sk-freshness-stale
+--sk-motion-flow-speed
+--sk-motion-pulse-opacity
+--sk-shadow-node
+--sk-shadow-critical
+```
+
+Node, edge, particle, chart, issue-board, and cockpit colors must derive from the same semantic token set so the overview does not look disconnected from the rest of the interface.
+
+#### 14.4.2 Custom station-node requirements
+
+Each station node in the overview renders as a compact diagnostic card:
+
+```text
+┌──────────────────────────────┐
+│ icon  Station Name   status  │
+│ queue  latency  errors       │
+│ throughput sparkline / strip │
+│ warnings blocked freshness   │
+└──────────────────────────────┘
+```
+
+Required node states:
+
+```text
+default | hover | selected | focused | upstream-highlight | downstream-highlight | muted | stale | degraded | blocked | frozen | offline
+```
+
+Required node behaviors:
+
+- hover reveals concise tooltip and emphasizes directly connected edges;
+- selection preserves viewport and opens the details drawer/cockpit link;
+- keyboard focus is visible and works without pointer input;
+- stale telemetry is visually different from healthy idle;
+- blocked/frozen/security/regression states are not represented by color alone;
+- micro-metrics animate by value interpolation only when reduced-motion is disabled.
+
+#### 14.4.3 Custom edge and label requirements
+
+Edges must communicate more than topology. Each edge has a purpose, flow direction, health/freshness state, and optional pressure metric.
+
+Required edge classes:
+
+```text
+event_flow
+historical_import_flow
+evidence_flow
+retrieval_flow
+broker_context_flow
+topology_operation_flow
+artifact_transaction_flow
+scanner_gate_flow
+evaluator_gate_flow
+activation_flow
+rollback_flow
+revocation_flow
+storage_control_flow
+```
+
+Edge rendering rules:
+
+- line thickness/intensity reflects bounded pressure or throughput buckets, not raw unbounded values;
+- labels use short stable purpose names plus optional metric badge;
+- selected edge highlights upstream source and downstream destination;
+- warning/security/regression/frozen flows use distinct stroke pattern plus label icon;
+- edge pulse speed is capped and disabled in reduced-motion mode;
+- labels avoid excessive overlap at default zoom through lane routing, label offset rules, and zoom-dependent abbreviation;
+- clicking an edge opens the flow detail panel with backing records.
+
+Required features:
 
 - custom node components by station group;
 - custom edges with animated path styles;
@@ -2765,9 +3237,71 @@ export type PipelineNodeData = {
 };
 ```
 
-### 14.5 PixiJS particle overlay
+React Flow update rules:
 
-The particle overlay is optional but recommended for the desired visual effect.
+```text
+node.id = stable component_id/station_id
+edge.id = stable source-target-purpose identifier
+node.type = stable station renderer type
+node.position = preserved unless topology layout changes
+node.data = replaced only when that node's displayed data changes
+edges = patched by stable edge ID
+layout = recalculated only for topology changes, not metric changes
+viewport = preserved across all ordinary live updates
+selection = preserved when selected object still exists
+```
+
+Metric-only station updates must update the relevant node’s `data` object and edge metric fields without rebuilding the entire node/edge array from scratch in a way that changes every object reference. React Flow supports updating node and edge properties when new arrays are passed, but changed node data must be represented as a new `data` object for the affected node so the node updates correctly.
+
+Recommended patch pattern:
+
+```ts
+function patchNodeMetric(nodes: Node<PipelineNodeData>[], patch: Partial<PipelineNodeData> & { componentId: string }) {
+  return nodes.map((node) => {
+    if (node.id !== patch.componentId) return node;
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        ...patch,
+      },
+    };
+  });
+}
+```
+
+The layout engine receives topology snapshots, not high-frequency metrics. It runs when:
+
+```text
+station added
+station removed
+edge added
+edge removed
+subsystem/workcell membership changed
+operator requests fit/re-layout
+graph mode changes in a way that changes structure
+```
+
+It does not run when:
+
+```text
+queue depth changes
+health changes
+latency changes
+throughput changes
+warning count changes
+risk/context pressure changes
+background read-model refresh changes timestamps only
+```
+
+Custom node components must be memoized and receive stable primitive props where practical. Large diagnostic panels inside nodes must subscribe to their own entity slices rather than forcing the whole graph to repaint.
+
+
+### 14.5 PixiJS particle and effects overlay
+
+The PixiJS overlay provides the high-density visual effects that would be too expensive or awkward to render as React DOM nodes. It is used for particles, glow bursts, flow shimmer, lane ambience, replay traces, and short-lived event effects. The structural graph remains React Flow; the overlay is never authoritative.
+
+The overlay is optional at runtime but required as part of the full visual design when the browser and operator settings permit it. If unavailable, the UI degrades to CSS/SVG effects while preserving all meaning.
 
 Rules:
 
@@ -2787,6 +3321,21 @@ low-priority high-frequency events are sampled
 aggregate metrics modify edge animation rather than generating every raw event
 security/rollback/freeze particles are never sampled away
 ```
+
+
+Visual-effect budgets:
+
+| Budget | Requirement |
+|---|---|
+| Particle count | Hard cap by viewport and deployment config; default cap applies before any browser slowdown is visible. |
+| Spawn rate | Sample low-priority events; aggregate noisy streams into edge intensity. |
+| Lifetime | Short-lived effects expire predictably and return objects to pools. |
+| Draw calls | Prefer batched sprites/graphics and shared textures/materials. |
+| Quality mode | `high`, `balanced`, `low`, and `off` modes select particle density, blur/glow intensity, and transition duration. |
+| Browser visibility | Pause the ticker or reduce to heartbeat mode when the document is hidden. |
+| Failure mode | Overlay errors disable the effects layer and create an Observatory self-health issue; they do not break the graph. |
+
+PixiJS must not render labels, menus, tooltips, accessibility semantics, or the canonical node/edge structure. Those remain DOM/SVG responsibilities so the interface stays inspectable, searchable, and accessible.
 
 ### 14.6 ECharts visualizations
 
@@ -2811,6 +3360,20 @@ Charts must support:
 - export to PNG/SVG where safe;
 - no raw-sensitive content in chart labels;
 - keyboard-accessible underlying data tables.
+
+Chart update rules:
+
+```text
+initialize chart instance once when the chart component mounts
+call setOption or the chart wrapper's equivalent to update series/options
+use stable series IDs/names and data point names where chart type supports diffing
+preserve user state such as legend selection, dataZoom, hover/crosshair, and time-window selection where practical
+do not dispose/reinitialize chart instances on ordinary data refresh
+do not blank chart containers between refreshes
+throttle high-frequency chart updates and coalesce low-priority points
+```
+
+ECharts performs data transitions by diffing updated option data against prior data when stable identifiers are available. The implementation must use that behavior for live charts rather than recreating chart components on each poll.
 
 ### 14.7 Monaco inspection
 
@@ -3020,6 +3583,8 @@ The frontend bundle is self-contained. It must not call CDNs, analytics services
 | Component page load | less than 2 seconds for default 24-hour summary. |
 | Trace detail load | less than 5 seconds for ordinary traces under 5,000 linked records. |
 | UI frame rate | maintain interactive pan/zoom above 30 FPS on ordinary laptop hardware for default graph size. |
+| Live-refresh visual stability | no visible full-route flash, graph blanking, chart blanking, viewport reset, or selected-object loss during ordinary refresh/delta cycles. |
+| Station update stability | a metric update for one station must not remount unrelated station nodes, charts, cockpits, or object microscope views. |
 | Large graph mode | degrade gracefully with clustering/sampling above 1,000 topology nodes. |
 | Backend query timeout | default 10 seconds for read endpoints, lower where possible. |
 
@@ -3052,7 +3617,7 @@ Refresh classes:
 | large retention/storage summaries | 5–30 minutes |
 | audit chain verification | on demand and scheduled daily |
 
-Cadences are configurable. Every read model exposes freshness in the UI.
+Cadences are configurable. Every read model exposes freshness in the UI. A read-model refresh updates the frontend data model; it must not imply clearing or remounting the visible route.
 
 ### 17.4 Data-quality and confidence display
 
@@ -3068,6 +3633,48 @@ Every aggregate and chart exposes data confidence:
 | unknown | Required telemetry is absent. | Render unknown, never healthy. |
 
 Charts with partial or stale data display the limitation in the chart header.
+
+
+### 17.5 Live-render stability
+
+The dashboard must remain visually stable during ordinary refresh. This requirement is separate from data freshness. A dashboard can receive fresh data and still be defective if it repeatedly clears and rebuilds the visible UI.
+
+Implementation requirements:
+
+- route components remain mounted while their selected route/tab remains active;
+- React keys are stable domain IDs;
+- graph viewport, zoom, pan, selection, pinned lanes, and open drawers persist across data updates;
+- chart instances persist across data updates;
+- tables preserve scroll position, sort, filters, selected row, and expanded rows when corresponding objects still exist;
+- station cards update text, badges, gauges, and animations in place;
+- background refetch never swaps the current route body for a global spinner when previous data exists;
+- skeletons appear only for first load or unavailable regions;
+- sequence-gap recovery is scoped and visibly explained through Observatory self-health.
+
+Instrumentation requirements:
+
+- development builds expose optional render/mount counters for overview graph, station node, subsystem lane, chart, and cockpit components;
+- the Observatory self-health page records snapshot reload counts, scoped invalidation counts, full-route remount counts, graph layout recomputation counts, chart reinitialization counts, and sequence-gap recoveries;
+- a periodic full-route remount without navigation, schema incompatibility, or sequence-gap recovery is classified as an Observatory defect;
+- a chart or graph instance reinitialized during an ordinary metric update is classified as an Observatory defect.
+
+Suggested self-health counters:
+
+```text
+overview_route_mount_count
+overview_route_unexpected_remount_count
+pipeline_graph_instance_recreated_count
+pipeline_layout_recompute_count
+station_node_mount_count_by_component
+chart_instance_recreated_count_by_chart
+background_refetch_count
+scoped_snapshot_reload_count
+sequence_gap_recovery_count
+full_page_loading_state_count_after_initial_load
+```
+
+The UI must be capable of proving that live updates are incremental. The proof comes from counters, tests, and visible behavior.
+
 
 ---
 
@@ -3111,10 +3718,17 @@ web_admin:
 
   visuals:
     particles_enabled_default: true
+    particle_quality_default: "balanced"      # high | balanced | low | off
     max_particles: 1500
+    max_particle_spawn_rate_per_second: 120
+    flow_animation_enabled_default: true
+    node_glow_enabled_default: true
+    adaptive_visual_quality: true
     reduced_motion_default: false
+    low_power_mode_default: false
     webgl_required: false
     large_graph_node_limit: 1000
+    overview_visual_theme: "command_surface"
 
   actions:
     enabled: true
@@ -3187,8 +3801,8 @@ Deliverables:
 
 Acceptance:
 
-- component status changes appear in UI without refresh;
-- missed sequence triggers safe snapshot reload;
+- component status changes appear in UI without manual refresh, full-route remount, graph blanking, or selected-object loss;
+- missed sequence triggers scoped safe snapshot reload;
 - admin stream failure does not affect core jobs.
 
 ### Phase 3 — Visual overview
@@ -3198,7 +3812,10 @@ Deliverables:
 - React/Vite/TypeScript app shell;
 - React Flow assembly-line graph;
 - ELK layout;
-- station cards;
+- custom station cards;
+- custom semantic edges and label chips;
+- overview theme tokens;
+- subsystem lane rails and polished command-surface background;
 - edge metrics;
 - KPI ribbon;
 - bottom drawer;
@@ -3209,6 +3826,8 @@ Deliverables:
 Acceptance:
 
 - all pipeline stations render;
+- the overview graph does not use default/plain library-demo node and edge styling;
+- station cards, lane rails, edge labels, status halos, and selected/hover/focus states match the Observatory design system;
 - clicking station opens a real station cockpit shell with live component health data;
 - health/latency/backlog overlays reflect read models;
 - overview remains responsive on expected graph size.
@@ -3288,27 +3907,32 @@ Acceptance:
 - high-impact actions require confirmation;
 - rejected actions display deterministic reason codes.
 
-### Phase 8 — Visual polish and soak-hardening
+### Phase 8 — Visual fidelity and soak-hardening
 
 Deliverables:
 
-- PixiJS particle overlay;
+- PixiJS particle/effects overlay;
 - graph replay animations;
 - mode-specific overlays;
+- lane ambience and event-backed flow shimmer;
+- high / balanced / low / off visual-quality modes;
 - large graph clustering;
 - theme polish;
 - keyboard shortcuts;
 - accessibility audit;
 - reduced-motion support;
+- low-power mode;
 - performance profiling;
 - browser error telemetry;
 - diagnostic snapshots.
 
 Acceptance:
 
+- the main overview graph has the intended high-fidelity control-room appearance and does not look like an unfinished flowchart;
+- visual effects remain data-backed and do not imply false state;
 - dashboard achieves desired visual impact without degrading core sidecar performance;
-- UI remains usable when live stream drops, DB read model is stale, or component is degraded;
-- reduced-motion and low-power modes remain functional.
+- UI remains usable when live stream drops, DB read model is stale, WebGL is unavailable, or a component is degraded;
+- reduced-motion and low-power modes remain fully functional.
 
 ---
 
@@ -3335,6 +3959,12 @@ Acceptance:
 - subsystem lane rendering;
 - station and subsystem drill-down navigation;
 - live delta reducer;
+- entity-level patching without clearing collections;
+- preservation of previous data during background refetch;
+- stable React keys based on domain IDs;
+- graph viewport/selection preservation across metric deltas;
+- chart instance update without dispose/reinitialize on data refresh;
+- station node mount-count guard for unrelated updates;
 - snapshot reload on sequence gap;
 - role-based action visibility;
 - error boundary behavior;
@@ -3346,7 +3976,11 @@ Acceptance:
 
 ### 20.3 End-to-end tests
 
-- live event appears in overview;
+- live event appears in overview without full-page flash;
+- five-second read-model refresh updates station values in place without clearing/rebuilding the overview graph;
+- background refetch does not replace existing route content with a global loading spinner;
+- React Flow viewport, selected node, and open cockpit remain stable across metric updates;
+- ECharts charts update data in place and preserve visible user state across refresh;
 - historical import progress appears in cockpit;
 - subsystem lens shows cross-component bottleneck;
 - global search opens trace/job/skill/object microscope pages without leaking raw content;
@@ -3405,6 +4039,44 @@ Run operator-focused tests with seeded failure scenarios:
 
 These tests validate whether a normal operator can find the problem in the interface, not only whether components render.
 
+### 20.7 Live-update defect tests
+
+These tests specifically prevent the polling-report behavior described by operators during soak testing.
+
+| Test | Expected result |
+|---|---|
+| Seed overview snapshot, then emit station metric delta every five seconds. | Station values update in place; graph does not disappear; route does not remount; viewport remains stable. |
+| Emit a background snapshot with identical entities and newer `snapshot_seq`. | No visible rebuild; unchanged entity references remain stable where practical; no component flash. |
+| Emit one changed station and many unchanged stations. | Only affected station data changes; unrelated station nodes do not remount. |
+| Emit a new issue/entity. | New card/row appears without clearing existing issue list or resetting filters. |
+| Resolve/delete an issue. | Only that issue leaves or changes state; scroll/filter/selection remains stable. |
+| Trigger metric-only read-model invalidation. | Affected query refreshes with previous data visible; no global loading state appears. |
+| Trigger graph topology change. | Affected topology updates with explained layout change; metrics-only layout state is not reset. |
+| Trigger WebSocket sequence gap. | Scoped snapshot recovery occurs; self-health warning appears; route state is preserved when possible. |
+| Refresh ECharts time series. | Chart transitions/diffs data; chart instance is not disposed and recreated. |
+| Refresh React Flow node metrics. | Node `data` updates; React Flow instance, node IDs, viewport, and selection persist. |
+
+
+### 20.8 Overview visual-fidelity defect tests
+
+These tests prevent the centerpiece graph from regressing into an unpolished debugging diagram.
+
+| Test | Expected result |
+|---|---|
+| Render the overview on a seeded healthy deployment. | The canvas shows custom station cards, subsystem lanes, semantic edges, label chips, status halos, and theme-token alignment; no default/plain React Flow node styling is visible. |
+| Switch through health, throughput, latency, security, context, topology, and historical-bootstrap lenses. | The same graph structure remains stable while visual encodings change coherently; labels, legends, and selected objects remain readable. |
+| Select a station, then follow upstream/downstream highlighting. | Relevant nodes/edges are emphasized, unrelated flow is dimmed, viewport remains stable, and a details drawer opens without graph remount. |
+| Select an edge label. | The edge highlights, its flow detail panel opens, and label placement remains readable at default zoom. |
+| Emit high-rate low-priority events. | Particle count remains capped; edge intensity aggregates noisy flow; UI remains responsive. |
+| Emit scanner/security/rollback/freeze events. | Required high-priority visual indicators appear and are never sampled away. |
+| Disable WebGL or force PixiJS initialization failure. | The graph remains visually complete through DOM/SVG/CSS fallback; an Observatory self-health issue records the effects-layer failure. |
+| Enable reduced-motion. | Particles, pulses, fly-throughs, and nonessential transitions stop; all state remains visible through static labels, icons, shapes, and panels. |
+| Enable low-power mode. | Visual effects degrade predictably while graph readability and diagnostic function remain intact. |
+| Run Playwright visual comparison for baseline overview states. | Healthy, degraded, blocked, security, reduced-motion, low-power, and WebGL-fallback screenshots remain within approved visual baselines. |
+
+The implementation must include a small visual-regression fixture set for the overview graph. The fixture set uses deterministic seeded data and covers at least: healthy idle, busy throughput, historical import active, scanner hard finding, evaluator regression, context-budget pressure, rollback/freeze, stale telemetry, and reduced-motion.
+
+
 ---
 
 ## 21. Acceptance criteria
@@ -3414,32 +4086,43 @@ The Observatory implementation is acceptable when all criteria are true:
 1. The sidecar serves the web UI and API from a configurable `/admin` base path.
 2. Authentication is required for every non-liveness endpoint.
 3. The overview graph shows every SkillKernel pipeline station and reflects live health.
-4. Each subsystem has an intermediate workcell lens showing cross-component flow, conversion, bottlenecks, data quality, traces, issues, and playbooks.
-5. Each station has a drill-down cockpit with component-specific metrics, records, traces, config, audit, and help.
-6. The issue board surfaces actionable degraded, blocked, security, regression, freeze, stale-telemetry, and data-quality conditions.
-7. Live updates work through WebSocket and survive reconnect through snapshot/delta reconciliation.
-8. Global search and command palette can locate traces, jobs, skills, candidates, artifacts, issues, imports, audit actions, and reason codes without leaking raw content.
-9. Object microscope pages expose summary, timeline, provenance, effects, content policy state, diagnostics, and audit for every major object type.
-10. The UI can replay an individual trace/evolution transaction through the pipeline without re-executing work.
-11. Skill pages show SkillIR, SkillGraphIR, compiled artifacts, support files, context budget, scanner/evaluator state, usage attribution, and rollback links.
-12. Topology pages show create/improve/compose/decompose lineage, dependency, conflict, shadowing, supersession, and external-skill relationships.
-13. Context budget pages make `SKILL.md`, broker hint, support-context, and ignored-skill token pressure visible.
-14. Historical ingestion pages show source discovery, dry-run, import progress, parser failures, taint/quarantine, evidence yielded, and candidates seeded.
-15. Scanner/evaluator pages expose hard findings, probe results, regression state, and canary state.
-16. Storage pages expose migration state, read-model freshness, pgvector/index status, and retention backlog.
-17. Model/embedding pages expose qualification and health without implementing dollar-cost analysis.
-18. Operator action pages expose action requests, policy checks, idempotency, confirmation state, linked jobs, and audit records.
-19. Observatory self-health pages expose admin API health, live-stream gaps, frontend diagnostics, and read-model staleness.
-20. Operator actions are role-checked, confirmation-gated when required by the configured deployment, idempotent, policy-controlled, and audited.
-21. The UI defaults to redacted content and does not expose raw content unless explicitly configured and authorized.
-22. Admin streaming and dashboard queries do not block core SkillKernel processing.
-23. Reduced-motion and low-power modes preserve full informational value.
-24. Component health is based on the required signal contract and never reports healthy when required telemetry is missing.
-25. Pipeline invariant failures create issue-board entries and deep links to supporting records.
-26. Baseline comparison supports bounded time-window and object-version comparisons without changing autonomous policy.
-27. Diagnostic bundles can be generated with redaction by default and audited access.
-28. The interface meets the configured accessibility, keyboard-navigation, reduced-motion, and low-power requirements.
-29. The visual design delivers the requested assembly-line bird’s-eye view, subsystem workcell views, and component zoom-in behavior.
+4. The overview graph uses a polished custom visual system: custom station cards, semantic edges, label chips, subsystem lanes, status halos, selected/hover/focus states, and theme-token alignment with the rest of the UI.
+5. The overview graph avoids default library-demo styling and is visually complete enough to serve as the product's main control-room map.
+6. Visual effects are performance-safe, data-backed, adaptive, and optional; WebGL failure or reduced-motion mode does not remove informational value.
+7. Overview visual-regression fixtures cover healthy, degraded, blocked, security, context-pressure, rollback/freeze, stale-telemetry, reduced-motion, low-power, and WebGL-fallback states.
+8. Each subsystem has an intermediate workcell lens showing cross-component flow, conversion, bottlenecks, data quality, traces, issues, and playbooks.
+9. Each station has a drill-down cockpit with component-specific metrics, records, traces, config, audit, and help.
+10. The issue board surfaces actionable degraded, blocked, security, regression, freeze, stale-telemetry, and data-quality conditions.
+11. Live updates work through WebSocket and survive reconnect through snapshot/delta reconciliation.
+12. Ordinary refresh cycles update visible components in place: no full-route flash, graph blanking, chart blanking, viewport reset, tab reset, selected-object loss, or broad component remount occurs without a justified navigation, topology, schema, or sequence-gap event.
+13. Background refetch preserves previous data and shows scoped syncing/stale indicators rather than replacing the current view with global loading UI.
+14. React Flow and ECharts instances persist through metric/data refreshes and update through keyed/diffed data changes.
+15. Global search and command palette can locate traces, jobs, skills, candidates, artifacts, issues, imports, audit actions, and reason codes without leaking raw content.
+16. Object microscope pages expose summary, timeline, provenance, effects, content policy state, diagnostics, and audit for every major object type.
+17. The UI can replay an individual trace/evolution transaction through the pipeline without re-executing work.
+18. Skill pages show SkillIR, SkillGraphIR, compiled artifacts, support files, context budget, scanner/evaluator state, usage attribution, and rollback links.
+19. Topology pages show create/improve/compose/decompose lineage, dependency, conflict, shadowing, supersession, and external-skill relationships.
+20. Context budget pages make `SKILL.md`, broker hint, support-context, and ignored-skill token pressure visible.
+21. Historical ingestion pages show source discovery, dry-run, import progress, parser failures, taint/quarantine, evidence yielded, and candidates seeded.
+22. Scanner/evaluator pages expose hard findings, probe results, regression state, and canary state.
+23. Storage pages expose migration state, read-model freshness, pgvector/index status, and retention backlog.
+24. Model/embedding pages expose qualification and health without implementing dollar-cost analysis.
+25. Operator action pages expose action requests, policy checks, idempotency, confirmation state, linked jobs, and audit records.
+26. Observatory self-health pages expose admin API health, live-stream gaps, frontend diagnostics, and read-model staleness.
+27. Operator actions are role-checked, confirmation-gated when required by the configured deployment, idempotent, policy-controlled, and audited.
+28. The UI defaults to redacted content and does not expose raw content unless explicitly configured and authorized.
+29. Admin streaming and dashboard queries do not block core SkillKernel processing.
+30. Reduced-motion and low-power modes preserve full informational value.
+31. Component health is based on the required signal contract and never reports healthy when required telemetry is missing.
+32. Pipeline invariant failures create issue-board entries and deep links to supporting records.
+33. Baseline comparison supports bounded time-window and object-version comparisons without changing autonomous policy.
+34. Diagnostic bundles can be generated with redaction by default and audited access.
+35. The interface meets the configured accessibility, keyboard-navigation, reduced-motion, and low-power requirements.
+36. The visual design delivers the requested assembly-line bird’s-eye view, subsystem workcell views, station cockpits, and object microscope behavior.
+37. The overview graph passes the centerpiece acceptance rubric for visual finish, legibility across zoom, diagnostic honesty, spatial memory, clutter control, performance, accessibility, and theme coherence.
+38. Every core SkillKernel topology operation, lifecycle operation, artifact operation, broker decision, scanner/evaluator decision, scheduler state, and historical-ingestion state has a visible path from system overview to object-level evidence.
+39. The system triage summary can identify healthy, degraded, blocked, frozen, stale, and unknown states with a primary reason code and safe next action.
+40. Seeded high-load fixtures demonstrate that Observatory remains effective for large deployments with months of transcripts, many agents, historical imports, large skill libraries, and active soak-test telemetry.
 ---
 
 ## 22. Implementation notes for “wow” without fragility
@@ -3464,7 +4147,29 @@ Do not let beauty hide failure. When the system is degraded, blocked, frozen, or
 
 ---
 
-## 23. Developer checklist
+
+## 23. Implementation anti-patterns
+
+These implementation choices are release-blocking because they undermine Observatory's purpose:
+
+| Anti-pattern | Why it is unacceptable |
+|---|---|
+| Poll-and-replace page refresh | Causes flashing, resets operator focus, hides continuity problems, and makes the interface feel like a static report. |
+| Default graph-library styling | Makes the central system map look unfinished and reduces trust in the diagnostic surface. |
+| Health without freshness | A green indicator without current telemetry is misleading. |
+| Aggregates without drill-down | Prevents operators from proving whether a metric reflects real SkillKernel state. |
+| Charts with no object links | Turns diagnostics into decoration rather than investigation tools. |
+| UI-local action state | Creates a second control plane and breaks auditability. |
+| Raw-content convenience toggles | Risks exposing transcripts, memories, prompts, tool results, or artifacts without explicit authorization and audit. |
+| Broad query invalidation for small deltas | Causes avoidable remounts, flicker, network load, and state loss. |
+| Unbounded data fetches | Makes soak testing fragile under real deployment history and large skill libraries. |
+| Visual effects as source of truth | Creates attractive but untrustworthy animation detached from audited records. |
+| Silent disabled components | Prevents operators from distinguishing healthy idle from missing telemetry or disabled ingestion. |
+| Non-deterministic demo data in production views | Makes screenshots, tests, and issue reports unreproducible. |
+
+Every anti-pattern has a positive replacement elsewhere in this specification: stable entity reconciliation, custom visual components, freshness-aware health, aggregate-to-evidence drill-downs, action gateway auditing, redacted-by-default content policy, bounded APIs, data-backed effects, explicit disabled states, and seeded deterministic fixtures.
+
+## 24. Developer checklist
 
 - [ ] Add admin API module to sidecar.
 - [ ] Add auth/role middleware.
@@ -3482,6 +4187,8 @@ Do not let beauty hide failure. When the system is degraded, blocked, frozen, or
 - [ ] Add OpenAPI-generated frontend client.
 - [ ] Build React/Vite app shell.
 - [ ] Build overview assembly-line graph with subsystem lanes.
+- [ ] Implement stable-identity live reconciliation for overview graph, charts, tables, and cockpits.
+- [ ] Add render/mount counters and live-update defect tests that detect full-route flashes and graph/chart reinitialization.
 - [ ] Build subsystem lens framework.
 - [ ] Build station cockpit framework.
 - [ ] Build all component cockpits.
@@ -3505,7 +4212,7 @@ Do not let beauty hide failure. When the system is degraded, blocked, frozen, or
 
 ---
 
-## 24. Authoritative references
+## 25. Authoritative references
 
 These references support the implementation choices in this document.
 
@@ -3523,14 +4230,44 @@ These references support the implementation choices in this document.
   URL: https://docs.openclaw.ai/tools/trajectory
   URL: https://docs.openclaw.ai/reference/transcript-hygiene
 
+- React state identity: React preserves or resets state based on component position and keys; stable domain keys are required for live dashboard continuity.  
+  URL: https://react.dev/learn/preserving-and-resetting-state
+
+- CSS reduced-motion preference: `prefers-reduced-motion` detects a user preference to minimize nonessential motion and must be honored by animation-heavy views.  
+  URL: https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/At-rules/%40media/prefers-reduced-motion
+
+- Page Visibility API: document visibility changes let the UI pause or reduce animation work when the tab is hidden.  
+  URL: https://developer.mozilla.org/en-US/docs/Web/API/Page_Visibility_API
+
+- React memoization: `memo` can avoid child re-renders when props are unchanged, useful for station nodes and cockpit subcomponents after profiling.  
+  URL: https://react.dev/reference/react/memo
+
 - React Flow / `@xyflow/react`: interactive node-edge diagrams, built-in MiniMap, Controls, custom node/edge support, and layouting examples with Dagre/ELK.  
   URL: https://reactflow.dev/
+
+- React Flow custom nodes and animated/custom edges: custom nodes are React components and custom edge examples show how the edge path can be styled/animated beyond defaults.  
+  URL: https://reactflow.dev/examples/nodes/custom-node
+  URL: https://reactflow.dev/examples/edges/animating-edges
+
+- React Flow performance guidance: memoization, state design, and avoiding unnecessary re-renders are required for large interactive graphs.  
+  URL: https://reactflow.dev/learn/advanced-use/performance
+
+- React Flow updating nodes: node and edge properties can be updated through new arrays, and node `data` objects must be recreated for data changes to be detected.  
+  URL: https://reactflow.dev/examples/nodes/update-node
 
 - ELK.js / Eclipse Layout Kernel: layered graph layout for directed node-link diagrams and port-aware layouts.  
   URL: https://github.com/kieler/elkjs
 
 - Apache ECharts: charting library with many chart types, Canvas/SVG rendering, dynamic data, progressive rendering, and large data support.  
   URL: https://echarts.apache.org/
+
+- Apache ECharts dynamic data and transitions: initialized charts update through `setOption`, and data transitions use add/update/remove diffing when identifiers such as data names are stable.  
+  URL: https://apache.github.io/echarts-handbook/en/how-to/data/dynamic-data/
+  URL: https://echarts.apache.org/handbook/en/how-to/animation/transition/
+
+- Apache ECharts large-data/performance features: Canvas/SVG rendering, progressive rendering, stream loading, and dirty-rectangle rendering support dense dashboards without full redraws.  
+  URL: https://echarts.apache.org/
+  URL: https://apache.github.io/echarts-handbook/en/basics/release-note/v5-feature/
 
 - PixiJS: GPU-accelerated canvas rendering through WebGL/WebGL2/WebGPU-capable renderers.  
   URL: https://pixijs.com/
@@ -3541,8 +4278,14 @@ These references support the implementation choices in this document.
 - TanStack Query: server-state fetching, caching, synchronization, invalidation, and async-state handling for React/TypeScript applications.  
   URL: https://tanstack.com/query/latest
 
+- TanStack Query important defaults: structural sharing preserves references for unchanged JSON-compatible data, which supports stable memoized views during background refetch.  
+  URL: https://tanstack.com/query/v5/docs/framework/react/guides/important-defaults
+
 - Monaco Editor: browser editor powering VS Code, useful for read-only JSON, manifest, `SKILL.md`, and diff inspection.  
   URL: https://microsoft.github.io/monaco-editor/
+
+- Playwright visual comparisons: screenshot baselines can detect accidental visual regressions in the overview graph and reduced-motion/low-power variants.  
+  URL: https://playwright.dev/docs/test-snapshots
 
 - FastAPI: high-performance Python web framework with type-hinted APIs, OpenAPI generation, security utilities, static-file support, and WebSocket support.  
   URL: https://fastapi.tiangolo.com/
@@ -3570,10 +4313,10 @@ These references support the implementation choices in this document.
 
 ---
 
-## 25. Readiness statement
+## 26. Readiness statement
 
 The SkillKernel Observatory is the correct next subsystem for soak testing. SkillKernel’s autonomous control plane needs a high-fidelity visual interface because the system’s behavior is distributed across live capture, historical ingestion, storage, retrieval, topology operations, context compilation, scanner/evaluator gates, file transactions, broker decisions, and rollback logic.
 
 The Observatory makes those internals visible without weakening the control plane. It runs from the sidecar, consumes governed read models, streams safe deltas, defaults to redacted content, provides drill-down across subsystem workcells and every station, and exposes guarded operator actions only through existing sidecar policy and audit paths.
 
-The implementation prioritizes correctness and inspectability first, then visual polish. The desired “wow” effect comes from accurately showing the living SkillKernel machine, not from decorative animation detached from real state.
+Correctness, inspectability, continuity, and visual quality are all implementation requirements. The desired “wow” effect comes from a polished, high-fidelity rendering of the real SkillKernel machine, not from decorative animation detached from real state. A user must be able to start at the overview, identify whether SkillKernel is healthy or inefficient, follow the affected subsystem, inspect the responsible station, and open the exact object-level evidence without leaving the web interface.
