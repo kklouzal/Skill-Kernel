@@ -16,9 +16,9 @@ SECTION_36 = "## 36. Implementation readiness and execution order"
 
 EXPECTED_LANDSCAPE_ROWS = 52
 EXPECTED_STANCE_LINES = 8
-EXPECTED_ARCHITECTURE_ITEMS = 28
+EXPECTED_ARCHITECTURE_ITEMS = 30
 EXPECTED_PRODUCT_OPERATIONS = 4
-EXPECTED_IMPLEMENTATION_ORDER_STEPS = 29
+EXPECTED_IMPLEMENTATION_ORDER_STEPS = 31
 
 LANDSCAPE_EVIDENCE_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (
@@ -172,6 +172,14 @@ ARCHITECTURE_EVIDENCE_BY_ITEM: dict[str, tuple[str, ...]] = {
         "autoskill.services.broker and /v1/runtime/context-hint",
         "sidecar/autoskill/tests/test_broker.py",
     ),
+    "calibrated selective-trust controller": (
+        "proposal-gate autonomy_assurance separates hard invariants from soft thresholds",
+        "sidecar/autoskill/tests/test_evaluator.py",
+    ),
+    "autonomy calibration corpus": (
+        "broker replay episodes, policy replay/canary feedback, and evaluator autonomy-assurance outputs",
+        "sidecar/autoskill/tests/test_broker_policy_api.py and test_evaluator.py",
+    ),
     "context compiler + token budget governor": (
         "context_artifacts/context_compile_runs and compiler token gates",
         "sidecar/autoskill/tests/test_skillir_compiler_scanner.py",
@@ -286,6 +294,14 @@ ORDER_EVIDENCE_BY_STEP: dict[str, tuple[str, ...]] = {
     "memory quarantine": (
         "memory quarantine APIs and broker/writer trust gates",
         "TASKFLOW.md memory quarantine validation checkpoint",
+    ),
+    "autonomous semantic adjudication": (
+        "typed LLM invocation audit plus deterministic proposal-gate autonomy assurance",
+        "sidecar/autoskill/tests/test_llm_client.py and test_evaluator.py",
+    ),
+    "autonomy calibration corpus and selective-trust policy trials": (
+        "broker replay/canary policy records plus threshold-deadlock candidate summaries",
+        "sidecar/autoskill/tests/test_broker_policy_api.py and test_evaluator.py",
     ),
     "external-skill inventory": (
         "external skill root scanning/inventory/review APIs",

@@ -18,9 +18,9 @@ def test_landscape_and_readiness_report_maps_sections_35_and_36() -> None:
     assert report["summary"]["validation_errors"] == []
     assert report["summary"]["landscape_rows"] == 52
     assert report["summary"]["stance_lines"] == 8
-    assert report["summary"]["architecture_items"] == 28
+    assert report["summary"]["architecture_items"] == 30
     assert report["summary"]["product_operations"] == 4
-    assert report["summary"]["implementation_order_steps"] == 29
+    assert report["summary"]["implementation_order_steps"] == 31
     assert report["sequencing_gates"] == {
         "do_not_build_autonomous_skill_writing_first": True,
         "future_design_changes_require_concrete_failure_mode": True,

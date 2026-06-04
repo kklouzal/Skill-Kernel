@@ -87,6 +87,10 @@ class EvaluationReviewRecord:
                 "required_gates": result.get("required_gates"),
                 "status": result.get("status"),
                 "summary": result.get("summary"),
+                "reason_codes": list(result.get("reason_codes") or []),
+                "autonomy_assurance": _safe_autonomy_assurance(
+                    _json_dict(result.get("autonomy_assurance"))
+                ),
             },
             created_at=row["created_at"],
         )
@@ -736,6 +740,26 @@ def _json_dict(value: object) -> dict[str, Any]:
     if isinstance(value, str):
         return json.loads(value)
     return {}
+
+
+def _safe_autonomy_assurance(value: dict[str, Any]) -> dict[str, Any]:
+    if not value:
+        return {}
+    return {
+        "decision_family": value.get("decision_family"),
+        "policy_version": value.get("policy_version"),
+        "hard_invariant_failures": list(value.get("hard_invariant_failures") or []),
+        "soft_threshold_misses": list(value.get("soft_threshold_misses") or []),
+        "autonomous_fallback_actions": list(
+            value.get("autonomous_fallback_actions") or []
+        ),
+        "threshold_deadlock_candidate": bool(value.get("threshold_deadlock_candidate")),
+        "administrative_escalation_allowed": bool(
+            value.get("administrative_escalation_allowed")
+        ),
+        "calibration_support_status": value.get("calibration_support_status"),
+        "evidence_mode": value.get("evidence_mode"),
+    }
 
 
 def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:

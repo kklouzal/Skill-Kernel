@@ -1394,6 +1394,22 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   Focused validation passed with the Observatory API regression (`2 passed`);
   final validation evidence is recorded in the implementation plan entry for
   this slice.
+- Proposal-gate autonomy assurance is implemented for the replacement handoff
+  autonomy-policy tranche: deterministic evaluator results now classify hard
+  invariant failures separately from calibrated soft-threshold misses, attach
+  non-admin autonomous fallback ladders, flag repeated soft-stall
+  threshold-deadlock candidates, and expose the bounded assurance summary
+  through evaluation review read models without relaxing scanner, regression,
+  activation, rollback, or proposal-gate requirements. This advances core
+  handoff Sections 5.1, 5.4-5.6, 5.10, 12.8-12.10, and production acceptance
+  criteria 53-55 and 62-63. Focused validation passed with `uv run pytest -q
+  sidecar/autoskill/tests/test_evaluator.py` (`11 passed`) and `uv run ruff
+  check sidecar/autoskill/services/evaluator.py
+  sidecar/autoskill/db/evaluations.py
+  sidecar/autoskill/tests/test_evaluator.py`; full validation passed with
+  `uv run ruff check sidecar scripts`, `uv run pytest` (`357 passed`),
+  `uv run python -m compileall -q sidecar scripts`, `docker compose config
+  --quiet`, and `git diff --check`.
 
 ## Next Gates
 

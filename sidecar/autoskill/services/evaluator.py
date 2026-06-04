@@ -14,6 +14,39 @@ ACCEPTANCE_POLICY = {
     "min_utility_delta": 0.03,
 }
 
+SOFT_THRESHOLD_FALLBACKS = {
+    "target-pass-rate-below-threshold": [
+        "generate_more_probes",
+        "collect_more_evidence",
+        "run_re_adjudication",
+        "no_op_reschedule",
+    ],
+    "token-delta-without-utility-gain": [
+        "reduce_scope",
+        "compile_more_conservatively",
+        "decompose_candidate",
+        "run_counterfactual_trial",
+    ],
+    "utility-delta-below-threshold": [
+        "run_counterfactual_trial",
+        "canary_with_smaller_exposure",
+        "collect_more_evidence",
+        "auto_reject_with_reason",
+    ],
+    "intervention-required": [
+        "assemble_richer_permitted_evidence",
+        "generate_more_probes",
+        "run_counterfactual_trial",
+        "no_op_reschedule",
+    ],
+}
+
+HARD_INVARIANT_REASON_CODES = {
+    "scanner-blocked",
+    "regression-failure-budget-exceeded",
+    "adversarial-critical-budget-exceeded",
+}
+
 
 @dataclass(frozen=True)
 class ProbeEvaluation:
@@ -40,6 +73,7 @@ class ProposalGateEvaluation:
     reason_codes: list[str]
     acceptance_policy: dict[str, float | int | bool]
     acceptance_metrics: dict[str, float | int]
+    autonomy_assurance: dict[str, Any]
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -48,6 +82,7 @@ class ProposalGateEvaluation:
             "reason_codes": self.reason_codes,
             "acceptance_policy": self.acceptance_policy,
             "acceptance_metrics": self.acceptance_metrics,
+            "autonomy_assurance": self.autonomy_assurance,
         }
 
 
@@ -67,6 +102,12 @@ def evaluate_proposal_gate(
             reason_codes=["scanner-blocked"],
             acceptance_policy=ACCEPTANCE_POLICY,
             acceptance_metrics=_acceptance_metrics([], probes=[]),
+            autonomy_assurance=_autonomy_assurance(
+                status="blocked",
+                probe_results=[],
+                reason_codes=["scanner-blocked"],
+                acceptance_metrics=_acceptance_metrics([], probes=[]),
+            ),
         )
 
     probe_results = [_evaluate_probe(skill_ir=skill_ir, probe=probe) for probe in probes]
@@ -90,7 +131,65 @@ def evaluate_proposal_gate(
         reason_codes=reason_codes,
         acceptance_policy=ACCEPTANCE_POLICY,
         acceptance_metrics=acceptance_metrics,
+        autonomy_assurance=_autonomy_assurance(
+            status=status,
+            probe_results=probe_results,
+            reason_codes=reason_codes,
+            acceptance_metrics=acceptance_metrics,
+        ),
     )
+
+
+def detect_threshold_deadlocks(
+    evaluation_results: list[dict[str, Any]],
+    *,
+    min_repeated_stalls: int = 3,
+) -> list[dict[str, Any]]:
+    """Summarize repeated soft-threshold stalls without weakening hard gates."""
+
+    cohorts: dict[tuple[str, tuple[str, ...]], list[dict[str, Any]]] = {}
+    for result in evaluation_results:
+        assurance = _dict(result.get("autonomy_assurance"))
+        if not assurance.get("threshold_deadlock_candidate"):
+            continue
+        if assurance.get("hard_invariant_failures"):
+            continue
+        soft_misses = tuple(str(item) for item in assurance.get("soft_threshold_misses") or [])
+        if not soft_misses:
+            continue
+        cohort_key = str(
+            result.get("skill_version_id")
+            or result.get("candidate_slug")
+            or _dict(result.get("result")).get("candidate_slug")
+            or "unknown"
+        )
+        cohorts.setdefault((cohort_key, soft_misses), []).append(result)
+
+    findings: list[dict[str, Any]] = []
+    for (cohort_key, soft_misses), rows in sorted(cohorts.items()):
+        if len(rows) < max(1, min_repeated_stalls):
+            continue
+        fallbacks = _dedupe(
+            action
+            for reason_code in soft_misses
+            for action in SOFT_THRESHOLD_FALLBACKS.get(reason_code, [])
+        )
+        findings.append(
+            {
+                "finding_kind": "threshold_deadlock",
+                "cohort_key": cohort_key,
+                "stall_count": len(rows),
+                "soft_threshold_misses": list(soft_misses),
+                "hard_invariant_failures": [],
+                "autonomous_fallback_actions": fallbacks,
+                "administrative_escalation_allowed": False,
+                "reason": (
+                    "soft thresholds repeatedly stalled while no hard invariant "
+                    "failure was present"
+                ),
+            }
+        )
+    return findings
 
 
 def _evaluate_probe(*, skill_ir: dict[str, Any], probe: dict[str, Any]) -> ProbeEvaluation:
@@ -338,6 +437,102 @@ def _acceptance_policy_reason_codes(metrics: dict[str, float | int]) -> list[str
         if utility_delta < ACCEPTANCE_POLICY["min_utility_delta"]:
             reason_codes.append("utility-delta-below-threshold")
     return reason_codes
+
+
+def _autonomy_assurance(
+    *,
+    status: str,
+    probe_results: list[ProbeEvaluation],
+    reason_codes: list[str],
+    acceptance_metrics: dict[str, float | int],
+) -> dict[str, Any]:
+    hard_failures = _hard_invariant_failures(
+        probe_results=probe_results,
+        reason_codes=reason_codes,
+    )
+    soft_misses = _soft_threshold_misses(
+        status=status,
+        probe_results=probe_results,
+        reason_codes=reason_codes,
+    )
+    fallback_actions = _dedupe(
+        action
+        for reason_code in soft_misses
+        for action in SOFT_THRESHOLD_FALLBACKS.get(reason_code, [])
+    )
+    threshold_deadlock_candidate = bool(soft_misses) and not hard_failures
+    return {
+        "decision_family": "skill_plan_semantic_adjudication",
+        "policy_version": "proposal_gate_acceptance_policy.v1",
+        "hard_invariant_failures": hard_failures,
+        "soft_threshold_misses": soft_misses,
+        "autonomous_fallback_actions": fallback_actions,
+        "threshold_deadlock_candidate": threshold_deadlock_candidate,
+        "threshold_deadlock_min_repeated_stalls": 3 if threshold_deadlock_candidate else None,
+        "administrative_escalation_allowed": False,
+        "administrative_escalation_reason_required": [
+            "policy_forbids_needed_raw_access",
+            "raw_reveal_requested",
+            "external_owned_root_mutation_requested",
+            "irreversible_infrastructure_change_requested",
+            "required_infrastructure_unavailable",
+            "repeated_contradictory_adjudications_after_fallback",
+            "predelegated_authority_absent_for_T4_action",
+        ],
+        "calibration_support_status": "fixed_policy_pending_replay_calibration",
+        "evidence_mode": _evidence_mode(acceptance_metrics),
+    }
+
+
+def _hard_invariant_failures(
+    *,
+    probe_results: list[ProbeEvaluation],
+    reason_codes: list[str],
+) -> list[str]:
+    failures = [code for code in reason_codes if code in HARD_INVARIANT_REASON_CODES]
+    for result in probe_results:
+        if result.status != "failed":
+            continue
+        if result.kind in {"regression", "adversarial"}:
+            failures.append(f"{result.kind}-probe-failed")
+    return _dedupe(failures)
+
+
+def _soft_threshold_misses(
+    *,
+    status: str,
+    probe_results: list[ProbeEvaluation],
+    reason_codes: list[str],
+) -> list[str]:
+    misses = [code for code in reason_codes if code in SOFT_THRESHOLD_FALLBACKS]
+    for result in probe_results:
+        if result.status != "failed":
+            continue
+        if result.kind in {"target", "no_skill_control"}:
+            misses.append(f"{result.kind}-evidence-insufficient")
+    if status == "needs_intervention":
+        misses.append("intervention-required")
+    return _dedupe(misses)
+
+
+def _evidence_mode(metrics: dict[str, float | int]) -> str:
+    if int(metrics.get("intervention_replay_count", 0) or 0) > 0:
+        return "semantic_derivative_only"
+    if int(metrics.get("probe_count", 0) or 0) > 0:
+        return "metadata_plus_probe_plan"
+    return "metadata_only"
+
+
+def _dedupe(values: Any) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        item = str(value)
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
 
 
 def _intervention_replay_metrics(replay: dict[str, Any]) -> dict[str, float]:

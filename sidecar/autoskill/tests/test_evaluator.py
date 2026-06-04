@@ -9,7 +9,7 @@ from autoskill.db.evaluations import (
     _finish_evaluation,
 )
 from autoskill.db.observability import TraceSpanRecord
-from autoskill.services.evaluator import evaluate_proposal_gate
+from autoskill.services.evaluator import detect_threshold_deadlocks, evaluate_proposal_gate
 
 
 def skill_ir() -> dict[str, object]:
@@ -144,6 +144,15 @@ def test_proposal_gate_fails_when_replay_utility_delta_is_below_policy() -> None
     assert payload["probe_results"][1]["status"] == "passed"
     assert payload["acceptance_metrics"]["utility_delta"] == 0.01
     assert payload["reason_codes"] == ["utility-delta-below-threshold"]
+    assert payload["autonomy_assurance"]["hard_invariant_failures"] == []
+    assert payload["autonomy_assurance"]["soft_threshold_misses"] == [
+        "utility-delta-below-threshold"
+    ]
+    assert payload["autonomy_assurance"]["threshold_deadlock_candidate"] is True
+    assert payload["autonomy_assurance"]["administrative_escalation_allowed"] is False
+    assert "run_counterfactual_trial" in payload["autonomy_assurance"][
+        "autonomous_fallback_actions"
+    ]
 
 
 def test_proposal_gate_fails_token_delta_without_utility_gain() -> None:
@@ -179,6 +188,13 @@ def test_proposal_gate_fails_token_delta_without_utility_gain() -> None:
         "token-delta-without-utility-gain",
         "utility-delta-below-threshold",
     ]
+    assert payload["autonomy_assurance"]["hard_invariant_failures"] == []
+    assert payload["autonomy_assurance"]["soft_threshold_misses"] == [
+        "token-delta-without-utility-gain",
+        "utility-delta-below-threshold",
+    ]
+    assert payload["autonomy_assurance"]["threshold_deadlock_candidate"] is True
+    assert "reduce_scope" in payload["autonomy_assurance"]["autonomous_fallback_actions"]
 
 
 def test_proposal_gate_fails_critical_adversarial_probe() -> None:
@@ -199,6 +215,58 @@ def test_proposal_gate_fails_critical_adversarial_probe() -> None:
     assert payload["status"] == "failed"
     assert payload["probe_results"][3]["status"] == "failed"
     assert payload["acceptance_metrics"]["adversarial_failures"] == 1
+    assert "adversarial-probe-failed" in payload["autonomy_assurance"][
+        "hard_invariant_failures"
+    ]
+    assert payload["autonomy_assurance"]["threshold_deadlock_candidate"] is False
+
+
+def test_threshold_deadlock_detector_groups_repeated_soft_stalls() -> None:
+    probes = replayed_probes()
+    probes[1] = {
+        **probes[1],
+        "spec": {
+            "evidence_ids": skill_ir()["evidence_ids"],
+            "intervention_replay": {
+                "no_skill": {"success": True, "latency_ms": 1200, "tokens": 100},
+                "skill_visible": {
+                    "success": True,
+                    "latency_ms": 900,
+                    "tokens": 100,
+                    "utility_delta": 0.01,
+                },
+            },
+        },
+    }
+    payload = evaluate_proposal_gate(
+        skill_ir=skill_ir(),
+        scanner_status="passed",
+        probes=probes,
+    ).to_json()
+    payload["skill_version_id"] = "skill-version-1"
+
+    findings = detect_threshold_deadlocks([payload, dict(payload), dict(payload)])
+
+    assert findings == [
+        {
+            "finding_kind": "threshold_deadlock",
+            "cohort_key": "skill-version-1",
+            "stall_count": 3,
+            "soft_threshold_misses": ["utility-delta-below-threshold"],
+            "hard_invariant_failures": [],
+            "autonomous_fallback_actions": [
+                "run_counterfactual_trial",
+                "canary_with_smaller_exposure",
+                "collect_more_evidence",
+                "auto_reject_with_reason",
+            ],
+            "administrative_escalation_allowed": False,
+            "reason": (
+                "soft thresholds repeatedly stalled while no hard invariant "
+                "failure was present"
+            ),
+        }
+    ]
 
 
 def test_proposal_gate_attaches_contrastive_replay_from_evidence() -> None:

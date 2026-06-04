@@ -15,15 +15,15 @@ SECTION_START = "## 34. References and research traceability"
 SECTION_END = "\n## 35."
 
 EXPECTED_ANCHOR_COUNTS = {
-    "34.1": 35,
+    "34.1": 44,
     "34.2": 4,
     "34.3": 17,
     "34.4": 5,
     "34.5": 9,
-    "34.6": 18,
+    "34.6": 21,
 }
 EXPECTED_MATRIX_ROWS = 25
-EXPECTED_ANCHORS_WITH_URLS = 79
+EXPECTED_ANCHORS_WITH_URLS = 88
 
 SECTION_RE = re.compile(r"^### (?P<section_id>34\.\d+) (?P<title>.+)$")
 ANCHOR_RE = re.compile(r"^- \*\*(?P<title>.+?)\*\*: (?P<body>.+)$")

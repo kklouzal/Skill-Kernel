@@ -16,21 +16,21 @@ def test_research_traceability_report_maps_section_34() -> None:
 
     assert report["ready"] is True
     assert report["summary"]["validation_errors"] == []
-    assert report["summary"]["anchor_sections"] == 6
-    assert report["summary"]["anchors"] == 88
-    assert report["summary"]["anchors_with_urls"] == 79
+    assert report["summary"]["anchor_sections"] == 7
+    assert report["summary"]["anchors"] == 100
+    assert report["summary"]["anchors_with_urls"] == 88
     assert report["summary"]["traceability_rows"] == 25
     anchor_counts = {
         section["section_id"]: section["anchor_count"]
         for section in report["anchor_sections"]
     }
     assert anchor_counts == {
-        "34.1": 35,
+        "34.1": 44,
         "34.2": 4,
         "34.3": 17,
         "34.4": 5,
         "34.5": 9,
-        "34.6": 18,
+        "34.6": 21,
     }
     assert traceability.validate_traceability_report(
         [

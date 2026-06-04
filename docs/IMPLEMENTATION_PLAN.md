@@ -870,6 +870,19 @@ Acceptance:
   sidecar/autoskill/tests/test_observatory_acceptance_report.py` (`1 passed`)
   and the report command returned `ready=true`, `satisfied=78`, and no
   validation errors.
+- validation evidence for the proposal-gate autonomy-assurance slice passed on
+  the final tree: proposal-gate evaluation results now separate hard invariant
+  failures from calibrated soft-threshold misses, attach autonomous fallback
+  ladders, mark repeated soft-stall threshold-deadlock candidates, and expose
+  the content-safe summary through evaluation review read models. This advances
+  core handoff Sections 5.1, 5.4-5.6, 5.10, 12.8-12.10, and production
+  acceptance criteria 53-55 and 62-63 without weakening scanner, regression,
+  rollback, activation, or evaluator gates. Focused validation passed with
+  `uv run pytest -q sidecar/autoskill/tests/test_evaluator.py` (`11 passed`)
+  and focused ruff checks; full validation passed with `uv run ruff check
+  sidecar scripts`, `uv run pytest` (`357 passed`), `uv run python -m
+  compileall -q sidecar scripts`, `docker compose config --quiet`, and `git
+  diff --check`.
 - validation evidence for the Observatory broker replay corpus read model passed
   on the final tree: focused Observatory API tests covered admin list/detail and
   generic object-microscope lookup for a stored replay episode, generated
