@@ -5055,11 +5055,7 @@ def create_app(
         *,
         last_seq: int | None,
     ) -> dict[str, object]:
-        payload = build_live_envelope(snapshot, last_seq=None)
-        payload["seq"] = last_seq or 0
-        payload["event_type"] = "snapshot" if last_seq is None else "heartbeat"
-        payload["requires_snapshot_reload"] = False
-        return payload
+        return build_live_envelope(snapshot, last_seq=last_seq)
 
     def _observatory_action_target(
         action: str,
@@ -6797,9 +6793,9 @@ def create_app(
                         workspace_id=workspace_id,
                         window_minutes=60,
                     )
-                    await websocket.send_json(
-                        _snapshot_live_fallback(snapshot, last_seq=last_seq)
-                    )
+                    payload = _snapshot_live_fallback(snapshot, last_seq=last_seq)
+                    await websocket.send_json(payload)
+                    last_seq = int(payload["seq"])
                 await asyncio.sleep(5)
         except WebSocketDisconnect:
             return
@@ -6838,6 +6834,7 @@ def create_app(
                     payload = _snapshot_live_fallback(snapshot, last_seq=current_last_seq)
                     yield f"event: {payload['event_type']}\n"
                     yield f"data: {json.dumps(payload, sort_keys=True)}\n\n"
+                    current_last_seq = int(payload["seq"])
                 await asyncio.sleep(5)
 
         return StreamingResponse(stream(), media_type="text/event-stream")

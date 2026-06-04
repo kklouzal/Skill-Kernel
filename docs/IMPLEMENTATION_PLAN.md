@@ -801,3 +801,12 @@ Acceptance:
   live Dev-01 validation against `/admin/api/v1/summary?workspace_id=dev-01`
   reported zero stations with `missing-required-signal` and one remaining real
   issue, `embedding-backlog-present`.
+- validation evidence for the Observatory live-stream fallback continuity slice
+  passed on the final tree: focused Observatory API tests `22 passed`, `npm run
+  build --prefix sidecar/autoskill/observatory` passed, `uv run ruff check
+  sidecar` passed, `uv run pytest` passed with 327 tests, `uv run python -m
+  compileall -q sidecar` passed, and `git diff --check` passed. WebSocket and
+  SSE fallback snapshots now preserve the read-model `snapshot_seq`, advance
+  the stream cursor after fallback delivery, and emit heartbeat payloads once
+  the client is caught up, while the frontend inspector remains a read-only
+  Monaco viewer with an explicit missing-payload state.

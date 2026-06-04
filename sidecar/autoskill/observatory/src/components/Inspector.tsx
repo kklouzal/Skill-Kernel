@@ -5,12 +5,15 @@ type Props = {
 };
 
 export function Inspector({ value }: Props) {
+  const serialized =
+    value === undefined ? "No detail payload is available yet." : JSON.stringify(value, null, 2);
+
   return (
     <div className="inspector">
       <Editor
         height="100%"
         defaultLanguage="json"
-        value={JSON.stringify(value, null, 2)}
+        value={serialized}
         theme="vs-dark"
         options={{
           readOnly: true,

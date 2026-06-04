@@ -18,7 +18,7 @@ from autoskill.db.events import NullEventStore
 from autoskill.db.observability import TraceSpanRecord, TraceSummaryRecord
 from autoskill.db.observatory_admin import NullObservatoryAdminStore
 from autoskill.db.retrieval import RetrievalLog
-from autoskill.services.observatory import build_observatory_snapshot
+from autoskill.services.observatory import build_live_envelope, build_observatory_snapshot
 from fastapi import HTTPException
 
 
@@ -112,6 +112,39 @@ def _routes(app):
         (route.path, next(iter(route.methods - {"HEAD", "OPTIONS"}))): route
         for route in app.routes
         if hasattr(route, "methods")
+    }
+
+
+def test_observatory_live_fallback_uses_snapshot_sequence_for_heartbeats() -> None:
+    snapshot = {
+        "snapshot_seq": 42,
+        "captured_at": "2026-06-04T03:30:00+00:00",
+        "global_health": "degraded",
+        "issue_board": [{"issue_id": "issue-1"}],
+        "pipeline": {
+            "stations": [
+                {"component_id": "observatory_admin", "health": "degraded"},
+                {"component_id": "audit_trace", "health": "healthy"},
+            ]
+        },
+    }
+
+    initial = build_live_envelope(snapshot, last_seq=None)
+    heartbeat = build_live_envelope(snapshot, last_seq=int(initial["seq"]))
+
+    assert initial["seq"] == 42
+    assert initial["event_type"] == "snapshot"
+    assert initial["payload"] == snapshot
+    assert heartbeat["seq"] == 42
+    assert heartbeat["event_type"] == "heartbeat"
+    assert heartbeat["requires_snapshot_reload"] is False
+    assert heartbeat["payload"] == {
+        "global_health": "degraded",
+        "issue_count": 1,
+        "component_health": {
+            "observatory_admin": "degraded",
+            "audit_trace": "healthy",
+        },
     }
 
 
@@ -232,6 +265,26 @@ def test_observatory_summary_exposes_all_pipeline_stations_and_truth_states() ->
         )
         assert station["data_quality"]["raw_content_available"] is False
         assert station["details_url"].startswith("/admin/components/")
+
+
+def test_observatory_live_sse_fallback_preserves_snapshot_sequence() -> None:
+    app = create_app(audit_store=MemoryAuditStore())
+    route = _routes(app)[("/admin/live-sse", "GET")]
+
+    async def run():
+        response = await route.endpoint(workspace_id="dev-01")
+        event_chunk = await anext(response.body_iterator)
+        data_chunk = await anext(response.body_iterator)
+        await response.body_iterator.aclose()
+        return event_chunk, data_chunk
+
+    event_chunk, data_chunk = asyncio.run(run())
+    payload = json.loads(data_chunk.removeprefix("data: ").strip())
+
+    assert event_chunk == "event: snapshot\n"
+    assert payload["event_type"] == "snapshot"
+    assert payload["seq"] == payload["payload"]["snapshot_seq"]
+    assert payload["seq"] > 0
 
 
 def test_observatory_pipeline_component_and_search_routes_are_bounded() -> None:

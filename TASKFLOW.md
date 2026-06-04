@@ -1123,6 +1123,17 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   consolidation job, and queued 100 additional `embeddings.generate` jobs to
   drain the remaining evidence/historical chunk embedding backlog with the
   maintenance worker active.
+- Observatory live stream fallback continuity is implemented for Phase 2:
+  WebSocket and SSE snapshot fallbacks now use the real snapshot sequence from
+  the read model, advance the local cursor after fallback delivery, and emit
+  heartbeat payloads once the client is caught up instead of repeatedly
+  replaying full snapshots. The frontend inspector remains the spec-required
+  read-only Monaco surface while handling missing detail payloads explicitly.
+  Validation passed with focused `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py -q` (`22 passed`),
+  `npm run build --prefix sidecar/autoskill/observatory`, `uv run ruff check
+  sidecar`, full `uv run pytest` (`327 passed`), `uv run python -m compileall
+  -q sidecar`, and `git diff --check`.
 
 ## Next Gates
 
@@ -1137,6 +1148,9 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
    signal to validate the schema-backed v2 source-item locator layer under
    non-file ledgers and live source systems.
 4. Roll out live repair/import execution only after production replay/embedding validation remains green under sustained traffic.
+5. Add live-stream delta/outbox smoke coverage with real Postgres once the next
+   Observatory slice touches `admin_live_event_outbox` persistence or stream
+   replay/canary behavior.
 
 ## Known Risks
 
