@@ -1211,6 +1211,14 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `uv run pytest -q sidecar/autoskill/tests/test_observatory_acceptance_report.py`
   (`1 passed`) and `uv run python scripts/autoskill_observatory_acceptance.py
   --json` reporting `ready=true`, `satisfied=78`, and no validation errors.
+- Observatory catalog seed remediation is implemented for Section 24.4:
+  `migrations/0001_autoskill_schema.sql` now creates and idempotently seeds
+  `autoskill.admin_component_catalog` and
+  `autoskill.admin_subsystem_catalog` from the runtime station/subsystem map,
+  with focused regression coverage tying all 24 station IDs and 8 subsystem
+  IDs back to the SQL seed. Validation passed with the Observatory acceptance
+  report showing `implemented_equivalent=5`, focused pytest (`2 passed`),
+  ruff, `docker compose config --quiet`, and `git diff --check`.
 
 ## Next Gates
 

@@ -75,7 +75,7 @@ DEVELOPER_CHECKLIST: tuple[ObservatoryItem, ...] = (
     ObservatoryItem("24.1", "Add admin API module to sidecar.", ("sidecar/autoskill/api/app.py admin routes",)),
     ObservatoryItem("24.2", "Add auth/role middleware.", ("_require_admin_auth and role headers",)),
     ObservatoryItem("24.3", "Add web_admin config block.", ("Settings web_admin fields", "/admin/api/v1/config")),
-    ObservatoryItem("24.4", "Add subsystem and component catalog seed migration.", ("STATIONS and SUBSYSTEMS catalog in services/observatory.py",), "implemented_equivalent"),
+    ObservatoryItem("24.4", "Add subsystem and component catalog seed migration.", ("autoskill.admin_component_catalog and autoskill.admin_subsystem_catalog seeds in migrations/0001_autoskill_schema.sql", "STATIONS and SUBSYSTEMS catalog in services/observatory.py")),
     ObservatoryItem("24.5", "Add component status snapshots.", ("build_observatory_snapshot",)),
     ObservatoryItem("24.6", "Add live event outbox.", ("observatory_admin live event store",)),
     ObservatoryItem("24.7", "Add diagnostic assertion and issue read models.", ("issue board and invariants routes",)),

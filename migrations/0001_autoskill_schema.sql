@@ -1356,6 +1356,88 @@ CREATE TABLE IF NOT EXISTS autoskill.admin_live_event_outbox (
   delivered_hint boolean NOT NULL DEFAULT false
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.admin_component_catalog (
+  component_id text PRIMARY KEY,
+  display_name text NOT NULL,
+  subsystem_ids text[] NOT NULL DEFAULT '{}',
+  purpose text NOT NULL,
+  object_kinds text[] NOT NULL DEFAULT '{}',
+  metric_family text NOT NULL,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  seeded_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.admin_subsystem_catalog (
+  subsystem_id text PRIMARY KEY,
+  display_name text NOT NULL,
+  station_ids text[] NOT NULL DEFAULT '{}',
+  diagnostic_questions text[] NOT NULL DEFAULT '{}',
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  seeded_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO autoskill.admin_component_catalog (
+  component_id,
+  display_name,
+  subsystem_ids,
+  purpose,
+  object_kinds,
+  metric_family
+) VALUES
+  ('openclaw_live_capture', 'OpenClaw live capture', ARRAY['capture_bootstrap'], 'Plugin hook and SDK-event capture from active OpenClaw sessions.', ARRAY['captured_event', 'hook_matrix', 'session_coverage'], 'ingest'),
+  ('historical_ingestion', 'Historical bootstrap', ARRAY['capture_bootstrap'], 'Discovery and ingestion of existing transcripts, trajectories, memory files, task records, and skills.', ARRAY['historical_import_run', 'historical_source', 'parser_finding'], 'historical'),
+  ('redaction_taint', 'Redaction + taint', ARRAY['capture_bootstrap'], 'Sensitive-content reduction, taint propagation, confidence, and storage eligibility.', ARRAY['redaction_finding', 'taint_graph', 'revocation_path'], 'redaction'),
+  ('spool_ingest', 'Spool + ingest', ARRAY['capture_bootstrap'], 'Plugin spool, sidecar ingest API, idempotency, and normalized forwarding.', ARRAY['spool_record', 'ingest_batch', 'normalization_result'], 'spool'),
+  ('event_normalization', 'Event normalization', ARRAY['capture_bootstrap'], 'Canonical events, chunks, spans, and evidence inputs.', ARRAY['canonical_event', 'span', 'evidence_input'], 'ingest'),
+  ('evidence_memory', 'Evidence + memory', ARRAY['learning_memory'], 'Evidence extraction, memory derivation, provenance, maturity, and poisoning defenses.', ARRAY['evidence_cluster', 'memory_record', 'provenance_path'], 'evidence'),
+  ('retrieval_indexing', 'Retrieval + indexing', ARRAY['learning_memory', 'runtime_context'], 'Lexical/vector indexing, pgvector status, re-embedding, exact rerank, and graph expansion indexes.', ARRAY['retrieval_audit', 'embedding_profile', 'rerank_example'], 'retrieval'),
+  ('broker_runtime', 'Runtime broker', ARRAY['runtime_context'], 'Skill-context selection, no-skill decisions, shadowing control, and context hint rendering.', ARRAY['broker_decision', 'scoring_waterfall', 'rendered_hint'], 'broker'),
+  ('opportunity_mining', 'Opportunity miner', ARRAY['learning_memory', 'topology_design'], 'Candidate discovery from clustered evidence, repeated workflows, failures, corrections, and co-use.', ARRAY['opportunity', 'rejected_candidate', 'candidate_seed'], 'topology'),
+  ('topology_operations', 'Topology operations', ARRAY['topology_design'], 'Create, improve, compose, decompose, merge, archive, promote, rollback, and freeze decisions.', ARRAY['topology_operation', 'curation_decision', 'skill_lineage'], 'topology'),
+  ('skill_ir_graph_ir', 'SkillIR / SkillGraphIR', ARRAY['topology_design'], 'Canonical skill representation, graph workflows, version state, contracts, and effect signatures.', ARRAY['skill_ir', 'skill_graph_ir', 'effect_signature'], 'skills'),
+  ('artifact_planner', 'Skill package planner', ARRAY['topology_design', 'artifact_mutation'], 'Ancillary-file planning and support artifact risk decisions.', ARRAY['artifact_plan', 'manifest', 'support_file_preview'], 'artifact'),
+  ('context_compiler', 'Context compiler', ARRAY['runtime_context', 'artifact_mutation'], 'Compiles SkillIR to compact runtime skill text, broker hints, and context excerpts under token budgets.', ARRAY['compiled_skill_md', 'broker_hint', 'token_diff'], 'context'),
+  ('scanner_security', 'Scanner + security', ARRAY['quality_gates', 'artifact_mutation'], 'Static, semantic, capability, harmful-skill, injection, artifact, and bundle scanning.', ARRAY['scanner_finding', 'risk_matrix', 'taint_to_artifact_path'], 'scanner'),
+  ('evaluator_probes', 'Evaluator + probes', ARRAY['quality_gates', 'artifact_mutation'], 'Target, regression, adversarial, canary, benchmark, and counterfactual trials.', ARRAY['evaluation_run', 'probe_fixture', 'comparison_trial'], 'evaluator'),
+  ('deterministic_writer', 'Deterministic writer', ARRAY['artifact_mutation'], 'Path-contained staging, manifest hashing, file writes, activation locks, and transactionality.', ARRAY['writer_transaction', 'file_diff', 'rollback_pointer'], 'writer'),
+  ('activation_curation', 'Activation + curation', ARRAY['artifact_mutation', 'lifecycle_governance'], 'Active/archive/promotion lifecycle, active budget, utility rollups, and skill technical debt.', ARRAY['skill_lifecycle', 'curation_decision', 'canary_result'], 'lifecycle'),
+  ('canary_rollback', 'Canary + rollback', ARRAY['runtime_context', 'artifact_mutation', 'lifecycle_governance'], 'Runtime canary observation, rollback, freeze, and derived-data revocation.', ARRAY['evolution_transaction', 'revocation_graph', 'post_rollback_validation'], 'rollback'),
+  ('scheduler_jobs', 'Scheduler + jobs', ARRAY['control_storage'], 'Sidecar schedules, jobs, leases, attempts, backoff, and queue pressure.', ARRAY['job', 'schedule', 'lease', 'attempt_timeline'], 'jobs'),
+  ('model_embedding', 'Model + embedding profiles', ARRAY['quality_gates', 'control_storage'], 'Text model profile, embedding profile, qualification gates, and invocation health.', ARRAY['profile_qualification', 'structured_output_failure', 'embedding_sanity_probe'], 'profiles'),
+  ('storage_db', 'Postgres + pgvector', ARRAY['control_storage'], 'DB health, migrations, index health, read models, partitions, and retention.', ARRAY['db_health_report', 'index_status', 'materialized_view_refresh'], 'storage'),
+  ('audit_trace', 'Audit + trace spine', ARRAY['lifecycle_governance', 'control_storage'], 'Correlation across events, jobs, actions, model calls, evaluations, artifacts, and mutations.', ARRAY['trace', 'span_graph', 'action_audit', 'causal_attribution'], 'audit'),
+  ('operator_action_gateway', 'Operator action gateway', ARRAY['lifecycle_governance'], 'Role checks, confirmations, idempotency, guarded action dispatch, and action audit links.', ARRAY['admin_action', 'policy_check', 'idempotency_key', 'action_receipt'], 'actions'),
+  ('observatory_admin', 'Observatory self-health', ARRAY['control_storage'], 'Admin API, frontend serving, live stream, read-model freshness, browser diagnostics, and dashboard performance.', ARRAY['admin_self_health', 'frontend_error', 'sequence_gap'], 'observatory')
+ON CONFLICT (component_id) DO UPDATE SET
+  display_name = EXCLUDED.display_name,
+  subsystem_ids = EXCLUDED.subsystem_ids,
+  purpose = EXCLUDED.purpose,
+  object_kinds = EXCLUDED.object_kinds,
+  metric_family = EXCLUDED.metric_family,
+  updated_at = now();
+
+INSERT INTO autoskill.admin_subsystem_catalog (
+  subsystem_id,
+  display_name,
+  station_ids,
+  diagnostic_questions
+) VALUES
+  ('capture_bootstrap', 'Capture + bootstrap workcell', ARRAY['openclaw_live_capture', 'historical_ingestion', 'redaction_taint', 'spool_ingest', 'event_normalization'], ARRAY['Are live and historical inputs arriving?', 'Are source items parsed, skipped, quarantined, or revoked?', 'Is redaction removing too much useful structure?']),
+  ('learning_memory', 'Learning + memory workcell', ARRAY['evidence_memory', 'retrieval_indexing', 'opportunity_mining'], ARRAY['Is evidence maturing into useful memory?', 'Are retrieval indexes fresh?', 'Are useful opportunities being produced?']),
+  ('runtime_context', 'Runtime context workcell', ARRAY['retrieval_indexing', 'broker_runtime', 'context_compiler', 'canary_rollback'], ARRAY['Is the broker selecting fewer, better skills?', 'Is context token pressure bounded?', 'Are canaries feeding rollback safely?']),
+  ('topology_design', 'Topology design workcell', ARRAY['opportunity_mining', 'topology_operations', 'skill_ir_graph_ir', 'artifact_planner'], ARRAY['Are create/improve/compose/decompose proposals well explained?', 'Are duplicate and external-skill collisions visible?', 'Does every proposal preserve provenance?']),
+  ('quality_gates', 'Quality gates workcell', ARRAY['scanner_security', 'evaluator_probes', 'model_embedding'], ARRAY['Which gates accepted or rejected work?', 'Are scanner or evaluator failures concentrated?', 'Are model and embedding profiles qualified?']),
+  ('artifact_mutation', 'Artifact mutation workcell', ARRAY['artifact_planner', 'context_compiler', 'scanner_security', 'evaluator_probes', 'deterministic_writer', 'activation_curation', 'canary_rollback'], ARRAY['Can every file mutation be traced to policy and evidence?', 'Are manifests and rollback pointers valid?', 'Are activation gates blocking unsafe changes?']),
+  ('lifecycle_governance', 'Lifecycle governance workcell', ARRAY['activation_curation', 'canary_rollback', 'audit_trace', 'operator_action_gateway'], ARRAY['Which skills are active, archived, frozen, or revoked?', 'Can changes roll back with derived data revoked?', 'Are operator actions policy checked and audited?']),
+  ('control_storage', 'Control + storage workcell', ARRAY['scheduler_jobs', 'model_embedding', 'storage_db', 'audit_trace', 'observatory_admin'], ARRAY['Is the sidecar scheduler moving work?', 'Is storage/index/read-model health trustworthy?', 'Is Observatory telemetry fresh enough to believe?'])
+ON CONFLICT (subsystem_id) DO UPDATE SET
+  display_name = EXCLUDED.display_name,
+  station_ids = EXCLUDED.station_ids,
+  diagnostic_questions = EXCLUDED.diagnostic_questions,
+  updated_at = now();
+
 CREATE TABLE IF NOT EXISTS autoskill.admin_action_audit (
   action_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   actor_id text NOT NULL,
@@ -1621,6 +1703,12 @@ CREATE INDEX IF NOT EXISTS admin_live_event_created_idx
 
 CREATE INDEX IF NOT EXISTS admin_live_event_component_idx
   ON autoskill.admin_live_event_outbox(component_id, seq DESC);
+
+CREATE INDEX IF NOT EXISTS admin_component_catalog_metric_family_idx
+  ON autoskill.admin_component_catalog(metric_family);
+
+CREATE INDEX IF NOT EXISTS admin_subsystem_catalog_station_ids_idx
+  ON autoskill.admin_subsystem_catalog USING gin(station_ids);
 
 CREATE INDEX IF NOT EXISTS admin_comparison_runs_workspace_time_idx
   ON autoskill.admin_comparison_runs(workspace_id, created_at DESC);

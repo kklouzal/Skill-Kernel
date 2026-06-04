@@ -840,3 +840,8 @@ Acceptance:
   sidecar/autoskill/tests/test_observatory_acceptance_report.py` (`1 passed`)
   and the report command returned `ready=true`, `satisfied=78`, and no
   validation errors.
+- the Observatory subsystem/component catalog is now present in durable schema,
+  not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
+  creates and idempotently seeds `admin_component_catalog` and
+  `admin_subsystem_catalog`, and focused tests verify every runtime station and
+  subsystem ID appears in that seed.
