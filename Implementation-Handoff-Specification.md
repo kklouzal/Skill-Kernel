@@ -1,10 +1,10 @@
 # SkillKernel — Comprehensive Implementation Handoff Specification
 
 **Document type:** implementation handoff specification
-**Date:** 2026-06-02
-**Status:** ready for development decomposition
+**Date:** 2026-06-04
+**Status:** authoritative implementation specification and soak-test baseline
 **Project:** SkillKernel, an OpenClaw plugin + autonomous sidecar container for evidence-driven skill creation, improvement, composition, decomposition, curation, historical session/memory ingestion, AI-facing context compilation, operator-configurable LLM/embedding access, runtime skill-context control, token-budget governance, and reversible skill-library governance.
-**Architecture:** one OpenClaw plugin, one Python sidecar, one Postgres database, one `autoskill` schema, pgvector, logical skill ownership by `skill_id`, canonical SkillIR as source of truth, governed skill-package artifact planner, deterministic context compiler/renderers that emit token-budgeted OpenClaw `SKILL.md` plus optional manifest-bound ancillary artifacts, historical backfill importer for existing OpenClaw deployments, SkillIR effect signatures, diagnostic-momentum improvement store, trace-spine observability, operator-configurable text-model access profile, operator-configurable embedding access profile, model/embedding profile qualification gates, SkillGraphIR for composed/decomposed workflow topology, SLSA-style artifact provenance manifests, no direct cost-tracker/analyzer, no per-operation model-routing matrix in v1, no per-skill databases, no per-skill schemas in v1, no OpenClaw Cron dependency, no Skill Workshop dependency.
+**Architecture:** one OpenClaw plugin, one Python sidecar, one Postgres database, one `autoskill` schema, pgvector, logical skill ownership by `skill_id`, canonical SkillIR as source of truth, governed skill-package artifact planner, deterministic context compiler/renderers that emit token-budgeted OpenClaw `SKILL.md` plus optional manifest-bound ancillary artifacts, historical backfill importer for existing OpenClaw deployments, SkillIR effect signatures, diagnostic-momentum improvement store, trace-spine observability, operator-configurable text-model access profile, operator-configurable embedding access profile, model/embedding profile qualification gates, governed raw-evidence vault, autonomous semantic adjudication engine, calibrated selective-trust controller, autonomy calibration corpus, automatic redacted-intent synthesis, SkillGraphIR for composed/decomposed workflow topology, SLSA-style artifact provenance manifests, no direct cost-tracker/analyzer, no per-operation model-routing matrix in v1, no per-skill databases, no per-skill schemas in v1, no OpenClaw Cron dependency, no Skill Workshop dependency.
 
 ---
 
@@ -14,23 +14,27 @@ Build **SkillKernel** as an autonomous skill operating system for OpenClaw. The 
 
 The system continuously captures live OpenClaw usage, ingests existing historical OpenClaw session/memory/workspace evidence when deployed into an established installation, extracts durable procedural evidence, converts repeated workflows/failures/corrections into evaluated skills, improves SkillKernel-owned skills from grounded usage data, compiles skill text into compact AI-facing runtime interfaces, controls which skills are visible or emphasized, archives low-value skills, promotes archived skills when demand recurs, merges duplicates, detects drift, and rolls back degraded changes.
 
-The system is autonomous by default and bounded by deterministic controls. Human approval is not part of the normal maintenance loop. Control comes from deterministic policy, redaction, taint tracking, scanner gates, evaluator gates, regression budgets, skill-context budgets, audit trails, canarying, rollback, quarantine, and freeze semantics.
+The system is autonomous by default and bounded by calibrated guardrails. Administrative escalation is not part of the normal maintenance loop. Control comes from configured evidence-retention policy, a governed raw-evidence vault, redaction/declassification gates, taint tracking, autonomous LLM semantic adjudication, risk-weighted decision bands, scanner gates, evaluator gates, regression budgets, skill-context budgets, audit trails, canarying, rollback, quarantine, and freeze semantics. Deterministic thresholds exist as policy instruments, not brittle constants: hard gates protect safety, integrity, privacy, reversibility, and runtime compatibility; soft thresholds are calibrated, configurable, evidence-aware, and allowed to trigger more evidence collection, more probes, narrower activation, ephemeral trials, or LLM re-adjudication before escalation. The system must collect enough full-fidelity evidence to let a qualified LLM infer user intent and operational meaning for autonomous skill management. Privacy controls restrict access, retention, exposure, and derivation; they do not remove the semantic substrate required for autonomy when the deployment has enabled full autonomous mode.
 
 The end-to-end loop is:
 
 ```text
 OpenClaw event or historical datasource
 → plugin hook capture or sidecar historical importer
-→ redaction + tainting
+→ evidence-fidelity classification
+→ raw-evidence vault capture when policy permits
+→ redaction + tainting for analytics/indexing paths
 → local spool or sidecar ingest
 → event/import-source normalization
 → immutable evidence extraction
+→ autonomous intent reconstruction and declassification when needed
 → governed memory derivation
 → active/archived skill matching
 → context-loadability classification
 → runtime skill-context calibration
 → action selection:
      no-op | create | improve | compose | decompose | compile | repair | merge | archive | promote | rollback | freeze
+→ autonomous LLM semantic adjudication for ambiguous intent/topology/privacy cases
 → structured SkillIR change plan
 → SkillIR validation + static + semantic + capability scan
 → target + regression + adversarial evaluation
@@ -50,7 +54,9 @@ OpenClaw runtime
   └─ SkillKernel plugin, TypeScript
        ├─ registers in-process OpenClaw hooks
        ├─ captures typed event envelopes
-       ├─ redacts and taints before persistence or forwarding
+       ├─ captures full-fidelity event envelopes according to evidence-retention policy
+       ├─ stores raw content only in an encrypted governed spool/vault path when enabled
+       ├─ redacts, taints, and minimizes analytics/indexing payloads before normal persistence or forwarding
        ├─ spools locally when the sidecar is unavailable
        ├─ forwards batches to localhost sidecar
        ├─ exposes status/control/diagnostic commands
@@ -63,6 +69,10 @@ SkillKernel sidecar, Python
   ├─ durable Postgres-backed scheduler
   ├─ durable Postgres-backed job queue with leases and idempotency
   ├─ event normalizer and evidence extractor
+  ├─ governed raw-evidence vault manager and access auditor
+  ├─ autonomous semantic adjudication engine
+  ├─ calibrated selective-trust controller and autonomy calibration corpus manager
+  ├─ redacted-intent and replay-corpus builder
   ├─ historical datasource discovery and backfill importer
   ├─ governed memory builder
   ├─ hybrid retrieval engine: lexical + vector + metadata + graph + exact rerank
@@ -84,6 +94,8 @@ SkillKernel sidecar, Python
 Postgres + pgvector
   └─ one database, one autoskill schema
        ├─ append-only event, historical import, evidence, and audit records
+       ├─ encrypted raw-evidence records, declassification reports, and raw-access audit logs
+       ├─ autonomous semantic adjudications, calibration records, and intent-interpretation records
        ├─ derived memory clusters and memory links
        ├─ skills, versions, SkillIR revisions, compiled files, manifests, contracts, capabilities
        ├─ skill components, dependency edges, probes, evaluations, failures
@@ -107,8 +119,13 @@ SkillKernel is defined by the following architecture requirements and control-pl
 | Area | Requirement | Implementation consequence |
 |---|---|---|
 | Source of truth | Use **canonical SkillIR** as the internal source of truth. | `SKILL.md` is not the internal canonical representation. It is a generated OpenClaw runtime artifact. All creation, improvement, curation, drift, retrieval, evaluation, and rollback operate over SkillIR revisions. |
-| Skill compiler | Implement deterministic **SkillIR → OpenClaw renderers** and optional renderers for broker hints, probes, manifests, and support-file manifests. | LLMs may propose SkillIR changes. Deterministic code validates, normalizes, scans, renders, token-budgets, hashes, stages, and rolls back outputs. |
-| Skill package planner | Treat optional files beside `SKILL.md` as first-class compiled artifacts, not incidental extras. | SkillKernel may generate scripts, references, templates, schemas, small immutable data, assets, examples, tests, probes, contracts, and inert adjunct requests only when evidence shows net value. Each support artifact has a loadability class, capability declaration, hash, tests or validation where applicable, and manifest entry. Generated skill packages cannot self-register OpenClaw hooks, OpenClaw Cron routines, tools, services, MCP servers, or mutable local stores; those needs become inert adjunct requests or operator-review integration proposals. |
+| Evidence fidelity | Preserve enough original user/agent/tool context to reconstruct intent for autonomous skill management when the deployment enables full autonomy. | Full-fidelity prompt, response, tool, and context windows go to a governed raw-evidence vault with encryption, retention, access policy, taint labels, and audit. Redacted/minimized derivatives feed analytics, embeddings, replay, and skill synthesis. Hash-only telemetry is a degraded mode, not the full-autonomy path. |
+| Privacy-preserving autonomy | Treat privacy as governed access and derivation, not blanket semantic erasure. | Store raw evidence only under configured policy; redact before embedding and ordinary analytics; expose only the minimum raw window to the configured LLM profile when an autonomous reasoning job requires original intent. Every raw access has purpose, job, model profile, retention class, and audit record. |
+| Autonomous semantic adjudication | Use the configured LLM to resolve semantic tasks that deterministic code cannot resolve with high fidelity. | Replay-corpus intent labeling, memory declassification, ambiguous topology choice, external-skill relationship classification, skill-synthesis plan generation, and context-equivalence reasoning are LLM-adjudicated first. Administrative escalation is reserved for policy-forbidden, low-confidence after autonomous fallback, contradictory, privacy-sensitive, or irreversible cases. |
+| Calibrated selective trust | Trust LLM semantic decisions according to calibrated outcome evidence, not raw model confidence. | Every semantic verdict records a confidence decomposition, calibration bucket, uncertainty checks, deterministic admissibility checks, and delayed outcome labels. High-confidence semantic decisions can proceed autonomously when hard invariants pass and the selected action is reversible, canaried, or otherwise policy-admissible. |
+| Dynamic soft-threshold scaling | Treat soft thresholds as risk-aware control surfaces rather than constants. | Thresholds scale by operation kind, risk, reversibility, source fidelity, executor profile, model-profile calibration, and workspace policy. Soft-threshold misses trigger autonomous uncertainty-reduction actions before escalation. |
+| Skill compiler | Implement deterministic **SkillIR → OpenClaw renderers** and optional renderers for broker hints, probes, manifests, and support-file manifests. | LLMs may author structured semantic verdicts and SkillIR change plans. Deterministic code validates, normalizes, scans, renders, token-budgets, hashes, stages, and rolls back outputs. |
+| Skill package planner | Treat optional files beside `SKILL.md` as first-class compiled artifacts, not incidental extras. | SkillKernel may generate scripts, references, templates, schemas, small immutable data, assets, examples, tests, probes, contracts, and inert adjunct requests only when evidence shows net value. Each support artifact has a loadability class, capability declaration, hash, tests or validation where applicable, and manifest entry. Generated skill packages cannot self-register OpenClaw hooks, OpenClaw Cron routines, tools, services, MCP servers, or mutable local stores; those needs become inert adjunct requests or administrative integration requests. |
 | Skill text | Represent runtime instructions as **typed contracts and pseudocode-like runtime interfaces**. | Runtime instructions use fixed fields: `WHEN`, `INPUTS`, `PRECONDITIONS`, `DO`, `OUTPUTS`, `EFFECTS`, `TOOL TEMPLATES`, `VERIFY`, `FAIL`, `DO NOT USE WHEN`, and `NEVER`. Free-form prose is discouraged. |
 | Runtime controls | Support **guard templates**, not arbitrary generated programs. | Skills may select from deterministic preapproved runtime guard templates such as preflight check, verify-only check, capability warning, sibling-disambiguation hint, or drift-block. LLMs cannot write executable guard logic. |
 | Retrieval | The broker performs **hybrid retrieval + graph expansion + context compilation**. | Retrieve candidate skills, expand prerequisite/conflict/supersession/shadow edges, hydrate the minimal useful subunits, render a set-aware context under budget, and track shadowing outcomes. |
@@ -118,7 +135,7 @@ SkillKernel is defined by the following architecture requirements and control-pl
 | Security | Apply **skill supply-chain scanning**. | Ban hidden comments, invisible Unicode, bidi controls, dynamic fetch-exec patterns, secret exfiltration patterns, unexpected shell/network access, and LLM-controlled paths. Treat every generated artifact as untrusted until scanned and hashed. |
 | Schemas | Use **one `autoskill` schema in v1**. | Per-skill schemas are acceptable in theory, but they add dynamic DDL, migration, index, and permission complexity without improving global retrieval, curation, attribution, or promotion. Use logical `skill_id` ownership and partitioning/indexes when scale demands it. |
 
-The implementation posture is: **LLM as semantic proposal engine; deterministic infrastructure as authority; SkillIR as source of truth; `SKILL.md` as compiled OpenClaw-facing artifact; skill topology as the optimized product surface.**
+The implementation posture is: **LLM as autonomous semantic adjudicator inside explicit policy; deterministic infrastructure as acceptance authority; SkillIR as source of truth; `SKILL.md` as compiled OpenClaw-facing artifact; skill topology as the optimized product surface.** Qualified LLM calls may infer intent, classify ambiguity, declassify safe operational meaning, recommend replay-corpus episodes, decide among topology operations, and produce structured plans. Deterministic infrastructure decides whether those LLM decisions are sufficiently grounded, safe, policy-compliant, reversible, and evaluated for autonomous action.
 
 ---
 
@@ -135,10 +152,11 @@ The system-level requirements below prevent long-run failure modes as the skill 
 | Memory | Add quarantine, delayed activation, provenance gates, and control-flow integrity auditing for memories that can affect retrieval, tool choice, or skill mutation. | Memory poisoning can steer future tool selection or skill edits without looking like a direct instruction. |
 | Skill composition security | Scan not only individual skill files but also co-loaded skill sets and rendered broker context. | Individually benign skills can become harmful together through shared context, shadowing, or puppet-style redirection. |
 | Runtime security | Add deterministic tool-call boundary enforcement hooks where available. | Model-level resistance is not enough for skill-file and tool-semantic attacks; runtime checks must constrain action boundaries. |
-| Support artifacts | Allow helper scripts, reference files, templates, examples, structured schemas/data, and static assets only when they improve net utility, reduce context cost, or improve repeatability. | Support files are optional compiled artifacts. They must stay inside the skill directory, use approved directories, be referenced from `SKILL.md` only when agent access is intended, carry loadability/capability metadata in the manifest, and pass scanner/evaluator gates. Executable artifacts require stricter tests and capability review. |
+| Support artifacts | Allow helper scripts, reference files, templates, examples, structured schemas/data, and static assets only when they improve net utility, reduce context cost, or improve repeatability. | Support files are optional compiled artifacts. They must stay inside the skill directory, use approved directories, be referenced from `SKILL.md` only when agent access is intended, carry loadability/capability metadata in the manifest, and pass scanner/evaluator gates. Executable artifacts require stricter tests and capability-policy validation. |
 | Compiler verifier | Require coverage, binding, replacement, and risk checks before rendering `SKILL.md`. | Generated runtime text must cover required SkillIR fields, bind to evidence/contracts, avoid vague replacements, and preserve security boundaries. |
 | Batch consolidation | Periodically run holistic batch consolidation across recent candidates, not only incremental per-event updates. | Trace-level work shows that transferable skills often require cross-episode comparison and conflict resolution. |
 | Historical ingestion | Treat existing sessions, trajectories, memories, workspace context, and task ledgers as first-class evidence sources. | Established deployments contain months of procedural signal. Fresh SkillKernel installs must bootstrap from that history without bypassing redaction, tainting, evidence maturity, or evaluation gates. |
+| Intent reconstruction | Capture and preserve the original semantic intent needed to explain why the agent acted. | Redacted summaries alone are insufficient for replay, attribution, and skill synthesis. The system stores raw-evidence pointers and creates LLM-generated redacted intent records that remain linked to source prompts/tool windows through provenance. |
 | Dynamic probes | Generate artifact-grounded probes from real failures, contracts, and drift events, then retire stale probes. | Static tests miss environment drift and overfit; probes must follow the actual operating surface. |
 | Per-skill schemas | Keep the v1 decision: no per-skill databases and no per-skill schemas. | Per-skill schemas remain acceptable only as a later strict-isolation migration if measured constraints justify them. They do not improve v1’s core mechanisms. |
 
@@ -157,9 +175,9 @@ The following implementation details are first-release requirements, not optiona
 | No-skill as policy action | The broker must be able to select `no_skill`, `defer_skill`, or `skill_hidden` explicitly. | Loading a skill is not always beneficial. The system must measure when not loading a skill improves outcome, latency, safety, or token cost. |
 | Evidence maturity ladder | Evidence gets a maturity state: `observed`, `recurring`, `contrastive`, `intervention_validated`, `regression_validated`, `canaried`, `production_verified`, or `revoked`. | Recurrence alone can propose a candidate; intervention/regression maturity is required for activation; production/canary maturity is required for broad applicability and high active priority. |
 | Harmful-capability classifier | Generated and external skills are classified for harmful capability, dual-use risk, unsafe implicit intent, sensitive-data access, credential exposure, and policy-override behavior. | A skill that improves task success but creates harmful capability amplification is quarantined or restricted by capability policy. |
-| Core infrastructure immutability | SkillKernel may mutate SkillKernel-owned skills and support artifacts. It must not autonomously rewrite the plugin, sidecar, migrations, scheduler, scanner, evaluator, compiler, or policy engine in v1. | Infrastructure improvement evidence can be logged as operator-review backlog only. Self-modification of the control plane is out of scope for v1. |
+| Core infrastructure immutability | SkillKernel may mutate SkillKernel-owned skills and support artifacts. It must not autonomously rewrite the plugin, sidecar, migrations, scheduler, scanner, evaluator, compiler, or policy engine in v1. | Infrastructure improvement evidence can be logged as administrative integration backlog only. Self-modification of the control plane is out of scope for v1. |
 | Derived-data revocation | Retention, deletion, rollback, and quarantine must propagate to derived artifacts: memories, embeddings, evidence links, skill versions, broker logs, compiled files, and cached context hints. | Privacy and rollback are graph operations, not row-level deletes. The system must track provenance edges strongly enough to revoke downstream artifacts. |
-| Secret reference discipline | Skills may refer to capability names or environment contract keys, but never raw secrets, credentials, tokens, personal identifiers, or private user facts. | Redaction happens before storage and embedding; scanner blocks secret-like material in SkillIR, `SKILL.md`, support files, probes, and logs. |
+| Secret reference discipline | Skills may refer to capability names or environment contract keys, but never raw secrets, credentials, tokens, personal identifiers, or private user facts. | Original prompts/tool outputs may be retained only in the encrypted raw-evidence vault under policy. Redaction happens before embedding, ordinary analytics, skill compilation, and non-vault logs; scanner blocks secret-like material in SkillIR, `SKILL.md`, support files, probes, and normal logs. |
 | Change admission criterion | Any future proposed design change must identify a concrete failure mode not already covered by redaction, provenance, evidence maturity, transactionality, scanner, evaluator, broker, rollback, canary, or freeze. | The specification is ready for implementation decomposition. Additional changes should be driven by implementation issues, benchmark evidence, red-team findings, OpenClaw API seam validation, or production telemetry, not speculative pre-implementation expansion. |
 
 This establishes the development principle: **autonomous mutation is allowed only as a rollback-complete transaction whose causal inputs, evidence maturity, compiled artifacts, runtime exposure, and downstream derived state are all versioned and auditable.**
@@ -232,7 +250,7 @@ This requirement is first-class because context is the scarcest runtime resource
 | `SKILL.md` is an executable prompt interface, not documentation. | Use terse typed sections such as `WHEN`, `INPUTS`, `DO`, `OUTPUTS`, `EFFECTS`, `VERIFY`, `FAIL`, `NEVER`; ban explanations, historical notes, implementation commentary, and human-readable onboarding prose unless measured useful. |
 | Every context-visible word must justify itself. | The compiler computes marginal utility per token, token delta per version, false-positive load cost, ignored-skill token waste, shadowing cost, and composed/decomposed token tradeoffs. |
 | Progressive disclosure is allowed but governed. | Support files are not context-free; classify every support artifact as `never_loaded`, `agent_may_read`, `broker_excerpt_only`, `script_only`, `probe_only`, or `operator_only`. Any `agent_may_read` artifact must pass compression and scanner gates. |
-| Compression is semantic compilation, not summarization. | LLMs may propose compact wording and detect semantic redundancy. Deterministic code enforces format, budget, forbidden text, required fields, hashing, scanning, and acceptance. |
+| Compression is semantic compilation, not summarization. | LLMs may adjudicate semantic equivalence, author compact wording, and identify redundancy. Deterministic code enforces format, budget, forbidden text, required fields, hashing, scanning, and acceptance. |
 | Context budget affects topology operations. | Composition is accepted only if the composed workflow beats component-only alternatives after token cost. Decomposition is favored when a broad skill causes partial-use loading, false positives, or high unused-token overhead. |
 | Context regression is a failure. | A new skill version can be rejected solely for worse token efficiency, increased shadowing, lower retrieval precision, or reduced semantic equivalence, even when target probes improve. |
 
@@ -335,7 +353,7 @@ risk_score
 status
 ```
 
-Patch rule: a production skill patch may be proposed by an LLM, but acceptance requires deterministic evidence thresholds over diagnostic momentum plus normal scanner, semantic-equivalence, regression, shadowing, context-budget, and canary gates.
+Patch rule: a production skill patch may be authored as a structured LLM semantic plan, but acceptance requires deterministic checks over diagnostic momentum plus normal scanner, semantic-equivalence, regression, shadowing, context-budget, and canary gates.
 
 One-off rule: a single severe event can trigger freeze/quarantine/rollback immediately, but it should not create a normal forward patch without corroborating evidence or targeted probes.
 
@@ -450,7 +468,7 @@ The landscape-derived requirements below are first-release requirements unless e
 | Runtime immutability lock | Active skill packages are immutable for any session that may use them. | All changes stage a new version in a trial root, compile and hash artifacts, then activate by atomic pointer/symlink/snapshot swap at a safe boundary. Never rewrite an active `SKILL.md` in place mid-session. |
 | External benchmark and validator adapter seam | Evaluator output must be adapter-friendly. | Support SkillsBench/SWE-Skills-Bench/OpenSkillEval/skillgrade/skill-validator-style adapters later without changing core schema. V1 need not bundle those tools, but evaluator records must support deterministic verifiers, gym-style tasks, pinned repos, and external grader artifacts. |
 | Genericity and bloat rejection | Reject generic, broad, vague, human-prose-heavy, or redundant skills even if they look polished. | The scanner/compiler must flag weak triggers, marketing language, non-actionable prose, overbroad descriptions, body bloat, repeated constraints, unbounded examples, and token-heavy support files. |
-| Co-evolved verifier lane | Skill generation/improvement and verifier/probe generation are separate roles. | A surrogate verifier can propose dense diagnostic checks, but it cannot alone approve a skill. Its probes must themselves pass scanner, coverage, risk, and known-case sanity gates. |
+| Co-evolved verifier lane | Skill generation/improvement and verifier/probe generation are separate roles. | A surrogate verifier can produce dense diagnostic checks, but it cannot alone admit a skill version. Its probes must themselves pass scanner, coverage, risk, and known-case sanity gates. |
 | Granularity labels | SkillIR must record skill granularity: `atomic`, `functional`, `workflow`, `planning`, `meta`, or `external`. | Compose/decompose decisions become explicit level transitions. Broad workflow skills must not shadow narrow atomic/functional skills unless intervention tests show net benefit. |
 | Scope labels | SkillIR must record scope: `workspace_local`, `project_local`, `domain`, `global_general`, `external_readonly`, or `archived`. | Prevents a broad generalized skill from polluting narrow tasks and supports future opt-in federation without leaking private evidence. |
 | Graph-aware retrieval expansion | Hybrid retrieval seeds candidates, then graph expansion adds required prerequisites, conflicts, supersessions, sibling alternatives, and composed/decomposed relationships under context budget. | The broker should support dependency expansion, reverse prerequisite traversal, co-use expansion, exact rerank, and context-budgeted hydration. Semantic similarity alone is insufficient. |
@@ -482,7 +500,7 @@ superseded
 external_readonly
 ```
 
-`ephemeral_candidate` is not visible to OpenClaw as a normal skill. It exists for temporary broker trials, probe generation, and evidence gathering. Promotion from `ephemeral_candidate` to `trial_candidate` requires clustered evidence or explicit user/operator intent. Promotion to `active` requires normal maturity, scanner, evaluator, context, provenance, and rollback gates.
+`ephemeral_candidate` is not visible to OpenClaw as a normal skill. It exists for temporary broker trials, probe generation, and evidence gathering. Promotion from `ephemeral_candidate` to `trial_candidate` requires clustered evidence, explicit current-user request, or a configured admin bootstrap policy. Admin bootstrap policy is configuration authority, not routine semantic review. Promotion to `active` requires normal maturity, scanner, evaluator, context, provenance, and rollback gates.
 
 #### 1.6.2 Topology labels to add to SkillIR
 
@@ -605,7 +623,7 @@ The architecture intentionally favors a small number of stable, auditable contro
 | Use one text LLM access profile and one embedding access profile in v1. | Operators need control over hosted versus local inference, model choice, thinking level, timeout, and token limits, but a per-operation model-routing matrix adds configuration burden and failure modes before there is operational evidence that it improves outcomes. One text profile and one embedding profile are sufficient for v1. |
 | Do not implement a direct dollar-cost tracker/analyzer. | Cost mitigation is handled by operator model selection, local-model support, deterministic prefilters, token budgets, concurrency limits, and timeouts. Invocation audit may record token counts when available, but price analytics and model-cost optimization are outside the v1 control plane. |
 | Generate embeddings outside pgvector. | pgvector stores vectors and performs similarity search; it does not create embeddings. SkillKernel therefore requires a configured embedding route and profile qualification gates. Embedding profile identity, dimensions, distance metric, and re-embedding campaigns are part of retrieval correctness. |
-| Use LLMs as proposal engines, not authorities. | LLMs are needed for semantic interpretation, contrastive analysis, skill synthesis, patch planning, compression, and ambiguous classification. They do not control SQL, paths, shell commands, policy state, scheduler state, file writes, activation, archive, promotion, rollback, or acceptance decisions. Deterministic infrastructure validates and applies state transitions. |
+| Use LLMs as autonomous semantic adjudicators inside policy, not as unchecked executors. | LLMs are needed for intent reconstruction, redacted replay-intent synthesis, memory declassification, ambiguous topology choices, contrastive analysis, skill synthesis, patch planning, compression, and semantic scanning. They may produce high-confidence semantic verdicts and structured plans. They do not control SQL, paths, shell commands, scheduler state, file writes, external mutations, or rollback mechanics. Deterministic infrastructure validates confidence, provenance, redaction, policy, scanner/evaluator results, and then applies or rejects state transitions. |
 | Prefer batch consolidation before durable mutation. | Isolated traces are noisy and can cause overfitting. Durable skill creation, improvement, composition, and decomposition should normally require clustered evidence, contrastive success/failure analysis, intervention trials, and regression checks. Explicit user instruction can create a high-priority candidate, but it still passes gates before activation. |
 | Provide an `ephemeral_candidate` lane. | Temporary skill-like guidance can be evaluated without polluting the active skill bank. The ephemeral lane lets SkillKernel test emerging behavior while preserving the evidence maturity ladder for durable `SKILL.md` activation. |
 | Treat create, improve, compose, and decompose as first-class topology operations. | SkillKernel optimizes the shape of the skill library, not merely individual files. Creation adds missing capabilities, improvement repairs useful capabilities, composition captures recurring multi-skill workflows, and decomposition splits broad or clunky skills into sharper reusable units. Merge, deduplicate, archive, promote, and retire are supporting operations. |
@@ -635,9 +653,9 @@ The rules below remove ambiguity and establish implementation precedence across 
 | Cost | No direct dollar-cost tracker/analyzer. | Record invocation metadata and token counts when returned for audit/debugging, but do not calculate prices, optimize by price, or expose cost analytics. |
 | Context | Runtime-loaded skill artifacts are compiled AI-facing prompt artifacts. | `SKILL.md`, broker hints, runtime snippets, and any loadable support excerpts must pass semantic-density, token-budget, scanner, equivalence, and regression gates. |
 | Topology | Create, improve, compose, and decompose are first-class lifecycle operations. | Merge/deduplicate, archive, promote, repair, compile, rollback, and freeze are supporting operations. They do not replace composition/decomposition. |
-| Source of truth | SkillIR and SkillGraphIR are canonical. | `SKILL.md` is generated output. The LLM proposes structured IR changes; deterministic code validates, renders, stages, hashes, activates, and rolls back. |
+| Source of truth | SkillIR and SkillGraphIR are canonical. | `SKILL.md` is generated output. The LLM may author structured semantic IR changes and topology verdicts; deterministic code validates, renders, stages, hashes, activates, and rolls back. |
 | Active artifacts | Active packages are immutable during sessions. | Mutations stage new versions and activate by atomic pointer/snapshot swap only after all gates pass. |
-| External skills | External/non-SkillKernel skills are inventoried and considered for collision/shadowing but never mutated autonomously. | Import requires explicit operator action and full scan/provenance conversion. |
+| External skills | External/non-SkillKernel skills are inventoried and considered for collision/shadowing but never mutated in place autonomously. | SkillKernel may autonomously classify relationships, suppress/shadow-aware route, or create a SkillKernel-owned replacement/adapter when policy, license/provenance, scanner, evaluator, and artifact gates pass. Mutating or deleting the external-owned source root requires operator action. |
 | Control plane | Plugin, sidecar, scheduler, migrations, scanner, evaluator, compiler, deterministic writer, and policy engine are not autonomously rewritten in v1. | Self-improvement is limited to SkillKernel-owned skill artifacts, broker policies, probes, manifests, support artifacts, lifecycle state, and derived memories under transaction/rollback controls. |
 
 Read this specification with the following precedence order:
@@ -674,7 +692,7 @@ Voyager, Reflexion, ExpeL, Agent Workflow Memory, Memento-Skills, and related wo
 
 SkillsBench and SkillLearnBench show that curated skills help, while self-generated skills can be unstable, task-dependent, or neutral. SkillLearnBench further reports that self-feedback alone can induce recursive drift.
 
-**Requirement:** skill creation and improvement must be evidence-gated, externally grounded, and regression-aware. Self-reflection can propose hypotheses; it cannot be the only acceptance signal.
+**Requirement:** skill creation and improvement must be evidence-gated, externally grounded, and regression-aware. Self-reflection can generate hypotheses; it cannot be the only acceptance signal.
 
 ### 2.4 Skill update quality depends on lifecycle management
 
@@ -710,11 +728,11 @@ Skill drift work shows that skills decay when APIs, packages, file formats, perm
 
 Memory poisoning, tool-selection poisoning, and sleeper-memory work show that long-term memory can carry delayed attacks. Skills can also be a persistence vector for prompt injection, exfiltration, or hidden directives.
 
-**Requirement:** untrusted content is tainted at ingestion. Memory promotion and skill compilation require provenance, trust, and scanner gates. Skills are treated as untrusted inputs to the model unless they are SkillKernel-generated, scanned, versioned, and policy-approved.
+**Requirement:** untrusted content is tainted at ingestion. Memory promotion and skill compilation require provenance, trust, and scanner gates. Skills are treated as untrusted inputs to the model unless they are SkillKernel-generated, scanned, versioned, and policy-cleared.
 
 ### 2.10 Skills are software supply-chain artifacts
 
-Large-scale security studies of agent skills report vulnerabilities across prompt injection, data exfiltration, privilege escalation, and supply-chain abuse. Hidden-comment injection shows that Markdown can conceal instructions from human reviewers while remaining visible to models.
+Large-scale security studies of agent skills report vulnerabilities across prompt injection, data exfiltration, privilege escalation, and supply-chain abuse. Hidden-comment injection shows that Markdown can conceal instructions from ordinary visual review while remaining visible to models.
 
 **Requirement:** SkillKernel-generated artifacts require manifests, capability declarations, file hashes, hidden-content bans, static and semantic scans, deterministic writes, restricted helper scripts, and rollback.
 
@@ -746,7 +764,7 @@ OpenClaw can run through different agent backends, sandboxes, hosts, models, tok
 
 Even though SkillKernel only mutates SkillKernel-owned skills, OpenClaw may load workspace, project-agent, personal-agent, managed, bundled, extra-directory, or plugin-provided skills. Non-SkillKernel skills can collide with SkillKernel skills by name, description, semantics, or capability scope.
 
-**Requirement:** inventory external skills, hash their visible artifacts, embed their descriptions for collision/shadow analysis, mark their ownership as external, and treat them as read-only unless an operator explicitly imports them into SkillKernel ownership.
+**Requirement:** inventory external skills, hash their visible artifacts, embed their descriptions for collision/shadow analysis, mark their ownership as external, and treat them as read-only in their original roots. SkillKernel may autonomously create a SkillKernel-owned replacement, adapter, or suppress/route policy from declassified external-skill evidence when policy, provenance, scanner, evaluator, and rollback gates pass. In-place mutation or deletion of the external root requires operator action.
 
 ### 2.16 Memory is control input, not passive storage
 
@@ -756,15 +774,15 @@ Memories, evidence summaries, and retrieval notes can steer future tool choice, 
 
 ### 2.17 Individual skill scanning is insufficient
 
-Per-file scanning misses cross-skill and audit-runtime gaps. Two individually safe skills can jointly produce unsafe context; a skill can pass review and later be modified; a mutable reference can change after approval; a broker-rendered bundle can change the meaning of a skill description.
+Per-file scanning misses cross-skill and audit-runtime gaps. Two individually safe skills can jointly produce unsafe context; a skill can pass scanner/evaluator gates and later be modified; a mutable reference can change after scanner clearance; a broker-rendered bundle can change the meaning of a skill description.
 
-**Requirement:** bind scanner verdicts to exact bytes/hashes, scan rendered skill bundles and broker hints, maintain co-load risk checks, and invalidate prior approvals if bytes, metadata, dependencies, or renderer version changes.
+**Requirement:** bind scanner verdicts to exact bytes/hashes, scan rendered skill bundles and broker hints, maintain co-load risk checks, and invalidate prior scanner/evaluator acceptances if bytes, metadata, dependencies, or renderer version changes.
 
 ### 2.18 Deterministic micro-executors and support artifacts are allowed but constrained
 
 Some reusable procedures are better represented as deterministic scripts, adapters, validators, schemas, templates, examples, or assets than as model instructions. This reduces context and improves repeatability when the artifact is small, bounded, testable, and directly tied to observed work. It also increases supply-chain and execution risk, so support artifacts are never casual extras.
 
-**Requirement:** support artifacts require a manifest, declared capabilities, file hashes, explicit interpreter/runtime where executable, tests or validation where applicable, no dynamic fetch-exec, no secret access unless explicitly declared, and scanner/evaluator approval. Approved OpenClaw-compatible active-root directories include `scripts/`, `references/`, `templates/`, `assets/`, and `examples/`; SkillKernel may also use governed `schemas/`, `data/`, `tests/`, `probes/`, and `adjunct_requests/` directories when their loadability class and scanner policy allow them. Tests, probes, bulky fixtures, mutable data stores, and operator audit material live under SkillKernel-managed `.autoskill/` storage by default. OpenClaw hooks, OpenClaw Cron routines, plugin tools, background services, MCP servers, and persistent local stores are not activated from a skill folder; SkillKernel creates inert adjunct requests or operator-review integration proposals for those needs. The LLM proposes the artifact plan; deterministic code writes, scans, tests, hashes, manifests, and activates it.
+**Requirement:** support artifacts require a manifest, declared capabilities, file hashes, explicit interpreter/runtime where executable, tests or validation where applicable, no dynamic fetch-exec, no secret access unless explicitly declared, and scanner/evaluator acceptance. Approved OpenClaw-compatible active-root directories include `scripts/`, `references/`, `templates/`, `assets/`, and `examples/`; SkillKernel may also use governed `schemas/`, `data/`, `tests/`, `probes/`, and `adjunct_requests/` directories when their loadability class and scanner policy allow them. Tests, probes, bulky fixtures, mutable data stores, and operator audit material live under SkillKernel-managed `.autoskill/` storage by default. OpenClaw hooks, OpenClaw Cron routines, plugin tools, background services, MCP servers, and persistent local stores are not activated from a skill folder; SkillKernel creates inert adjunct requests or administrative integration requests for those needs. The LLM may author the semantic artifact plan; deterministic code decides artifact admissibility, writes exact files, scans, tests, hashes, manifests, and activates accepted artifacts.
 
 ### 2.19 Evolution must be transactional across artifacts
 
@@ -806,7 +824,7 @@ Static probes age. User workflows, file formats, APIs, OpenClaw behavior, model 
 
 Source-level self-rewriting can address failures unreachable from skill text, but it also increases blast radius. SkillKernel's v1 safety case depends on deterministic control-plane components being stable enough to govern generated skills.
 
-**Requirement:** the plugin, sidecar, scheduler, migrations, scanner, evaluator, compiler, policy engine, and deterministic writer are not autonomously rewritten. SkillKernel may log infrastructure-defect evidence and generate operator-review proposals, but v1 autonomous mutation is limited to SkillKernel-owned skills, manifests, support artifacts, broker policy versions, probes, and lifecycle state.
+**Requirement:** the plugin, sidecar, scheduler, migrations, scanner, evaluator, compiler, policy engine, and deterministic writer are not autonomously rewritten. SkillKernel may log infrastructure-defect evidence and generate administrative integration proposals, but v1 autonomous mutation is limited to SkillKernel-owned skills, manifests, support artifacts, broker policy versions, probes, and lifecycle state.
 
 ### 2.26 Rollback and deletion are provenance-graph operations
 
@@ -899,7 +917,7 @@ Research on formal skill representations, typed pseudocode, and structured skill
 
 The simplified v1 model-access design is correct: one text model profile and one embedding profile. The missing hardening is qualification. A local or hosted model may fail JSON adherence, lose evidence IDs, hallucinate paths, compress away constraints, ignore refusal policy, mishandle long context, or produce unstable outputs. An embedding model may have the wrong dimension, poor query/document behavior, or unstable batches.
 
-**Requirement:** active text and embedding profiles must pass lightweight qualification probes before autonomous apply. Failed profiles may still be usable for propose-only or classification tasks if explicitly allowed, but cannot be treated as production-autonomous reasoning backends.
+**Requirement:** active text and embedding profiles must pass lightweight qualification probes before autonomous apply. Failed profiles may still be usable for low-risk draft or classification tasks if explicitly allowed, but cannot be treated as production-autonomous reasoning backends.
 
 ### 2.41 Embedding profiles are retrieval contracts
 
@@ -926,15 +944,45 @@ RAG and agent-memory work consistently show that retrieval quality depends on so
 
 **Requirement:** the historical importer is not a filesystem crawler that dumps text into embeddings. It is a controlled ETL subsystem with datasource-specific parsers, idempotent fingerprints, chunk lineage, source confidence, stale-context detection, deduplication, redaction-before-embedding, summary/body separation, multi-agent scoping, and replayable import runs.
 
-### 2.45 Research boundary
+### 2.45 Autonomous decisions require calibrated selective trust, not static approval gates
 
-The research synthesis supports the architecture: a deterministic control plane, a governed evidence store, compact AI-facing compiled artifacts, profile-qualified LLM/embedding access, graph-aware composition, regression-aware evaluation, supply-chain manifests, and rollback-complete transactions.
+SkillKernel is an autonomous system, so ordinary semantic uncertainty must be resolved by the system itself. A fixed threshold that routes near-margin cases to administrative escalation by default defeats the product goal and creates a hidden operational bottleneck. At the same time, an uncalibrated LLM verdict is not a sufficient safety basis for autonomous mutation. The correct pattern is calibrated selective trust: the LLM performs semantic adjudication, deterministic infrastructure checks admissibility and execution safety, and the autonomy controller chooses an autonomous next step based on calibrated reliability, risk, reversibility, evidence fidelity, and canary containment.
 
-**Requirement:** future conceptual changes should be admitted only when they identify a concrete failure mode not already covered by redaction, provenance, evidence maturity, profile qualification, SkillIR/SkillGraphIR contracts, transactionality, scanner, evaluator, broker, rollback, canary, or freeze.
+**Requirement:** every semantic decision family has an auditable calibration loop. The system records the LLM verdict, confidence decomposition, evidence coverage, action class, selected autonomous action, delayed outcome, and eventual utility/harm signal. The resulting calibration data is used to adjust soft decision bands, trial sizing, canary exposure, and fallback strategy. Administrative escalation is reserved for explicit policy boundaries, raw-content reveal, irreversible external mutation, unavailable required infrastructure, or unresolved contradiction after autonomous fallback attempts.
 
-### 2.46 Change admission condition
+### 2.46 Dynamic thresholds are policy artifacts with outcome feedback
 
-The principal risk is implementation discipline. The specification covers live capture, historical ingestion, redaction, provenance, storage, scheduling, retrieval, body-aware routing, SkillIR, compilation, LLM/deterministic boundaries, scanner, evaluator, transactionality, rollback, memory governance, broker governance, autonomous topology operations, creation, improvement, composition, decomposition, curation, archiving, promotion, external-skill inventory, harmful-capability controls, executor profiles, observability, retention, and implementation order.
+Soft thresholds are not constants embedded in code. They are versioned policy artifacts calibrated against replay, historical bootstrap, canary, and production outcomes. A threshold has meaning only within a decision family, task family, executor profile, evidence-fidelity tier, risk class, and autonomy mode. Thresholds must move when the system learns that they are too strict, too permissive, stale for a new executor profile, or mismatched to the current evidence distribution.
+
+**Requirement:** soft-threshold policies have a lifecycle: draft, replay evaluation, shadow mode, bounded canary, active, rollback, retired. Threshold updates cannot bypass hard invariants. They may change candidate priority, evidence budgets, probe budgets, canary sizing, decision bands, and no-op/reschedule behavior. Each policy version records reliability metrics such as coverage, false-accept rate, false-reject rate, calibration error, utility-per-token, regression rate, and harm findings.
+
+### 2.47 Agentic confidence must be trajectory-aware
+
+A single verbalized model confidence score is not enough for autonomous skill governance. Agentic outcomes depend on multi-step trajectories: user intent, evidence fidelity, skill retrieval, broker rendering, tool calls, errors, canary behavior, scanner findings, evaluator margins, and rollback capability. Confidence must therefore be computed from trajectory features and delayed outcomes rather than only the final model answer.
+
+**Requirement:** SkillKernel maintains a trajectory-aware confidence calibrator. The calibrator consumes structured features from the trace spine, evidence packets, raw-vault/declassification state, LLM adjudications, scanner/evaluator results, broker decisions, canary outcomes, user corrections, and rollback events. It emits calibrated decision confidence per decision family and stores reason components so the system can autonomously repair confidence bottlenecks.
+
+### 2.48 Reliability comes from separation of powers, not removing autonomy
+
+The design must avoid both extremes: a single LLM call that adjudicates, authorizes, and executes high-risk work; and a brittle workflow that punts routine semantic judgments to operators. SkillKernel achieves autonomy through separation of powers. LLM calls adjudicate semantic meaning and produce structured verdicts or plans. Deterministic services enforce hard invariants, policy bounds, schemas, scanner results, rollback contracts, and execution mechanics. The Autonomy Decision Orchestrator combines these into a next action.
+
+**Requirement:** no single LLM call can unilaterally adjudicate, accept, and execute a high-risk mutation. High-risk SkillKernel-owned mutations remain autonomous by using independent adjudication when needed, deterministic admissibility checks, isolated trials, regression probes, canary containment, and rollback-complete evolution transactions. External-owned root mutation, raw reveal, and new infrastructure capabilities require an explicit predelegated policy authority or admin action.
+
+### 2.49 Abstention is an autonomous action, not a human handoff synonym
+
+Abstention research is useful only if it produces better autonomous routing. In SkillKernel, abstention means the system chooses a safer autonomous action: no-op with reschedule, more evidence, re-adjudication, narrower scope, ephemeral candidate, canary-only activation, archive suppression, broker `no_skill`, automatic rejection, quarantine, freeze, or rollback. It does not mean default administrative escalation.
+
+**Requirement:** all ordinary soft-threshold misses and semantic uncertainty cases must produce one of the defined autonomous fallback actions before escalation. The system tracks unnecessary abstention, delayed acceptance after abstention, and cases where over-conservative thresholds suppressed useful skills.
+
+### 2.50 Research boundary
+
+The research synthesis supports the architecture: a deterministic control plane, a governed evidence store, compact AI-facing compiled artifacts, profile-qualified LLM/embedding access, calibrated autonomous semantic adjudication, dynamic soft-threshold policy, graph-aware composition, regression-aware evaluation, supply-chain manifests, and rollback-complete transactions.
+
+**Requirement:** future conceptual changes should be admitted only when they identify a concrete failure mode not already covered by redaction, provenance, evidence maturity, calibrated autonomy, profile qualification, SkillIR/SkillGraphIR contracts, transactionality, scanner, evaluator, broker, rollback, canary, freeze, or threshold-deadlock remediation.
+
+### 2.51 Change admission condition
+
+The principal risk is implementation discipline. The specification covers live capture, historical ingestion, redaction, provenance, storage, scheduling, retrieval, body-aware routing, SkillIR, compilation, LLM/deterministic boundaries, calibrated autonomous semantic adjudication, scanner, evaluator, transactionality, rollback, memory governance, broker governance, autonomous topology operations, creation, improvement, composition, decomposition, curation, archiving, promotion, external-skill inventory, harmful-capability controls, executor profiles, observability, retention, and implementation order.
 
 **Requirement:** proceed with implementation. Design changes require a concrete failure mode not covered by the current control surfaces.
 
@@ -969,7 +1017,7 @@ Full-fidelity evidence and rationale live in SkillIR/Postgres, not in the prompt
 | Archive root | **`<workspace>/.autoskill/archive/<skill-id>/v<version>/`** | Outside OpenClaw skill roots; searchable only through SkillKernel. |
 | Mutation scope | **Only SkillKernel-owned skills mutate automatically.** | Third-party/user-authored skills are separate trust boundaries. |
 | Core infrastructure mutation | **No autonomous rewriting of the plugin, sidecar, scheduler, scanner, evaluator, compiler, migrations, or policy engine in v1.** | The control plane must remain deterministic and governable. |
-| External skill adoption | **Explicit operator action only.** | Not autonomous v1. |
+| External skill adoption | **Autonomous relationship adjudication; no in-place external mutation.** | SkillKernel may create SkillKernel-owned replacements/adapters from scanned/declassified external evidence when policy permits. It never edits or deletes external-owned roots autonomously. |
 | Creation priority | **Improve active → promote archived → merge/supersede → create new.** | Prevents duplicate bloat. |
 | Runtime context | **Bounded skill-context broker.** | Prevents skill shadowing and token waste. |
 | Broker abstention | **`no_skill` is a valid broker decision.** | Skill injection can hurt; abstention must be measured and rewarded when useful. |
@@ -979,7 +1027,7 @@ Full-fidelity evidence and rationale live in SkillIR/Postgres, not in the prompt
 | Risky action attribution | **Log causal contributors for high-risk actions and run counterfactual/attenuated checks where feasible.** | Runtime security depends on intent-to-execution integrity, not only text scanning. |
 | Skill text | **Compiled runtime interface.** | Minimizes prompt overhead and ambiguity. |
 | Memory | **DB-side governed memory.** | Avoids context bloat and memory poisoning. |
-| Raw secrets | **Never store, embed, or compile.** | Redact before persistence and embedding. |
+| Raw secrets | **Never embed, compile, or place in normal logs/analytics.** | Secret-like material may exist only in encrypted raw-evidence vault records when capture policy permits it; it is short-retention, access-audited, never compiled, and normally masked before LLM exposure. |
 | User-specific data | **Never compile into general skills.** | Skills encode reusable procedure, not private facts. |
 | Historical ingestion | **Core bootstrap importer.** | Live plugin capture and historical backfill feed the same evidence pipeline. Existing deployments must gain immediate value from prior sessions, trajectories, memory files, task records, workspace context, and existing skill inventories without bypassing redaction, provenance, taint, maturity, or evaluation gates. |
 | Default autonomy | **`autonomous_guarded`.** | Applies safe changes automatically; rejects unsafe changes automatically. |
@@ -996,12 +1044,13 @@ This is a non-negotiable implementation boundary, not an optimization suggestion
 #### 3.1.1 Core rule
 
 ```text
-Use deterministic code for control, persistence, security, scheduling, IO, scoring, policy, validation, writing, rollback, and accounting.
-Use LLM calls for semantic interpretation, reusable-procedure induction, structured plan generation, repair hypotheses, compression decisions, and ambiguous evidence classification.
-Never let an LLM directly control paths, SQL, shell commands, scheduler state, policy decisions, file writes, archive/promotion state, or rollback behavior.
+Use deterministic code for control, persistence, security, scheduling, IO, hard-invariant enforcement, validation, writing, rollback, and accounting.
+Use LLM calls for semantic interpretation, reusable-procedure induction, structured plan generation, high-confidence semantic adjudication, repair hypotheses, compression decisions, and ambiguous evidence classification.
+Use calibrated soft-threshold policies to guide evidence gathering, trial sizing, canary exposure, and priority; do not use arbitrary fixed thresholds as administrative-escalation tripwires.
+Never let an LLM directly control paths, SQL, shell commands, scheduler state, raw policy permissions, file writes, archive/promotion state, or rollback behavior.
 ```
 
-The LLM is a proposal engine. Deterministic services are the authority.
+The LLM is a semantic adjudicator and plan generator. For meaning-heavy decisions, the LLM verdict is the semantic decision artifact; deterministic services are the admissibility, safety, and execution boundary.
 
 #### 3.1.2 Required LLM uses
 
@@ -1010,6 +1059,10 @@ LLM calls are appropriate for these jobs because deterministic code cannot relia
 | Job | Why the LLM is used | Output contract |
 |---|---|---|
 | candidate skill discovery from transcript/evidence clusters | identify repeated latent workflows, missing procedures, user corrections, and recurring task intent | candidate classification plus cited evidence IDs |
+| user-intent reconstruction | infer what the user was trying to accomplish from prompt/assistant/tool/context windows when redacted telemetry is insufficient | redacted intent record, task fingerprint, confidence, sensitivity report, and source evidence IDs |
+| replay-corpus intent synthesis | convert real usage telemetry into safe durable replay/canary episodes without manual operator plans | `redacted_user_intent`, expected skill decision, redaction report, and replay eligibility verdict |
+| memory declassification adjudication | determine whether a memory candidate is safe operational evidence, private fact, poisoned instruction, contradiction, or low-confidence | structured memory verdict plus declassification or rejection reason |
+| external-skill relationship adjudication | classify whether an external skill overlaps, shadows, conflicts, supersedes, complements, or should inspire a SkillKernel-owned replacement | relationship record, risk labels, and routing/adoption recommendation |
 | contrastive success/failure analysis | infer what successful trajectories did differently from failed ones | reusable behavioral delta with cited traces |
 | skill creation planning | synthesize a new procedural capability from multiple evidence items | structured candidate plan JSON only |
 | skill improvement planning | infer repair hypotheses from failures, corrections, regressions, and drift | structured patch plan JSON only |
@@ -1018,7 +1071,7 @@ LLM calls are appropriate for these jobs because deterministic code cannot relia
 | ambiguous outcome attribution support | help classify hard cases where a skill may have helped, hurt, been ignored, or been shadowed | suggested attribution, never ledger write without rule checks |
 | semantic scanner support | detect prompt-injection-like intent or unsafe instruction semantics beyond regex/static checks | scanner finding with severity and rationale |
 | probe generation | generate natural-language or tool-use regression probes from evidence | probe specification, expected behavior, and pass/fail conditions |
-| topology reasoning | decide whether skills should be deduplicated, composed into a workflow skill, or decomposed into sharper skills | structured topology proposal with evidence |
+| topology reasoning | decide whether skills should be deduplicated, composed into a workflow skill, or decomposed into sharper skills | structured topology verdict/plan with evidence |
 
 Every LLM output must be schema-validated, evidence-linked, scanned, and either accepted by deterministic gates or discarded.
 
@@ -1033,7 +1086,7 @@ The following must never depend on LLM judgment as the authority:
 | scheduling and job execution | Postgres schedules/jobs, leases, idempotency keys, advisory locks |
 | SQL generation and migrations | static migrations and parameterized queries only |
 | embedding writes and retrieval queries | fixed query builders, indexes, thresholds, exact rerank |
-| scoring and threshold decisions | configured formulas and calibrated policy tables |
+| hard-invariant enforcement and calibrated soft-threshold routing | configured formulas, decision bands, policy tables, and deadlock detection |
 | active/archive/promote/freeze/rollback state transitions | explicit finite-state machine |
 | scanner hard denylists | static/path/Markdown/script/capability scanners |
 | capability enforcement | manifests, allowlists, and workspace policy |
@@ -1071,7 +1124,8 @@ Examples:
 - Do not ask an LLM whether every event is a skill candidate. First aggregate events into clusters and only send recurring/high-signal clusters.
 - Do not ask an LLM to retrieve skills. Retrieve with hybrid search, then optionally use the LLM only for hard disambiguation cases outside the synchronous path.
 - Do not ask an LLM to count runtime context tokens or enforce budgets. Count and enforce deterministically.
-- Do not ask an LLM to decide whether a patch is accepted. The LLM proposes; scanner/evaluator/policy gates decide.
+- Do not ask an LLM to bypass acceptance policy, scanner, evaluator, rollback, or token-budget gates. The LLM may make a semantic verdict or plan; deterministic gates decide whether that verdict is actionable.
+- Do ask a qualified LLM to infer user intent, classify why a turn happened, synthesize a redacted replay intent, choose among create/improve/compose/decompose/no-op for an ambiguous evidence packet, or recommend memory declassification when deterministic code cannot preserve enough meaning.
 
 #### 3.1.5 Execution modes
 
@@ -1100,6 +1154,11 @@ generate_composition_plan
 generate_decomposition_plan
 generate_probe_specs
 compile_runtime_sections
+infer_user_intent_from_raw_window
+synthesize_redacted_replay_intent
+adjudicate_memory_candidate
+adjudicate_external_skill_relationship
+adjudicate_topology_operation
 semantic_scan_artifact
 suggest_merge_or_deduplicate
 explain_policy_rejection
@@ -1114,12 +1173,13 @@ Each typed purpose has:
 - timeout;
 - retry policy;
 - priority class;
-- redaction requirement;
+- content-exposure level;
+- redaction/declassification requirement;
 - audit record;
 - deterministic validator;
 - fallback behavior.
 
-No component calls a generic chat-completion function directly. No component selects a different model per operation in v1. The only active text LLM choice is the configured text model profile.
+No component calls a generic chat-completion function directly. No component selects a different model per operation in v1. The only active text LLM choice is the configured text model profile. Each purpose declares the maximum allowed input sensitivity so the raw-evidence vault can permit, mask, deny, or escalate the job before any model call.
 
 #### 3.1.7 Single-profile capability policy
 
@@ -1127,8 +1187,8 @@ SkillKernel uses one active text profile in v1. The profile is qualified into ca
 
 | Qualification | Allowed use |
 |---|---|
-| `qualified_autonomous` | May propose create/improve/compose/decompose plans that can proceed to deterministic gates. |
-| `qualified_propose_only` | May draft proposals, but autonomous apply is blocked. |
+| `qualified_autonomous` | May perform autonomous semantic adjudication and author create/improve/compose/decompose verdicts/plans that can proceed to deterministic gates. |
+| `qualified_propose_only` | May draft semantic plans and explanations for inspection or testing, but autonomous apply is blocked. |
 | `qualified_classify` | May classify evidence, labels, and low-risk semantic fields only. |
 | `failed` | Not used by SkillKernel jobs. |
 
@@ -1193,6 +1253,11 @@ context compilation
 semantic equivalence support
 semantic scanner support
 probe generation
+raw-window intent reconstruction
+redacted replay-intent synthesis
+memory declassification/adjudication
+external-skill relationship adjudication
+autonomous semantic adjudication of gated-but-reasoning-dependent cases
 ambiguous attribution assistance
 operator-facing explanation generation
 ```
@@ -1220,7 +1285,7 @@ The active OpenClaw chat/session model is not implicitly reused. SkillKernel has
 
 #### 3.2.3 OpenClaw-routed text profile
 
-When `route_type: openclaw`, SkillKernel uses an explicitly supported OpenClaw text-generation capability for the target OpenClaw version. This route is valid only when OpenClaw exposes a stable host-owned simple-completion seam that can be used for maintenance prompts without inheriting the active user's transcript, tools, approvals, memory, or transient turn context. If the installed OpenClaw version cannot provide that narrow service-model path, the `openclaw` profile is invalid and the operator must choose `openai_compatible` instead.
+When `route_type: openclaw`, SkillKernel uses an explicitly supported OpenClaw text-generation capability for the target OpenClaw version. This route is valid only when OpenClaw can provide a maintenance-safe model path: either a host-owned simple-completion seam or a dedicated SkillKernel maintenance agent/session identity that does not inherit the active user's transcript, tools, approvals, memory, or transient turn context. If the installed OpenClaw version cannot provide that narrow service-model path, the `openclaw` profile is invalid and the operator must choose `openai_compatible` instead.
 
 Rules:
 
@@ -1320,7 +1385,7 @@ downstream acceptance result
 error code
 ```
 
-The audit must not store raw prompts or raw responses unless a separate redacted retention policy explicitly allows it.
+The invocation audit stores hashes and metadata by default. Raw prompts, raw responses, or model-visible raw evidence are stored only in the governed raw-evidence vault when the active evidence-retention policy permits them. The audit row links to vault record IDs and declassification reports; it does not duplicate raw content in ordinary audit fields.
 
 #### 3.2.8 Embedding access profile
 
@@ -1485,6 +1550,9 @@ skillkernel:
         max_concurrent: 1
         hosted_allowed: true
         local_only: false
+        max_input_sensitivity: private
+        allow_raw_evidence: true
+        require_local_for_raw_private: true
 
   embeddings:
     active_profile: local_embeddings
@@ -1589,14 +1657,14 @@ thinking-level support or explicit omit/downgrade behavior
 Qualification verdicts:
 
 ```text
-qualified_autonomous   = may be used for autonomous create/improve/compose/decompose proposals
-qualified_propose_only = may draft proposals, but autonomous apply is blocked
+qualified_autonomous   = may be used for autonomous semantic adjudication and create/improve/compose/decompose plans
+qualified_propose_only = may draft plans/explanations, but autonomous apply is blocked
 qualified_classify     = may classify evidence or labels only
 failed                 = not used by SkillKernel jobs
 expired                = must requalify before autonomous use
 ```
 
-The evaluator, scanner, compiler, token governor, writer, and rollback system remain deterministic authorities. A qualified model can propose; it cannot accept, write, schedule, archive, promote, or roll back.
+The evaluator, scanner, compiler, token governor, writer, and rollback system remain deterministic execution authorities. A qualified model can author semantic verdicts and plans; it cannot directly write files, execute SQL or shell, mutate scheduler state, change policy state, archive, promote, roll back, or mark its own output accepted without deterministic admissibility checks.
 
 #### 3.3.2 Embedding profile qualification
 
@@ -1695,7 +1763,7 @@ SkillKernel must preserve the following OpenClaw constraints:
 11. Skills are organized under the SkillKernel subfolder so ownership is obvious.
 12. Archive directories stay outside OpenClaw-visible roots so archived skills cannot be selected accidentally.
 
-Skill folders are not plugins, schedulers, persistent services, or databases. A generated skill may include a script that the agent can run through an existing OpenClaw tool, a template that the agent can copy, a schema that a verifier can use, or a reference that the agent can read. It must not assume that `hooks/`, `cron/`, `services/`, or mutable local-state files placed in the skill directory will be registered by OpenClaw. When a reusable capability requires a new OpenClaw tool, plugin hook, sidecar schedule, background service, MCP server, or durable store, SkillKernel records an inert adjunct request or operator-review integration proposal rather than silently embedding active infrastructure inside the skill folder.
+Skill folders are not plugins, schedulers, persistent services, or databases. A generated skill may include a script that the agent can run through an existing OpenClaw tool, a template that the agent can copy, a schema that a verifier can use, or a reference that the agent can read. It must not assume that `hooks/`, `cron/`, `services/`, or mutable local-state files placed in the skill directory will be registered by OpenClaw. When a reusable capability requires a new OpenClaw tool, plugin hook, sidecar schedule, background service, MCP server, or durable store, SkillKernel records an inert adjunct request or administrative integration request rather than silently embedding active infrastructure inside the skill folder.
 
 OpenClaw plugin hooks are the capture seam. Hook handlers should not run slow analysis or file mutation. They normalize, redact, enqueue, and return. The only optional prompt-adjacent behavior is a short, cached, sidecar-supplied runtime skill-context hint with a strict timeout and fail-soft behavior.
 
@@ -1713,32 +1781,471 @@ The production default is:
 autonomy_mode: autonomous_guarded
 ```
 
+SkillKernel is designed to operate autonomously end-to-end. Administrative escalation is not part of ordinary skill creation, improvement, composition, decomposition, replay-corpus construction, memory adjudication, external-skill relationship classification, broker tuning, archive/promotion, or repair workflows. Administrative involvement is reserved for explicitly configured policy boundaries, raw reveal, mutation of external-owned roots, irreversible infrastructure change, missing required infrastructure, or unresolved contradiction after autonomous evidence gathering and adjudication have been exhausted.
+
+The autonomy model is:
+
+```text
+LLM semantic adjudication
++ calibrated soft decision policy
++ deterministic hard-invariant enforcement
++ isolated trial/canary/rollback controls
+= autonomous high-confidence action
+```
+
 Autonomy modes:
 
 | Mode | Behavior |
 |---|---|
-| `observe_only` | Capture, store, analyze. No proposals, no writes. |
-| `propose_only` | Generate candidates and evaluations. No filesystem writes. |
+| `observe_only` | Capture, store, analyze. No proposals, no writes. Raw-evidence capture follows the configured evidence-retention policy. |
+| `propose_only` | Generate candidates, redacted intents, semantic adjudications, evaluations, and staged plans. No filesystem writes. |
 | `auto_archive_only` | Can archive/demote SkillKernel-owned low-utility skills. No creation/improvement writes. |
-| `autonomous_guarded` | Can create, improve, compose, decompose, compile, archive, promote, merge, repair, and roll back SkillKernel-owned skills inside policy gates. |
-| `autonomous_max` | Same as guarded but with lower thresholds, more exploration, and larger probe budgets. Still scanner/evaluator/rollback gated. |
-| `frozen` | Emergency stop. Capture may continue; mutation and context hints stop. |
+| `autonomous_guarded` | Can create, improve, compose, decompose, compile, archive, promote, merge, repair, roll back, build replay episodes, admit safe memory declassifications, and resolve semantic adjudication tasks inside policy gates. |
+| `autonomous_max` | Same as guarded but with larger exploration budgets, wider trial/canary lanes, more retry/adjudication attempts, lower soft-threshold entry points, and more aggressive threshold-deadlock remediation. It does not lower hard safety, privacy, schema, scanner, rollback, ownership, or path-containment invariants. |
+| `frozen` | Emergency stop. Capture may continue; mutation and context hints stop. Raw-evidence capture may continue only when incident policy explicitly permits it. |
+
+### 5.1 Hard invariants versus calibrated soft thresholds
+
+The implementation must not let arbitrary deterministic thresholds grind autonomy to a halt. Gates are divided into two classes.
+
+**Hard invariants** are non-negotiable safety, integrity, privacy, ownership, compatibility, and reversibility requirements. A hard-invariant failure rejects, quarantines, freezes, or rolls back automatically. Examples:
+
+- invalid OpenClaw `SKILL.md` format;
+- path escape, symlink escape, or attempt to write outside approved roots;
+- missing rollback pointer, manifest hash, provenance edge, or evolution transaction;
+- failed critical scanner finding;
+- forbidden capability expansion;
+- secret leakage into embeddings, runtime skill text, normal logs, or support artifacts;
+- raw-evidence exposure forbidden by deployment policy;
+- unqualified text or embedding profile for the required sensitivity level;
+- evaluator infrastructure unavailable for an action that requires evaluation;
+- mutation of non-SkillKernel-owned roots;
+- request to install hooks, tools, services, MCP servers, providers, or schedulers outside approved adjunct templates.
+
+**Calibrated soft thresholds** are adaptive decision aids. They influence routing, priority, confidence, exploration, canary size, replay inclusion, evidence budgets, and operation selection, but they do not directly force human involvement. Examples:
+
+- recurrence count;
+- projected utility;
+- evidence confidence;
+- topology operation score;
+- memory declassification confidence;
+- replay-intent confidence;
+- target-probe pass rate near boundary;
+- context-token pressure;
+- retrieval similarity;
+- candidate priority;
+- archive/promotion utility margins.
+
+When a soft threshold is not met, SkillKernel must choose a non-blocking autonomous exit before administrative escalation:
+
+```text
+collect_more_evidence
+run_additional_retrieval
+use_raw_vault_context_if_policy_allows
+run_llm_re_adjudication
+run_independent_verifier_adjudication
+create_ephemeral_candidate
+reduce_scope
+decompose_candidate
+compile_more_conservatively
+generate_more_probes
+run_counterfactual_trial
+canary_with_smaller_exposure
+record_pending_candidate
+auto_reject_with_reason
+no_op_with_reschedule
+```
+
+A soft-threshold miss is an evidence-quality or calibration signal, not a stop sign.
+
+### 5.2 Autonomous Decision Orchestrator
+
+All semantic or topology-changing workflows pass through the Autonomous Decision Orchestrator. The orchestrator combines LLM semantic judgment, calibrated reliability estimates, deterministic admissibility checks, and operation risk to choose the next autonomous action.
+
+Required orchestrator inputs:
+
+```text
+objective
+operation_kind
+action_risk_tier
+evidence_packet_ids
+raw_vault_access_decision
+source_fidelity_tiers
+source_taint
+LLM structured verdict
+LLM rationale evidence IDs
+semantic_uncertainty_signals
+repeated_adjudication_agreement
+confidence decomposition
+calibration_family
+calibration_policy_version
+hard_invariant_results
+soft_threshold_results
+scanner/evaluator/probe results
+risk class
+reversibility class
+canary eligibility
+current deployment autonomy mode
+```
+
+Required orchestrator outputs:
+
+```text
+auto_accept
+auto_reject
+collect_more_evidence
+run_more_probes
+run_re_adjudication
+run_verifier_adjudication
+stage_ephemeral_candidate
+stage_canary
+reduce_scope
+quarantine
+freeze
+rollback
+escalate_admin
+no_op_reschedule
+```
+
+The LLM is allowed to decide semantic meaning, user intent, candidate purpose, redacted replay intent, memory interpretation, topology relationship, context equivalence, and whether an ambiguous case is conceptually safe or useful. Deterministic infrastructure decides whether the LLM verdict is admissible, supported, reversible, policy-compliant, and executable.
+
+### 5.3 Action risk tiers
+
+Risk is assigned to actions, not to entire components. The same subsystem may run fully autonomously for one action and require predelegated authority for another.
+
+| Tier | Example action | Normal autonomy behavior |
+|---|---|---|
+| `T0_observe` | read telemetry, compute metrics, scan existing artifacts | Always autonomous when source access is configured. |
+| `T1_internal_record` | create evidence packet, declassified summary, replay draft, memory verdict, broker diagnostic | Autonomous when schema, provenance, redaction, and raw-access policy pass. |
+| `T2_trial_artifact` | stage SkillIR, SkillGraphIR, probes, package draft, ephemeral candidate | Autonomous when hard invariants pass; soft misses route to narrower trial, more evidence, or canary preparation. |
+| `T3_owned_runtime_change` | activate SkillKernel-owned skill canary, promote archived SkillKernel skill, update broker policy, archive low-utility owned skill | Autonomous in `autonomous_guarded` when regression, scanner, context, canary, and rollback gates pass. |
+| `T4_external_or_irreversible` | mutate external-owned root, reveal raw private content, install new hook/tool/service/provider, alter infrastructure policy | Requires explicit predelegated policy authority or admin action. If such authority is absent, the system creates an adjunct request and continues all reversible internal work. |
+
+This tiering prevents brittle manual gates for routine semantic work while preserving hard trust boundaries around irreversible or externally owned effects.
+
+### 5.4 Composite and calibrated confidence
+
+SkillKernel must not trust verbalized model confidence alone. The decision confidence used for autonomous action is a composite score built from:
+
+- model-provided structured confidence;
+- evidence coverage;
+- source-fidelity tier;
+- recurrence and cross-session diversity;
+- agreement between independent evidence clusters;
+- agreement between repeated adjudication passes when used;
+- semantic uncertainty or answer dispersion when sampled adjudication is used;
+- contradiction checks against surrounding turns, memories, and skill history;
+- scanner risk;
+- evaluator/probe margin;
+- reversibility;
+- canary containment;
+- model-profile qualification status;
+- historical calibration outcomes for similar decisions;
+- delayed production outcomes from prior decisions in the same calibration family.
+
+Confidence bands are risk-weighted and calibrated per decision family:
+
+| Band | Meaning | Default action |
+|---|---|---|
+| `clear_accept` | Strong evidence, high calibrated confidence, no hard-invariant failure, reversible or canaried | Apply autonomously or canary. |
+| `clear_reject` | Strong evidence the candidate is unsafe, redundant, harmful, private, or not useful | Reject autonomously with reason and provenance. |
+| `improve_evidence` | Decision is promising but under-supported | Gather more data, retrieve raw context if allowed, run more probes, or re-adjudicate. |
+| `narrow_scope` | Candidate is useful but too broad/risky/token-heavy | Decompose, scope down, create ephemeral candidate, or tighten broker trigger. |
+| `canary_only` | Useful but insufficiently proven for full activation | Activate only in a bounded canary with rollback triggers. |
+| `quarantine` | Potentially useful but policy/safety ambiguity remains | Quarantine and schedule automated re-analysis when new evidence arrives. |
+| `admin_required` | Policy explicitly requires admin authority, raw reveal, or external/irreversible mutation without predelegated authority | Escalate with a complete evidence packet and suggested resolution. |
+
+### 5.5 Calibration families and reliability metrics
+
+Each autonomous semantic task belongs to a calibration family. Families must be calibrated separately because a model can be reliable at one semantic task and unreliable at another.
+
+Default calibration families:
+
+```text
+intent_reconstruction
+replay_episode_promotion
+memory_declassification
+external_skill_relationship
+topology_operation_choice
+skill_plan_semantic_adjudication
+context_equivalence
+semantic_compression_preservation
+broker_decision_adjudication
+freeze_repair_triage
+```
+
+For each family, SkillKernel records:
+
+```text
+verdict
+structured confidence
+confidence components
+evidence-fidelity tier
+selected autonomous action
+action risk tier
+soft thresholds applied
+hard invariants checked
+adjudication agreement/disagreement
+canary/trial status
+delayed outcome
+user correction signal when available
+regression/security/context findings
+rollback/freeze outcome
+```
+
+Reliability metrics include:
+
+```text
+coverage_rate
+false_accept_rate
+false_reject_rate
+abstention_rate
+unnecessary_abstention_rate
+post_abstention_success_rate
+calibration_error
+brier_like_score
+reliability_bin_summary
+mean_evaluator_margin
+canary_failure_rate
+rollback_rate
+harm_finding_rate
+utility_per_context_token
+```
+
+The system uses these metrics to adjust soft decision bands, not to bypass hard invariants.
+
+### 5.6 Selective trust and selective abstention
+
+The orchestrator implements selective trust. It trusts an LLM semantic verdict only when the calibrated confidence and evidence conditions for the relevant family and risk tier are satisfied. It abstains from immediate activation when reliability is not yet sufficient, but abstention must produce a productive autonomous next step.
+
+Valid abstention outcomes:
+
+```text
+no_skill
+no_op_reschedule
+collect_more_evidence
+re_adjudicate
+run_verifier_adjudication
+build_ephemeral_candidate
+generate_more_probes
+reduce_scope
+canary_only
+auto_reject
+quarantine
+freeze
+rollback
+```
+
+Invalid abstention outcome:
+
+```text
+administrative_escalation_because_soft_threshold_missed
+```
+
+Administrative escalation requires one of these reasons:
+
+```text
+policy_forbids_needed_raw_access
+raw_reveal_requested
+external_owned_root_mutation_requested
+irreversible_infrastructure_change_requested
+required_infrastructure_unavailable
+repeated_contradictory_adjudications_after_fallback
+predelegated_authority_absent_for_T4_action
+```
+
+### 5.7 Independent adjudication and verifier passes
+
+For high-impact or near-boundary decisions, SkillKernel may run additional LLM calls through the same configured text profile. This is not a per-operation model-routing matrix. It is repeated or role-separated adjudication under one active text profile.
+
+Allowed patterns:
+
+| Pattern | Use |
+|---|---|
+| `single_adjudication` | Routine low-risk semantic decisions. |
+| `repeat_same_prompt_with_seed_variation` | Estimate semantic stability for ambiguous natural-language interpretation. |
+| `independent_verifier_prompt` | Ask a separate prompt to find contradictions, privacy leakage, policy violations, or missing evidence. |
+| `contrastive_alternative_prompt` | Compare create vs improve vs compose vs decompose vs no-op. |
+| `semantic_equivalence_prompt` | Check that compressed runtime text preserves SkillIR intent. |
+
+The system stores disagreement rather than hiding it. Agreement increases calibrated confidence only when historical calibration for that family shows that agreement predicts success. Disagreement routes to more evidence, narrower scope, canary, quarantine, or autonomous rejection before admin escalation.
+
+### 5.8 Adaptive threshold lifecycle
+
+Soft thresholds are stored as versioned policy records and calibrated from observed outcomes. They may differ by workspace, executor profile, task family, skill granularity class, operation kind, source-fidelity tier, risk class, calibration family, and autonomy mode.
+
+Soft-threshold policies follow this lifecycle:
+
+```text
+draft
+→ replay_backtest
+→ shadow_mode
+→ canary_policy
+→ active
+→ retired_or_rolled_back
+```
+
+A threshold-policy update may be produced by deterministic analysis, LLM root-cause adjudication, or both. Activation requires deterministic evaluation on historical replay, canary data, and regression/security/context metrics. The update must record which stalled decisions it would unblock and which failure modes it may increase.
+
+Threshold adaptation may change:
+
+```text
+soft evidence requirements
+candidate priority
+minimum recurrence for trial entry
+probe budget
+re-adjudication budget
+canary exposure size
+archive/promotion margins
+context-pressure response thresholds
+no-op/reschedule timing
+```
+
+Threshold adaptation may not change:
+
+```text
+path containment
+ownership boundaries
+secret handling
+raw-access policy
+scanner hard denies
+OpenClaw skill-format validity
+rollback requirements
+external infrastructure authority
+mandatory audit/provenance
+```
+
+### 5.9 Conformal and empirical calibration policy
+
+Where enough exchangeable or approximately comparable calibration data exists, SkillKernel may use conformal or conformal-inspired selective calibration to choose accepted sets, action bands, or abstention policies for a decision family. The implementation must not overclaim statistical guarantees when calibration data is sparse, stale, non-exchangeable, or drawn from a different executor profile/task family.
+
+Required behavior:
+
+```text
+if calibration_data_sufficient_and_comparable:
+  use calibrated risk target for acceptance/canary/abstention band
+else:
+  mark calibration as empirical_low_support
+  prefer reversible actions: more evidence, ephemeral candidate, narrower scope, canary, or auto-reject
+```
+
+Calibration state is surfaced in audit records and Observatory. A high-confidence LLM verdict with low calibration support can still proceed through reversible trial/canary lanes, but it does not receive the same authority as a well-calibrated decision family.
+
+### 5.10 Threshold-deadlock prevention
+
+The system must maintain a threshold-deadlock detector. A deadlock exists when candidates repeatedly stall for soft-threshold reasons while hard invariants pass and LLM adjudication indicates high utility or high user-intent confidence.
+
+Deadlock handling is autonomous:
+
+```text
+create threshold_deadlock finding
+retrieve stalled candidate cohort
+run LLM root-cause adjudication
+classify bottleneck as evidence, calibration, probe, scope, context, risk, or policy
+refresh evidence window
+retrieve richer redacted derivatives
+retrieve raw-vault context when policy allows
+run re-adjudication or verifier adjudication
+generate narrower probes
+narrow the operation scope
+create an ephemeral candidate
+canary with lower exposure
+auto-reject with reason
+no-op with reschedule
+propose calibrated threshold-policy update when appropriate
+evaluate threshold-policy update on replay and shadow data
+activate policy update only if regression/security/context metrics pass
+escalate only for explicit hard-boundary reasons
+```
+
+No candidate may bypass hard invariants through threshold adaptation. Threshold adaptation only changes soft routing, candidate priority, evidence budgets, canary sizing, and operation selection policy.
+
+### 5.11 Default action rules
 
 Default action rules:
 
-1. If evidence is weak, do nothing.
+1. If evidence is weak, preserve the evidence packet, schedule more evidence collection when plausible, create an ephemeral candidate when useful, or record a no-op with reschedule; do not discard useful signal silently.
 2. If a matching active skill exists, improve or recompile it rather than create a new one.
 3. If a matching archived skill exists, promote or repair it rather than create a new one.
 4. If sibling skills conflict, merge/split/clarify before creating.
-5. If a change fails scanner, reject or quarantine.
-6. If a change fails target evaluation, reject.
-7. If a change fails regression budget, reject.
+5. If a change fails a hard scanner invariant, reject, quarantine, freeze, or roll back.
+6. If a change narrowly misses a soft target evaluation threshold, run more probes, narrow scope, re-adjudicate, or canary rather than escalating by default.
+7. If a change fails a hard regression budget, reject, repair in trial mode, or decompose/narrow the candidate.
 8. If canary fails after activation, roll back.
-9. If repeated failures occur, freeze the skill and require explicit operator action.
+9. If repeated failures occur, freeze the skill, launch automated root-cause/adjudication/repair jobs in trial mode, and unfreeze only after a passed repair/canary transaction or explicit admin override.
 
-Quarantine is not the normal workflow. It is an exception bucket for potentially useful but unsafe/ambiguous artifacts.
+Quarantine is not the normal workflow. It is an exception bucket for potentially useful but unsafe, ambiguous, or policy-limited artifacts. Ordinary semantic uncertainty is routed to autonomous LLM adjudication first; quarantine or administrative escalation is used only after configured autonomous fallback actions fail or policy forbids the needed evidence/action.
 
 ---
+
+### 5.12 Autonomy assurance and evidence-completeness requirements
+
+SkillKernel must avoid two failure modes at the same time: unsafe model overreach and quiet autonomy collapse. The system therefore treats LLM semantic adjudication, deterministic admissibility, and reversible execution as separate but cooperating powers.
+
+SkillKernel's autonomy also depends on retaining enough governed semantic evidence for the configured LLM to reconstruct intent, workflow meaning, and operational consequences. The system must not replace needed semantic evidence with hashes and then treat the resulting ambiguity as a routine administrative review requirement.
+
+Autonomy assurance rules:
+
+1. A semantic decision that can be made from permitted evidence must be routed to LLM adjudication before administrative escalation is considered.
+2. A hard invariant failure results in reject, quarantine, freeze, rollback, or explicit admin escalation according to policy; it is not softened by model confidence.
+3. A soft threshold miss triggers autonomous next actions first: gather more evidence, widen or shift the permitted context window, re-adjudicate, run an independent verifier pass, generate additional probes, reduce scope, convert to ephemeral candidate, canary narrowly, auto-reject with reason, or reschedule.
+4. A model verdict is admissible only when it cites evidence IDs, exposes uncertainty factors, passes schema validation, passes redaction and taint checks, and fits the calibrated decision family.
+5. The system records both over-action and over-deferral. Over-action includes canary regression, rollback, scanner discovery, privacy leak, or harmful activation. Over-deferral includes repeated no-op/escalation when later evidence shows an autonomous action would have been safe and useful.
+6. Threshold policies are calibrated artifacts. They can be updated through replay, shadow mode, canary, and outcome feedback, but cannot alter hard invariants or grant new capability surfaces.
+7. Administrative escalation is an exception path with an allowed reason code, not a substitute for semantic reasoning.
+
+Full-autonomy mode requires these additional evidence-completeness rules:
+
+1. **Semantic evidence is retained or derivable.** For any decision family that needs user intent, task context, tool-result meaning, skill visibility, or outcome interpretation, the evidence packet must reference either raw-vault-linked records, trajectory/transcript windows, or declassified semantic derivatives that preserve the necessary meaning.
+2. **Hash-only telemetry is explicitly degraded.** Hashes are useful for idempotency, deduplication, and correlation. They are not sufficient for user-intent reconstruction, replay-corpus promotion, memory declassification, topology choice, or semantic compression verification unless joined to preserved semantic evidence.
+3. **The LLM adjudicates meaning when deterministic code cannot.** Routine ambiguity is resolved by assembling permitted evidence and running structured LLM adjudication. The LLM verdict may classify intent, declassify memory, synthesize redacted replay intent, choose a topology operation, or reject a candidate when its confidence is calibrated and deterministic admissibility checks pass.
+4. **Deterministic gates enforce admissibility, not semantics-by-default.** Deterministic code validates schema, provenance, redaction, scanner findings, policy, rollback, path containment, ownership, evaluator results, and hard invariants. It does not block an otherwise admissible semantic decision merely because a fixed soft threshold is near a boundary.
+5. **Administrative escalation is exceptional and measurable.** Escalation is allowed only for configured authority gaps: forbidden raw exposure, raw reveal, irreversible external mutation, infrastructure installation, missing required infrastructure, repeated contradictory adjudications after autonomous fallback, or absent predelegated authority for a `T4_external_or_irreversible` action.
+6. **Repeated escalation is an autonomy defect.** If a decision family repeatedly escalates while hard invariants pass, the threshold-deadlock detector must open a finding, run autonomous root-cause analysis, and attempt policy/evidence/probe/scope/canary remediation.
+7. **Full autonomy is scoped by ownership and reversibility.** SkillKernel-owned reversible changes can be made autonomously after gates pass. Non-SkillKernel-owned roots, raw reveal, new runtime capabilities, external infrastructure, and irreversible changes require predelegated authority or administrative action. This is a hard ownership/security boundary, not a semantic-review fallback.
+
+Autonomy claims must be reported by evidence mode:
+
+| Evidence mode | Autonomy claim | Normal behavior |
+|---|---|---|
+| `full_semantic` | Full SkillKernel autonomy is available for covered decision families. | Raw-vault-linked or declassified semantic evidence supports LLM adjudication and deterministic activation. |
+| `semantic_derivative_only` | High autonomy is available, but some replay/probe fidelity is reduced. | Use declassified summaries and trajectories; prefer reversible actions and canaries for high-impact changes. |
+| `metadata_only` | Limited autonomy. | Mine aggregate patterns, but do not claim reliable intent reconstruction without additional evidence. |
+| `hash_only` | Correlation only. | Use for deduplication and counters; never promote durable replay episodes, memory declassification, or topology changes from hashes alone. |
+
+The result is calibrated autonomy: the model is trusted for meaning when its configured profile and evidence support the task; deterministic infrastructure remains responsible for safety, execution, durability, and auditability. A deployed system that disables semantic evidence retention may still provide observability, aggregate mining, and conservative suggestions, but it must not present itself as fully autonomous for decisions that require intent interpretation.
+
+### 5.13 Semantic autonomy decision matrix
+
+Semantic decision families must declare the evidence fidelity they require for full autonomy. This prevents two failure modes: pretending hash-only telemetry is enough for meaning, and escalating ordinary semantic work even though permitted evidence exists.
+
+| Decision family | Minimum evidence for full-autonomy path | LLM semantic authority | Deterministic authority boundary | Default autonomous fallback when evidence is insufficient |
+|---|---|---|---|---|
+| `intent_reconstruction` | `raw_vault_linked` prompt/turn/tool window, or `declassified_summary` with source links and contradiction check | Infer user goal, task family, sensitive fields to omit, and confidence bottlenecks. | Secret masking, declassification report, source provenance, retention policy, and output schema. | Assemble wider permitted window; synthesize lower-confidence derivative; mark degraded; reschedule or no-op without claiming intent certainty. |
+| `replay_episode_promotion` | `raw_vault_linked` or declassified turn/tool window plus broker decision context | Synthesize `redacted_user_intent`, expected skill decision, avoid-list, and rationale codes. | Redaction scan, replay reproducibility, evidence links, confidence band, policy, and canary eligibility. | Keep as replay draft, run more retrieval reconstruction, create degraded candidate, or skip durable replay promotion. |
+| `memory_declassification` | Source memory plus provenance, trust, taint, and enough surrounding context to classify intent | Decide whether candidate is operational lesson, evidence-only, private fact, contradiction, poisoned instruction, or low-confidence. | Scanner hard findings, privacy policy, taint policy, TTL, provenance, and derived-data revocation links. | Keep quarantined, transform to evidence-only, reject, or request more source context. |
+| `external_skill_relationship` | External skill body/metadata/support manifest plus local active/archive skill body-level representation | Classify overlap, shadowing, complementarity, conflict, adapter opportunity, or replacement opportunity. | External ownership boundary, scanner results, package trust, active-root write rules, and mutation prohibition for external-owned roots. | Inventory only, suppress risky routing, create SkillKernel-owned candidate, or emit adjunct request. |
+| `topology_operation_choice` | Evidence packet with co-use/order/outcome/correction/context-cost data and candidate skill matches | Choose create, improve, compose, decompose, no-op, or supporting action and explain the tradeoff. | Operation state machine, evaluator/probe gates, context budget, regression budget, ownership, rollback, and canary policy. | Trial multiple alternatives, narrow scope, create ephemeral candidate, generate probes, or defer with scheduled evidence collection. |
+| `context_equivalence` | SkillIR revision, compiled runtime artifact, support-artifact summary, probes, and representative evidence | Judge whether compressed runtime text preserves operational meaning and failure boundaries. | Token budget, forbidden-content scan, semantic-density gate, probe pass/fail, context-regression check, and manifest hash. | Recompile, move detail to support file, decompose broad skill, reduce trigger surface, or reject compiled artifact. |
+| `broker_decision_adjudication` | Retrieval candidates, broker features, rendered context, final outcome, and action attribution signals | Explain why a skill should have been loaded, hidden, suppressed, or replaced by no-skill. | Runtime hook no-LLM rule, broker policy versioning, shadowing controls, active-bank constraints, and canary rollout. | Update broker diagnostics, add replay episode, run shadow evaluation, tune soft policy, or leave current policy unchanged. |
+
+A decision family may run in degraded mode with lower-fidelity evidence, but degraded mode has narrower authority. It may produce diagnostics, weak candidates, ephemeral candidates, or no-op/reschedule records. It may not silently produce durable replay truth, memory influence, topology mutation, or broad runtime activation when the evidence cannot support those decisions.
+
+### 5.14 Threshold-governance contract
+
+Soft thresholds are governed policy artifacts. Each threshold used by the Autonomous Decision Orchestrator must have:
+
+- a named decision family;
+- a reason code;
+- a hard-invariant relationship, if any;
+- an evidence-fidelity requirement;
+- a default autonomous fallback ladder;
+- calibration-support status;
+- an expected effect on coverage, false accepts, false rejects, context cost, canary risk, and rollback rate;
+- replay/shadow/canary evidence before broad activation;
+- rollback criteria for the threshold policy itself.
+
+Threshold policies may tighten automatically after scanner failures, canary regressions, rollback spikes, harmful-capability findings, privacy leaks, context regressions, or drift incidents. Threshold policies may relax only through replay backtests, shadow-mode comparison, limited canarying, and recorded improvement in autonomy without unacceptable increases in false accepts, harm findings, context cost, or rollback rate. Hard invariants cannot be relaxed by threshold policy.
 
 ## 6. Workspace, tenant, and trust model
 
@@ -1774,7 +2281,7 @@ Taint propagation rules:
 3. Tainted content cannot enter `SKILL.md` as instruction text.
 4. Tainted content can produce probes or negative tests.
 5. User-specific private facts cannot compile into general skills.
-6. Secrets and credentials are redacted before storage and embedding.
+6. Secrets and credentials are blocked from embeddings, skill text, support artifacts, normal logs, and ordinary analytics. They may appear only in raw-evidence vault records when raw retention is enabled, encrypted, access-controlled, short-retention by policy, and never exposed to hosted LLMs unless the operator explicitly allows that sensitivity tier.
 
 ### 6.1 Sidecar deployment and filesystem access boundaries
 
@@ -1893,7 +2400,7 @@ The plugin registers these typed hooks when supported by the installed OpenClaw 
 | Agent run finalization/end | `before_agent_finalize`, `agent_end` | final answer acceptance, final message list, run metadata, duration, terminal status | capture outcome, finalization behavior, correction windows, and trace correlation; bound flushing because hook execution may be timeout-limited |
 | Heartbeat turns | `heartbeat_prompt_contribution` | heartbeat-only context opportunities, lifecycle-monitor state, recurring background check-ins | provide only compact cached status/hints for heartbeat turns; do not alter normal user-initiated turns through this hook |
 | Provider-call telemetry | `model_call_started`, `model_call_ended` | sanitized provider/model attempt metadata, timing, outcome, request-id hashes, API/transport, effective context token budget | capture as low-content telemetry; no raw prompts, responses, headers, or request bodies should be required |
-| Raw model input/output | `llm_input`, `llm_output` | system prompt, prompt, history, provider output, usage, resolved context token budget | capture only when explicit conversation-access trust is enabled; redact before spool, storage, embedding, or LLM reuse |
+| Raw model input/output | `llm_input`, `llm_output` | system prompt, prompt, history, provider output, usage, resolved context token budget | capture only when explicit conversation-access trust is enabled; write raw content to the governed raw-evidence path when retention policy allows; write redacted/minimized derivatives to normal event/evidence stores; embed only redacted or declassified text |
 | Tool execution | `before_tool_call`, `after_tool_call` | tool name/kind, params, approvals/blocks, result class, errors, latency, retries | capture before/after pairs and outcome attribution data; enforce deterministic guard templates for risky operations where enabled |
 | Exec environment | `resolve_exec_env` | host/sandbox/node execution context and plugin-contributed environment facts | capture executor-profile facts only; do not inject secrets or broad environment changes |
 | Tool persistence | `tool_result_persist`, `before_message_write` | transformed persisted tool result, bounded metadata, transcript-persistence behavior, write-attempt signals | capture persisted form for replay alignment; do not place prompt-critical text only in stripped metadata |
@@ -1907,7 +2414,7 @@ The plugin registers these typed hooks when supported by the installed OpenClaw 
 | Gateway-owned cron observation | `cron_changed` | external OpenClaw cron lifecycle facts that may later explain sessions/tasks | observe only as environmental evidence; never use OpenClaw Cron as SkillKernel's scheduler |
 | Install scanning | `before_install` | skill/plugin install scan findings and install-block opportunities | record environment changes; optionally block clearly unsafe skill/plugin installs according to deterministic policy |
 
-Conversation-bearing hooks require explicit operator trust. A non-bundled SkillKernel plugin must not assume raw prompt, history, response, or conversation access. When the required OpenClaw trust gate is absent, SkillKernel still captures non-content telemetry, tool metadata, session lifecycle, delivery metadata, trajectories, compaction summaries, and historical files, but the evidence is lower-recall and lower-confidence.
+Conversation-bearing hooks require explicit operator trust. A non-bundled SkillKernel plugin must not assume raw prompt, history, response, or conversation access. Full-autonomy quality requires conversation-bearing access or equivalent authorized trajectory/transcript import because replay-corpus construction, user-intent inference, attribution, and topology decisions depend on original semantic context. When the required OpenClaw trust gate is absent, SkillKernel still captures non-content telemetry, tool metadata, session lifecycle, delivery metadata, trajectories, compaction summaries, and historical files, but the deployment runs in degraded evidence-fidelity mode with lower recall, lower confidence, fewer automatic replay/canary episodes, and more escalation/no-op decisions.
 
 Prompt mutation is a separate trust gate from conversation reading. SkillKernel can capture events without prompt-injection permission. Runtime broker hints require prompt-injection permission and strict latency/token limits. If prompt mutation is disabled, the runtime broker still evaluates retrieval decisions offline and logs what it would have rendered for replay; it does not modify the live turn.
 
@@ -1942,6 +2449,8 @@ All plugin events share this shape:
   "trust": "tool_output",
   "taint": ["runtime", "untrusted_output"],
   "redaction_state": "redacted",
+  "evidence_fidelity": "redacted_derivative",
+  "raw_evidence_record_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
   "payload_hash": "sha256:5f2d8d8f8f0f62c01c6f9b7e6d2a0c5e88f5f7b0a0d3c4b6e7f8a9b0c1d2e3f4",
   "payload": {},
   "plugin_version": "1.0.0",
@@ -1960,7 +2469,7 @@ Requirements:
 - idempotency keys;
 - retry with exponential backoff;
 - oldest-safe compaction after retention threshold;
-- no secrets in spool;
+- no secrets in normal spool; raw-content spool entries are encrypted, separately tagged, short-retention, and readable only by the sidecar raw-evidence importer;
 - no blocking OpenClaw if sidecar is down.
 
 ### 7.5 Runtime skill-context hint path
@@ -2012,6 +2521,9 @@ The sidecar exposes:
 | retrieval service | hybrid search and exact reranking |
 | mining service | candidate discovery and duplicate matching |
 | generation service | structured plan generation |
+| raw-evidence vault service | encrypted raw evidence storage, retention, access checks, declassification jobs, and audit |
+| autonomous adjudication service | LLM-assisted high-confidence decisions for intent, replay, memory, topology, external-skill relationships, and other semantic gates |
+| replay-corpus builder | automatic redacted-intent synthesis and replay episode construction from live/historical evidence |
 | scanner service | static/semantic/capability checks |
 | evaluator service | probe execution and regression checks |
 | writer service | deterministic staged file writes |
@@ -2027,6 +2539,11 @@ POST /v1/ingest/replay
 POST /v1/ingest/historical/discover
 POST /v1/ingest/historical/import
 GET  /v1/ingest/historical/runs
+GET  /v1/evidence/raw-vault/status
+POST /v1/evidence/adjudications/run
+GET  /v1/evidence/adjudications/{adjudication_id}
+GET  /v1/replay/candidates
+POST /v1/replay/candidates/{candidate_id}/adjudicate
 GET  /v1/health
 GET  /v1/status
 POST /v1/control/mode
@@ -2154,10 +2671,244 @@ CREATE TABLE autoskill.raw_events (
   trust text NOT NULL,
   taint text[] NOT NULL DEFAULT '{}',
   redaction_state text NOT NULL,
+  evidence_fidelity text NOT NULL DEFAULT 'redacted_derivative' CHECK (evidence_fidelity IN ('metadata_only','hash_only','redacted_derivative','declassified_summary','raw_vault_linked')),
+  raw_evidence_record_id uuid,
   payload_hash text NOT NULL,
   payload jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (workspace_id, source_kind, source_event_key)
+);
+
+CREATE TABLE autoskill.raw_evidence_records (
+  raw_evidence_record_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  source_event_hash text NOT NULL,
+  source_kind text NOT NULL,
+  source_id text,
+  session_id text,
+  turn_id text,
+  raw_kind text NOT NULL CHECK (raw_kind IN (
+    'user_prompt','agent_message','system_prompt','model_input','model_output','tool_params','tool_result','transcript_window','trajectory_window','memory_file','context_file','diagnostic_raw_stream','other'
+  )),
+  content_hash text NOT NULL,
+  sensitivity_level text NOT NULL CHECK (sensitivity_level IN ('public','internal','private','secret_candidate','credential_candidate','unknown')),
+  taint text[] NOT NULL DEFAULT '{}',
+  retention_until timestamptz NOT NULL,
+  encryption_key_id text NOT NULL,
+  ciphertext bytea,
+  external_ciphertext_ref text,
+  compression text NOT NULL DEFAULT 'zstd',
+  capture_policy_id text NOT NULL,
+  redaction_policy_id text NOT NULL,
+  access_policy jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  revoked_at timestamptz,
+  UNIQUE (workspace_id, source_event_hash, raw_kind, content_hash),
+  CHECK ((ciphertext IS NOT NULL) OR (external_ciphertext_ref IS NOT NULL))
+);
+
+
+ALTER TABLE autoskill.raw_events
+  ADD CONSTRAINT raw_events_raw_evidence_record_fk
+  FOREIGN KEY (raw_evidence_record_id)
+  REFERENCES autoskill.raw_evidence_records(raw_evidence_record_id)
+  DEFERRABLE INITIALLY DEFERRED;
+
+CREATE TABLE autoskill.raw_evidence_access_log (
+  raw_access_id uuid PRIMARY KEY,
+  raw_evidence_record_id uuid NOT NULL REFERENCES autoskill.raw_evidence_records(raw_evidence_record_id),
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  job_id uuid,
+  purpose text NOT NULL,
+  accessor_kind text NOT NULL CHECK (accessor_kind IN ('sidecar_job','llm_profile','operator_ui','retention_job','scanner','evaluator')),
+  model_profile_id uuid,
+  exposure_level text NOT NULL CHECK (exposure_level IN ('metadata','redacted','secret_masked_raw','raw_local_only','raw_allowed_hosted')),
+  decision text NOT NULL CHECK (decision IN ('allowed','denied','masked','expired','revoked')),
+  reason_code text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE autoskill.declassification_reports (
+  declassification_report_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  source_raw_evidence_ids uuid[] NOT NULL DEFAULT '{}',
+  output_kind text NOT NULL CHECK (output_kind IN ('redacted_intent','semantic_summary','operational_fact','memory_candidate','replay_episode','topology_hint','rejected')),
+  redaction_policy_id text NOT NULL,
+  model_profile_id uuid,
+  confidence numeric NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+  privacy_risk numeric NOT NULL CHECK (privacy_risk >= 0 AND privacy_risk <= 1),
+  output jsonb NOT NULL,
+  scanner_status text NOT NULL CHECK (scanner_status IN ('passed','failed','quarantined','not_run')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE autoskill.autonomous_adjudications (
+  adjudication_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  job_id uuid,
+  adjudication_kind text NOT NULL CHECK (adjudication_kind IN (
+    'intent_reconstruction','replay_episode_promotion','memory_declassification','external_skill_relationship','topology_operation_choice','policy_safe_action','skill_plan_semantic_adjudication','context_equivalence','quarantine_release','freeze_repair_triage'
+  )),
+  input_event_ids uuid[] NOT NULL DEFAULT '{}',
+  input_evidence_ids uuid[] NOT NULL DEFAULT '{}',
+  input_raw_evidence_ids uuid[] NOT NULL DEFAULT '{}',
+  model_profile_id uuid,
+  llm_verdict jsonb NOT NULL,
+  confidence numeric NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+  deterministic_checks jsonb NOT NULL DEFAULT '{}',
+  decision text NOT NULL CHECK (decision IN ('auto_accept','auto_reject','collect_more_evidence','run_more_probes','run_re_adjudication','run_verifier_adjudication','stage_ephemeral_candidate','stage_canary','reduce_scope','quarantine','freeze','rollback','escalate_admin','no_op_reschedule')),
+  escalation_reason text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE autoskill.autonomy_policy_versions (
+  autonomy_policy_version_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  policy_kind text NOT NULL CHECK (policy_kind IN ('decision_orchestrator','candidate_thresholds','acceptance_bands','broker_policy','curation_policy','canary_policy')),
+  version_name text NOT NULL,
+  policy jsonb NOT NULL,
+  status text NOT NULL CHECK (status IN ('draft','active','retired','quarantined')),
+  activated_at timestamptz,
+  retired_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, policy_kind, version_name)
+);
+
+CREATE TABLE autoskill.autonomy_calibration_observations (
+  calibration_observation_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  calibration_family text NOT NULL,
+  autonomy_policy_version_id uuid REFERENCES autoskill.autonomy_policy_versions(autonomy_policy_version_id),
+  model_profile_id uuid,
+  adjudication_id uuid REFERENCES autoskill.autonomous_adjudications(adjudication_id),
+  autonomy_decision_id uuid,
+  action_risk_tier text NOT NULL CHECK (action_risk_tier IN ('T0_observe','T1_internal_record','T2_trial_artifact','T3_owned_runtime_change','T4_external_or_irreversible')),
+  predicted_confidence numeric NOT NULL CHECK (predicted_confidence >= 0 AND predicted_confidence <= 1),
+  confidence_components jsonb NOT NULL DEFAULT '{}',
+  selected_action text NOT NULL,
+  outcome_status text NOT NULL CHECK (outcome_status IN ('pending','success','failure','mixed','unknown','revoked')),
+  outcome_observed_at timestamptz,
+  outcome jsonb NOT NULL DEFAULT '{}',
+  false_accept boolean,
+  false_reject boolean,
+  unnecessary_abstention boolean,
+  harm_finding boolean,
+  utility_score numeric,
+  context_token_delta integer,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE autoskill.autonomy_reliability_metrics (
+  reliability_metric_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  calibration_family text NOT NULL,
+  autonomy_policy_version_id uuid REFERENCES autoskill.autonomy_policy_versions(autonomy_policy_version_id),
+  executor_profile_id uuid,
+  evidence_fidelity text,
+  action_risk_tier text,
+  window_start timestamptz NOT NULL,
+  window_end timestamptz NOT NULL,
+  sample_count integer NOT NULL DEFAULT 0,
+  coverage_rate numeric,
+  false_accept_rate numeric,
+  false_reject_rate numeric,
+  abstention_rate numeric,
+  unnecessary_abstention_rate numeric,
+  calibration_error numeric,
+  brier_like_score numeric,
+  canary_failure_rate numeric,
+  rollback_rate numeric,
+  harm_finding_rate numeric,
+  utility_per_context_token numeric,
+  reliability_bins jsonb NOT NULL DEFAULT '[]',
+  calibration_support text NOT NULL CHECK (calibration_support IN ('none','empirical_low_support','empirical_supported','conformal_supported','stale')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE autoskill.autonomy_policy_trials (
+  autonomy_policy_trial_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  policy_kind text NOT NULL,
+  candidate_policy jsonb NOT NULL,
+  baseline_policy_version_id uuid REFERENCES autoskill.autonomy_policy_versions(autonomy_policy_version_id),
+  status text NOT NULL CHECK (status IN ('draft','replay_backtest','shadow_mode','canary_policy','accepted','rejected','rolled_back')),
+  replay_result jsonb NOT NULL DEFAULT '{}',
+  shadow_result jsonb NOT NULL DEFAULT '{}',
+  canary_result jsonb NOT NULL DEFAULT '{}',
+  hard_invariant_impact jsonb NOT NULL DEFAULT '{}',
+  expected_unblocked_decisions integer NOT NULL DEFAULT 0,
+  expected_risk_delta jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  activated_at timestamptz,
+  retired_at timestamptz
+);
+
+CREATE TABLE autoskill.autonomy_decisions (
+  autonomy_decision_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  job_id uuid,
+  candidate_id uuid,
+  skill_id uuid,
+  operation_kind text NOT NULL,
+  autonomy_policy_version_id uuid REFERENCES autoskill.autonomy_policy_versions(autonomy_policy_version_id),
+  llm_adjudication_ids uuid[] NOT NULL DEFAULT '{}',
+  hard_invariants jsonb NOT NULL DEFAULT '{}',
+  soft_thresholds jsonb NOT NULL DEFAULT '{}',
+  confidence_decomposition jsonb NOT NULL DEFAULT '{}',
+  decision_band text NOT NULL CHECK (decision_band IN ('clear_accept','clear_reject','improve_evidence','narrow_scope','canary_only','quarantine','admin_required')),
+  action text NOT NULL CHECK (action IN ('auto_accept','auto_reject','collect_more_evidence','run_more_probes','run_re_adjudication','stage_ephemeral_candidate','stage_canary','reduce_scope','quarantine','freeze','rollback','escalate_admin','no_op_reschedule')),
+  reason_codes text[] NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE autoskill.administrative_escalation_events (
+  escalation_event_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  autonomy_decision_id uuid REFERENCES autoskill.autonomy_decisions(autonomy_decision_id),
+  adjudication_id uuid REFERENCES autoskill.autonomous_adjudications(adjudication_id),
+  escalation_kind text NOT NULL CHECK (escalation_kind IN (
+    'policy_forbids_needed_raw_access','raw_reveal_requested','external_owned_root_mutation_requested','irreversible_infrastructure_change_requested','required_infrastructure_unavailable','repeated_contradictory_adjudications_after_fallback','predelegated_authority_absent_for_T4_action'
+  )),
+  evidence_packet_id uuid,
+  decision_family text,
+  source_fidelity text,
+  hard_invariants jsonb NOT NULL DEFAULT '{}',
+  attempted_autonomous_alternatives text[] NOT NULL DEFAULT '{}',
+  recommended_admin_action text,
+  status text NOT NULL CHECK (status IN ('open','resolved','withdrawn','superseded','expired')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  resolved_at timestamptz
+);
+
+CREATE TABLE autoskill.threshold_deadlock_findings (
+  threshold_deadlock_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  policy_kind text NOT NULL,
+  stalled_candidate_ids uuid[] NOT NULL DEFAULT '{}',
+  stall_reason_codes text[] NOT NULL DEFAULT '{}',
+  hard_invariants_passed boolean NOT NULL,
+  llm_high_utility_count integer NOT NULL DEFAULT 0,
+  recommended_action text NOT NULL CHECK (recommended_action IN ('collect_more_evidence','generate_more_probes','relax_soft_threshold','narrow_scope','increase_canary_budget','reject_cohort','no_action')),
+  status text NOT NULL CHECK (status IN ('open','trialing_policy','resolved','rejected','quarantined')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  resolved_at timestamptz
+);
+
+CREATE TABLE autoskill.intent_interpretations (
+  intent_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  session_id text,
+  turn_id text,
+  source_event_ids uuid[] NOT NULL DEFAULT '{}',
+  raw_evidence_record_ids uuid[] NOT NULL DEFAULT '{}',
+  declassification_report_id uuid REFERENCES autoskill.declassification_reports(declassification_report_id),
+  redacted_user_intent text NOT NULL,
+  intent_fingerprint text NOT NULL,
+  expected_skill_decision jsonb NOT NULL DEFAULT '{}',
+  confidence numeric NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+  taint text[] NOT NULL DEFAULT '{}',
+  status text NOT NULL CHECK (status IN ('candidate','accepted','rejected','quarantined','revoked')),
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE autoskill.evidence (
@@ -2618,7 +3369,7 @@ CREATE TABLE autoskill.integration_proposals (
   proposal_kind text NOT NULL CHECK (proposal_kind IN (
     'openclaw_tool','plugin_hook','plugin_service','mcp_server','sidecar_schedule','taskflow_template','persistent_store','capability_policy_change'
   )),
-  status text NOT NULL CHECK (status IN ('draft','operator_review_required','approved','rejected','implemented','superseded')),
+  status text NOT NULL CHECK (status IN ('draft','admin_integration_required','approved','rejected','implemented','superseded')),
   reason text NOT NULL,
   proposed_contract jsonb NOT NULL DEFAULT '{}',
   inert_template_artifact_id uuid REFERENCES autoskill.runtime_artifacts(runtime_artifact_id),
@@ -3334,19 +4085,19 @@ Do not use a learned planner in v1. Log enough data to train one later.
 
 The renderer creates short hints and frontmatter descriptions. It is set-aware: it should mention sibling boundaries when confusion is likely.
 
-Description format:
+Description format example:
 
 ```text
-<capability>; use for <specific trigger>; not for <sibling boundary>.
+Repair PDF table extraction failures; use when row/column alignment, OCR uncertainty, or scanned-table layout affects tabular data; not for narrative PDF summaries.
 ```
 
-Runtime hint format:
+Runtime hint example:
 
 ```text
 SkillKernel routing hint:
-- Use <skill> when <conditions>.
-- Verify <checks>.
-- Do not use <confusable-skill> when <boundary>.
+- Use pdf-table-repair when table extraction failed or visible row/column structure is uncertain.
+- Verify row count, column alignment, headers, and explicitly marked uncertain cells.
+- Do not use generic-pdf-summary when the task requires structured table output.
 ```
 
 The renderer cannot include raw untrusted content. It cannot include hidden comments. It cannot mention secrets. It cannot add new behavioral policy beyond known skill contracts.
@@ -3414,7 +4165,7 @@ Every artifact in every SkillKernel-owned skill directory must be classified bef
 | `broker_excerpt_only` | Material the broker may summarize or excerpt into context. | Broker renders only a bounded excerpt; raw file is not directly loaded. |
 | `script_only` | Executed helper script, not prompt text. | Capability-scanned; never used as prompt content except path/contract references. |
 | `probe_only` | Evaluation fixture or test case. | Not visible in normal runtime. |
-| `operator_only` | Audit/debug/human review notes. | Never loaded into agent context. |
+| `operator_only` | Audit/debug/admin diagnostic notes. | Never loaded into agent context. |
 | `never_loaded` | Raw evidence, examples, transcripts, logs. | Stored in Postgres; not placed in skill directory unless needed for offline evaluation. |
 
 Default policy: generated skill directories should contain only `SKILL.md`, `.autoskill-manifest.json`, optional `.autoskill-contract.json`, and the minimal verified support files that are actually used: scripts, references, templates, schemas, small immutable data, assets, examples, tests, probes, or inert adjunct requests. No README, changelog, rationale, history, raw transcript excerpts, duplicated notes, mutable local database, or generated runtime registration file should exist inside a skill directory unless the artifact planner and context compiler classify it as operationally necessary and safe.
@@ -3555,7 +4306,7 @@ Rules:
 6. If the agent should not inspect a file directly, classify it as `broker_excerpt_only`, `script_only`, `probe_only`, `operator_only`, or `never_loaded`.
 7. If it is rationale, history, raw evidence, improvement notes, large logs, private memory, or low-trust historical material, keep it in Postgres.
 8. If it is long and partially useful, split into anchored sections with compact headings so the agent can read only the relevant part.
-9. If the desired artifact would be an OpenClaw hook, OpenClaw Cron routine, tool, plugin service, MCP server, or persistent local database, do not place live infrastructure inside the skill folder. Create an operator-review integration proposal and keep any skill-local file as an inert template/reference only.
+9. If the desired artifact would be an OpenClaw hook, OpenClaw Cron routine, tool, plugin service, MCP server, or persistent local database, do not place live infrastructure inside the skill folder. Create an administrative integration request and keep any skill-local file as an inert template/reference only.
 10. No support artifact may be loaded into context, executed, or used by the broker unless it is manifest-bound, scanner-approved, and covered by the artifact decision record for the active skill version.
 
 
@@ -3563,11 +4314,42 @@ Rules:
 
 ## 12. Evidence and memory pipeline
 
-### 12.1 Raw events are immutable
+### 12.1 Raw events and raw evidence are immutable
 
-Raw events are append-only after redaction. Derived records point back to raw event IDs.
+Raw events are append-only redacted or minimized event envelopes. They are the normal analytics, indexing, evidence, and audit substrate. Derived records point back to raw event IDs.
 
-No job can mutate raw event payloads except retention/deletion jobs governed by policy. Deletion requires audit entries.
+Full-fidelity prompts, model messages, tool inputs/results, transcript windows, trajectory windows, memory/context file excerpts, and diagnostic raw streams are not stored in ordinary `raw_events.payload`. When retention policy permits full-fidelity capture, they are stored as encrypted `raw_evidence_records` with explicit retention, sensitivity, taint, source hash, access policy, and audit logging. `raw_events` may hold a pointer to the raw vault record plus redacted/minimized payload fields.
+
+No job can mutate raw event payloads or raw evidence records except retention, revocation, or deletion jobs governed by policy. Deletion and revocation require audit entries and derived-data traversal.
+
+### 12.1.1 Evidence-fidelity tiers
+
+Evidence fidelity is part of the autonomy contract. The importer and live capture path must tag every source and derived object with the highest available fidelity level and the operations it can support. A lower-fidelity source can still contribute to recurrence, clustering, deduplication, and weak priors, but it cannot silently stand in for preserved semantics.
+
+| Fidelity tier | Stored content | Appropriate uses | Inappropriate uses |
+|---|---|---|---|
+| `raw_vault_linked` | encrypted raw or minimally masked prompt/message/tool/context window with provenance | intent reconstruction, replay intent synthesis, semantic compression checks, memory declassification, topology adjudication | direct runtime context injection, ordinary analytics exposure, embedding secrets |
+| `declassified_summary` | redacted semantic derivative with source links and declassification report | replay episodes, evidence packets, skill plans, memory candidates, probes | raw reveal, secret/private fact propagation |
+| `redacted_derivative` | redacted turn/tool/context summary with enough operational meaning for some decisions | clustering, candidate evidence, low/medium-risk adjudication, bootstrap mining | high-risk activation without corroboration |
+| `metadata_only` | timestamps, source IDs, status, model/tool/skill IDs, counters, result codes | correlation, health, recurrence, performance, routing statistics | user-intent reconstruction, redacted replay intent synthesis |
+| `hash_only` | hashes/fingerprints without content | idempotency, deduplication, privacy-preserving joins | semantic decisions, replay promotion, memory declassification, topology choice |
+
+Full-autonomy deployments should target `raw_vault_linked` for user prompts, assistant turns, relevant model inputs/outputs, and tool-result windows that materially affect skill decisions. Deployments that disable raw capture remain supported, but they operate in degraded evidence-fidelity mode and must expect more no-op, low-confidence, or administrative-escalation outcomes. A deployment cannot claim full autonomous skill management for a decision family unless that family has enough semantic evidence for calibrated LLM adjudication.
+
+### 12.1.2 Raw-evidence vault policy
+
+The raw-evidence vault exists to preserve original meaning for autonomous reasoning while preventing casual access or uncontrolled reuse.
+
+Rules:
+
+- raw evidence is encrypted at rest and never duplicated into ordinary analytics tables;
+- raw evidence carries retention, sensitivity, taint, source, parser, capture-policy, and redaction-policy metadata;
+- raw evidence is never embedded directly; embeddings use redacted derivatives or declassified semantic outputs;
+- raw evidence is exposed to an LLM only through a declared purpose, minimum necessary source window, configured text profile, exposure-level check, scanner/secret-masker where applicable, and access audit;
+- hosted LLM exposure for raw private content is disabled unless the operator explicitly configures that content tier;
+- local/self-hosted LLM routes can be required for raw-sensitive adjudication;
+- raw access denial produces an ordinary no-op/quarantine/escalation reason rather than silently weakening a decision;
+- retention, privacy delete, source revocation, rollback, and quarantine traverse from raw evidence to derived summaries, embeddings, intent records, memories, replay episodes, candidates, probes, SkillIR revisions, compiled artifacts, and broker caches.
 
 ### 12.2 Evidence extraction
 
@@ -3609,7 +4391,7 @@ A memory candidate is promoted only if:
 - not secret or private fact;
 - taint is acceptable for the target use;
 - contradiction check passes;
-- recurrence or severity threshold passes;
+- calibrated recurrence, severity, explicit-intent, or source-fidelity policy supports promotion, or the candidate is routed to an autonomous fallback such as more evidence, quarantine, probe-only use, or rejection;
 - projected utility exceeds cost;
 - no existing memory/skill already covers it.
 
@@ -3656,9 +4438,163 @@ Derived memories that can influence future behavior enter quarantine when they i
 - content from untrusted webpages, files, tool outputs, or user-controlled artifacts;
 - claims that modify skill applicability, risk, or execution order.
 
-Quarantined memory is not embedded for runtime retrieval and cannot become skill text. Approval requires provenance checks, scanner pass, and a deterministic transformation into a non-imperative evidence record.
+Quarantined memory is not embedded for runtime retrieval and cannot become skill text. Quarantine release requires provenance checks, scanner pass, and a deterministic transformation into a non-imperative evidence record.
 
-### 12.8 Control-flow integrity logging
+Memory quarantine is not an administrative-escalation default. The sidecar first runs autonomous memory adjudication when enough source evidence exists. The LLM may classify the candidate as safe operational memory, evidence-only, private fact, external instruction, poisoned/imperative content, contradiction, or low-confidence. Deterministic checks then apply scanner findings, trust, recurrence, taint, privacy policy, source provenance, and confidence thresholds. High-confidence safe transformations are accepted automatically; high-confidence unsafe candidates are rejected automatically; low-confidence, contradictory, privacy-sensitive, or policy-forbidden cases remain quarantined or escalate.
+
+### 12.8 Autonomous semantic adjudication pipeline
+
+Autonomous semantic adjudication bridges the gap between collected data and decisions that require intent interpretation. It is used whenever deterministic code cannot reliably infer meaning from structured telemetry alone.
+
+Adjudication tasks include:
+
+```text
+intent_reconstruction
+replay_episode_promotion
+memory_declassification
+external_skill_relationship
+topology_operation_choice
+policy_safe_action
+skill_plan_semantic_adjudication
+context_equivalence
+quarantine_release
+freeze_repair_triage
+```
+
+Required stages:
+
+```text
+candidate source set
+→ evidence-fidelity check
+→ raw-vault access decision, if needed
+→ minimum necessary context-window assembly
+→ deterministic secret masking when required
+→ LLM structured verdict under schema
+→ deterministic schema/provenance/redaction/confidence validation
+→ scanner/evaluator/policy checks
+→ auto_accept | auto_reject | quarantine | escalate_admin | no_op_reschedule
+→ audit + provenance edges + derived-data links
+```
+
+The LLM is allowed to make the semantic verdict. Deterministic infrastructure decides whether that verdict is admissible and executable. This distinction preserves autonomy without giving the model unchecked agency over files, scheduling, activation, rollback, or policy state.
+
+### 12.8.1 Semantic adjudication is an autonomy enabler
+
+Semantic adjudication exists to remove routine human interpretation from the maintenance loop. If a decision depends on user intent, workflow meaning, redaction semantics, topology relationship, memory meaning, or expected runtime behavior, the normal path is:
+
+```text
+assemble enough permitted evidence
+→ ask the configured LLM for a structured verdict
+→ validate the verdict deterministically
+→ take the next autonomous action
+```
+
+A missing deterministic threshold alone is not a reason to ask a human. The system must first attempt the non-blocking autonomous exits defined by the Autonomous Decision Orchestrator: gather more evidence, re-run retrieval, use raw-vault context if policy allows, re-adjudicate, generate probes, narrow the scope, create an ephemeral candidate, canary at reduced exposure, reject with reason, or reschedule.
+
+### 12.8.2 Adjudication confidence bands
+
+Each adjudication stores both the LLM verdict and a deterministic confidence decomposition. The decomposition must identify which factors reduced confidence so the system can act autonomously on the bottleneck.
+
+Examples:
+
+| Confidence bottleneck | Autonomous response |
+|---|---|
+| `insufficient_context_window` | Retrieve a larger permitted transcript/trajectory window. |
+| `raw_prompt_missing` | Use available redacted derivatives, historical trajectories, or mark source as degraded without blocking unrelated operations. |
+| `redaction_uncertain` | Run redaction-specific adjudication and scanner; if still uncertain, quarantine rather than activate. |
+| `topology_ambiguous` | Trial multiple topology alternatives: improve, compose, decompose, no-skill, and broker-only. |
+| `probe_margin_low` | Generate more probes and run a canary-only path if hard gates pass. |
+| `context_budget_near_limit` | Recompile, decompose, or move content into support files before rejection. |
+| `reversibility_high` | Prefer bounded canary over administrative escalation when hard gates pass. |
+| `irreversible_or_external` | Escalate only when the action cannot be represented as a reversible SkillKernel-owned change. |
+
+### 12.8.3 Autonomy evidence failure modes
+
+The implementation must explicitly detect evidence modes that would make autonomous reasoning impossible. A decision family is marked `evidence_insufficient_for_autonomy` when the available records contain only hashes, counters, selected skill IDs, or decontextualized metadata for a decision that requires user intent, workflow meaning, redaction semantics, or causal attribution. That state is not treated as a normal review queue. The sidecar must first attempt authorized historical lookup, raw-vault lookup, trajectory lookup, transcript-window reconstruction, related-turn expansion, broker/context-log reconstruction, and LLM adjudication over the richest permitted evidence. Only after those autonomous remedies fail may the decision become `administrative_escalation_required`.
+
+This prevents a privacy implementation from silently degrading into non-autonomy. Privacy policy controls which evidence may be retained, viewed, declassified, embedded, or exposed to a local/hosted model. It must not let a deployment claim full autonomy while storing only correlation artifacts for semantic decision families.
+
+### 12.9 Replay-corpus intent synthesis
+
+Replay and canary corpora require a safe, stable `redacted_user_intent`. The system must synthesize this automatically when evidence permits.
+
+Inputs:
+
+```text
+user prompt or transcript window from raw-evidence vault
+assistant response and final status
+tool calls/results and errors
+retrieved/rendered/ignored skills
+broker decision and context hints
+session/task metadata
+user corrections or follow-up turns
+historical trajectory records when available
+```
+
+Output:
+
+```json
+{
+  "redacted_user_intent": "Extract the failed PDF table into a CSV and preserve uncertain cells explicitly.",
+  "task_family": "pdf_table_extraction",
+  "expected_skill_decision": {
+    "ideal": "load_skill",
+    "skill_slug": "pdf-table-repair",
+    "avoid": ["generic-pdf-summary"]
+  },
+  "sensitive_fields_removed": ["local_path", "customer_name"],
+  "confidence": 0.93,
+  "requires_administrative_escalation": false,
+  "rationale_codes": ["explicit_user_request", "tool_error_context", "skill_retrieval_miss"]
+}
+```
+
+Acceptance requires:
+
+- source-window provenance;
+- redaction/declassification report;
+- deterministic secret scan pass;
+- contradiction check against surrounding turns;
+- confidence satisfies the calibrated replay-promotion policy, or the episode is routed to an autonomous fallback such as more evidence, degraded candidate recording, probe-only use, or rejection;
+- no policy-forbidden content exposure;
+- replay episode reproducibility using the redacted intent and recorded metadata.
+
+An operator-provided `redacted_user_intent` is an override path, not the normal path. If raw prompts are not available and the LLM cannot reconstruct intent from redacted context, SkillKernel records a degraded candidate and either skips durable replay promotion or routes to `escalate_admin` according to policy.
+
+### 12.10 Administrative escalation boundary
+
+Administrative escalation is reserved for cases where autonomous adjudication and autonomous fallback actions cannot produce a safe, high-confidence, policy-compliant decision. It is not the default implementation path for semantic adjudication, replay-corpus building, memory declassification, external-skill relationship classification, topology operation choice, candidate acceptance, canary activation, or SkillKernel-owned rollback.
+
+Before escalating, the sidecar must attempt the applicable autonomous alternatives:
+
+```text
+assemble richer permitted evidence
+run re-adjudication with explicit uncertainty decomposition
+generate more probes
+run no-skill/current-skill/candidate counterfactuals
+reduce scope
+decompose candidate
+create ephemeral candidate
+run canary-only activation
+auto-reject with reason
+no-op and reschedule when useful future evidence is likely
+```
+
+Escalate only when:
+
+- policy forbids the required raw-content exposure;
+- the only adequate context contains secrets or private facts that cannot be masked without losing meaning;
+- repeated adjudications contradict each other after more-evidence and re-adjudication attempts;
+- composite confidence remains below the risk-weighted minimum floor after autonomous fallback attempts;
+- source provenance is missing or revoked and the decision would create durable runtime influence;
+- the action would mutate a non-SkillKernel-owned root or external system;
+- the action would create a new capability surface outside preapproved adjunct templates;
+- deterministic scanner/evaluator/rollback infrastructure is unavailable for an action that requires it;
+- the deployment mode explicitly requires admin authorization for that action class.
+
+Otherwise, SkillKernel uses LLM adjudication plus deterministic admissibility checks to continue autonomously.
+
+### 12.11 Control-flow integrity logging
 
 Whenever memory, skills, broker policy, or external-skill inventory materially influences retrieval, mutation, tool selection, archive, promotion, or rollback, SkillKernel writes a `control_flow_events` row. This supports audits and poisoning detection.
 
@@ -3819,6 +4755,273 @@ repair/improve existing skill
 This bias prevents append-only growth while still allowing genuinely missing skills to be created.
 
 
+### 13.8 Data-to-usable-skill bridge
+
+SkillKernel must implement an explicit bridge from collected data to an active, usable skill. Rich evidence is not enough. A candidate becomes a usable skill only after it is converted into SkillIR or SkillGraphIR, compiled into an OpenClaw-compatible skill package, evaluated against target and regression cases, transactionally activated, indexed by the runtime broker, and observed under canary policy.
+
+The bridge is a required sidecar orchestration path. It applies to live capture, historical bootstrap, and incremental historical sync. Historical evidence can accelerate the early stages, but it does not bypass the same gates used for live evidence.
+
+#### 13.8.1 Definition of a usable skill
+
+A SkillKernel-owned skill is usable only when all of the following are true:
+
+- an accepted `skills` record exists with a current active or canary version;
+- canonical SkillIR exists for a single-skill node, or SkillGraphIR exists for a composed/decomposed workflow node;
+- required clauses are present: use boundary, non-use boundary, inputs, preconditions, procedure, verification, failure handling, and safety constraints;
+- all referenced evidence is redacted, provenance-linked, taint-classified, and mature enough for the operation;
+- optional ancillary artifacts have an accepted artifact plan and manifest-bound records;
+- `SKILL.md` compiles as a valid OpenClaw skill with required frontmatter and compact AI-facing runtime text;
+- support files are immutable, hashed, scanned, loadability-classified, and referenced through safe paths such as `{baseDir}` when runtime access is intended;
+- scanner, evaluator, regression, shadowing, token-budget, context-bundle, and profile-qualification gates pass;
+- a rollback pointer and evolution transaction exist;
+- the active package is installed under the SkillKernel active skill root at a safe activation boundary;
+- archived/superseded packages are invisible to OpenClaw skill loading;
+- broker indexes, embeddings, lexical indexes, topology edges, and runtime-context policy records are updated;
+- canary observation is scheduled unless policy explicitly allows immediate production activation;
+- every derived object is reachable from the provenance graph for audit and revocation.
+
+Anything short of this state is not an active usable skill. It is an event, evidence record, memory, component, candidate, probe, package draft, canary, rejected candidate, archived version, or quarantine object.
+
+#### 13.8.2 Bridge pipeline
+
+The sidecar implements the bridge as a stateful pipeline with explicit inputs, outputs, gates, and failure exits:
+
+```text
+live/historical source records
+→ redacted raw events and trace spine
+→ evidence windows
+→ evidence packets
+→ task/workflow clusters
+→ active/archive/external-skill matching
+→ topology operation decision
+→ autonomous LLM semantic adjudication and structured operation plan
+→ SkillIR or SkillGraphIR construction
+→ artifact planning
+→ deterministic validation and taint checks
+→ probe and trial generation
+→ context compilation
+→ package staging
+→ scanner/evaluator/regression/shadowing gates
+→ evolution transaction
+→ atomic activation or quarantine
+→ broker/index registration
+→ canary observation
+→ production verification, repair, rollback, freeze, archive, or promotion
+```
+
+The implementation should expose this bridge as a named workflow in job records and Observatory views. A developer should be able to inspect one candidate and see every stage from source records to final activation or rejection.
+
+#### 13.8.3 Stage contract
+
+| Stage | Input | Output | Authority | Failure exit |
+|---|---|---|---|---|
+| Source normalization | plugin events, transcripts, trajectories, memory/context files, tasks, existing skills | redacted raw events, trace links, source confidence | deterministic parser/redactor | rejected source item, parser finding |
+| Evidence extraction | raw events and trace spans | typed evidence records and memory candidates | deterministic extraction plus bounded LLM classification when needed | evidence quarantine, memory quarantine |
+| Evidence windowing | evidence records | evidence packet with task fingerprint, recurrence, outcome, tools, skills, costs, taint, provenance | deterministic clustering/retrieval | insufficient evidence, no-op |
+| Skill matching | evidence packet | active/archive/external/component match set | hybrid lexical/vector/metadata/graph retrieval with exact rerank | duplicate, promote archived, improve existing |
+| Operation decision | evidence packet and match set | create/improve/compose/decompose/no-op/supporting-action decision | calibrated autonomous decision orchestrator using deterministic policy, retrieval evidence, and LLM semantic adjudication when meaning, intent, or topology is not mechanically decidable | no-op, memory-only, probe-only, ephemeral candidate, more evidence |
+| Semantic induction | high-signal candidate | structured operation plan, semantic verdict, confidence decomposition, uncertainty notes, and evidence IDs | LLM semantic adjudication plus deterministic schema/provenance/admissibility checks | schema reject, unsupported claim, re-adjudication, more evidence, low-confidence autonomous fallback |
+| Canonical modeling | operation plan | SkillIR or SkillGraphIR revision | deterministic normalizer/validator | candidate quarantine |
+| Artifact planning | SkillIR/SkillGraphIR | `SKILL.md` plus optional scripts/references/templates/schemas/data/assets/examples/tests/probes/adjunct requests | LLM authors artifact plan; deterministic planner admits allowed artifacts | instruction-only fallback, support artifact rejection |
+| Probe generation | evidence packet and SkillIR/SkillGraphIR | target, regression, counterfactual, shadowing, and canary probes | LLM may author probe specs; deterministic evaluator owns execution | probe-only, candidate hold |
+| Context compilation | SkillIR/SkillGraphIR and artifact plan | compact AI-facing runtime artifacts | deterministic compiler with LLM-assisted semantic compression | split, decompose, support-file move, keep prior version |
+| Package staging | compiled artifacts | staged immutable package plus `.autoskill-manifest.json` | deterministic writer | path-containment reject, scanner reject |
+| Evaluation | staged package and probes | trial results and acceptance verdict | deterministic evaluator | reject, repair candidate, freeze target, keep current |
+| Activation | accepted transaction | active/canary skill package, updated indexes, broker policy records | deterministic transaction manager | rollback, quarantine, activation defer |
+| Observation | canary/live usage | attribution, utility, drift, context, and repair evidence | deterministic logging plus bounded semantic analysis | keep, repair, archive, rollback, freeze |
+
+#### 13.8.4 Evidence packet
+
+The evidence packet is the handoff object between collection and skill design. It is the minimum unit that can produce a topology-operation candidate. It must include:
+
+```json
+{
+  "evidence_packet_id": "evidence-packet:2b1d8f0a-3a7e-4a9d-9c4f-3353db6e5b21",
+  "workspace_id": "workspace:0e1a6d5f-5d78-4a8a-8f2e-2b4a6e7c9a10",
+  "agent_ids": ["agent:4f2c1e99-6b2f-40cd-a9b2-fdc0e4f71517"],
+  "task_fingerprint": "task:pdf-table-repair:v1:7b6a9c",
+  "source_window": {
+    "kind": "mixed_live_and_historical",
+    "first_seen_at": "2026-05-20T18:13:22Z",
+    "last_seen_at": "2026-06-04T04:11:03Z"
+  },
+  "operation_hints": ["create", "improve"],
+  "recurrence": {
+    "event_count": 9,
+    "distinct_sessions": 4,
+    "distinct_days": 3
+  },
+  "outcomes": {
+    "successes": 4,
+    "failures": 5,
+    "user_corrections": 2
+  },
+  "skill_context": {
+    "active_matches": [],
+    "archived_matches": [],
+    "external_matches": ["external-skill:pdf-summary"],
+    "co_used_skills": []
+  },
+  "procedural_signal": {
+    "stable_tool_sequence": true,
+    "stable_repair_delta": true,
+    "verification_available": true
+  },
+  "risk": {
+    "taint": "redacted_internal",
+    "privacy": "low",
+    "capability": ["filesystem-read"],
+    "source_confidence": 0.86
+  },
+  "provenance": {
+    "raw_event_ids": ["raw-event:1efc9a52-ef49-4039-9d82-f746e0c4df0d"],
+    "evidence_ids": ["evidence:4f9a2b1c-1111-4222-8333-abcdefabcdef"],
+    "historical_chunk_ids": ["historical-chunk:f08dc358-5c7e-4c56-a9d8-a384a81b8a55"]
+  }
+}
+```
+
+The packet is not prompt text. It is structured control-plane data. LLM prompts are rendered from redacted packet views with evidence IDs preserved.
+
+#### 13.8.5 Semantic adjudication to SkillIR conversion
+
+The LLM issues an autonomous semantic adjudication artifact for the candidate: interpreted user intent, operation choice, structured plan, confidence decomposition, uncertainty notes, redaction/declassification assumptions, and evidence-linked procedural claims. This artifact is the semantic decision input, not executable authority. The deterministic normalizer converts admissible adjudication artifacts into canonical SkillIR or SkillGraphIR by enforcing:
+
+- valid slug/name/description constraints;
+- operation class: create, improve, compose, decompose, or supporting action;
+- explicit use and non-use boundaries;
+- required inputs and preconditions;
+- deterministic procedure clauses;
+- verification and failure clauses;
+- declared capabilities and environment contracts;
+- evidence-ID coverage for every procedural claim;
+- taint and source-trust compatibility;
+- dependency, conflict, supersession, component, and sibling edges;
+- artifact plan consistency;
+- no unsupported instructions, raw transcript rationale, secrets, or external imperatives.
+
+If a procedural claim cannot be traced to evidence or justified by a safe generalization rule, it does not enter SkillIR. If the missing support can be resolved autonomously, the orchestrator gathers more evidence, retrieves raw-vault context when policy allows, asks for re-adjudication, or narrows the scope. Otherwise the claim remains a candidate note, is rejected, or is quarantined according to policy.
+
+#### 13.8.6 Data-to-skill path by operation
+
+| Operation | Data signal | Canonical object | Package result | Activation proof |
+|---|---|---|---|---|
+| create | missing reusable procedure with recurrence, correction, failure repair, or explicit user request | new SkillIR node | new skill package | target probes beat no-skill and nearest active/archive alternatives without regression |
+| improve | attributed failure, omission, drift, context waste, or user correction tied to a skill version | new SkillIR revision | replacement package version | patched version beats current version and preserves prior passes |
+| compose | repeated co-use/sequence across smaller skills with measurable workflow overhead | SkillGraphIR orchestration node plus component edges | composed workflow package, usually leaving components intact | composed package beats component-only baseline and does not shadow components incorrectly |
+| decompose | broad/clunky skill with separable usage clusters, false-positive loads, token waste, or independent drift | successor SkillIR nodes plus supersession/decomposition edges | smaller skill packages and archived/superseded original | successor set beats original and broker can select the right subset |
+
+The bridge must never default to create when improve, promote, compose, decompose, merge, description tightening, broker suppression, memory-only storage, probe addition, or no-op is more appropriate.
+
+#### 13.8.7 Artifact planner decision rules
+
+The bridge produces an artifact plan after SkillIR/SkillGraphIR exists. Instruction-only skills are the default. Ancillary files are included only when they improve execution, verification, context economy, or safety.
+
+Use optional artifacts as follows:
+
+| Artifact class | Include when | Do not include when |
+|---|---|---|
+| `scripts/` | brittle deterministic transformation, parsing, validation, formatting, or repeated file operation is safer in code | the task requires judgment, external authority, or broad filesystem/network access |
+| `schemas/` | output/input contract needs machine validation | schema is speculative or too task-specific to reuse |
+| `templates/` | repeated exact output structure reduces model ambiguity | free-form output is acceptable |
+| `references/` | compact static reference prevents long prompt text | reference would be loaded every time or can stay in Postgres |
+| `data/` | small immutable lookup is needed at runtime | data is mutable, sensitive, large, or better indexed in Postgres |
+| `assets/` | static example/image/resource is required for deterministic execution or tests | asset is decorative, large, or private |
+| `examples/` | minimal example materially improves execution in probes | example is explanatory prose or token-expensive |
+| `tests/` / `probes/` | package-local self-check is useful and small | full regression bank belongs in SkillKernel-managed `.autoskill/` storage |
+| `adjunct_requests/` | skill would benefit from a scheduler/tool/hook/template outside skill authority | request would silently create active infrastructure |
+
+The artifact planner is part of the bridge. A candidate is not ready for compilation until the artifact plan is allowed, minimized, and tied to capability declarations.
+
+#### 13.8.8 Evaluation bridge
+
+Evaluation must prove not only that the skill text exists, but that it changes behavior in the intended direction.
+
+For every candidate, generate an evaluation bundle containing:
+
+- positive target probes derived from failures, corrections, or recurring successful workflows;
+- negative boundary probes for tasks where the skill must not activate;
+- nearest-active-skill and nearest-archived-skill comparisons;
+- no-skill baseline when feasible;
+- regression probes from prior passes and sibling skills;
+- context-pressure measurements;
+- shadowing tests against broad and narrow related skills;
+- support-artifact tests for scripts, schemas, templates, and deterministic validators;
+- executor-profile compatibility checks;
+- canary observation plan.
+
+A candidate with good-looking text but no measurable evaluation advantage remains inactive.
+
+#### 13.8.9 Activation bridge
+
+Activation is a controlled state transition, not a file copy. The activation transaction must:
+
+1. lock the target skill, topology edges, candidate, and active package pointer;
+2. verify scanner, evaluator, compiler, manifest, and rollback records are current;
+3. write or atomically swap the staged package into the active SkillKernel skill root only at a safe session boundary or maintenance window;
+4. update `skills`, `skill_versions`, `runtime_artifacts`, `embeddings`, topology edges, broker records, and audit records;
+5. ensure archived/superseded versions are outside OpenClaw-visible skill roots;
+6. schedule canary and post-activation observation jobs;
+7. emit Observatory trace events for every updated object;
+8. release locks only after the rollback pointer is valid.
+
+The activation bridge must be idempotent. A retry cannot create duplicate active packages, duplicate embeddings, duplicate topology edges, or orphan archive records.
+
+#### 13.8.10 Required implementation object: data-to-skill trace
+
+Every operation candidate and every active SkillKernel-owned skill must expose a data-to-skill trace:
+
+```text
+source item
+→ raw event or historical chunk
+→ evidence record
+→ evidence packet
+→ candidate
+→ operation plan
+→ SkillIR/SkillGraphIR revision
+→ artifact plan
+→ compiled artifact
+→ staged package
+→ evaluation result
+→ evolution transaction
+→ active/canary package
+→ broker decision records
+→ canary/production observations
+```
+
+This trace is part of the product, not an observability extra. It is required for debugging, trust, revocation, rollback, red-team analysis, and explaining why a generated skill exists.
+
+#### 13.8.11 Non-skill exits
+
+The bridge must be allowed to stop before skill creation. Valid non-skill outcomes include:
+
+- `no_op`: evidence is insufficient or not reusable;
+- `memory_only`: useful fact or preference, but not procedural skill;
+- `probe_only`: failure needs future detection, not a runtime skill;
+- `description_tighten`: existing skill only needs routing boundary improvement;
+- `broker_policy_update`: skill exists, but runtime selection is wrong;
+- `archive_or_promote`: lifecycle state change is better than new skill;
+- `merge_candidate`: duplicate skills exist;
+- `ephemeral_candidate`: temporary hint can be tried without active package mutation;
+- `quarantine`: evidence, plan, artifact, or memory is unsafe;
+- `administrative_escalation_required`: policy, confidence, provenance, privacy, or reversibility prevents autonomous adjudication after autonomous fallbacks are exhausted.
+
+This prevents SkillKernel from converting all collected data into skill text. The correct output is the smallest safe control-plane change that improves future behavior.
+
+#### 13.8.12 Development acceptance criteria for the bridge
+
+The bridge is implemented only when all are true:
+
+- a seeded set of raw events can produce an evidence packet with provenance and taint;
+- a seeded missing-workflow packet can produce a create candidate, SkillIR, artifact plan, compiled `SKILL.md`, staged package, evaluator result, and inactive/inactive planning record;
+- a seeded skill-failure packet can produce an improvement candidate against the correct skill version;
+- a seeded co-use packet can produce a compose candidate with component edges and component-vs-composed trials;
+- a seeded broad-skill packet can produce a decompose candidate with successor edges and original-vs-successor trials;
+- every bridge stage exposes a status, reason code, input IDs, output IDs, and failure exit;
+- rejected candidates remain inspectable and searchable so repeated failed attempts are not regenerated blindly;
+- no active usable skill can exist without a complete data-to-skill trace, manifest, rollback pointer, broker registration, and evaluation verdict.
+
+
 ## 14. Historical ingestion and deployment bootstrap
 
 SkillKernel includes a historical ingestion subsystem so established OpenClaw deployments can benefit from months of prior sessions, memory files, trajectory captures, tool failures, user corrections, task records, and existing skill inventories immediately after adoption. Historical ingestion is part of the normal evidence pipeline. It is not a separate shortcut around redaction, provenance, taint, evidence maturity, evaluation, or rollback.
@@ -3850,7 +5053,7 @@ The importer must support these OpenClaw-native source classes. Default discover
 | Source class | Primary value | Trust posture | Import behavior |
 |---|---|---|---|
 | Session metadata stores | agent IDs, session IDs, keys, channels, models, token counts, timestamps, labels, active/deleted state | medium | Use for session discovery, workspace/agent scoping, recurrence windows, and idempotency. Do not treat metadata alone as skill evidence. |
-| Raw session transcripts | user turns, assistant turns, tool calls/results, compaction summaries, errors, corrections, workflow sequences | sensitive/high-value/low-trust | Parse locally only after source authorization. Redact before persistence, chunking, or embedding. Preserve turn order, parent/branch structure, compaction markers, truncation markers, and tool-call pairing when present. |
+| Raw session transcripts | user turns, assistant turns, tool calls/results, compaction summaries, errors, corrections, workflow sequences | sensitive/high-value/low-trust | Parse locally only after source authorization. Store raw content only in the raw-evidence vault when policy permits; store redacted derivatives for ordinary persistence, chunking, and embedding. Preserve turn order, parent/branch structure, compaction markers, truncation markers, and tool-call pairing when present. |
 | Transcript corpus exports | imported/live transcript folders, `summary.md`, `metadata.json`, `transcript.jsonl`, meeting or voice-session summaries when present | useful/derived/mixed trust | Import as historical narrative and transcript evidence. Treat summaries as derived/lower-confidence, preserve source metadata and line ranges, and never use summaries alone to activate a skill. |
 | Sanitized session-history views | bounded, redacted, stripped recall of session content | safer but incomplete | Prefer for low-risk previews and triage. Do not rely on it for exact tool/outcome reconstruction because tool results may be excluded or stripped. |
 | Trajectory sidecars and exports | ordered runtime timeline, prompts, selected prompt-building details, metadata, tools, prompt cache, usage, errors, compiled context, final artifacts | high-value/sensitive | Use when available for executor profiles, skill visibility, broker replay, action attribution, tool failures, usage/token metadata, and regression probes. Redact paths/secrets and respect trajectory truncation flags. |
@@ -4103,12 +5306,13 @@ Historical data is more sensitive than live typed telemetry because it may conta
 Hard rules:
 
 ```text
-redact before store
-redact before embed
-redact before LLM analysis
-redact before logs
-record source lineage before redaction without storing raw sensitive payloads
-store raw hashes, not raw secrets
+store raw historical content only in the governed raw-evidence vault when policy permits
+store redacted derivatives in ordinary historical/evidence tables
+redact or declassify before embedding
+use raw content for LLM analysis only through the raw-vault access policy and minimum-necessary context windows
+redact before ordinary logs
+record source lineage before redaction while keeping sensitive payloads in the vault
+store raw hashes in ordinary records; store raw sensitive payloads only in encrypted vault records
 classify private user facts separately from reusable procedure
 quarantine imperative external instructions
 quarantine memory that tries to alter policy, identity, routing, tools, credentials, or future behavior
@@ -4268,7 +5472,7 @@ import source
 → topology result
 ```
 
-Revocation does not rewrite audit history. It tombstones derived objects, removes active runtime exposure, invalidates embeddings and broker caches, and blocks future use of affected evidence unless a retained aggregate is policy-approved and contains no sensitive source material.
+Revocation does not rewrite audit history. It tombstones derived objects, removes active runtime exposure, invalidates embeddings and broker caches, and blocks future use of affected evidence unless a retained aggregate is policy-retained and contains no sensitive source material.
 
 ### 14.11 Performance and operational limits
 
@@ -4302,11 +5506,11 @@ Historical ingestion is production-ready only when all are true:
 2. dry-run inventory reports source counts, byte estimates, risk classes, import eligibility, and skipped reasons;
 3. raw transcripts, trajectories, memories, workspace context, task records, and existing skills import through separate parsers;
 4. every imported item has source lineage, fingerprint, parser version, redaction version, chunking version, and trust/taint labels;
-5. no imported raw content is embedded or sent to an LLM before redaction;
+5. no imported raw content is embedded raw or sent to an LLM outside raw-vault access policy; LLM use of raw historical context requires a minimum-necessary window, exposure check, redaction/secret masking when required, declassification report, and audit;
 6. duplicate imports are idempotent across restarts and reruns;
 7. compaction summaries are marked as lossy derived evidence;
 8. historical memory files cannot directly become runtime skill text;
-9. external skills are inventoried and indexed but not autonomously mutated;
+9. external skills are inventoried and indexed but not autonomously mutated in place; SkillKernel-owned replacements/adapters may be created only through normal policy, scan, evaluation, provenance, and rollback gates;
 10. historical candidates enter the same topology operation gates as live candidates;
 11. importing history cannot activate a skill without scanner, evaluator, token-budget, regression, and rollback gates;
 12. source revocation invalidates derived embeddings, evidence, memories, candidates, compiled artifacts, broker caches, and probes;
@@ -4543,9 +5747,9 @@ A generated skill directory cannot autonomously activate new OpenClaw hooks, Ope
 
 SkillKernel may create inert `adjunct_requests/*.json` files and matching Postgres records when evidence shows that a skill would benefit from an adjunct capability. Activation follows these rules:
 
-1. **Hook adjuncts** use only preexisting SkillKernel plugin hook surfaces or preapproved deterministic hook templates. The LLM may propose the need for hook-time capture or a guard condition; it may not write hook handler logic. Non-template hook requests become operator-review backlog.
+1. **Hook adjuncts** use only preexisting SkillKernel plugin hook surfaces or preapproved deterministic hook templates. The LLM may identify the need for hook-time capture or a guard condition; it may not write hook handler logic. Non-template hook requests become administrative integration backlog.
 2. **Schedule adjuncts** use the sidecar-owned scheduler. They never use OpenClaw Cron. A skill may request “run drift probe daily” or “refresh static-data source weekly,” but the sidecar stores and executes the schedule as a SkillKernel `sidecar_schedule` job linked to `skill_id` and version.
-3. **Tool adjuncts** may route through stable, preexisting SkillKernel/OpenClaw tools only. A generated skill may set `command-dispatch: tool` only when the target tool already exists, is allowlisted, and the argument contract is deterministic. Requests for new tools become operator-review backlog.
+3. **Tool adjuncts** may route through stable, preexisting SkillKernel/OpenClaw tools only. A generated skill may set `command-dispatch: tool` only when the target tool already exists, is allowlisted, and the argument contract is deterministic. Requests for new tools become administrative integration backlog.
 4. **Mutable state** lives in `autoskill.skill_state_records` or a configured SkillKernel runtime-data root. The active skill package may include immutable `data/` files, but not SQLite databases, append-only logs, or mutable caches.
 5. **Execution outputs** created while using a skill belong in the user workspace or configured runtime-data root, never under the active skill package. Active packages remain read-only for sessions that may use them.
 
@@ -4566,7 +5770,7 @@ load SkillIR / SkillGraphIR
 → activation transaction records hashes, loadability class, and rollback pointer
 ```
 
-The LLM may propose what kind of artifact would help and why. Deterministic infrastructure decides whether the artifact type is allowed, whether the path is legal, whether the content passes scanner/tests, whether the artifact improves evaluation, and whether it can be activated.
+The LLM may author an artifact plan explaining what kind of artifact would help and why. Deterministic infrastructure decides whether the artifact type is allowed, whether the path is legal, whether the content passes scanner/tests, whether the artifact improves evaluation, and whether it can be activated.
 
 #### 15.4.4 Support artifact record
 
@@ -4598,7 +5802,7 @@ Use `{baseDir}/scripts/extract_tables.py --input "$PDF" --pages "$PAGES" --out "
 See `{baseDir}/schemas/table-output.schema.json` only when validating output shape.
 ```
 
-The compiler rejects support artifacts when they increase attack surface or token surface without measured benefit. A support artifact can be split, moved to Postgres-only evidence, replaced by a shorter `SKILL.md` instruction, moved to a trial-only probe, or escalated as an operator-review integration proposal.
+The compiler rejects support artifacts when they increase attack surface or token surface without measured benefit. A support artifact can be split, moved to Postgres-only evidence, replaced by a shorter `SKILL.md` instruction, moved to a trial-only probe, or escalated as an administrative integration request.
 
 ### 15.5 Runtime text rules
 
@@ -4661,7 +5865,7 @@ Allowed guard categories:
 | capability_check | Confirm declared capabilities match actual requested actions. |
 | shadowing_hint | Disambiguate against sibling skills. |
 
-LLMs may propose guard-template selection. They cannot author executable guard logic, filesystem paths, shell commands, SQL, or capability expansion.
+LLMs may adjudicate which preapproved guard template fits a semantic risk. They cannot author executable guard logic, filesystem paths, shell commands, SQL, or capability expansion.
 
 ### 15.8 Description management
 
@@ -4840,7 +6044,7 @@ Transition requirements:
 |---|---|
 | observed pattern → candidate cluster | recurrence or high-severity explicit signal, source confidence, redaction complete |
 | candidate cluster → ephemeral candidate | duplicate/archived match check, source provenance, no hard scanner denial |
-| ephemeral candidate → trial candidate | clustered evidence or explicit user/operator intent, evaluator feasibility, provenance complete |
+| ephemeral candidate → trial candidate | clustered evidence, explicit current-user request, or configured admin bootstrap policy; evaluator feasibility; provenance complete |
 | trial candidate → validated candidate | target probes, no-skill control, nearest active/archived comparison, scanner pass |
 | validated candidate → staged version | SkillIR valid, context compiler feasible, manifest plan complete |
 | staged → trial/canary/active | target eval pass, regression eval pass, context-budget pass, manifest complete, rollback pointer present |
@@ -4873,7 +6077,7 @@ Every topology operation must satisfy these invariants:
 
 1. It is represented as an `evolution_transaction`.
 2. It cites source evidence and maturity state.
-3. It has a structured LLM proposal only where semantic reasoning is required.
+3. It has a structured LLM semantic verdict or plan where semantic reasoning is required.
 4. It is normalized into deterministic SkillIR or lifecycle changes.
 5. It passes scanner, policy, capability, token, and taint gates.
 6. It has target probes and regression probes.
@@ -4890,7 +6094,7 @@ Every topology operation must satisfy these invariants:
 
 **LLM role:** infer the reusable procedure, applicability boundary, negative boundary, verification checks, failure handling, and candidate SkillIR from evidence clusters.
 
-**Deterministic role:** active/archived duplicate search, evidence thresholding, schema validation, scanner/evaluator, token budgeting, file writing, activation, rollback, and utility tracking.
+**Deterministic role:** active/archived duplicate search, hard-invariant checks, calibrated soft evidence banding, schema validation, scanner/evaluator, token budgeting, file writing, activation, rollback, and utility tracking.
 
 **Acceptance tests:**
 
@@ -4910,7 +6114,7 @@ Every topology operation must satisfy these invariants:
 
 **Primary evidence:** skill helped but was inefficient, skill failed, tool/API drift, user correction, repeated verification failure, shadowing, misleading description, high token cost, stale support artifact, or evaluator/canary failure.
 
-**LLM role:** propose localized SkillIR changes, repair hypotheses, clearer boundaries, validators, failure modes, contract updates, or compression plans.
+**LLM role:** author localized SkillIR change plans, repair hypotheses, clearer boundaries, validators, failure modes, contract updates, or compression plans.
 
 **Deterministic role:** identify target version, generate diff, validate capability deltas, run regression probes, compare token/risk/utility, stage files, atomically activate or roll back.
 
@@ -5036,14 +6240,14 @@ operation_score =
   - uncertainty_penalty
 ```
 
-Activation requires `operation_score > threshold` and all hard gates passing. Hard gates override score.
+Activation requires hard gates passing and an Autonomous Decision Orchestrator action of `auto_accept` or `stage_canary`. `operation_score` is a soft ranking signal, not an activation authority by itself.
 
 ### 17.7 Operation selection precedence
 
 When multiple candidates compete, prefer the least invasive operation that solves the measured problem:
 
 ```text
-no-op if evidence is weak
+no-op/reschedule or collect more evidence if evidence is weak
 → description/disambiguator repair
 → improve existing active skill
 → promote/repair archived skill
@@ -5108,22 +6312,43 @@ Trigger a candidate when one or more are true:
 - archived skill demand recurs but archived skill is stale and repairable;
 - active skill repeatedly shadows or gets shadowed and needs split/merge.
 
-### 18.3 Candidate thresholds
+### 18.3 Candidate decision bands
 
-Default thresholds:
+Creation thresholds are soft policy inputs, not administrative-escalation blockers. The creation algorithm uses calibrated decision bands over recurrence, evidence confidence, projected utility, risk, context cost, reversibility, and explicit user intent.
+
+Default soft policy values:
 
 ```yaml
 min_recurrence_count: 3
 min_distinct_sessions: 2
 min_evidence_confidence: 0.72
 min_projected_utility: 0.15
-max_risk_score: 0.35
+max_soft_risk_score: 0.35
 max_token_cost_for_new_skill: 900
 explicit_user_request_override: true
 high_severity_failure_override: true
+allow_ephemeral_below_threshold: true
+allow_canary_near_threshold: true
+allow_llm_high_confidence_semantic_override: true
 ```
 
-Explicit user requests can lower recurrence requirements, but they do not bypass scanner/evaluator gates.
+Explicit user requests, high-severity repeated failures, strong raw-vault intent evidence, or high-confidence LLM semantic adjudication may lower soft recurrence and utility requirements. They do not bypass hard invariants: scanner, redaction, provenance, path containment, OpenClaw compatibility, rollback, token hard caps, and required evaluation still apply.
+
+If a candidate misses a soft threshold, the default next step is not administrative escalation. The creation service chooses one of:
+
+```text
+collect_more_evidence
+run_re_adjudication
+create_ephemeral_candidate
+compile narrower skill
+repair archived skill
+improve existing active skill
+create probe-only record
+no_op_reschedule
+auto_reject_with_reason
+```
+
+Threshold policy must be versioned and calibrated against delayed outcomes. A workspace with limited historical data starts with conservative soft thresholds but can still act autonomously through explicit user requests, raw-vault intent evidence, ephemeral candidates, and canary-only activation.
 
 ### 18.4 Contrastive induction
 
@@ -5418,7 +6643,7 @@ OpenClaw injects skill metadata into the prompt for eligible skills, so the desc
 Required description style:
 
 ```text
-<verb capability>; use when <narrow trigger>; not for <sibling boundary>.
+Repair PDF table extraction failures; use when extraction/layout/OCR uncertainty affects tabular data; not for narrative PDF summaries.
 ```
 
 Reject descriptions that are generic, marketing-like, or broad enough to cause false-positive loading.
@@ -5694,29 +6919,53 @@ If drift is detected:
 
 ### 23.2 Acceptance gate
 
-A candidate passes only if:
+Acceptance is split into hard invariants and soft evidence margins. Hard invariants are absolute. Soft margins determine whether to activate broadly, canary narrowly, gather more evidence, narrow the candidate, or reject.
+
+A candidate is inadmissible if any hard invariant fails:
 
 ```text
-scanner_pass = true
-AND target_probe_pass_rate >= threshold
-AND regression_failures <= hard_budget
-AND adversarial_findings = none_critical
-AND capability_expansion_allowed = true
-AND token_delta_allowed = true
-AND utility_delta_positive = true
+scanner_critical_findings = true
+OR path_containment_failed = true
+OR manifest_or_rollback_missing = true
+OR policy_forbidden_capability_expansion = true
+OR required_redaction_failed = true
+OR provenance_missing_or_revoked = true
+OR OpenClaw_skill_format_invalid = true
+OR evaluator_unavailable_for_required_gate = true
+OR regression_hard_budget_exceeded = true
 ```
 
-Suggested defaults:
+For admissible candidates, soft margins are evaluated as a decision band:
+
+```text
+target_probe_pass_rate
+regression_margin
+adversarial_noncritical_findings
+token_delta
+utility_delta
+shadowing_delta
+context_pressure
+canary_reversibility
+LLM_semantic_confidence
+evidence_maturity
+```
+
+Suggested default policy:
 
 ```yaml
-target_probe_min_pass_rate: 0.85
+target_probe_min_pass_rate_for_direct_activation: 0.85
+target_probe_min_pass_rate_for_canary: 0.70
 regression_failure_hard_budget: 0
 adversarial_critical_budget: 0
 max_token_delta_without_utility_gain: 0
-min_utility_delta: 0.03
+min_utility_delta_for_direct_activation: 0.03
+min_utility_delta_for_canary: 0.00
+allow_more_probe_generation_near_margin: true
+allow_narrow_scope_recompile_near_margin: true
+allow_ephemeral_trial_near_margin: true
 ```
 
-For noisy tasks, allow statistical confidence intervals, but never allow critical scanner failures.
+For noisy tasks, use statistical confidence intervals, repeated probes, counterfactual trials, and canaries. Do not convert near-threshold uncertainty into immediate administrative escalation unless the action is high-impact, irreversible, policy-forbidden, or cannot be evaluated autonomously.
 
 ### 23.3 Intervention testing
 
@@ -5784,7 +7033,7 @@ The evaluator records whether the skill improved task success, reduced tool call
 
 ### 23.8 Dynamic artifact-grounded probes
 
-Probe generation uses real artifacts: failing commands, changed schemas, file samples, API responses, stack traces, missing binaries, permission errors, and user corrections. Stale probes are retired only after the skill’s contract changes and the retirement itself passes review.
+Probe generation uses real artifacts: failing commands, changed schemas, file samples, API responses, stack traces, missing binaries, permission errors, and user corrections. Stale probes are retired only after the skill’s contract changes and the retirement itself passes the normal scanner/evaluator/version gate.
 
 ---
 
@@ -5854,24 +7103,28 @@ The manifest is checked before writing and during future improvement.
 
 ### 24.4 LLM authority limits
 
-The LLM never controls:
+The LLM may make structured semantic verdicts and plans for intent, redaction meaning, memory declassification, replay-corpus intent synthesis, skill topology, context equivalence, artifact usefulness, and repair strategy. Those verdicts are first-class autonomy inputs, not merely comments.
+
+The LLM never directly controls:
 
 - filesystem target path;
 - archive path;
 - SQL execution;
 - shell execution;
 - dependency installation;
-- policy decisions;
-- scanner verdict;
-- evaluator verdict;
+- policy-state mutation;
+- scanner acceptance;
+- evaluator acceptance;
 - rollback eligibility;
-- capability approval.
+- capability expansion;
+- activation state;
+- raw-content reveal.
 
-The LLM proposes. Deterministic services decide and apply.
+Deterministic services decide admissibility, execution, activation, rollback, and policy-state changes. This preserves full semantic autonomy while preventing unchecked agency over irreversible or externally scoped effects.
 
 ### 24.5 Audit-runtime binding
 
-Scanner approval is bound to exact bytes, renderer version, manifest, dependency hashes, and broker context rendering. If any of these change, approval is invalidated. Mutable URLs, remote scripts, package install commands, and support artifacts require re-scan on every material change.
+Scanner/evaluator acceptance is bound to exact bytes, renderer version, manifest, dependency hashes, and broker context rendering. If any of these change, acceptance is invalidated. Mutable URLs, remote scripts, package install commands, and support artifacts require re-scan on every material change.
 
 ### 24.6 Cross-skill and context-bundle scanning
 
@@ -6015,7 +7268,7 @@ validate structured plan
 → enqueue canary monitor
 ```
 
-Activation must respect OpenClaw skill snapshots and watcher behavior. SkillKernel does not rewrite an active package while a session may consume that package. If an activation window is unavailable, the evolution transaction remains staged and the sidecar activates it at the next safe session boundary, idle window, or explicit operator-approved maintenance window. Watcher-triggered refresh is treated as an OpenClaw compatibility mechanism, not as permission to mutate in-use packages.
+Activation must respect OpenClaw skill snapshots and watcher behavior. SkillKernel does not rewrite an active package while a session may consume that package. If an activation window is unavailable, the evolution transaction remains staged and the sidecar activates it at the next safe session boundary, idle window, or explicit configured maintenance window. Watcher-triggered refresh is treated as an OpenClaw compatibility mechanism, not as permission to mutate in-use packages.
 
 ### 25.3 Rollback flow
 
@@ -6262,6 +7515,112 @@ skillkernel:
     transcript_corpus_roots: []
     host_container_path_map: []
 
+  evidence_retention:
+    mode: full_autonomous_vault       # metadata_only | redacted_only | full_autonomous_vault
+    raw_vault_enabled: true
+    capture_user_prompts: true
+    capture_agent_messages: true
+    capture_model_inputs: true
+    capture_model_outputs: true
+    capture_tool_params: true
+    capture_tool_results: true
+    capture_system_prompt_windows: bounded
+    default_raw_retention_days: 30
+    secret_candidate_retention_hours: 24
+    encrypt_raw_evidence: true
+    raw_access_requires_job_purpose: true
+    raw_access_audit: true
+    embed_raw_content: false
+    hosted_llm_raw_private_allowed: false
+    require_local_llm_for_raw_private: true
+    minimum_necessary_window_tokens: 12000
+    max_raw_window_tokens: 50000
+
+  autonomous_adjudication:
+    enabled: true
+    structured_verdict_required: true
+    require_evidence_ids: true
+    require_deterministic_redaction_pass: true
+    require_provenance_edges: true
+    repeated_adjudication:
+      enabled_for_near_margin: true
+      max_attempts: 3
+      verifier_prompt_enabled: true
+      record_disagreement: true
+    semantic_uncertainty:
+      sample_when_ambiguous: true
+      max_samples: 3
+      cluster_by_meaning: true
+    escalation_policy:
+      escalate_on_policy_forbidden_raw_access: true
+      escalate_on_raw_reveal: true
+      escalate_on_predelegated_authority_absent_for_T4: true
+      escalate_on_repeated_contradictory_adjudications_after_fallback: true
+
+  autonomous_decision_orchestrator:
+    enabled: true
+    hard_invariants_fail_closed: true
+    soft_thresholds_are_adaptive: true
+    min_autonomous_fallback_attempts_before_escalation: 2
+    allow_llm_high_confidence_semantic_override_for_soft_thresholds: true
+    allow_ephemeral_candidate_when_under_supported: true
+    allow_canary_when_near_soft_margin: true
+    allow_more_probe_generation_near_margin: true
+    allow_scope_reduction_near_margin: true
+    threshold_deadlock_detector: true
+    threshold_policy_versioning: true
+    confidence_model: calibrated_composite
+    calibration:
+      enabled: true
+      families:
+        - intent_reconstruction
+        - replay_episode_promotion
+        - memory_declassification
+        - external_skill_relationship
+        - topology_operation_choice
+        - skill_plan_semantic_adjudication
+        - context_equivalence
+        - semantic_compression_preservation
+        - broker_decision_adjudication
+        - freeze_repair_triage
+      metrics:
+        - coverage_rate
+        - false_accept_rate
+        - false_reject_rate
+        - abstention_rate
+        - unnecessary_abstention_rate
+        - calibration_error
+        - brier_like_score
+        - canary_failure_rate
+        - rollback_rate
+        - harm_finding_rate
+      threshold_lifecycle: [draft, replay_backtest, shadow_mode, canary_policy, active, retired_or_rolled_back]
+      use_conformal_when_supported: true
+      mark_low_support_when_sparse: true
+    confidence_components:
+      - llm_structured_confidence
+      - evidence_coverage
+      - source_fidelity
+      - recurrence_diversity
+      - repeated_adjudication_agreement
+      - semantic_uncertainty
+      - contradiction_check
+      - scanner_risk
+      - evaluator_margin
+      - reversibility
+      - canary_containment
+      - model_profile_qualification
+      - historical_calibration
+      - delayed_outcome_reliability
+    escalation_policy:
+      escalate_on_policy_forbidden_raw_access: true
+      escalate_on_raw_reveal: true
+      escalate_on_irreversible_external_mutation_without_predelegated_authority: true
+      escalate_on_missing_required_infrastructure: true
+      escalate_on_repeated_contradictory_adjudications_after_fallback: true
+      escalate_on_soft_threshold_only: false
+
+
   historical_ingestion:
     enabled: true
     mode: incremental            # discover_only | import | incremental | disabled
@@ -6313,16 +7672,16 @@ skillkernel:
       - "**/.env*"
       - "**/*secret*"
       - "**/*credential*"
-    raw_content_policy: redact_before_store
+    raw_content_policy: vault_then_redacted_derivative
     embed_policy: redacted_only
-    llm_policy: redacted_high_signal_clusters_only
+    llm_policy: autonomous_adjudication_with_raw_vault_when_needed
     compaction_summary_confidence_multiplier: 0.65
     stale_source_confidence_multiplier: 0.50
     historical_candidate_initial_maturity_cap: recurring
     require_normal_gates_for_activation: true
 
   plugin:
-    capture_raw_conversation: false
+    capture_raw_conversation: true
     capture_tool_events: true
     capture_messages: true
     local_spool_max_mb: 256
@@ -6358,6 +7717,9 @@ skillkernel:
         max_concurrent: 1
         hosted_allowed: true
         local_only: false
+        max_input_sensitivity: private
+        allow_raw_evidence: true
+        require_local_for_raw_private: true
 
   embeddings:
     active_profile: default_embedding
@@ -6414,8 +7776,9 @@ skillkernel:
     allow_network_in_generated_skills: false
     allow_shell_in_generated_skills: false
     forbid_hidden_markdown: true
-    redact_before_store: true
+    redact_before_ordinary_store: true
     redact_before_embed: true
+    raw_content_only_in_vault: true
 
   scheduler:
     tick_seconds: 30
@@ -6561,7 +7924,7 @@ Acceptance:
 
 - established deployments with multiple agents can be inventoried without mutating OpenClaw state;
 - every imported item records source lineage, parser version, redaction policy, chunking policy, trust, taint, and hash identity;
-- raw transcript and memory text is never embedded or sent to an LLM before redaction;
+- raw transcript and memory text is never embedded raw and is sent to an LLM only through raw-vault access policy, minimum-necessary context windows, exposure checks, secret masking/redaction when required, declassification reports, and audit;
 - historical candidates can reach observed/recurring maturity but cannot activate without the normal scanner, evaluator, regression, token-budget, and rollback gates;
 - repeated import runs are idempotent and resumable;
 - external skills are indexed for collision/shadowing but remain read-only;
@@ -6699,24 +8062,35 @@ Acceptance:
 - no-skill is a valid decision;
 - shadowing cases are logged and influence curation.
 
-### Phase 12 — Creation, improvement, composition, and decomposition in propose-only mode
+### Phase 12 — Creation, improvement, composition, and decomposition in inactive planning mode
 
 Deliver:
 
 - opportunity miner;
+- data-to-usable-skill bridge runner;
+- evidence-packet assembler;
 - contrastive induction;
+- active/archive/external-skill matching before creation;
 - create/improve/compose/decompose candidate planners;
+- operation-plan normalizer;
+- SkillIR and SkillGraphIR skeleton builders;
+- artifact planner;
 - topology candidate tables;
 - component/co-use graph analysis;
 - operation-specific trial generation;
-- reviewer/status UI for proposals.
+- data-to-skill trace records;
+- adjudication/status UI for inactive candidates, operation plans, and traceability.
 
 Acceptance:
 
-- candidates require evidence;
-- compose proposals beat component-only baselines before activation;
-- decompose proposals beat original-skill baselines before activation;
-- broad/clunky/black-hole skill detection works in dry-run reports.
+- candidates require evidence packets, not raw transcript snippets;
+- every proposed candidate exposes the source → evidence → packet → candidate → plan → SkillIR/SkillGraphIR trace;
+- a seeded missing-workflow dataset produces a valid create candidate with compiled inactive `SKILL.md`;
+- a seeded skill-failure dataset produces an improvement candidate tied to the correct current skill version;
+- compose candidates beat component-only baselines before activation;
+- decompose candidates beat original-skill baselines before activation;
+- broad/clunky/black-hole skill detection works in dry-run reports;
+- invalid, unsafe, low-maturity, or duplicate candidates exit through explicit non-skill outcomes instead of becoming active skills.
 
 ### Phase 13 — Autonomous guarded apply, canarying, curation, and archive/promotion
 
@@ -6767,47 +8141,65 @@ The release is production-ready only if all are true:
 2. no dependency on Skill Workshop;
 3. no per-skill databases;
 4. no per-skill schemas;
-5. all events are redacted before persistence;
-6. all embeddings are created from redacted text;
+5. ordinary analytics, indexing, evidence, and audit stores receive redacted or minimized event payloads; full-fidelity content may persist only in the governed encrypted raw-evidence vault when policy permits it;
+6. embeddings are created only from redacted derivatives or declassified semantic outputs, never from raw private content;
 7. sidecar outage does not block normal OpenClaw usage;
 8. sidecar endpoint is private/authenticated and never exposed publicly;
 9. container path mappings and root containment checks are verified before historical import or file activation;
-8. scheduler survives restart and resumes safely;
-9. job leases prevent duplicate mutation;
-10. skill operation selection considers improve, promote, compose, decompose, merge, and archive before creating duplicates;
-11. every created skill is a normal OpenClaw skill with valid `SKILL.md`;
-12. every mutation has manifest, hashes, scanner result, evaluator result, and rollback pointer;
-13. hidden comments and invisible Markdown are rejected;
-14. scanner blocks known malicious skill patterns;
-15. regression gate blocks local fixes that break prior probes;
-16. no-skill controls or equivalent intervention checks exist for accepted skills;
-17. active skill budget is enforced;
-18. runtime context broker is bounded and fail-soft;
-19. archived skills are invisible to OpenClaw but searchable through SkillKernel;
-20. archived promotion works;
-21. rollback works under canary failure;
-22. drift checks detect simple broken environment contracts;
-23. retrieval logs track retrieved/rendered/injected/used/outcome;
-24. shadowing logs and remediation exist;
-25. audit hash chain validates;
-26. all core invariants are automated tests;
-27. create, improve, compose, and decompose are implemented as separate operation classes with separate evidence, evaluation, and metrics;
-28. composition requires co-use/sequence evidence and component-vs-composed trials;
-29. decomposition requires partial-use/false-positive/separable-cluster evidence and original-vs-successor trials;
-30. topology operations are rollback-complete across graph edges, broker policy, embeddings, probes, and active files.
-31. every context-loadable artifact has a registry row, token count, budget, content hash, compiler version, scanner status, and provenance;
-32. every compressed description passes positive/negative routing-equivalence tests;
-33. every compressed body passes information-preservation and regression gates;
-34. every support snippet has classification, budget, scan result, and retrieval boundary;
-35. context-value-per-token is measured and can drive archive, compose, decompose, or no-skill decisions.
-36. historical datasource discovery works across configured agents without crossing agent/workspace boundaries;
-37. historical import supports session stores, transcripts, trajectories, compaction summaries, workspace memories, workspace context files, task records, task-flow/workflow records, plugin session-extension state, queued injections, active-memory persisted transcripts, diagnostics exports, channel media/transcription/preprocessing artifacts, and existing skills;
-38. every historical import row has provenance, fingerprint, parser version, redaction version, trust, and taint;
-39. historical raw content is never embedded, indexed for LLM analysis, or compiled before redaction;
-40. historical candidates use the same create/improve/compose/decompose gates as live candidates;
-41. historical source revocation traverses derived chunks, embeddings, evidence, memories, candidates, probes, broker caches, and compiled artifacts;
-42. established deployments can run a bounded bootstrap import without degrading normal OpenClaw runtime behavior.
-
+10. scheduler survives restart and resumes safely;
+11. job leases prevent duplicate mutation;
+12. skill operation selection considers improve, promote, compose, decompose, merge, and archive before creating duplicates;
+13. every created skill is a normal OpenClaw skill with valid `SKILL.md`;
+14. every mutation has manifest, hashes, scanner result, evaluator result, and rollback pointer;
+15. hidden comments and invisible Markdown are rejected;
+16. scanner blocks known malicious skill patterns;
+17. regression gate blocks local fixes that break prior probes;
+18. no-skill controls or equivalent intervention checks exist for accepted skills;
+19. active skill budget is enforced;
+20. runtime context broker is bounded and fail-soft;
+21. archived skills are invisible to OpenClaw but searchable through SkillKernel;
+22. archived promotion works;
+23. rollback works under canary failure;
+24. drift checks detect simple broken environment contracts;
+25. retrieval logs track retrieved/rendered/injected/used/outcome;
+26. shadowing logs and remediation exist;
+27. audit hash chain validates;
+28. all core invariants are automated tests;
+29. create, improve, compose, and decompose are implemented as separate operation classes with separate evidence, evaluation, and metrics;
+30. composition requires co-use/sequence evidence and component-vs-composed trials;
+31. decomposition requires partial-use/false-positive/separable-cluster evidence and original-vs-successor trials;
+32. topology operations are rollback-complete across graph edges, broker policy, embeddings, probes, and active files;
+33. no active SkillKernel-owned skill exists without a complete data-to-skill trace from source record through evidence packet, operation plan, SkillIR/SkillGraphIR revision, artifact plan, compiled package, evaluation verdict, evolution transaction, broker registration, and rollback pointer;
+34. seeded datasets prove the bridge can produce create, improve, compose, and decompose proposals without bypassing scanner/evaluator/token/security gates;
+35. every bridge stage has inspectable input IDs, output IDs, status, reason code, and non-skill failure exit;
+36. every context-loadable artifact has a registry row, token count, budget, content hash, compiler version, scanner status, and provenance;
+37. every compressed description passes positive/negative routing-equivalence tests;
+38. every compressed body passes information-preservation and regression gates;
+39. every support snippet has classification, budget, scan result, and retrieval boundary;
+40. context-value-per-token is measured and can drive archive, compose, decompose, or no-skill decisions.
+41. historical datasource discovery works across configured agents without crossing agent/workspace boundaries;
+42. historical import supports session stores, transcripts, trajectories, compaction summaries, workspace memories, workspace context files, task records, task-flow/workflow records, plugin session-extension state, queued injections, active-memory persisted transcripts, diagnostics exports, channel media/transcription/preprocessing artifacts, and existing skills;
+43. every historical import row has provenance, fingerprint, parser version, redaction version, trust, and taint;
+44. historical raw content is never embedded raw, never placed in ordinary analytics/logs, and never compiled into runtime artifacts; LLM analysis of raw historical content occurs only through raw-vault access policy, minimum-necessary windows, declassification reports, and audit;
+45. historical candidates use the same create/improve/compose/decompose gates as live candidates;
+46. historical source revocation traverses derived chunks, embeddings, evidence, memories, candidates, probes, broker caches, and compiled artifacts;
+47. established deployments can run a bounded bootstrap import without degrading normal OpenClaw runtime behavior;
+48. replay-corpus candidates can be promoted automatically from raw-vault-linked telemetry by synthesizing `redacted_user_intent` through LLM adjudication plus deterministic validation, without requiring an operator plan in the normal path;
+49. hash-only telemetry is reported as degraded evidence fidelity and cannot silently block full-autonomy claims;
+50. memory quarantine has autonomous high-confidence accept/reject paths plus escalation only for policy/ambiguity/low-confidence cases;
+51. every LLM adjudication stores input IDs, exposure level, declassification report, confidence, deterministic check results, decision, and escalation reason when applicable;
+52. raw-prompt retention disabled mode remains functional but surfaces limited autonomy, lower evidence confidence, and reduced replay/canary creation capability;
+53. soft-threshold misses do not default to administrative escalation; seeded tests prove the orchestrator first attempts configured autonomous alternatives such as more evidence, more probes, re-adjudication, ephemeral candidates, reduced scope, canary-only activation, autonomous rejection, or no-op reschedule;
+54. hard invariants are clearly separated from soft thresholds in code, database records, UI reason codes, and documentation;
+55. threshold-deadlock detection identifies stalled candidate cohorts where hard invariants pass but soft thresholds repeatedly block progress, and produces evaluated policy or candidate-remediation actions;
+56. composite confidence records include model confidence, evidence coverage, source fidelity, contradiction checks, scanner risk, evaluator margin, reversibility, canary containment, and historical calibration factors;
+57. near-margin acceptance tests prove candidates can move to canary, ephemeral, narrower-scope, or more-probe states without administrative intervention when hard gates pass;
+58. every autonomous semantic decision family has calibration observations, delayed outcomes, and reliability metrics;
+59. policy versions for soft thresholds pass replay/backtest, shadow-mode, or canary-policy evaluation before activation;
+60. no hard invariant can be weakened by adaptive threshold updates;
+61. high-impact SkillKernel-owned runtime changes use risk tiering, verifier/adjudication when needed, canary containment, and rollback rather than default administrative escalation;
+62. administrative escalation records one of the allowed escalation reasons and cannot be triggered solely by a soft-threshold miss;
+63. Observatory exposes calibration support, reliability metrics, threshold-deadlock findings, and reason codes for every stalled autonomous decision.
 
 Additional context-management acceptance criteria:
 
@@ -6819,16 +8211,13 @@ Additional context-management acceptance criteria:
 - no raw transcript, rationale, history, or improvement note appears in runtime context unless explicitly promoted through SkillIR and compiler gates;
 - context regressions trigger reject, rollback, decompose, description tighten, or broker abstention.
 
-
----
-
 ## 32. Risk register
 
 | Risk | Mitigation |
 |---|---|
 | Skill bloat degrades context | Active budget, context broker, compiler, curation, archive. |
 | Over-compression drops rare critical constraints | Coverage map, information-preservation gate, semantic-equivalence probes, regression bank, rollback. |
-| Support artifacts become hidden infrastructure | Skill folders cannot silently register OpenClaw hooks, OpenClaw Cron routines, tools, services, or mutable stores; such needs become operator-review integration proposals. |
+| Support artifacts become hidden infrastructure | Skill folders cannot silently register OpenClaw hooks, OpenClaw Cron routines, tools, services, or mutable stores; such needs become administrative integration requests. |
 | Verbose support files bypass SKILL.md compression | Support-file classification, snippet budgets, progressive-disclosure gates, scanner and token governor. |
 | Description compression breaks routing | Positive/negative routing-equivalence tests and delta-debugging rollback. |
 | Context budget policy drifts by model/backend | Executor-profile-specific token policies and artifact variants only when evaluated. |
@@ -6856,6 +8245,10 @@ Additional context-management acceptance criteria:
 | Postgres growth | Partitioning, rollups, retention, vacuum/index maintenance. |
 | User-facing dependency changes | No Cron/Skill Workshop dependency; narrow skill/hook compatibility surface. |
 | Evaluation too expensive | Tiered probes, cached evals, canary sampling, multi-objective budget. |
+| Soft-threshold rigidity stalls autonomy | Separate hard invariants from soft decision bands, run autonomous fallback actions before escalation, detect threshold deadlocks, and calibrate policy versions against delayed outcomes. |
+| Threshold relaxation becomes unsafe | Threshold updates are policy-versioned, replay-tested, shadowed/canaried, auditable, and forbidden from weakening hard invariants. |
+| LLM overconfidence causes bad autonomous decision | Composite confidence, evidence-linked rationale, calibration, contradiction checks, scanner/evaluator gates, canary containment, repeated/verifier adjudication when needed, and rollback. |
+| LLM underconfidence suppresses useful autonomy | Track unnecessary abstention, post-abstention success, and threshold-deadlock cohorts; route near-margin decisions to additional evidence, narrower scope, ephemeral candidates, or canary rather than administrative escalation. |
 | Autonomy incident | Freeze, quarantine, rollback, audit, operator controls. |
 
 ---
@@ -6877,7 +8270,9 @@ Before coding:
 - [ ] Define context-loadable artifact classes and budgets: description, body, broker hint, support snippet, support manifest, external-skill summary, probe prompt.
 - [ ] Choose tokenizer/token counting implementation per executor profile.
 - [ ] Define semantic-density, information-preservation, and context-value thresholds.
-- [ ] Define support-artifact planning, loadability classes, approved directories, manifest schema, script/test policy, and integration-proposal handling for hook/tool/cron/service needs.
+- [ ] Define hard invariants versus soft decision bands for candidate creation, improvement, composition, decomposition, replay-corpus promotion, memory declassification, broker changes, and curation.
+- [ ] Define Autonomous Decision Orchestrator action mapping, composite confidence factors, threshold-deadlock detection, and autonomous fallback order before admin escalation.
+- [ ] Define support-artifact planning, loadability classes, approved directories, manifest schema, script/test policy, and integration-proposal handling for hook/tool/sidecar-schedule/service-adjunct needs.
 - [ ] Define no-human-prose and no-raw-transcript gates for runtime artifacts.
 - [ ] Implement the skill-package artifact planner with support-file allowlists, inclusion rubric, scanner bindings, manifest generation, and adjunct-request handling.
 - [ ] Define sidecar authentication.
@@ -6934,7 +8329,7 @@ The implementation team should treat this section as the research/design crosswa
 - **OpenClaw skill creation documentation**: generated skill directories must contain valid `SKILL.md` frontmatter and body. URL: https://docs.openclaw.ai/tools/creating-skills
 - **OpenClaw Plugin/Hooks documentation**: typed plugin hooks cover agent runs, prompt construction, provider calls, tool calls, message delivery, session lifecycle, subagents, compaction, installs, and Gateway lifecycle; hooks are in-process extension points and should remain lightweight. The sidecar owns slow scheduling, LLM analysis, evaluation, mutation, and rollback. URL: https://docs.openclaw.ai/plugins/hooks
 - **OpenClaw Internal Hooks documentation**: internal hooks cover coarse command, compaction, bootstrap, gateway, and message-processing events. SkillKernel may use plugin-bundled internal hooks only as supplemental side-effect/event coverage, not as the primary ordered middleware or policy surface. URL: https://docs.openclaw.ai/automation/hooks
-- **OpenClaw Plugin runtime helpers documentation**: OpenClaw exposes `api.runtime.llm.complete`, runtime event subscriptions such as `api.runtime.events.onAgentEvent(...)` and `api.runtime.events.onSessionTranscriptUpdate(...)`, session helpers, runtime config helpers, and model-thinking policy helpers for plugins; SkillKernel uses only stable helpers and keeps model-relay work outside hook execution. URL: https://docs.openclaw.ai/plugins/sdk-runtime
+- **OpenClaw Plugin runtime helpers documentation**: OpenClaw exposes `api.runtime.llm.complete`, runtime event subscriptions such as `api.runtime.events.onAgentEvent(...)` and `api.runtime.events.onSessionTranscriptUpdate(...)`, session helpers, runtime config helpers, and model-thinking policy helpers for plugins; SkillKernel uses only stable helpers and keeps model-relay work outside hook execution. The OpenClaw-routed text profile is valid only when the helper can be used as a maintenance-safe simple-completion relay that does not inherit active user transcript, active tools, approvals, memory, or transient turn context beyond explicitly supplied messages. URL: https://docs.openclaw.ai/plugins/sdk-runtime
 - **OpenClaw Plugin SDK overview documentation**: grouped SDK namespaces such as `api.session.state.registerSessionExtension(...)`, `api.session.workflow.enqueueNextTurnInjection(...)`, and `api.agent.events.registerAgentEventSubscription(...)` are the preferred host-hook registration surfaces for new plugin code; `api.onConversationBindingResolved(...)` supplies conversation-binding correlation when available, and memory-capability public artifact/corpus surfaces are the correct way to consume another memory plugin without scraping private storage. URL: https://docs.openclaw.ai/plugins/sdk-overview
 - **OpenClaw Configuration reference**: plugin raw-conversation access, prompt-injection allowance, and plugin LLM model overrides are explicit trust gates; SkillKernel must fail closed when required trust gates are absent. URL: https://docs.openclaw.ai/gateway/configuration-reference
 - **OpenClaw Scheduled Tasks/Cron documentation**: Cron is Gateway/user-facing automation; SkillKernel must not use it as the internal autonomous maintenance substrate. URL: https://docs.openclaw.ai/automation/cron-jobs
@@ -6954,6 +8349,18 @@ The implementation team should treat this section as the research/design crosswa
 - **OpenClaw Background tasks documentation**: task records track detached work such as ACP runs, subagents, isolated cron executions, and CLI operations; they are activity evidence, not scheduling substrate. URL: https://docs.openclaw.ai/automation/tasks
 - **OpenClaw Agent workspace and FAQ documentation**: workspaces contain `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, daily memory files, optional `HEARTBEAT.md`, and skills separately from Gateway state; SkillKernel preserves this boundary during historical import and skill writing. URLs: https://docs.openclaw.ai/concepts/agent-workspace and https://docs.openclaw.ai/help/faq
 - **OpenClaw Logging, diagnostics, raw-stream, and transcript hygiene documentation**: logs, diagnostics, and debug streams can identify repeated provider/tool/runtime failures, but raw streams may contain full prompts, tool output, user data, and secrets; SkillKernel treats them as explicit-opt-in corroborating/debug evidence and keeps runtime/system context distinct from user-authored transcript text. URLs: https://docs.openclaw.ai/logging, https://docs.openclaw.ai/help/debugging, and https://docs.openclaw.ai/reference/transcript-hygiene
+
+### 34.1.1 Calibrated autonomy, selective trust, and threshold governance anchors
+
+- **Trust or Escalate: LLM Judges with Provable Guarantees for Human Agreement**: supports selective trust in LLM judgments based on calibrated confidence rather than unconditional trust or blanket escalation. SkillKernel applies this to autonomous semantic adjudication. URL: https://arxiv.org/abs/2407.18370
+- **Agentic Confidence Calibration / Holistic Trajectory Calibration**: supports using process-level trajectory features, not only final-answer confidence, to estimate autonomous-agent reliability. SkillKernel therefore calibrates confidence from trace, evidence, scanner, evaluator, broker, canary, and rollback features. URL: https://arxiv.org/html/2601.15778v1
+- **Uncertainty Quantification in LLM Agents**: supports treating uncertainty in tool-using agents as structured uncertainty across interactive decision processes. SkillKernel propagates uncertainty through evidence packets, semantic adjudication, candidate states, probes, canaries, and runtime broker decisions. URL: https://arxiv.org/html/2602.05073v2
+- **Self-Evaluation Improves Selective Generation in Large Language Models**: supports quality-calibrated self-evaluation for selective generation. SkillKernel uses LLM self-evaluation as one calibrated feature, never as standalone authority. URL: https://arxiv.org/html/2312.09300v1
+- **Answer, Refuse, or Guess? Investigating Risk-Aware Decision Policies in Language Models**: shows that language models can both over-answer high-risk cases and over-defer low-risk cases. SkillKernel treats both over-action and over-deferral as measurable autonomy failures. URL: https://arxiv.org/html/2503.01332v2
+- **Survey of Confidence Estimation and Calibration in Large Language Models**: supports confidence decomposition and task-specific calibration instead of trusting verbalized model confidence. URL: https://aclanthology.org/2024.naacl-long.366/
+- **NIST AI Risk Management Framework 1.0**: organizes trustworthy AI risk management around Govern, Map, Measure, and Manage. SkillKernel maps those functions into policy versioning, source/risk classification, calibration metrics, and adaptive management of autonomy policies. URL: https://nvlpubs.nist.gov/nistpubs/ai/nist.ai.100-1.pdf
+- **OWASP Agentic AI Threats and Mitigations / OWASP LLM risks**: supports hard boundaries around permissions, raw reveal, external mutation, execution surfaces, prompt injection, supply-chain risk, and excessive agency. URLs: https://genai.owasp.org/resource/agentic-ai-threats-and-mitigations/ and https://genai.owasp.org/llm-top-10/
+- **Microsoft secure autonomous agentic systems guidance**: supports identity, least privilege, runtime monitoring, and defense-in-depth as autonomy increases. SkillKernel keeps semantic adjudication separate from privileged execution and records action attribution, policy decisions, and rollback pointers. URL: https://learn.microsoft.com/en-us/security/zero-trust/sfi/secure-agentic-systems
 
 ### 34.2 Database and retrieval anchors
 
@@ -7023,6 +8430,10 @@ The implementation team should treat this section as the research/design crosswa
 - **AttriGuard / CausalArmor / AgentSentry / intent-to-execution integrity work**: high-risk actions should record causal attribution and verify that user intent, not poisoned context, caused the action.
 - **MOSS / runtime-governance / self-evolving-agent work**: evolution must be evidence-batched, staged, verified, versioned, and rollbackable. V1 must not autonomously rewrite the plugin, scheduler, scanner, evaluator, compiler, migrations, or policy engine.
 
+- **Trust or Escalate: LLM Judges with Provable Guarantees for Human Agreement**: supports selective trust in LLM judgments using confidence calibration and escalation only when uncertainty remains. SkillKernel applies this pattern to semantic adjudication by treating LLM verdicts as admissible when confidence is calibrated, evidence-linked, and deterministic checks pass.
+- **LLM confidence-calibration and uncertainty-estimation work**: verbalized model confidence is not sufficient by itself. SkillKernel uses composite confidence decomposition, not a single self-reported number.
+- **OWASP LLM excessive-agency guidance**: autonomous action needs bounded authority, least privilege, auditing, and hard safety invariants. SkillKernel permits high-confidence LLM semantic decisions while keeping file writes, raw policy access, activation, rollback, scheduling, and external capability changes under deterministic control.
+
 ### 34.7 Research-to-design traceability matrix
 
 | Research or platform finding | design response |
@@ -7047,7 +8458,7 @@ The implementation team should treat this section as the research/design crosswa
 | Memory can be poisoned and persist. | Memory quarantine, provenance, declassification, revocation traversal, and negative controls. |
 | Unsafe actions can be caused indirectly. | Action-attribution logs and high-risk boundary checks. |
 | Rollback can leave derived state behind. | Evolution transactions covering DB state, files, embeddings, caches, memories, broker hints, probes, and derived artifacts. |
-| LLM reasoning is useful but nondeterministic. | LLM proposes structured plans; deterministic infrastructure validates, decides, writes, schedules, archives, and rolls back. |
+| LLM reasoning is useful but nondeterministic. | LLM adjudicates semantic meaning and authors structured plans; deterministic infrastructure validates admissibility, writes, schedules, archives, and rolls back. |
 | Context-loaded skill docs are AI-facing, not human-facing. | No-human-prose gate; compact runtime interface; full details remain in SkillIR/Postgres. |
 | Reliable composition requires precondition-effect structure. | SkillIR effect signatures, typed graph edges, component compatibility checks, node-level verification, and localized repair. |
 | One-off reflection can overfit. | Diagnostic momentum store, contrastive support counts, counterevidence, targeted probes, and patch thresholds. |
@@ -7055,8 +8466,14 @@ The implementation team should treat this section as the research/design crosswa
 
 ---
 
+### 34.8 Additional platform and autonomy notes
 
----
+- **OpenClaw plugin hooks documentation**: conversation-bearing hooks such as `before_agent_run`, `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end` require explicit `allowConversationAccess`; low-content provider telemetry hooks omit raw prompts/responses. SkillKernel uses this to separate full-fidelity autonomous mode from degraded telemetry-only mode.
+- **OpenClaw trajectory documentation**: trajectory bundles record prompt/system-prompt/tool/transcript/model/settings/usage/error context and can contain prompts, tool results, local paths, and runtime data. SkillKernel treats trajectories as high-fidelity historical evidence subject to raw-vault/declassification policy.
+- **OWASP LLM Top 10 and Excessive Agency guidance**: prompt injection, insecure output handling, sensitive information disclosure, insecure plugin design, excessive agency, overreliance, and data poisoning require layered controls. SkillKernel permits LLM semantic adjudication but constrains execution through deterministic policy, scanners, evaluators, minimum permissions, and audit.
+- **NIST AI RMF Generative AI Profile**: generative AI systems may require different human-AI oversight configurations, tracking, documentation, data provenance, retention, monitoring, and risk-based controls. SkillKernel implements risk-based escalation rather than default administrative escalation.
+- **RAG and memory privacy/security research**: private retrieval stores and persistent memories can leak data or be poisoned. SkillKernel therefore stores raw evidence in a governed vault, avoids raw embeddings, tracks taint/provenance, and declassifies only narrow operational meaning for skills/replay/memory.
+- **LLM-as-judge/selective evaluation research**: LLM judges can scale semantic adjudication but require calibration, consistency checks, and selective escalation. SkillKernel uses the qualified text model as an autonomous semantic adjudicator whose verdicts must pass deterministic confidence, provenance, redaction, and evaluator gates.
 
 ## 35. Comprehensive landscape assimilation matrix
 
@@ -7113,7 +8530,7 @@ This appendix records the source-by-source ingestion pass. SkillKernel does not 
 | Malicious Agent Skills in the Wild | Real registries contain malicious/vulnerable skills distributed with user-level privileges. | Treat skills as supply-chain artifacts; require manifests, hashes, capabilities, scans. | Do not trust public registry artifacts. URL: https://arxiv.org/abs/2602.06547 |
 | SkillProbe / hierarchical malicious-skill triage | Atomic scanners miss combinatorial and natural-language attacks. | Scan composed bundles and broker-rendered context, not only individual files. | Do not rely only on regex or static code analyzers. URL: https://arxiv.org/html/2603.21019 |
 | BadSkill | Bundled models or artifacts inside skills can carry backdoors. | Restrict helper artifacts, declare capabilities, hash files, and block opaque bundled models in v1 unless explicitly allowed. | Do not allow arbitrary model-in-skill payloads. URL: https://arxiv.org/html/2604.09378 |
-| Trojan's Whisper | Bootstrap guidance and workspace context files can become persistent attack surfaces that frame malicious behavior as normal operational guidance. | Treat `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOT.md`, memory files, skills, support files, and broker bundles as guidance-bearing artifacts requiring provenance, tainting, scanner review, and no direct compilation into runtime skills. | Do not trust workspace guidance merely because it is local, old, or phrased as best practice. URL: https://arxiv.org/abs/2603.19974 |
+| Trojan's Whisper | Bootstrap guidance and workspace context files can become persistent attack surfaces that frame malicious behavior as normal operational guidance. | Treat `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOT.md`, memory files, skills, support files, and broker bundles as guidance-bearing artifacts requiring provenance, tainting, scanner clearance, and no direct compilation into runtime skills. | Do not trust workspace guidance merely because it is local, old, or phrased as best practice. URL: https://arxiv.org/abs/2603.19974 |
 | OpenClaw PRISM | In-process plugin hooks plus sidecar services can provide runtime security monitoring, risk accumulation, policies, and auditability without forking the host runtime. | Confirms SkillKernel's thin-plugin/thick-sidecar security posture and action-attribution controls. | Do not replace SkillKernel's deterministic scanner/evaluator/rollback gates with LLM-only runtime judgment. URL: https://arxiv.org/html/2603.22895 |
 | Sleeper Memory Poisoning / MemoryGraft / AgentPoison / MemMorph | Persistent memory and retrieval stores can become durable attack surfaces influencing future behavior. | Keep memory quarantine, taint, provenance, delayed activation, derived-data revocation, and control-flow integrity logs. | Do not let raw untrusted text become skill memory or runtime instruction. URLs: https://arxiv.org/abs/2605.15338, https://arxiv.org/html/2512.16962v1, https://openreview.net/forum?id=Y841BRW9rY |
 | OWASP LLM risks and SLSA | LLM applications need supply-chain, data-poisoning, plugin design, excessive-agency, and provenance controls. | Keep fail-closed policy, SLSA-style manifests, audit hash chains, and deterministic writer. | Do not expose autonomous mutation without rollback-complete provenance. URLs: https://genai.owasp.org/, https://slsa.dev/ |
@@ -7154,6 +8571,8 @@ SkillIR as canonical source of truth
 OpenClaw SKILL.md as compiled runtime artifact
 sidecar-owned scheduler
 runtime skill-context broker
+calibrated selective-trust controller
+autonomy calibration corpus
 context compiler + token budget governor
 diagnostic momentum store
 SkillIR effect signatures
@@ -7202,6 +8621,8 @@ redaction
 → historical ingestion bootstrap
 → event/evidence/memory pipeline
 → memory quarantine
+→ autonomous semantic adjudication
+→ autonomy calibration corpus and selective-trust policy trials
 → external-skill inventory
 → body-level index documents
 → retrieval logs
