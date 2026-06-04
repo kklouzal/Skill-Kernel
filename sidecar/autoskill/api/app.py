@@ -141,6 +141,7 @@ from autoskill.services.observatory import (
     build_live_envelope,
     build_observatory_snapshot,
     object_microscope,
+    playbook_detail,
     search_observatory,
 )
 from autoskill.services.opportunity import mine_opportunities
@@ -6070,32 +6071,8 @@ def create_app(
             workspace_id=workspace_id,
             window_minutes=window_minutes,
         )
-        playbooks = [
-            {**playbook, "subsystem_id": subsystem["subsystem_id"]}
-            for subsystem in snapshot["subsystems"]  # type: ignore[index]
-            for playbook in subsystem.get("playbooks", [])
-        ]
-        playbook = _find_by_id(playbooks, playbook_id, ("playbook_id",))
         return ObservatoryObjectResponse(
-            object={
-                "schema_version": "skillkernel.observatory.playbook.v1",
-                "object_type": "playbook",
-                "object_id": playbook_id,
-                "title": playbook.get("playbook_id", playbook_id) if playbook else playbook_id,
-                "summary": playbook.get("summary") if playbook else "No playbook read model found.",
-                "current_signal_state": playbook
-                or _missing_read_model("playbook", supporting_component="observatory_admin"),
-                "supporting_records": [
-                    issue
-                    for issue in snapshot["issue_board"]  # type: ignore[index]
-                    if playbook
-                    and issue.get("subsystem_id") == playbook.get("subsystem_id")
-                ],
-                "content_policy": {
-                    "raw_available": False,
-                    "raw_reason": "raw-content-disabled",
-                },
-            }
+            object=playbook_detail(snapshot, playbook_id)
         )
 
     @app.get("/admin/api/v1/invariants", response_model=ObservatoryCollectionResponse)

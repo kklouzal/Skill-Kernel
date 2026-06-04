@@ -757,24 +757,7 @@ def object_microscope(
     for subsystem in snapshot["subsystems"]:
         for playbook in subsystem.get("playbooks", []):
             if object_type == "playbook" and playbook["playbook_id"] == object_id:
-                return _microscope_payload(
-                    object_type=object_type,
-                    object_id=object_id,
-                    title=str(playbook["playbook_id"]).replace("-", " ").title(),
-                    summary=str(playbook["summary"]),
-                    diagnostics={
-                        **playbook,
-                        "subsystem_id": subsystem["subsystem_id"],
-                        "current_reason_codes": subsystem.get("reason_codes", []),
-                    },
-                    upstream=[
-                        {"object_type": "subsystem", "object_id": subsystem["subsystem_id"]}
-                    ],
-                    downstream=[
-                        {"object_type": "issue", "object_id": issue_id}
-                        for issue_id in subsystem.get("issue_ids", [])
-                    ],
-                )
+                return playbook_detail(snapshot, str(object_id))
     for command in snapshot.get("command_palette", []):
         if object_type == "command" and command["command"] == object_id:
             return _microscope_payload(
@@ -799,6 +782,131 @@ def object_microscope(
         upstream=[],
         downstream=[],
     )
+
+
+def playbook_detail(snapshot: dict[str, Any], playbook_id: str) -> dict[str, Any]:
+    for subsystem in snapshot["subsystems"]:
+        playbook = _playbook_by_id(subsystem, playbook_id)
+        if playbook is None:
+            continue
+        station_ids = {str(station_id) for station_id in subsystem.get("station_ids", [])}
+        components = [
+            component
+            for component in snapshot["pipeline"]["stations"]
+            if str(component["component_id"]) in station_ids
+        ]
+        issues = [
+            issue
+            for issue in snapshot["issue_board"]
+            if issue.get("subsystem_id") == subsystem.get("subsystem_id")
+            or str(issue.get("component_id")) in station_ids
+        ]
+        missing_warnings = _playbook_missing_telemetry(components)
+        safe_actions = _playbook_safe_actions(playbook, issues, components)
+        affected_objects = _playbook_affected_objects(subsystem, components, issues)
+        current_state = {
+            **playbook,
+            "subsystem_id": subsystem["subsystem_id"],
+            "subsystem_health": subsystem["health"],
+            "severity": _playbook_severity(str(subsystem["health"]), issues),
+            "confidence": _playbook_confidence(components, missing_warnings),
+            "reason_codes": sorted(
+                {
+                    code
+                    for code in [
+                        *subsystem.get("reason_codes", []),
+                        *[
+                            reason_code
+                            for issue in issues
+                            for reason_code in issue.get("reason_codes", [])
+                        ],
+                    ]
+                }
+            ),
+            "first_checks": list(playbook.get("first_checks", [])),
+            "typical_next_views": list(playbook.get("typical_next_views", [])),
+            "missing_telemetry_warnings": missing_warnings,
+            "affected_objects": affected_objects,
+            "safe_next_diagnostic_actions": safe_actions,
+            "blocked_policy_actions": _playbook_blocked_policy_actions(),
+        }
+        supporting_records = [
+            *[
+                {
+                    "object_type": "issue",
+                    "object_id": issue["issue_id"],
+                    "severity": issue["severity"],
+                    "reason_codes": list(issue.get("reason_codes", [])),
+                    "summary": issue["summary"],
+                }
+                for issue in issues[:8]
+            ],
+            *[
+                {
+                    "object_type": "component",
+                    "object_id": component["component_id"],
+                    "health": component["health"],
+                    "reason_codes": list(component.get("reason_codes", [])),
+                    "data_quality": component.get("data_quality", {}),
+                }
+                for component in components
+                if component.get("reason_codes")
+            ][:8],
+        ]
+        return {
+            "schema_version": "skillkernel.observatory.playbook.v1",
+            "object_type": "playbook",
+            "object_id": playbook_id,
+            "title": str(playbook_id).replace("-", " ").title(),
+            "summary": playbook["summary"],
+            "current_signal_state": current_state,
+            "supporting_records": supporting_records,
+            "provenance": {
+                "upstream": [
+                    {"object_type": "subsystem", "object_id": subsystem["subsystem_id"]},
+                    *[
+                        {"object_type": "component", "object_id": component["component_id"]}
+                        for component in components
+                    ],
+                ],
+                "downstream": [
+                    {"object_type": "issue", "object_id": issue["issue_id"]}
+                    for issue in issues
+                ],
+            },
+            "effects": safe_actions,
+            "diagnostics": current_state,
+            "timeline": [{"at": snapshot["captured_at"], "event": "playbook_snapshot_loaded"}],
+            "audit": {"links": [], "chain_visible": True},
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "redacted_or_not_applicable",
+            },
+        }
+    return {
+        "schema_version": "skillkernel.observatory.playbook.v1",
+        "object_type": "playbook",
+        "object_id": playbook_id,
+        "title": playbook_id,
+        "summary": "No playbook read model found.",
+        "current_signal_state": {
+            "health": "unknown",
+            "reason_codes": ["read-model-missing"],
+            "summary": "No bounded Observatory playbook exists for this id.",
+        },
+        "supporting_records": [],
+        "provenance": {"upstream": [], "downstream": []},
+        "effects": [],
+        "diagnostics": {"reason_codes": ["read-model-missing"]},
+        "timeline": [{"at": snapshot["captured_at"], "event": "playbook_missing"}],
+        "audit": {"links": [], "chain_visible": True},
+        "content_policy": {
+            "raw_available": False,
+            "raw_reason": "raw-content-disabled",
+            "redaction_state": "redacted_or_not_applicable",
+        },
+    }
 
 
 def action_receipt(
@@ -1546,43 +1654,181 @@ def _command_palette() -> list[dict[str, Any]]:
     ]
 
 
-def _playbooks_for_subsystem(subsystem_id: str) -> list[dict[str, str]]:
+def _playbooks_for_subsystem(subsystem_id: str) -> list[dict[str, Any]]:
     playbooks = {
         "capture_bootstrap": [
             (
                 "candidate-drought",
                 "Check capture, parser loss, redaction pressure, and evidence yield.",
+                (
+                    "capture coverage",
+                    "historical import yield",
+                    "redaction loss",
+                    "evidence maturity",
+                ),
+                (
+                    "/admin/subsystems/capture_bootstrap",
+                    "/admin/components/historical_ingestion",
+                    "/admin/components/redaction_taint",
+                    "/admin/components/evidence_memory",
+                ),
             ),
             (
                 "historical-bootstrap-validation",
                 "Follow source discovery through chunks, quarantine, evidence, "
                 "and seeded candidates.",
+                (
+                    "source discovery",
+                    "parser failures",
+                    "deduplication",
+                    "redaction",
+                    "evidence yield by source",
+                ),
+                (
+                    "/admin/components/historical_ingestion",
+                    "/admin/components/redaction_taint",
+                    "/admin/components/evidence_memory",
+                ),
             ),
         ],
         "learning_memory": [
             (
                 "candidate-drought",
                 "Check recurring evidence, duplicate suppression, and opportunity recommendations.",
+                (
+                    "recurring evidence",
+                    "duplicate suppression",
+                    "candidate rejection",
+                    "opportunity recommendations",
+                ),
+                (
+                    "/admin/components/evidence_memory",
+                    "/admin/components/opportunity_mining",
+                    "/admin/components/topology_operations",
+                ),
             ),
-            ("recall-quality", "Compare lexical/vector decisions and embedding backlog."),
+            (
+                "recall-quality",
+                "Compare lexical/vector decisions and embedding backlog.",
+                (
+                    "retrieval recall audit",
+                    "embedding backlog",
+                    "lexical/vector disagreement",
+                    "shadowing suppression",
+                ),
+                (
+                    "/admin/components/retrieval_indexing",
+                    "/admin/components/broker_runtime",
+                    "/admin/broker/decisions",
+                ),
+            ),
         ],
         "runtime_context": [
             (
                 "context-pressure",
                 "Inspect broker decisions, compiled context tokens, false-positive loads, "
                 "and canary feedback.",
+                (
+                    "false-positive loads",
+                    "broad-skill shadowing",
+                    "support-context loadability",
+                    "ignored-skill waste",
+                ),
+                (
+                    "/admin/subsystems/runtime_context",
+                    "/admin/components/broker_runtime",
+                    "/admin/components/context_compiler",
+                    "/admin/components/topology_operations",
+                ),
+            ),
+            (
+                "broker-misses-relevant-skills",
+                "Inspect recall audit, embedding backlog, no-skill decisions, "
+                "and broker suppression.",
+                (
+                    "retrieval recall audit",
+                    "embedding backlog",
+                    "lexical/vector disagreement",
+                    "shadowing suppression",
+                    "no-skill decisions",
+                ),
+                (
+                    "/admin/components/retrieval_indexing",
+                    "/admin/components/broker_runtime",
+                    "/admin/components/topology_operations",
+                ),
             ),
         ],
         "topology_design": [
             (
                 "skill-package-inspection",
                 "Inspect SkillIR, topology operation, artifact plan, and gate evidence.",
+                (
+                    "candidate rejection",
+                    "duplicate suppression",
+                    "SkillIR effect coverage",
+                    "planned trial state",
+                ),
+                (
+                    "/admin/components/topology_operations",
+                    "/admin/components/skill_ir_graph_ir",
+                    "/admin/components/artifact_planner",
+                ),
+            ),
+            (
+                "skill-improvements-rejected",
+                "Trace rejected improvements through scanner, evaluator, equivalence, "
+                "and token gates.",
+                (
+                    "scanner findings",
+                    "regression failures",
+                    "semantic equivalence failures",
+                    "token-budget failures",
+                    "stale probes",
+                ),
+                (
+                    "/admin/components/context_compiler",
+                    "/admin/components/scanner_security",
+                    "/admin/components/evaluator_probes",
+                    "/admin/components/skill_ir_graph_ir",
+                ),
             ),
         ],
         "quality_gates": [
             (
                 "harm-regression",
                 "Follow scanner findings, evaluator probes, canary failures, and rollback options.",
+                (
+                    "canary failures",
+                    "user corrections",
+                    "action attribution",
+                    "broker load decisions",
+                    "regression drift",
+                ),
+                (
+                    "/admin/components/canary_rollback",
+                    "/admin/components/evaluator_probes",
+                    "/admin/components/broker_runtime",
+                    "/admin/components/audit_trace",
+                ),
+            ),
+            (
+                "harm-after-activation",
+                "Trace post-activation harm through canary, attribution, broker, "
+                "and rollback evidence.",
+                (
+                    "canary failures",
+                    "user corrections",
+                    "action attribution",
+                    "broker load decisions",
+                    "regression drift",
+                ),
+                (
+                    "/admin/components/canary_rollback",
+                    "/admin/components/evaluator_probes",
+                    "/admin/components/broker_runtime",
+                    "/admin/components/audit_trace",
+                ),
             ),
         ],
         "artifact_mutation": [
@@ -1590,25 +1836,263 @@ def _playbooks_for_subsystem(subsystem_id: str) -> list[dict[str, str]]:
                 "mutation-safety",
                 "Follow manifest, scanner/evaluator gates, writer transaction, "
                 "and rollback pointer.",
+                (
+                    "manifest hash",
+                    "scanner gate",
+                    "evaluator gate",
+                    "writer transaction",
+                    "rollback pointer",
+                ),
+                (
+                    "/admin/components/deterministic_writer",
+                    "/admin/components/scanner_security",
+                    "/admin/components/evaluator_probes",
+                    "/admin/components/canary_rollback",
+                ),
             ),
         ],
         "lifecycle_governance": [
             (
                 "rollback-revocation",
                 "Trace evolution transaction impact and derived-data revocation.",
+                (
+                    "evolution transaction",
+                    "revocation graph",
+                    "freeze state",
+                    "derived-data invalidation",
+                ),
+                (
+                    "/admin/components/canary_rollback",
+                    "/admin/components/activation_curation",
+                    "/admin/components/audit_trace",
+                ),
             ),
         ],
         "control_storage": [
             (
                 "infrastructure-health",
                 "Check jobs, profiles, DB/read models, audit chain, and Observatory self-health.",
+                (
+                    "migration state",
+                    "read-model freshness",
+                    "dashboard query latency",
+                    "retention backlog",
+                    "audit chain",
+                ),
+                (
+                    "/admin/components/storage_db",
+                    "/admin/components/observatory_admin",
+                    "/admin/components/audit_trace",
+                ),
+            ),
+            (
+                "read-model-staleness",
+                "Trace stale database and dashboard read models through storage and self-health.",
+                (
+                    "migration state",
+                    "materialized view refresh",
+                    "slow dashboard queries",
+                    "LISTEN/NOTIFY bridge",
+                    "retention backlog",
+                ),
+                (
+                    "/admin/components/storage_db",
+                    "/admin/components/observatory_admin",
+                    "/admin/components/audit_trace",
+                ),
+            ),
+            (
+                "llm-maintenance-stalled",
+                "Inspect profile qualification, structured-output failures, retries, "
+                "and paused LLM jobs.",
+                (
+                    "text profile qualification",
+                    "structured output failures",
+                    "timeout/retry pressure",
+                    "paused LLM jobs",
+                ),
+                (
+                    "/admin/components/model_embedding",
+                    "/admin/components/scheduler_jobs",
+                    "/admin/components/opportunity_mining",
+                ),
             ),
         ],
     }
     return [
-        {"playbook_id": playbook_id, "summary": summary}
-        for playbook_id, summary in playbooks.get(subsystem_id, [])
+        {
+            "playbook_id": playbook_id,
+            "summary": summary,
+            "first_checks": list(first_checks),
+            "typical_next_views": list(typical_next_views),
+        }
+        for playbook_id, summary, first_checks, typical_next_views in playbooks.get(
+            subsystem_id, []
+        )
     ]
+
+
+def _playbook_by_id(subsystem: dict[str, Any], playbook_id: str) -> dict[str, Any] | None:
+    for playbook in subsystem.get("playbooks", []):
+        if str(playbook["playbook_id"]) == playbook_id:
+            return playbook
+    return None
+
+
+def _playbook_missing_telemetry(components: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for component in components:
+        data_quality = _dict(component.get("data_quality"))
+        missing_signals = list(data_quality.get("missing_signals") or [])
+        missing_metric_keys = list(data_quality.get("missing_signal_keys") or [])
+        if not missing_signals and not missing_metric_keys:
+            continue
+        warnings.append(
+            {
+                "component_id": component["component_id"],
+                "component_display_name": component["display_name"],
+                "missing_signals": missing_signals,
+                "missing_metric_keys": missing_metric_keys,
+                "coverage_state": data_quality.get("coverage_state"),
+                "telemetry_freshness_seconds": data_quality.get(
+                    "telemetry_freshness_seconds"
+                ),
+            }
+        )
+    return warnings
+
+
+def _playbook_safe_actions(
+    playbook: dict[str, Any],
+    issues: list[dict[str, Any]],
+    components: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    actions: list[dict[str, str]] = [
+        {
+            "action": "inspect_playbook_first_check",
+            "summary": str(first_check),
+            "target": str(playbook.get("typical_next_views", ["/admin"])[0]),
+        }
+        for first_check in playbook.get("first_checks", [])
+    ]
+    for issue in issues:
+        for action in issue.get("safe_next_actions", []):
+            actions.append(
+                {
+                    "action": str(action.get("action", "inspect_issue")),
+                    "summary": str(action.get("summary", issue["summary"])),
+                    "target": str(issue.get("deep_link", "/admin/issues")),
+                }
+            )
+    for component in components:
+        actions.append(
+            {
+                "action": "open_component_cockpit",
+                "summary": f"Open {component['display_name']} cockpit.",
+                "target": str(component["details_url"]),
+            }
+        )
+    return _dedupe_action_dicts(actions)[:12]
+
+
+def _playbook_affected_objects(
+    subsystem: dict[str, Any],
+    components: list[dict[str, Any]],
+    issues: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    objects: list[dict[str, Any]] = [
+        {
+            "object_type": "subsystem",
+            "object_id": subsystem["subsystem_id"],
+            "health": subsystem["health"],
+        }
+    ]
+    objects.extend(
+        {
+            "object_type": "component",
+            "object_id": component["component_id"],
+            "health": component["health"],
+            "object_kinds": list(component.get("object_kinds", [])),
+        }
+        for component in components
+    )
+    objects.extend(
+        {
+            "object_type": "issue",
+            "object_id": issue["issue_id"],
+            "severity": issue["severity"],
+            "reason_codes": list(issue.get("reason_codes", [])),
+        }
+        for issue in issues
+    )
+    return objects[:16]
+
+
+def _playbook_severity(subsystem_health: str, issues: list[dict[str, Any]]) -> str:
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    if issues:
+        return min(
+            (str(issue["severity"]) for issue in issues),
+            key=lambda severity: severity_order.get(severity, 9),
+        )
+    health_severity = {
+        "blocked": "critical",
+        "offline": "critical",
+        "frozen": "high",
+        "degraded": "medium",
+        "unknown": "low",
+    }
+    return health_severity.get(subsystem_health, "none")
+
+
+def _playbook_confidence(
+    components: list[dict[str, Any]],
+    missing_warnings: list[dict[str, Any]],
+) -> float:
+    if not components:
+        return 0.0
+    unknown_count = sum(1 for component in components if component.get("health") == "unknown")
+    confidence = 1.0 - (0.12 * len(missing_warnings)) - (0.05 * unknown_count)
+    return round(max(0.25, min(1.0, confidence)), 3)
+
+
+def _playbook_blocked_policy_actions() -> list[dict[str, str]]:
+    return [
+        {
+            "action": "execute_hidden_action",
+            "blocked_by": "playbooks_are_read_only",
+            "summary": "Playbooks link to views and guarded actions but never execute hidden work.",
+        },
+        {
+            "action": "reveal_raw_content",
+            "blocked_by": "raw-content-disabled",
+            "summary": "Raw content remains unavailable from playbook read models.",
+        },
+        {
+            "action": "activate_or_rewrite_runtime_skill",
+            "blocked_by": "control-plane-immutability",
+            "summary": (
+                "Skill activation still requires deterministic writer, policy, "
+                "and audit gates."
+            ),
+        },
+    ]
+
+
+def _dedupe_action_dicts(actions: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen: set[tuple[str, str, str]] = set()
+    deduped: list[dict[str, str]] = []
+    for action in actions:
+        key = (
+            str(action.get("action", "")),
+            str(action.get("summary", "")),
+            str(action.get("target", "")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(action)
+    return deduped
 
 
 def _safe_next_actions(reason_code: str) -> list[dict[str, str]]:

@@ -944,6 +944,20 @@ Acceptance:
   authority or raw-content access. Validation passed with the focused
   Observatory API regression (`3 passed`), focused ruff, full sidecar ruff, full
   pytest (`355 passed`), compileall, and diff-check gates.
+- validation evidence for the Observatory guided-playbook signal-state slice
+  passed on the final tree: `/admin/api/v1/playbooks/{id}` and the generic
+  object microscope now expose severity, confidence, first checks, next views,
+  supporting issue/component records, missing telemetry warnings, affected
+  objects, content-safe next diagnostic actions, and explicit blocked-policy
+  actions for built-in playbooks. The playbook catalog now covers the required
+  Section 7.5 journeys for candidate drought, rejected improvements, context
+  pressure, harmful activation, historical bootstrap yield, broker misses,
+  read-model staleness, and stalled LLM maintenance. This advances Observatory
+  Sections 7.5, 7.7, 12.1, 12.6, and 16.1/16.3 without adding mutation
+  authority or raw-content access. Focused Observatory API tests passed
+  (`35 passed`); final validation passed with `uv run ruff check sidecar`,
+  `uv run pytest` (`356 passed`), `uv run python -m compileall -q sidecar`,
+  `docker compose config --quiet`, and `git diff --check`.
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and

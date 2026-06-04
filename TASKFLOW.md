@@ -1370,6 +1370,21 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   regression (`3 passed`), focused ruff checks, full `uv run ruff check
   sidecar`, full `uv run pytest` (`355 passed`), `uv run python -m compileall
   -q sidecar`, and `git diff --check`.
+- Observatory guided diagnostic playbooks now expose the Section 7.5 current
+  signal-state contract: `/admin/api/v1/playbooks/{id}` and the generic object
+  microscope return severity, confidence, first checks, next views, supporting
+  issue/component records, missing telemetry warnings, affected objects,
+  content-safe next diagnostic actions, and explicit policy-blocked actions.
+  The catalog now includes the required operator journeys for candidate drought,
+  rejected improvements, context pressure, harmful activation, historical
+  bootstrap yield, broker misses, read-model staleness, and stalled LLM
+  maintenance without adding mutation authority or raw-content access.
+  Validation passed with focused Observatory API tests (`35 passed`), focused
+  ruff, full `uv run ruff check sidecar`, full `uv run pytest` (`356 passed`),
+  `uv run python -m compileall -q sidecar`, `docker compose config --quiet`,
+  and `git diff --check`. No compose/Postgres smoke was needed because this is
+  a deterministic snapshot/read-model shaping slice over existing in-memory
+  Observatory snapshot data.
 
 ## Next Gates
 

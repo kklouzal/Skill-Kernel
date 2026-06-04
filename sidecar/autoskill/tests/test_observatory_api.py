@@ -640,7 +640,7 @@ def test_observatory_collection_routes_return_bounded_content_safe_envelopes() -
         playbooks = await routes[("/admin/api/v1/playbooks", "GET")].endpoint(
             workspace_id="dev-01",
             window_minutes=10,
-            limit=3,
+            limit=20,
         )
         ready = await routes[("/admin/api/v1/health/ready", "GET")].endpoint(
             workspace_id="dev-01",
@@ -672,8 +672,73 @@ def test_observatory_collection_routes_return_bounded_content_safe_envelopes() -
     assert reason_codes.collection["source"] == "observatory_snapshot.reason_code_catalog"
     assert playbooks.collection["items"]
     assert playbooks.collection["content_policy"]["raw_available"] is False
+    playbook_ids = {item["playbook_id"] for item in playbooks.collection["items"]}
+    assert {
+        "candidate-drought",
+        "skill-improvements-rejected",
+        "context-pressure",
+        "harm-after-activation",
+        "historical-bootstrap-validation",
+        "broker-misses-relevant-skills",
+        "read-model-staleness",
+        "llm-maintenance-stalled",
+    }.issubset(playbook_ids)
     assert ready.object["schema_version"] == "skillkernel.observatory.ready.v1"
     assert ready.object["ready"] is False
+
+
+def test_observatory_playbook_detail_exposes_current_signal_state() -> None:
+    app = create_app(audit_store=MemoryAuditStore())
+    routes = _routes(app)
+
+    async def run():
+        detail = await routes[("/admin/api/v1/playbooks/{playbook_id}", "GET")].endpoint(
+            playbook_id="context-pressure",
+            workspace_id="dev-01",
+            window_minutes=10,
+        )
+        microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="playbook",
+            object_id="context-pressure",
+            workspace_id="dev-01",
+            window_minutes=10,
+        )
+        return detail, microscope
+
+    detail, microscope = asyncio.run(run())
+
+    assert detail.object["object_type"] == "playbook"
+    state = detail.object["current_signal_state"]
+    assert state["severity"] in {"critical", "high", "medium", "low", "none"}
+    assert 0.0 <= state["confidence"] <= 1.0
+    assert state["first_checks"]
+    assert state["typical_next_views"]
+    assert state["safe_next_diagnostic_actions"]
+    assert state["blocked_policy_actions"] == [
+        {
+            "action": "execute_hidden_action",
+            "blocked_by": "playbooks_are_read_only",
+            "summary": "Playbooks link to views and guarded actions but never execute hidden work.",
+        },
+        {
+            "action": "reveal_raw_content",
+            "blocked_by": "raw-content-disabled",
+            "summary": "Raw content remains unavailable from playbook read models.",
+        },
+        {
+            "action": "activate_or_rewrite_runtime_skill",
+            "blocked_by": "control-plane-immutability",
+            "summary": (
+                "Skill activation still requires deterministic writer, policy, "
+                "and audit gates."
+            ),
+        },
+    ]
+    assert detail.object["supporting_records"]
+    assert detail.object["content_policy"]["raw_available"] is False
+    assert microscope.object["current_signal_state"]["first_checks"] == state["first_checks"]
 
 
 def test_observatory_memory_and_control_flow_read_models_are_content_safe() -> None:
