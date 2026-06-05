@@ -2103,10 +2103,19 @@ def test_observatory_broker_decisions_use_content_safe_retrieval_logs() -> None:
                             "object_type": "body_index_document",
                             "object_id": str(candidate_object_id),
                             "rank": 0.9,
+                            "raw_candidate_summary": "raw candidate body text",
                         }
                     ],
                     "reason_codes": ["vector-fused"],
-                    "suppressed": [],
+                    "suppressed": [
+                        {
+                            "object_type": "skill",
+                            "object_id": str(rendered_skill_id),
+                            "reason": "duplicate-skill",
+                            "raw_suppression_context": "raw suppressed body text",
+                        }
+                    ],
+                    "raw_query_text": "operator secret retrieval query",
                 },
                 created_at=datetime.now(UTC),
             )
@@ -2123,9 +2132,16 @@ def test_observatory_broker_decisions_use_content_safe_retrieval_logs() -> None:
         detail = await routes[
             ("/admin/api/v1/broker/decisions/{decision_id}", "GET")
         ].endpoint(decision_id=str(retrieval_log_id), workspace_id="dev-01")
-        return collection, detail
+        object_detail = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="broker_decision",
+            object_id=str(retrieval_log_id),
+            workspace_id="dev-01",
+        )
+        return collection, detail, object_detail
 
-    collection, detail = asyncio.run(run())
+    collection, detail, object_detail = asyncio.run(run())
 
     assert collection.collection["source"] == "retrieval_store.list_recent_logs"
     assert collection.collection["items"][0]["object_id"] == str(retrieval_log_id)
@@ -2138,6 +2154,13 @@ def test_observatory_broker_decisions_use_content_safe_retrieval_logs() -> None:
         candidate_object_id
     )
     assert detail.object["effects"]["rendered_skill_ids"] == [str(rendered_skill_id)]
+    assert object_detail.object == detail.object
+    assert detail.object["effects"]["suppressed"][0]["reason"] == "duplicate-skill"
+    assert detail.object["content_policy"]["metadata_values_returned"] is False
+    rendered = json.dumps(detail.object, sort_keys=True)
+    assert "operator secret retrieval query" not in rendered
+    assert "raw candidate body text" not in rendered
+    assert "raw suppressed body text" not in rendered
 
 
 def test_observatory_broker_replay_episode_read_model_is_content_safe() -> None:

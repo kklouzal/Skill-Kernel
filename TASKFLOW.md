@@ -17,6 +17,25 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 ## Current State
 
 - 2026-06-05: Observatory object microscopes now resolve
+  `broker_decision`/`retrieval_log` links to the same content-safe retrieval-log
+  detail used by `/admin/api/v1/broker/decisions/{id}` instead of falling
+  through to a generic snapshot object. Broker decision detail construction is
+  shared across both routes and now allowlists candidate/suppression refs plus
+  scalar diagnostic identity while withholding raw retrieval queries, raw
+  candidate summaries, raw suppression context, and arbitrary metadata values.
+  This advances core handoff Sections 7-8 runtime-broker/sidecar requirements
+  plus Observatory Sections 7.6, 7.7, 8.7, 8.20, 12.6, 16.1, and 21.16 by
+  making broker-quality aggregates and replay-episode provenance links
+  traversable through the sidecar object microscope without adding UI-local
+  authority. Validation passed with focused broker-decision microscope coverage
+  (`1 passed`), focused ruff checks, `uv run ruff check sidecar`, `uv run
+  pytest` (`376 passed`), `uv run python -m compileall -q sidecar`, `git diff
+  --check`, `docker compose config --quiet`, and core and Observatory
+  acceptance reports (`ready=true`, `70` implemented and `86` satisfied, `0`
+  validation errors). No compose/Postgres smoke was needed because this slice
+  reuses existing retrieval-store read paths and exercises them through the
+  in-memory retrieval store.
+- 2026-06-05: Observatory object microscopes now resolve
   `action_attribution_check` links from admin action receipts to content-safe
   deterministic boundary-check detail instead of falling through to a generic
   snapshot object. The attribution store exposes a workspace-filtered lookup by

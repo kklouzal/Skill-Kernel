@@ -6653,6 +6653,108 @@ def create_app(
             "audit": {"links": [], "chain_visible": True},
         }
 
+    def _safe_broker_ref(item: Any) -> dict[str, object] | None:
+        if not isinstance(item, dict):
+            return None
+        ref: dict[str, object] = {}
+        for key in (
+            "object_type",
+            "object_id",
+            "skill_id",
+            "rank",
+            "score",
+            "reason",
+            "scanner_codes",
+        ):
+            value = item.get(key)
+            if value is None:
+                continue
+            if isinstance(value, str | int | float | bool):
+                ref[key] = value
+            elif isinstance(value, list):
+                ref[key] = [
+                    str(entry)
+                    for entry in value
+                    if isinstance(entry, str | int | float | bool)
+                ][:10]
+        return ref or None
+
+    def _broker_decision_microscope(log: Any) -> dict[str, Any]:
+        payload = log.to_json()
+        metadata = log.metadata if isinstance(log.metadata, dict) else {}
+        candidate_objects = [
+            ref
+            for item in metadata.get("candidate_objects", [])
+            if (ref := _safe_broker_ref(item)) is not None
+        ]
+        suppressed = [
+            ref
+            for item in metadata.get("suppressed", [])
+            if (ref := _safe_broker_ref(item)) is not None
+        ]
+        return {
+            "schema_version": "skillkernel.observatory.broker-decision.v1",
+            "object_type": "broker_decision",
+            "object_id": str(log.retrieval_log_id),
+            "title": f"Broker decision {log.retrieval_log_id}",
+            "summary": (
+                f"{log.decision}; rendered={len(log.rendered_skill_ids)}; "
+                f"candidates={len(log.candidate_skill_ids)}"
+            ),
+            "timeline": [
+                {
+                    "at": payload["created_at"],
+                    "event": "retrieval_logged",
+                    "decision": log.decision,
+                }
+            ],
+            "provenance": {
+                "upstream": [
+                    {"object_type": "trace", "object_id": str(log.trace_id)}
+                ]
+                if log.trace_id
+                else [],
+                "downstream": [
+                    {"object_type": "skill", "object_id": skill_id}
+                    for skill_id in payload["rendered_skill_ids"]
+                ],
+                "candidate_objects": candidate_objects,
+            },
+            "effects": {
+                "rendered_skill_ids": payload["rendered_skill_ids"],
+                "candidate_skill_ids": payload["candidate_skill_ids"],
+                "no_skill_control": log.no_skill_control,
+                "suppressed": suppressed,
+            },
+            "diagnostics": {
+                "decision": log.decision,
+                "reason_codes": [
+                    str(code)
+                    for code in metadata.get("reason_codes", [])
+                    if isinstance(code, str | int | float | bool)
+                ][:25],
+                "query_hash": metadata.get("query_hash")
+                if isinstance(metadata.get("query_hash"), str)
+                else None,
+                "candidate_count": metadata.get("candidate_count")
+                if isinstance(metadata.get("candidate_count"), int)
+                else len(candidate_objects),
+                "rendered_skill_count": len(log.rendered_skill_ids),
+                "broker_policy_version_id": payload["broker_policy_version_id"],
+                "trace_id": payload["trace_id"],
+                "span_id": payload["span_id"],
+                "metadata_keys": sorted(str(key) for key in metadata),
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "redacted_or_not_applicable",
+                "raw_query_stored": False,
+                "metadata_values_returned": False,
+            },
+            "audit": {"links": [], "chain_visible": True},
+        }
+
     def _topology_operation_microscope(detail: Any) -> dict[str, Any]:
         payload = detail.to_json()
         operation = payload["operation"]
@@ -8512,6 +8614,14 @@ def create_app(
                 return ObservatoryObjectResponse(
                     object=_broker_replay_episode_microscope(episode)
                 )
+        if object_type in {"broker_decision", "broker-decision", "retrieval_log"}:
+            retrieval_log_id = _uuid_or_404(object_id, "broker decision")
+            log = await retrieval.get_log(
+                workspace_key=workspace_id,
+                retrieval_log_id=retrieval_log_id,
+            )
+            if log is not None:
+                return ObservatoryObjectResponse(object=_broker_decision_microscope(log))
         if object_type in {"context_artifact", "context-artifact"}:
             context_artifact_id = _uuid_or_404(object_id, "context artifact")
             artifact = await context_governance.get_artifact(
@@ -9447,73 +9557,7 @@ def create_app(
                 status_code=http_status.HTTP_404_NOT_FOUND,
                 detail="broker decision not found",
             )
-        payload = log.to_json()
-        candidate_objects = [
-            item
-            for item in log.metadata.get("candidate_objects", [])
-            if isinstance(item, dict)
-        ]
-        suppressed = [
-            item for item in log.metadata.get("suppressed", []) if isinstance(item, dict)
-        ]
-        return ObservatoryObjectResponse(
-            object={
-                "schema_version": "skillkernel.observatory.broker-decision.v1",
-                "object_type": "broker_decision",
-                "object_id": str(log.retrieval_log_id),
-                "title": f"Broker decision {log.retrieval_log_id}",
-                "summary": (
-                    f"{log.decision}; rendered={len(log.rendered_skill_ids)}; "
-                    f"candidates={len(log.candidate_skill_ids)}"
-                ),
-                "timeline": [
-                    {
-                        "at": payload["created_at"],
-                        "event": "retrieval_logged",
-                        "decision": log.decision,
-                    }
-                ],
-                "provenance": {
-                    "upstream": [
-                        {"object_type": "trace", "object_id": str(log.trace_id)}
-                    ]
-                    if log.trace_id
-                    else [],
-                    "downstream": [
-                        {"object_type": "skill", "object_id": skill_id}
-                        for skill_id in payload["rendered_skill_ids"]
-                    ],
-                    "candidate_objects": candidate_objects,
-                },
-                "effects": {
-                    "rendered_skill_ids": payload["rendered_skill_ids"],
-                    "candidate_skill_ids": payload["candidate_skill_ids"],
-                    "no_skill_control": log.no_skill_control,
-                    "suppressed": suppressed,
-                },
-                "diagnostics": {
-                    "decision": log.decision,
-                    "reason_codes": log.metadata.get("reason_codes", []),
-                    "query_hash": log.metadata.get("query_hash"),
-                    "candidate_count": log.metadata.get(
-                        "candidate_count",
-                        len(candidate_objects),
-                    ),
-                    "rendered_skill_count": len(log.rendered_skill_ids),
-                    "broker_policy_version_id": payload["broker_policy_version_id"],
-                    "trace_id": payload["trace_id"],
-                    "span_id": payload["span_id"],
-                    "metadata_keys": sorted(log.metadata.keys()),
-                },
-                "content_policy": {
-                    "raw_available": False,
-                    "raw_reason": "raw-content-disabled",
-                    "redaction_state": "redacted_or_not_applicable",
-                    "raw_query_stored": False,
-                },
-                "audit": {"links": [], "chain_visible": True},
-            }
-        )
+        return ObservatoryObjectResponse(object=_broker_decision_microscope(log))
 
     @app.get(
         "/admin/api/v1/broker/replay-episodes",

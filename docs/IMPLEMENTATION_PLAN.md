@@ -3,6 +3,23 @@
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
 2026-06-05 update: Observatory object microscopes now include a dedicated
+content-safe `broker_decision`/`retrieval_log` path backed by the retrieval
+store. `/admin/api/v1/objects/broker_decision/{id}` resolves the same broker
+decision detail as `/admin/api/v1/broker/decisions/{id}`, including decision
+timeline, trace link, rendered/candidate skill effects, bounded candidate refs,
+safe suppression refs, reason codes, query hash identity, and broker policy
+identity. Raw retrieval query text, raw candidate summaries, raw suppression
+context, and arbitrary metadata values remain unavailable. This advances core
+Sections 7-8 runtime-broker/sidecar requirements plus Observatory Sections 7.6,
+7.7, 8.7, 8.20, 12.6, 16.1, and 21.16 by closing the drill-down gap from
+broker-quality aggregates and replay-episode provenance refs to retrieval-log
+evidence. Validation passed with focused broker-decision microscope coverage,
+focused ruff checks, full sidecar ruff/pytest/compileall gates, diff-check,
+compose config, and core and Observatory acceptance reports. No compose/Postgres
+smoke was needed because the slice reuses the existing retrieval-store read path
+and validates it through the in-memory retrieval store.
+
+2026-06-05 update: Observatory object microscopes now include a dedicated
 content-safe `action_attribution_check` detail path backed by the attribution
 store. `/admin/api/v1/objects/action_attribution_check/{id}` resolves the
 deterministic operator-action boundary check behind admin action receipts,
