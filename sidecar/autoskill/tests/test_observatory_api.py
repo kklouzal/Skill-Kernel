@@ -31,6 +31,7 @@ from autoskill.db.governance import (
     EvolutionTransactionItemRecord,
     EvolutionTransactionRecord,
     NullGovernanceStore,
+    RevocationRequestRecord,
 )
 from autoskill.db.jobs import JobQueueSummary
 from autoskill.db.llm_invocations import NullLLMInvocationStore
@@ -87,9 +88,11 @@ class MemoryTopologyGovernanceStore(NullGovernanceStore):
         self,
         transactions: list[EvolutionTransactionRecord],
         items: list[EvolutionTransactionItemRecord] | None = None,
+        revocations: list[RevocationRequestRecord] | None = None,
     ) -> None:
         self.transactions = transactions
         self.items = items or []
+        self.revocations = revocations or []
 
     async def list_transactions(
         self,
@@ -133,6 +136,20 @@ class MemoryTopologyGovernanceStore(NullGovernanceStore):
             for item in self.items
             if item.evolution_transaction_id == evolution_transaction_id
         ]
+
+    async def get_revocation_request(
+        self,
+        *,
+        workspace_key: str | None = None,
+        revocation_request_id,
+    ) -> RevocationRequestRecord | None:
+        for revocation in self.revocations:
+            if (
+                revocation.revocation_request_id == revocation_request_id
+                and (workspace_key is None or revocation.workspace_key == workspace_key)
+            ):
+                return revocation
+        return None
 
 
 class MemoryRetrievalLogStore:
@@ -2084,6 +2101,134 @@ def test_observatory_evolution_transaction_object_microscope_is_content_safe() -
     assert "raw evidence text" not in rendered
     assert "raw skill body" not in rendered
     assert "raw rollback text" not in rendered
+
+
+def test_observatory_revocation_request_object_microscope_is_content_safe() -> None:
+    revocation_request_id = uuid4()
+    root_object_id = uuid4()
+    skill_version_id = uuid4()
+    rollback_transaction_id = uuid4()
+    created_by_job_id = uuid4()
+    governance = MemoryTopologyGovernanceStore(
+        [],
+        revocations=[
+            RevocationRequestRecord(
+                revocation_request_id=revocation_request_id,
+                workspace_id=uuid4(),
+                workspace_key="dev-01",
+                request_kind="rollback",
+                root_object_type="evolution_transaction",
+                root_object_id=root_object_id,
+                status="completed",
+                traversal_summary={
+                    "source": "critical_canary",
+                    "raw_operator_reason": "raw rollback rationale",
+                    "impacted_count": 2,
+                    "impacted_objects": [
+                        {
+                            "object_type": "evolution_transaction",
+                            "object_id": str(root_object_id),
+                            "depth": 0,
+                            "raw_payload": "raw root payload",
+                        },
+                        {
+                            "object_type": "skill_version",
+                            "object_id": str(skill_version_id),
+                            "depth": 1,
+                            "raw_skill_text": "raw generated skill text",
+                        },
+                    ],
+                    "edges": [
+                        {
+                            "source_kind": "evolution_transaction",
+                            "source_id": str(root_object_id),
+                            "derived_kind": "skill_version",
+                            "derived_id": str(skill_version_id),
+                            "relation": "created_version",
+                            "raw_edge_note": "raw provenance note",
+                        }
+                    ],
+                    "rollback_transaction_id": str(rollback_transaction_id),
+                    "invalidation": {
+                        "objects": 2,
+                        "embeddings_deleted": 1,
+                        "raw_error": "raw invalidation detail",
+                    },
+                },
+                created_by_job_id=created_by_job_id,
+                created_at=datetime.now(UTC),
+                completed_at=datetime.now(UTC),
+            )
+        ],
+    )
+    app = create_app(governance_store=governance, audit_store=MemoryAuditStore())
+    route = next(
+        route for route in app.routes if route.path == "/admin/api/v1/objects/{object_type}/{object_id}"
+    )
+
+    async def run():
+        return await route.endpoint(
+            object_type="revocation_request",
+            object_id=str(revocation_request_id),
+            authorization=None,
+            x_skillkernel_roles=None,
+            workspace_id="dev-01",
+            window_minutes=60,
+        )
+
+    response = asyncio.run(run())
+    payload = response.object
+
+    assert payload["schema_version"] == "skillkernel.observatory.revocation-request.v1"
+    assert payload["object_type"] == "revocation_request"
+    assert payload["object_id"] == str(revocation_request_id)
+    assert payload["status"] == "completed"
+    assert payload["root"] == {
+        "object_type": "evolution_transaction",
+        "object_id": str(root_object_id),
+        "relationship": "revocation_root",
+    }
+    assert payload["provenance"]["upstream"] == [
+        {
+            "object_type": "evolution_transaction",
+            "object_id": str(root_object_id),
+            "relationship": "revocation_root",
+        },
+        {
+            "object_type": "job",
+            "object_id": str(created_by_job_id),
+            "relationship": "created_by_job",
+        },
+    ]
+    assert {
+        "object_type": "skill_version",
+        "object_id": str(skill_version_id),
+        "relationship": "impacted_by_revocation",
+    } in payload["provenance"]["downstream"]
+    traversal = payload["effects"]["traversal"]
+    assert traversal["impacted_count"] == 2
+    assert traversal["impacted_objects"][1] == {
+        "object_type": "skill_version",
+        "object_id": str(skill_version_id),
+        "depth": 1,
+    }
+    assert traversal["edges"][0] == {
+        "source_kind": "evolution_transaction",
+        "source_id": str(root_object_id),
+        "derived_kind": "skill_version",
+        "derived_id": str(skill_version_id),
+        "relation": "created_version",
+    }
+    assert traversal["invalidation"]["objects"] == 2
+    assert traversal["invalidation"]["embeddings_deleted"] == 1
+    assert payload["content_policy"]["raw_available"] is False
+    assert payload["diagnostics"]["raw_traversal_summary_returned"] is False
+    rendered = json.dumps(payload, sort_keys=True)
+    assert "raw rollback rationale" not in rendered
+    assert "raw root payload" not in rendered
+    assert "raw generated skill text" not in rendered
+    assert "raw provenance note" not in rendered
+    assert "raw invalidation detail" not in rendered
 
 
 def test_observatory_broker_decisions_use_content_safe_retrieval_logs() -> None:

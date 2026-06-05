@@ -2,6 +2,23 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: Observatory object microscopes now include a dedicated
+content-safe `revocation_request` path backed by the governance store.
+`/admin/api/v1/objects/revocation_request/{id}` resolves rollback/revocation
+request status, root object, created-by job, bounded impacted objects, bounded
+provenance edges, rollback transaction refs, and numeric/boolean invalidation
+counters while suppressing raw traversal metadata, raw operator/source text,
+raw generated skill text, raw provenance notes, and arbitrary invalidation
+strings. This advances core Sections 1.2 and 2.26 plus Observatory Sections
+7.6, 7.7, 8.16, 12.6, 13.1, and 16.1 by closing the drill-down gap from
+rollback/freeze derived-state revocation to governed sidecar evidence.
+Validation passed with focused revocation/evolution microscope coverage,
+focused worker/governance revocation coverage, full sidecar ruff/pytest/
+compileall gates, compose config, diff-check, core and Observatory acceptance
+reports, and an isolated compose/Postgres smoke that migrated a fresh database
+and round-tripped a rollback revocation request through the asyncpg governance
+lookup with workspace filtering.
+
 2026-06-05 update: Observatory scanner findings now have a dedicated
 content-safe detail read model. The scanner station emits a stable
 `scanner_finding` object for scanner reject counts, and

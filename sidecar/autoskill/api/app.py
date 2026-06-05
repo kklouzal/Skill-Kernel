@@ -7031,6 +7031,174 @@ def create_app(
             "created_at": payload["created_at"],
         }
 
+    def _safe_revocation_traversal_summary(summary: dict[str, Any]) -> dict[str, Any]:
+        safe: dict[str, Any] = {
+            "summary_keys": sorted(str(key) for key in summary),
+            "raw_summary_returned": False,
+        }
+        for key in (
+            "source",
+            "root_object_type",
+            "root_object_id",
+            "impacted_count",
+            "truncated",
+            "max_depth",
+            "max_nodes",
+            "rollback_transaction_id",
+            "claimed_by",
+        ):
+            value = summary.get(key)
+            if isinstance(value, str | int | bool) or value is None:
+                safe[key] = value
+        invalidation = summary.get("invalidation")
+        if isinstance(invalidation, dict):
+            safe["invalidation"] = {
+                str(key): value
+                for key, value in invalidation.items()
+                if isinstance(value, int | bool | float) or value is None
+            }
+        impacted = summary.get("impacted_objects")
+        if isinstance(impacted, list):
+            safe["impacted_objects"] = [
+                {
+                    key: str(item[key]) if item.get(key) is not None else None
+                    for key in ("object_type", "object_id", "relation")
+                    if key in item
+                }
+                | (
+                    {"depth": item["depth"]}
+                    if isinstance(item.get("depth"), int)
+                    else {}
+                )
+                for item in impacted[:100]
+                if isinstance(item, dict)
+            ]
+            safe["impacted_object_limit"] = 100
+        edges = summary.get("edges")
+        if isinstance(edges, list):
+            safe["edges"] = [
+                {
+                    key: str(item[key]) if item.get(key) is not None else None
+                    for key in (
+                        "source_kind",
+                        "source_id",
+                        "derived_kind",
+                        "derived_id",
+                        "relation",
+                    )
+                    if key in item
+                }
+                for item in edges[:100]
+                if isinstance(item, dict)
+            ]
+            safe["edge_limit"] = 100
+        return safe
+
+    def _revocation_request_microscope(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        request_id = payload["revocation_request_id"]
+        root_ref = {
+            "object_type": payload["root_object_type"],
+            "object_id": payload["root_object_id"],
+            "relationship": "revocation_root",
+        }
+        job_ref = (
+            {
+                "object_type": "job",
+                "object_id": payload["created_by_job_id"],
+                "relationship": "created_by_job",
+            }
+            if payload.get("created_by_job_id")
+            else None
+        )
+        traversal_summary = (
+            payload["traversal_summary"]
+            if isinstance(payload.get("traversal_summary"), dict)
+            else {}
+        )
+        safe_summary = _safe_revocation_traversal_summary(traversal_summary)
+        downstream_refs: list[dict[str, Any]] = []
+        for item in safe_summary.get("impacted_objects", []):
+            if not isinstance(item, dict) or not item.get("object_type") or not item.get(
+                "object_id"
+            ):
+                continue
+            downstream_refs.append(
+                {
+                    "object_type": item["object_type"],
+                    "object_id": item["object_id"],
+                    "relationship": "impacted_by_revocation",
+                }
+            )
+        if safe_summary.get("rollback_transaction_id"):
+            downstream_refs.append(
+                {
+                    "object_type": "evolution_transaction",
+                    "object_id": safe_summary["rollback_transaction_id"],
+                    "relationship": "rollback_transaction",
+                }
+            )
+        timeline = [
+            {
+                "at": payload["created_at"],
+                "event": "revocation_request_created",
+                "status": payload["status"],
+                "request_kind": payload["request_kind"],
+            }
+        ]
+        if payload.get("completed_at"):
+            timeline.append(
+                {
+                    "at": payload["completed_at"],
+                    "event": "revocation_request_completed",
+                    "status": payload["status"],
+                }
+            )
+        return {
+            "schema_version": "skillkernel.observatory.revocation-request.v1",
+            "object_type": "revocation_request",
+            "object_id": request_id,
+            "title": f"{payload['request_kind']} revocation {request_id}",
+            "summary": (
+                f"{payload['request_kind']} / {payload['status']}; "
+                f"root={payload['root_object_type']}; "
+                f"impacted={safe_summary.get('impacted_count', 'unknown')}"
+            ),
+            "workspace_key": payload.get("workspace_key"),
+            "request_kind": payload["request_kind"],
+            "status": payload["status"],
+            "root": root_ref,
+            "timeline": timeline,
+            "provenance": {
+                "upstream": [ref for ref in (root_ref, job_ref) if ref is not None],
+                "downstream": downstream_refs[:100],
+            },
+            "effects": {
+                "derived_state_revocation_status": payload["status"],
+                "traversal": safe_summary,
+                "downstream_ref_count": len(downstream_refs),
+                "downstream_ref_limit": 100,
+            },
+            "diagnostics": {
+                "supporting_component": "canary_rollback_freeze",
+                "request_kind": payload["request_kind"],
+                "root_object_type": payload["root_object_type"],
+                "status": payload["status"],
+                "completed": payload.get("completed_at") is not None,
+                "traversal_summary_key_count": len(traversal_summary),
+                "raw_traversal_summary_returned": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "content_safe_revocation_metadata",
+            },
+            "audit": {
+                "links": [{"object_type": "revocation_request", "object_id": request_id}],
+                "chain_visible": True,
+            },
+        }
+
     def _evolution_transaction_microscope(
         transaction: Any,
         items: list[Any],
@@ -8795,6 +8963,20 @@ def create_app(
                 )
                 return ObservatoryObjectResponse(
                     object=_evolution_transaction_microscope(transaction, items)
+                )
+        if object_type in {
+            "revocation_request",
+            "revocation-request",
+            "revocation",
+        }:
+            revocation_request_id = _uuid_or_404(object_id, "revocation request")
+            revocation = await governance.get_revocation_request(
+                workspace_key=workspace_id,
+                revocation_request_id=revocation_request_id,
+            )
+            if revocation is not None:
+                return ObservatoryObjectResponse(
+                    object=_revocation_request_microscope(revocation)
                 )
         snapshot = await _observatory_snapshot(
             workspace_id=workspace_id,

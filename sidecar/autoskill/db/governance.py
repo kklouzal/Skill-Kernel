@@ -356,6 +356,14 @@ class GovernanceStore(Protocol):
     ) -> RevocationRequestRecord:
         """Queue a rollback/retention/quarantine revocation traversal."""
 
+    async def get_revocation_request(
+        self,
+        *,
+        workspace_key: str | None = None,
+        revocation_request_id: UUID,
+    ) -> RevocationRequestRecord | None:
+        """Return one revocation request for a content-safe object microscope."""
+
     async def claim_next_revocation_request(
         self,
         *,
@@ -573,6 +581,14 @@ class NullGovernanceStore:
             created_at=datetime.now(UTC),
             completed_at=None,
         )
+
+    async def get_revocation_request(
+        self,
+        *,
+        workspace_key: str | None = None,
+        revocation_request_id: UUID,
+    ) -> RevocationRequestRecord | None:
+        return None
 
     async def claim_next_revocation_request(
         self,
@@ -1029,6 +1045,29 @@ class AsyncpgGovernanceStore(AsyncpgPoolOwner):
                 created_by_job_id,
             )
             return RevocationRequestRecord.from_row({**dict(row), "workspace_key": workspace_key})
+
+    async def get_revocation_request(
+        self,
+        *,
+        workspace_key: str | None = None,
+        revocation_request_id: UUID,
+    ) -> RevocationRequestRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT rr.*, w.external_key AS workspace_key
+                FROM autoskill.revocation_requests rr
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE rr.revocation_request_id = $1
+                  AND ($2::text IS NULL OR w.external_key = $2)
+                """,
+                revocation_request_id,
+                workspace_key,
+            )
+            if row is None:
+                return None
+            return RevocationRequestRecord.from_row(row)
 
     async def claim_next_revocation_request(
         self,

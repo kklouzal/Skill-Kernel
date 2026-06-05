@@ -16,6 +16,29 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory object microscopes now resolve
+  `revocation_request` links to content-safe rollback/revocation request
+  detail backed by the governance store instead of falling through to the
+  generic snapshot object. The governance store exposes a workspace-filtered
+  `get_revocation_request` lookup; the object route returns request kind/status,
+  root object, created-by job, timeline, bounded impacted object refs, bounded
+  provenance edges, rollback transaction refs, and numeric/boolean invalidation
+  counters while withholding raw traversal metadata, raw operator/source text,
+  raw generated skill text, raw edge notes, and arbitrary invalidation strings.
+  This advances core handoff Sections 1.2 and 2.26 rollback/derived-data
+  revocation requirements plus Observatory Sections 7.6, 7.7, 8.16, 12.6,
+  13.1, and 16.1 by making derived-state revocation status traversable through
+  the sidecar object microscope without adding any runtime mutation authority.
+  Validation passed with focused governance/rollback Observatory coverage (`3
+  passed`) and worker/governance revocation coverage (`3 passed`), `uv run ruff
+  check sidecar`, `uv run pytest` (`378 passed`), `uv run python -m compileall
+  -q sidecar`, `docker compose config --quiet`, `git diff --check`, core and
+  Observatory acceptance reports (`ready=true`, `70` implemented and `86`
+  satisfied, `0` validation errors), and an isolated compose/Postgres smoke on
+  port `59621` that migrated a fresh database, queued one rollback revocation
+  request through `AsyncpgGovernanceStore`, fetched it by workspace/request ID,
+  verified workspace isolation, completed it, refetched completed status, and
+  removed the temporary compose project/volume.
 - 2026-06-05: Observatory scanner findings now have a content-safe detail
   microscope instead of remaining list-only scanner cockpit records. The
   scanner station record is normalized as a stable `scanner_finding` object,
