@@ -2,6 +2,8 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: Observatory split-container serving is now first-class in the implementation ledger and runtime contract. The FastAPI core serves admin APIs, live streams, readiness, and content-safe config only; the separate Observatory nginx container owns the compiled React app, `/admin` browser entrypoint, and `/admin/api`, `/admin/live`, `/admin/live-sse` reverse proxies. The legacy core static mount and `sidecar` local-development static-serving mode were removed so development and production both validate UI changes through the same rebuild/redeploy path.
+
 2026-06-04 update: the authoritative main and Observatory specs were refreshed. Acceptance crosswalks were expanded to the current main criteria (`31.1`-`31.63` plus context criteria) and Observatory criteria/checklist (`21.1`-`21.42`, `24.auto.1`-`24.auto.6`, `24.1`-`24.38`). The newly exposed replay-corpus gap is closed by `/v1/broker/replay-episodes/synthesize`: it records pre-adjudicated redacted telemetry, can synthesize a redacted intent through the configured text LLM from content-safe retrieval context, repairs stale telemetry-derived episode expectations from source retrieval logs, stores deterministic validation/provenance, and returns explicit hash-only/metadata-only/no-safe-context skip reasons instead of treating degraded evidence as full-autonomy replay support. Live Dev-01 validation synthesized/repaired telemetry-derived episodes and replayed the stored corpus at 19/19 matches.
 
 ## Phase 0 - Confirm OpenClaw Seams

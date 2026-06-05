@@ -28,7 +28,7 @@ class ObservatoryItem:
 
 
 ACCEPTANCE_CRITERIA: tuple[ObservatoryItem, ...] = (
-    ObservatoryItem("21.1", "The sidecar serves the web UI and API from a configurable /admin base path.", ("sidecar/autoskill/api/app.py admin routes and static mount", "sidecar/autoskill/observatory/vite.config.ts")),
+    ObservatoryItem("21.1", "The sidecar serves the API from a configurable /admin base path, and the split Observatory container serves the web UI at the same base path through its reverse proxy.", ("sidecar/autoskill/api/app.py admin routes", "docker/observatory/default.conf.template", "sidecar/autoskill/observatory/vite.config.ts")),
     ObservatoryItem("21.2", "Authentication is required for every non-liveness endpoint.", ("_require_admin_auth in sidecar/autoskill/api/app.py", "sidecar/autoskill/tests/test_observatory_api.py")),
     ObservatoryItem("21.3", "The overview graph shows every SkillKernel pipeline station and reflects live health.", ("24 StationDefinition entries in sidecar/autoskill/services/observatory.py", "test_observatory_api.py asserts 24 stations")),
     ObservatoryItem("21.4", "The overview graph uses custom station cards, semantic edges, label chips, selected states, and theme alignment.", ("sidecar/autoskill/observatory/src/components/AssemblyLine.tsx", "sidecar/autoskill/observatory/src/styles.css")),

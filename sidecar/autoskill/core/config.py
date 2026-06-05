@@ -1,7 +1,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from autoskill.core.enums import AutonomyMode
 from pydantic import AliasChoices, Field
@@ -176,8 +176,6 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("SKILLKERNEL_ADMIN_TOKEN", "AUTOSKILL_WEB_ADMIN_TOKEN"),
     )
-    web_admin_static_serving_mode: Literal["external", "sidecar"] = "external"
-    web_admin_static_dir: Path = Path("sidecar/autoskill/observatory/dist")
     web_admin_raw_content_enabled: bool = False
     web_admin_csrf_enabled: bool = True
     web_admin_issue_board_enabled: bool = True
@@ -389,8 +387,7 @@ def effective_skillkernel_config(settings: Settings | None = None) -> dict[str, 
                 "dedicated_token_configured": bool(resolved.web_admin_token),
                 "control_token_fallback_configured": bool(resolved.control_token),
             },
-            "static_serving_mode": resolved.web_admin_static_serving_mode,
-            "static_dir": str(resolved.web_admin_static_dir),
+            "static_serving": "observatory_container",
             "raw_content": {"enabled": resolved.web_admin_raw_content_enabled},
             "diagnostics": {
                 "issue_board_enabled": resolved.web_admin_issue_board_enabled,

@@ -192,7 +192,6 @@ from fastapi import (
 )
 from fastapi import status as http_status
 from fastapi.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 DEFAULT_OBSERVATORY_WORKSPACE_ID = "dev-01"
@@ -2023,26 +2022,8 @@ def _dominant_role(roles: set[str]) -> str:
     return "viewer"
 
 
-def _admin_static_dir() -> Path:
-    settings = get_settings()
-    configured = settings.web_admin_static_dir
-    if configured.is_absolute():
-        return configured
-    cwd_candidate = (Path.cwd() / configured).resolve()
-    if cwd_candidate.exists():
-        return cwd_candidate
-    return (Path(__file__).resolve().parents[1] / "observatory" / "dist").resolve()
-
-
 def _admin_static_available() -> bool:
-    settings = get_settings()
-    if settings.web_admin_static_serving_mode == "external":
-        return True
-    return (_admin_static_dir() / "index.html").exists()
-
-
-def _admin_sidecar_static_mount_enabled() -> bool:
-    return get_settings().web_admin_static_serving_mode == "sidecar"
+    return True
 
 
 def _admin_base_path() -> str:
@@ -6673,7 +6654,6 @@ def create_app(
     ) -> ObservatoryConfigResponse:
         principal = _require_admin_auth(authorization, x_skillkernel_roles)
         settings = get_settings()
-        static_dir = _admin_static_dir()
         return ObservatoryConfigResponse(
             config={
                 "base_path": _admin_base_path(),
@@ -6681,8 +6661,7 @@ def create_app(
                 "live_path": f"{_admin_base_path()}/live",
                 "enabled": settings.web_admin_enabled,
                 "static_available": _admin_static_available(),
-                "static_serving_mode": settings.web_admin_static_serving_mode,
-                "static_dir": str(static_dir),
+                "static_serving": "observatory_container",
                 "principal": principal,
                 "raw_content": {"enabled": settings.web_admin_raw_content_enabled},
                 "csrf": {
@@ -10715,16 +10694,6 @@ def create_app(
             audit=[record.model_dump(mode="json") for record in records],
             chain_valid=await audit.verify_chain(workspace_key=workspace_id, limit=bounded_limit),
         )
-
-    settings = get_settings()
-    if settings.web_admin_enabled:
-        static_dir = _admin_static_dir()
-        if _admin_sidecar_static_mount_enabled() and static_dir.exists():
-            app.mount(
-                _admin_base_path(),
-                StaticFiles(directory=static_dir, html=True),
-                name="skillkernel-observatory",
-            )
 
     # Some existing unit tests inspect app.routes directly and assume every
     # route-like object has .methods. Starlette WebSocket and Mount routes do

@@ -426,8 +426,8 @@ The portable web interface is a split-container deployment. The Python core
 container owns sidecar APIs, live streams, durable read models, jobs, policy,
 and audit. The Observatory web container owns the compiled React application,
 static assets, browser entrypoint, and reverse proxy to the core container.
-FastAPI sidecar static mounting is an explicit local-development mode only, not
-the portable deployment contract.
+FastAPI sidecar static mounting is not supported; development and production
+both validate UI changes through normal split-container rebuild/redeploy.
 
 ```text
 Browser
@@ -4528,7 +4528,7 @@ Autonomy/evidence acceptance criteria:
 
 The Observatory implementation is acceptable when all criteria are true:
 
-1. The sidecar serves the web UI and API from a configurable `/admin` base path.
+1. The sidecar serves the API from a configurable `/admin` base path, and the split Observatory container serves the web UI at the same base path through its reverse proxy.
 2. Authentication is required for every non-liveness endpoint.
 3. The overview graph shows every SkillKernel pipeline station and reflects live health.
 4. The overview graph uses a polished custom visual system: custom station cards, semantic edges, label chips, subsystem lanes, status halos, selected/hover/focus states, and theme-token alignment with the rest of the UI.
