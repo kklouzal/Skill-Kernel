@@ -116,6 +116,12 @@ By default, the core API is published on `127.0.0.1:8765` and Observatory is
 published on `127.0.0.1:8757/admin/`. Set `SKILLKERNEL_CORE_BIND` or
 `SKILLKERNEL_OBSERVATORY_BIND` to expose them on another interface.
 
+`AUTOSKILL_WEB_ADMIN_STATIC_SERVING_MODE=external` is the normal portable
+deployment mode: the core image reports Observatory frontend readiness through
+the external web container and does not mount a bundled React build. Set the
+mode to `sidecar` only for a local development preview where the React app has
+already been built into the configured sidecar static directory.
+
 Validate the OpenClaw plugin skeleton:
 
 ```bash

@@ -1,3 +1,5 @@
+# Compatibility core image. Portable deployments use Dockerfile.core for the
+# Python core services and Dockerfile.observatory for the web UI container.
 FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

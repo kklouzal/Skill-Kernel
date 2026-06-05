@@ -2036,9 +2036,13 @@ def _admin_static_dir() -> Path:
 
 def _admin_static_available() -> bool:
     settings = get_settings()
-    if settings.web_admin_static_external:
+    if settings.web_admin_static_serving_mode == "external":
         return True
     return (_admin_static_dir() / "index.html").exists()
+
+
+def _admin_sidecar_static_mount_enabled() -> bool:
+    return get_settings().web_admin_static_serving_mode == "sidecar"
 
 
 def _admin_base_path() -> str:
@@ -6677,7 +6681,7 @@ def create_app(
                 "live_path": f"{_admin_base_path()}/live",
                 "enabled": settings.web_admin_enabled,
                 "static_available": _admin_static_available(),
-                "static_external": settings.web_admin_static_external,
+                "static_serving_mode": settings.web_admin_static_serving_mode,
                 "static_dir": str(static_dir),
                 "principal": principal,
                 "raw_content": {"enabled": settings.web_admin_raw_content_enabled},
@@ -10715,7 +10719,7 @@ def create_app(
     settings = get_settings()
     if settings.web_admin_enabled:
         static_dir = _admin_static_dir()
-        if static_dir.exists():
+        if _admin_sidecar_static_mount_enabled() and static_dir.exists():
             app.mount(
                 _admin_base_path(),
                 StaticFiles(directory=static_dir, html=True),

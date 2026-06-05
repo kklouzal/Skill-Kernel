@@ -48,6 +48,7 @@ from autoskill.services.observatory import (
     object_microscope,
 )
 from fastapi import HTTPException, Response
+from starlette.routing import Mount
 
 
 class MemoryAuditStore:
@@ -1071,6 +1072,89 @@ def test_observatory_admin_routes_include_browser_security_headers() -> None:
     assert admin_headers["x-frame-options"] == "DENY"
     assert admin_headers["referrer-policy"] == "no-referrer"
     assert "content-security-policy" not in health_headers
+
+
+def test_observatory_external_static_mode_is_first_class(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
+    monkeypatch.setenv("AUTOSKILL_WEB_ADMIN_STATIC_SERVING_MODE", "external")
+    get_settings.cache_clear()
+    try:
+        app = create_app(audit_store=MemoryAuditStore())
+        routes = _routes(app)
+
+        async def run():
+            config = await routes[("/admin/api/v1/config", "GET")].endpoint()
+            ready = await routes[("/admin/api/v1/health/ready", "GET")].endpoint()
+            return config, ready
+
+        config, ready = asyncio.run(run())
+        admin_mounts = [
+            route
+            for route in app.routes
+            if isinstance(route, Mount) and route.path == "/admin"
+        ]
+
+        assert admin_mounts == []
+        assert config.config["static_serving_mode"] == "external"
+        assert config.config["static_available"] is True
+        assert "frontend_serving" not in ready.object["data_quality"]["missing_signals"]
+        assert all(
+            "frontend-serving-unavailable" not in issue["reason_codes"]
+            for issue in ready.object["issues"]
+        )
+    finally:
+        get_settings.cache_clear()
+
+
+def test_observatory_sidecar_static_mode_requires_built_app(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    static_dir = tmp_path / "observatory-dist"
+    monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
+    monkeypatch.setenv("AUTOSKILL_WEB_ADMIN_STATIC_SERVING_MODE", "sidecar")
+    monkeypatch.setenv("AUTOSKILL_WEB_ADMIN_STATIC_DIR", str(static_dir))
+    get_settings.cache_clear()
+    try:
+        app = create_app(audit_store=MemoryAuditStore())
+        routes = _routes(app)
+
+        async def missing_run():
+            config = await routes[("/admin/api/v1/config", "GET")].endpoint()
+            ready = await routes[("/admin/api/v1/health/ready", "GET")].endpoint()
+            return config, ready
+
+        missing_config, missing_ready = asyncio.run(missing_run())
+        assert missing_config.config["static_serving_mode"] == "sidecar"
+        assert missing_config.config["static_available"] is False
+        assert "frontend_serving" in missing_ready.object["data_quality"]["missing_signals"]
+        assert any(
+            "frontend-serving-unavailable" in issue["reason_codes"]
+            for issue in missing_ready.object["issues"]
+        )
+
+        static_dir.mkdir()
+        (static_dir / "index.html").write_text("<!doctype html><title>ok</title>", encoding="utf-8")
+        get_settings.cache_clear()
+        built_app = create_app(audit_store=MemoryAuditStore())
+        built_routes = _routes(built_app)
+
+        async def built_run():
+            config = await built_routes[("/admin/api/v1/config", "GET")].endpoint()
+            ready = await built_routes[("/admin/api/v1/health/ready", "GET")].endpoint()
+            return config, ready
+
+        built_config, built_ready = asyncio.run(built_run())
+        admin_mounts = [
+            route
+            for route in built_app.routes
+            if isinstance(route, Mount) and route.path == "/admin"
+        ]
+        assert len(admin_mounts) == 1
+        assert built_config.config["static_available"] is True
+        assert "frontend_serving" not in built_ready.object["data_quality"]["missing_signals"]
+    finally:
+        get_settings.cache_clear()
 
 
 def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() -> None:

@@ -453,8 +453,8 @@ REASON_CODES: dict[str, str] = {
     "audit-chain-unverified": "Audit chain verification failed or was unavailable.",
     "embedding-endpoint-not-configured": "The configured embedding provider has no endpoint URL.",
     "raw-content-disabled": "Raw content reveal is disabled by configuration.",
-    "static-app-not-built": (
-        "The React application has not been built into the configured static directory."
+    "frontend-serving-unavailable": (
+        "The Observatory frontend is not available through the configured serving mode."
     ),
 }
 
@@ -1092,7 +1092,7 @@ def _component_snapshot(
     elif station.metric_family == "observatory":
         if not static_available:
             health = _worse(health, "degraded")
-            reason_codes.append("static-app-not-built")
+            reason_codes.append("frontend-serving-unavailable")
         if not settings.web_admin_token and not settings.control_token:
             health = _worse(health, "degraded")
             reason_codes.append("admin-token-not-configured")
@@ -1305,7 +1305,7 @@ def _issue_board(
     if not audit_chain_valid:
         issues.append(_issue("audit-chain-unverified", "critical", "audit_trace"))
     if not static_available:
-        issues.append(_issue("static-app-not-built", "medium", "observatory_admin"))
+        issues.append(_issue("frontend-serving-unavailable", "medium", "observatory_admin"))
     for component in components:
         if "missing-required-signal" in component.get("reason_codes", []):
             issues.append(_missing_required_signal_issue(component))
@@ -1561,7 +1561,7 @@ def _global_data_quality(
     if not settings.database_url:
         missing.append("database_read_models")
     if not static_available:
-        missing.append("static_frontend")
+        missing.append("frontend_serving")
     stale = read_model_age_seconds > settings.web_admin_telemetry_staleness_warning_seconds
     return {
         "telemetry_freshness_seconds": read_model_age_seconds,
@@ -2145,9 +2145,9 @@ def _safe_next_actions(reason_code: str) -> list[dict[str, str]]:
             "inspect_evaluation_runs",
             "Open evaluator cockpit and inspect failed probes.",
         ),
-        "static-app-not-built": (
-            "build_observatory_frontend",
-            "Run the Observatory frontend build before serving the dashboard.",
+        "frontend-serving-unavailable": (
+            "verify_observatory_frontend",
+            "Verify the Observatory web container or explicit sidecar local-development mode.",
         ),
     }
     action, summary = actions.get(

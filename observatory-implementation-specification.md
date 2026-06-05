@@ -51,7 +51,7 @@ Apache ECharts for high-density charts, timelines, heatmaps, funnels, Sankey dia
 PixiJS canvas/WebGL/WebGPU overlay for animated event particles and high-density visual effects
 Monaco Editor for read-only JSON/SkillIR/manifest/diff inspection
 TanStack Query for API caching, invalidation, and server-state management
-FastAPI sidecar routes for authenticated APIs, static frontend serving, and live streams
+FastAPI sidecar routes for authenticated APIs and live streams, plus a separate Observatory web container for the static frontend
 PostgreSQL read models, materialized summaries, and LISTEN/NOTIFY invalidation when it improves freshness without disturbing core processing
 ```
 
@@ -420,20 +420,31 @@ The web interface must not blur SkillKernel’s core architecture.
 
 ## 3. Architecture overview
 
-### 3.1 Sidecar-hosted architecture
+### 3.1 Split-container architecture
 
-The web interface runs from the SkillKernel sidecar container.
+The portable web interface is a split-container deployment. The Python core
+container owns sidecar APIs, live streams, durable read models, jobs, policy,
+and audit. The Observatory web container owns the compiled React application,
+static assets, browser entrypoint, and reverse proxy to the core container.
+FastAPI sidecar static mounting is an explicit local-development mode only, not
+the portable deployment contract.
 
 ```text
 Browser
-  ├─ loads static React app from sidecar
+  ├─ loads static React app from Observatory web container
   ├─ authenticates using local token/session/mTLS/reverse-proxy identity
   ├─ calls /admin/api/v1/* for snapshots, queries, and guarded actions
   └─ subscribes to /admin/live for component/job/trace/skill updates
 
-SkillKernel sidecar
+SkillKernel Observatory web container
+  ├─ nginx static frontend server
+  ├─ compiled React/Vite Observatory app under /admin/
+  ├─ proxy for /admin/api/v1/* to the core container
+  ├─ proxy for /admin/live to the core container
+  └─ proxy for /admin/live-sse to the core container
+
+SkillKernel core container
   ├─ FastAPI admin API
-  ├─ static frontend server
   ├─ WebSocket live stream, plus optional SSE read-only stream
   ├─ read-model service
   ├─ action gateway enforcing policy and audit
@@ -2534,8 +2545,8 @@ Baseline comparison is diagnostic only. It does not decide autonomous policy. Po
 All admin routes are under `/admin` by default.
 
 ```text
-GET  /admin/                         static SPA shell
-GET  /admin/assets/*                 frontend assets
+GET  /admin/                         static SPA shell from Observatory web container
+GET  /admin/assets/*                 frontend assets from Observatory web container
 GET  /admin/api/v1/health/live       liveness, optionally unauthenticated
 GET  /admin/api/v1/health/ready      authenticated readiness
 GET  /admin/api/v1/summary           global dashboard summary
@@ -4180,7 +4191,7 @@ Deliverables:
 - auth middleware;
 - role checks;
 - OpenAPI schema;
-- static frontend serving;
+- static frontend serving by the Observatory web container;
 - common response envelopes;
 - audit table;
 - component catalog;
@@ -4758,7 +4769,7 @@ These references support the implementation choices in this document.
 
 ### 25.4 Backend API, observability, and database anchors
 
-- FastAPI and FastAPI WebSockets: type-hinted API framework, OpenAPI generation, static serving, security utilities, and WebSocket endpoint support for live dashboard streams.  
+- FastAPI and FastAPI WebSockets: type-hinted API framework, OpenAPI generation, security utilities, and WebSocket endpoint support for live dashboard streams.
   URL: https://fastapi.tiangolo.com/
   URL: https://fastapi.tiangolo.com/advanced/websockets/
 

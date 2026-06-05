@@ -16,6 +16,14 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Portable Observatory deployment is now modeled as split-container
+  from first principles: the core container owns FastAPI admin APIs/live streams
+  and reports `web_admin_static_serving_mode`, while the Observatory nginx
+  container owns the compiled React static app and proxies `/admin/api`,
+  `/admin/live`, and `/admin/live-sse` to core. The legacy core static mount is
+  available only when explicitly configured as `sidecar` local-development mode;
+  default Compose mode is `external`, so readiness no longer emits the stale
+  sidecar-build warning for the normal web container.
 - 2026-06-04: Implementation and Observatory specs were refreshed, revealing acceptance-crosswalk drift. The executable reports now cover the current main production criteria (`31.1`-`31.63`, plus seven context criteria) and Observatory criteria/checklist (`21.1`-`21.42`, `24.auto.1`-`24.auto.6`, `24.1`-`24.38`). Added automatic broker replay episode synthesis through `/v1/broker/replay-episodes/synthesize`: it records pre-adjudicated redacted telemetry, can synthesize missing redacted intent through the configured text LLM from content-safe retrieval context, repairs stale telemetry-derived episode expectations from source retrieval logs, stores deterministic validation/provenance, and returns explicit hash-only/metadata-only/no-safe-context skip reasons without raw prompt exposure. Live Dev-01 replay validation now matches the stored telemetry-derived corpus at 19/19 after synthesis/repair.
 - 2026-06-04: Observatory context compiler cockpit read models now use the persisted context-governance store instead of snapshot placeholder records. The context store exposes bounded list/detail reads for context artifacts, context compile runs, context budget events, and semantic compression trials; `/admin/api/v1/context/artifacts`, `/context/compile-runs`, `/context/budget-events`, `/context/compression-trials`, their detail routes, and generic object-microscope aliases return hashes, statuses, token metrics, evidence/metadata key summaries, and provenance refs without compiled text, raw SkillIR, prompt bodies, raw evidence, or artifact text. This advances core handoff Sections 11.12-11.15 and Observatory Sections 8.12, 12.1, 12.6, and 13.1 while preserving sidecar-hosted read-only authority. Validation passed with focused context/route tests (`2 passed`), generated Observatory OpenAPI client `--check`, focused Observatory API tests (`39 passed`), `uv run ruff check sidecar`, `uv run pytest` (`369 passed`), `uv run python -m compileall -q sidecar`, `npm run build --prefix sidecar/autoskill/observatory`, `docker compose config --quiet`, `git diff --check`, the Observatory acceptance report (`86` satisfied, `0` validation errors), and a real compose/Postgres smoke that applied migrations, recorded/listed/detail-read all four context-governance record families through `AsyncpgContextGovernanceStore`, and stopped the Postgres service afterward.
 - 2026-06-04: Observatory threshold-deadlock findings now have a dedicated detail/read-model route at `/admin/api/v1/autonomy/threshold-deadlocks/{decision_id}` plus generic `threshold_deadlock` object-microscope support. The payload is derived from `admin_autonomy_decision_status`, preserves the underlying autonomy-decision reference, exposes a content-safe safe-next-action and provenance path, and keeps raw content unavailable. This advances Observatory Sections 7.6, 7.7, 8.5.3, 12.1, and 12.6 without adding mutation authority or a second control plane. Validation passed with focused Observatory API tests (`38 passed`), generated Observatory OpenAPI client `--check`, `uv run ruff check sidecar`, `uv run pytest` (`368 passed`), `uv run python -m compileall -q sidecar`, `npm run build --prefix sidecar/autoskill/observatory`, `docker compose config --quiet`, `git diff --check`, and the Observatory acceptance report (`86` satisfied, `0` validation errors).
@@ -921,10 +929,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   run ruff check sidecar`, `uv run pytest -q` with 303 tests, `uv run python -m
   compileall -q sidecar`, and `git diff --check`.
 - Observatory implementation slice landed from
-  `observatory-implementation-specification.md`: sidecar web-admin config,
+  `observatory-implementation-specification.md`: web-admin config,
   role-aware admin auth, `/admin/api/v1/*` summary/pipeline/subsystem/component
   issue/search/object/replay/action endpoints, `/admin/live` WebSocket,
-  `/admin/live-sse`, sidecar static serving, station/subsystem/read-model
+  `/admin/live-sse`, web-container static serving, station/subsystem/read-model
   aggregation, issue/reason-code generation, content-safe object microscope
   payloads, audited operator action receipts, and legacy route-inspection
   compatibility for existing tests.

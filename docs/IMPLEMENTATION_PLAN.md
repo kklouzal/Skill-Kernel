@@ -676,9 +676,11 @@ Acceptance:
 
 Deliverables:
 
-- sidecar-hosted web-admin shell; implemented as a React/Vite Observatory under
-  `sidecar/autoskill/observatory`, served from `/admin`, with API calls bound to
-  sidecar admin routes rather than a second control plane;
+- split-container web-admin shell; implemented as a React/Vite Observatory under
+  `sidecar/autoskill/observatory`, built into the `Dockerfile.observatory`
+  nginx image and served from `/admin`, with `/admin/api`, `/admin/live`, and
+  `/admin/live-sse` proxied to core sidecar admin routes rather than a second
+  control plane;
 - role-aware admin configuration and content-safe API envelopes; implemented for
   `/admin/api/v1/config`, `/summary`, `/pipeline`, `/subsystems`, `/components`,
   `/issues`, `/search`, `/objects`, `/health/live`, and `/health/ready`.
