@@ -2,6 +2,26 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: Observatory artifact drill-downs now resolve UUID-backed
+compiled/context artifacts through the governed context-artifact read model
+instead of leaving the broader `/admin/api/v1/artifacts/{id}` and generic
+`/admin/api/v1/objects/artifact/{id}` surfaces as dead-end placeholders.
+The artifact aliases expose artifact kind, source object refs, token budget
+status, safety/equivalence/shadowing status, hashes, and redacted metadata-key
+summaries while preserving the existing explicit missing-read-model response
+for non-UUID or unsupported artifact records. This advances core Section 1.4
+context-management gates plus Observatory Sections 7.6, 7.7, and 8.12 by
+closing the aggregate-to-evidence path for context artifact contributors
+without returning compiled text or adding UI-local mutation authority.
+Validation passed with focused context-compiler read-model coverage, `uv run
+ruff check sidecar`, `uv run pytest` (`379 passed`), `uv run python -m
+compileall -q sidecar`, `docker compose config --quiet`, `git diff --check`,
+and core and Observatory acceptance reports (`ready=true`, `70` implemented,
+`7` context criteria, `86` Observatory criteria/checklist items satisfied, `0`
+validation errors). No compose/Postgres smoke was needed because the slice
+reuses the existing context-governance read path and validates it through the
+in-memory context store.
+
 2026-06-05 update: Observatory object microscopes now include a dedicated
 content-safe `trace` path backed by the observability store.
 `/admin/api/v1/objects/trace/{trace_id}` resolves the same ordered trace detail

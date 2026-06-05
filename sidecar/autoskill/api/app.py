@@ -6,7 +6,7 @@ import json
 import os
 import secrets
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from hmac import compare_digest
 from pathlib import Path
@@ -9025,7 +9025,13 @@ def create_app(
             )
             if log is not None:
                 return ObservatoryObjectResponse(object=_broker_decision_microscope(log))
-        if object_type in {"context_artifact", "context-artifact"}:
+        if object_type in {
+            "context_artifact",
+            "context-artifact",
+            "artifact",
+            "compiled_artifact",
+            "compiled-artifact",
+        }:
             context_artifact_id = _uuid_or_404(object_id, "context artifact")
             artifact = await context_governance.get_artifact(
                 workspace_key=workspace_id,
@@ -9865,8 +9871,19 @@ def create_app(
         artifact_id: str,
         authorization: Annotated[str | None, Header()] = None,
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
     ) -> ObservatoryObjectResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
+        with suppress(ValueError):
+            context_artifact_id = UUID(artifact_id)
+            artifact = await context_governance.get_artifact(
+                workspace_key=workspace_id,
+                context_artifact_id=context_artifact_id,
+            )
+            if artifact is not None:
+                return ObservatoryObjectResponse(
+                    object=_context_artifact_admin_record(artifact)
+                )
         return ObservatoryObjectResponse(
             object={
                 "schema_version": "skillkernel.observatory.artifact.v1",

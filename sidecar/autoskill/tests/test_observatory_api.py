@@ -1095,6 +1095,12 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
             artifact_id=str(artifact.context_artifact_id),
             workspace_id="dev-01",
         )
+        artifact_alias_detail = await routes[
+            ("/admin/api/v1/artifacts/{artifact_id}", "GET")
+        ].endpoint(
+            artifact_id=str(artifact.context_artifact_id),
+            workspace_id="dev-01",
+        )
         runs = await routes[("/admin/api/v1/context/compile-runs", "GET")].endpoint(
             workspace_id="dev-01",
             limit=10,
@@ -1124,7 +1130,14 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
             trial_id=str(trial.semantic_compression_trial_id),
             workspace_id="dev-01",
         )
-        microscope = await routes[
+        artifact_microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="artifact",
+            object_id=str(artifact.context_artifact_id),
+            workspace_id="dev-01",
+        )
+        compile_run_microscope = await routes[
             ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
         ].endpoint(
             object_type="context_compile_run",
@@ -1134,25 +1147,29 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
         return (
             artifacts,
             artifact_detail,
+            artifact_alias_detail,
             runs,
             run_detail,
             events,
             event_detail,
             trials,
             trial_detail,
-            microscope,
+            artifact_microscope,
+            compile_run_microscope,
         )
 
     (
         artifacts,
         artifact_detail,
+        artifact_alias_detail,
         runs,
         run_detail,
         events,
         event_detail,
         trials,
         trial_detail,
-        microscope,
+        artifact_microscope,
+        compile_run_microscope,
     ) = asyncio.run(read())
 
     artifact_item = artifacts.collection["items"][0]
@@ -1161,6 +1178,10 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
     assert artifact_item["text_hash"] == artifact.text_hash
     assert artifact_item["metadata_keys"] == ["gate", "raw_note"]
     assert artifact_detail.object["effects"]["raw_text_returned"] is False
+    assert artifact_alias_detail.object["object_type"] == "context_artifact"
+    assert artifact_alias_detail.object["object_id"] == str(artifact.context_artifact_id)
+    assert artifact_alias_detail.object["content_policy"]["compiled_text_returned"] is False
+    assert artifact_microscope.object["object_type"] == "context_artifact"
 
     run_item = runs.collection["items"][0]
     assert runs.collection["source"] == "context_governance_store.list_compile_runs"
@@ -1168,7 +1189,7 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
     assert run_item["input_skillir_hash"] == "skillir-hash"
     assert run_detail.object["content_policy"]["skillir_returned"] is False
     assert run_detail.object["effects"]["activation_proof_candidate"] is True
-    assert microscope.object["object_type"] == "context_compile_run"
+    assert compile_run_microscope.object["object_type"] == "context_compile_run"
 
     event_item = events.collection["items"][0]
     assert events.collection["source"] == "context_governance_store.list_budget_events"
@@ -1188,12 +1209,15 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
         [
             artifacts.collection,
             artifact_detail.object,
+            artifact_alias_detail.object,
             runs.collection,
             run_detail.object,
             events.collection,
             event_detail.object,
             trials.collection,
             trial_detail.object,
+            artifact_microscope.object,
+            compile_run_microscope.object,
         ],
         sort_keys=True,
     )
