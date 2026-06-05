@@ -2,6 +2,23 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: Observatory storage/read-model health now has a dedicated
+content-safe storage microscope. `/admin/api/v1/storage` returns a storage
+object with relation counts, table/index/total byte summaries, estimated rows,
+largest relation metadata, read-model freshness, index-health status, explicit
+migration/retention telemetry gaps, and action/invariant links while withholding
+connection details, raw SQL, and database content. Generic `storage`,
+`storage_db`, and `db_health_report` object aliases resolve the same bounded
+storage microscope. This advances core Sections 28.2-28.3 plus Observatory
+Sections 7.6, 7.7, 8.19, 12.6, 13.1, and 21.25 by closing the storage cockpit
+aggregate-to-evidence path without adding storage mutation authority. Validation
+passed with focused storage microscope coverage, full sidecar ruff/pytest/
+compileall gates, compose config, diff-check, and core and Observatory
+acceptance reports (`70` implemented, `86` satisfied, `0` validation errors).
+No compose/Postgres smoke was needed because the slice only shapes existing
+operator storage metrics and validates them through in-memory snapshot/API
+coverage.
+
 2026-06-05 update: Observatory schedule records now have content-safe
 drill-down evidence. `/admin/api/v1/schedules` returns redacted schedule admin
 records with stable IDs, cadence, enabled state, misfire policy, payload key

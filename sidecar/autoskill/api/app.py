@@ -184,6 +184,7 @@ from autoskill.services.observatory import (
     object_microscope,
     playbook_detail,
     search_observatory,
+    storage_microscope,
 )
 from autoskill.services.opportunity import mine_opportunities
 from autoskill.services.profile_qualification import (
@@ -10604,9 +10605,7 @@ def create_app(
             workspace_id=workspace_id,
             window_minutes=window_minutes,
         )
-        return ObservatoryObjectResponse(
-            object=object_microscope(snapshot, object_type="component", object_id="storage_db")
-        )
+        return ObservatoryObjectResponse(object=storage_microscope(snapshot))
 
     @app.get("/admin/api/v1/audit", response_model=ObservatoryCollectionResponse)
     async def observatory_audit(

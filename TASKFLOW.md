@@ -16,6 +16,24 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory storage/read-model health now has a dedicated
+  content-safe storage microscope instead of relying on the generic component
+  microscope. `/admin/api/v1/storage` returns the bounded storage object with
+  relation counts, table/index/total byte summaries, estimated rows, largest
+  relation metadata, read-model freshness, index-health status, explicit
+  migration/retention telemetry gaps, and action/invariant links while
+  withholding connection details, raw SQL, and arbitrary database content; the
+  generic `storage`, `storage_db`, and `db_health_report` object aliases resolve
+  the same microscope. This advances core handoff Sections 28.2-28.3 and
+  Observatory Sections 7.6, 7.7, 8.19, 12.6, 13.1, and 21.25 by closing the
+  storage cockpit aggregate-to-evidence path without adding storage mutation
+  authority. Validation passed with focused storage microscope coverage (`2
+  passed`), `uv run ruff check sidecar`, `uv run pytest` (`383 passed`), `uv
+  run python -m compileall -q sidecar`, `docker compose config --quiet`, `git
+  diff --check`, and core and Observatory acceptance reports (`70`
+  implemented, `86` satisfied, `0` validation errors). No compose/Postgres
+  smoke was needed because this slice only shapes existing operator storage
+  metrics and validates them through in-memory snapshot/API coverage.
 - 2026-06-05: Observatory schedules now have content-safe drill-down evidence
   instead of remaining list-only scheduler cockpit records. The sidecar
   schedule collection shapes schedules through a redacted admin record with

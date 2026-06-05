@@ -57,6 +57,7 @@ from autoskill.services.observatory import (
     build_live_envelope,
     build_observatory_snapshot,
     object_microscope,
+    storage_microscope,
 )
 from fastapi import HTTPException, Response
 from starlette.routing import Mount
@@ -1430,6 +1431,150 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         "rollback-revokes-derived-data",
         "read-models-fresh",
     }.issubset(invariant_ids)
+
+
+def test_observatory_storage_microscope_exposes_bounded_db_summary() -> None:
+    storage_rows = [
+        {
+            "table_name": "embeddings",
+            "table_bytes": 2048,
+            "index_bytes": 1024,
+            "total_bytes": 4096,
+            "estimated_rows": 7,
+        },
+        {
+            "table_name": "skill_versions",
+            "table_bytes": 1024,
+            "index_bytes": 512,
+            "total_bytes": 1536,
+            "estimated_rows": 3,
+        },
+    ]
+    metrics = _operator_metrics_payload(
+        workspace_key="dev-01",
+        window_minutes=10,
+        storage_limit=10,
+        ingest={"events_in_window": 1, "total_events": 1},
+        redaction_counts={},
+        latency={},
+        latency_by_operation_kind={},
+        job_status_counts={},
+        job_kind_counts={},
+        embedding_backlog={},
+        retrieval_decisions={},
+        context={},
+        context_hints={},
+        skill_lifecycle_counts={},
+        skill_version_counts=[],
+        transaction_counts={},
+        evaluation_counts={},
+        curation_counts={},
+        revocation_counts={},
+        freeze={},
+        canary_counts={},
+        drift={},
+        utility={},
+        audit={},
+        storage=storage_rows,
+    )
+    settings = get_settings().model_copy(
+        update={"database_url": "postgresql://autoskill:autoskill-dev@127.0.0.1/autoskill"}
+    )
+    snapshot = build_observatory_snapshot(
+        settings=settings,
+        status={
+            "mode": "dev",
+            "database_configured": True,
+            "ingest_auth_configured": True,
+            "control_auth_configured": True,
+            "runtime_context_broker": {"enabled": True},
+            "jobs": {},
+            "workers": {},
+        },
+        operator_metrics=metrics,
+        worker_health={},
+        audit_chain_valid=True,
+        static_available=True,
+        workspace_id="dev-01",
+        window_minutes=10,
+    )
+
+    storage = storage_microscope(snapshot)
+    generic = object_microscope(snapshot, object_type="storage", object_id="storage")
+
+    assert storage["object_type"] == "storage_db"
+    assert generic["object_type"] == "storage_db"
+    assert storage["diagnostics"]["relation_count"] == 2
+    assert storage["diagnostics"]["relation_totals"] == {
+        "table_bytes": 3072,
+        "index_bytes": 1536,
+        "total_bytes": 5632,
+        "estimated_rows": 10,
+    }
+    assert storage["diagnostics"]["largest_relations"][0]["table_name"] == "embeddings"
+    assert storage["diagnostics"]["index_health"]["indexed_relation_count"] == 2
+    assert storage["diagnostics"]["migration_state"]["version_available"] is False
+    assert storage["diagnostics"]["content_policy"]["connection_details_returned"] is False
+    assert storage["content_policy"]["raw_available"] is False
+    assert {"object_type": "pipeline_invariant", "object_id": "read-models-fresh"} in storage[
+        "provenance"
+    ]["downstream"]
+
+
+def test_observatory_storage_route_uses_storage_microscope() -> None:
+    class StorageMetricsObservabilityStore:
+        async def operator_metrics(self, **_kwargs):
+            return _operator_metrics_payload(
+                workspace_key="dev-01",
+                window_minutes=10,
+                storage_limit=10,
+                ingest={},
+                redaction_counts={},
+                latency={},
+                latency_by_operation_kind={},
+                job_status_counts={},
+                job_kind_counts={},
+                embedding_backlog={},
+                retrieval_decisions={},
+                context={},
+                context_hints={},
+                skill_lifecycle_counts={},
+                skill_version_counts=[],
+                transaction_counts={},
+                evaluation_counts={},
+                curation_counts={},
+                revocation_counts={},
+                freeze={},
+                canary_counts={},
+                drift={},
+                utility={},
+                audit={},
+                storage=[
+                    {
+                        "table_name": "audit_records",
+                        "table_bytes": 11,
+                        "index_bytes": 7,
+                        "total_bytes": 19,
+                        "estimated_rows": 2,
+                    }
+                ],
+            )
+
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        observability_store=StorageMetricsObservabilityStore(),
+    )
+    route = _routes(app)[("/admin/api/v1/storage", "GET")]
+
+    async def run():
+        return await route.endpoint(workspace_id="dev-01", window_minutes=10)
+
+    response = asyncio.run(run())
+
+    assert response.object["object_type"] == "storage_db"
+    assert response.object["diagnostics"]["relation_count"] == 1
+    assert response.object["diagnostics"]["relation_totals"]["total_bytes"] == 19
+    assert response.object["diagnostics"]["content_policy"]["connection_details_returned"] is False
 
 
 def test_observatory_job_object_microscope_resolves_scheduler_read_model() -> None:

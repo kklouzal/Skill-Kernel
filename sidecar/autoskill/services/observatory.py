@@ -679,6 +679,12 @@ def object_microscope(
     object_type: str,
     object_id: str,
 ) -> dict[str, Any]:
+    if object_type in {"storage", "storage_db", "db_health_report"} and object_id in {
+        "storage",
+        "storage_db",
+        "db_health_report",
+    }:
+        return storage_microscope(snapshot)
     for component in snapshot["pipeline"]["stations"]:
         if object_type == "component" and component["component_id"] == object_id:
             return _microscope_payload(
@@ -838,6 +844,105 @@ def object_microscope(
         },
         upstream=[],
         downstream=[],
+    )
+
+
+def storage_microscope(snapshot: dict[str, Any]) -> dict[str, Any]:
+    component = _component_by_id(snapshot, "storage_db")
+    observatory = _component_by_id(snapshot, "observatory_admin")
+    audit = _component_by_id(snapshot, "audit_trace")
+    relations = _storage_relations(component)
+    total_table_bytes = sum(_int(row.get("table_bytes")) for row in relations)
+    total_index_bytes = sum(_int(row.get("index_bytes")) for row in relations)
+    total_bytes = sum(_int(row.get("total_bytes")) for row in relations)
+    estimated_rows = sum(_int(row.get("estimated_rows")) for row in relations)
+    largest_relations = sorted(
+        relations,
+        key=lambda row: (_int(row.get("total_bytes")), str(row.get("table_name") or "")),
+        reverse=True,
+    )[:10]
+    data_quality = _dict(component.get("data_quality"))
+    reason_codes = sorted(
+        {
+            *[str(code) for code in component.get("reason_codes", [])],
+            *[
+                str(code)
+                for code in observatory.get("reason_codes", [])
+                if str(code) in {"telemetry-stale", "missing-required-signal"}
+            ],
+        }
+    )
+    diagnostics = {
+        "supporting_component": "storage_db",
+        "health": component.get("health", "unknown"),
+        "reason_codes": reason_codes,
+        "data_quality": data_quality,
+        "read_model": {
+            "freshness_seconds": data_quality.get("read_model_age_seconds"),
+            "coverage_state": data_quality.get("coverage_state"),
+            "missing_signals": data_quality.get("missing_signals", []),
+            "missing_signal_keys": data_quality.get("missing_signal_keys", []),
+        },
+        "migration_state": {
+            "version_available": False,
+            "state": "not_reported_by_operator_metrics",
+            "reason": "static migrations are deterministic; runtime migration version telemetry is not yet persisted",
+        },
+        "relation_count": len(relations),
+        "relation_totals": {
+            "table_bytes": total_table_bytes,
+            "index_bytes": total_index_bytes,
+            "total_bytes": total_bytes,
+            "estimated_rows": estimated_rows,
+        },
+        "index_health": {
+            "index_bytes": total_index_bytes,
+            "indexed_relation_count": sum(
+                1 for row in relations if _int(row.get("index_bytes")) > 0
+            ),
+            "pgvector_status": "covered_by_storage_relation_metrics"
+            if relations
+            else "not_reported",
+        },
+        "retention": {
+            "backlog_available": False,
+            "state": "not_reported_by_operator_metrics",
+        },
+        "slow_queries": {
+            "p50_latency_ms": component.get("p50_latency_ms"),
+            "p95_latency_ms": component.get("p95_latency_ms"),
+            "source": "component latency rollup",
+        },
+        "largest_relations": largest_relations,
+        "content_policy": {
+            "raw_available": False,
+            "raw_reason": "raw-content-disabled",
+            "relation_names_only": True,
+            "connection_details_returned": False,
+        },
+    }
+    return _microscope_payload(
+        object_type="storage_db",
+        object_id="storage_db",
+        title="Postgres + pgvector storage",
+        summary=(
+            f"{component.get('health', 'unknown')} storage/read-model signal; "
+            f"relations={len(relations)}; total_bytes={total_bytes}; "
+            f"read_model_age_seconds={data_quality.get('read_model_age_seconds')}"
+        ),
+        diagnostics=diagnostics,
+        upstream=[
+            {"object_type": "subsystem", "object_id": "control_storage"},
+            {"object_type": "component", "object_id": "scheduler_jobs"},
+            {"object_type": "component", "object_id": "model_embedding"},
+        ],
+        downstream=[
+            {"object_type": "component", "object_id": observatory["component_id"]},
+            {"object_type": "component", "object_id": audit["component_id"]},
+            {"object_type": "pipeline_invariant", "object_id": "read-models-fresh"},
+            {"object_type": "admin_action", "object_id": "storage_health_check"},
+            {"object_type": "admin_action", "object_id": "storage_retention_dry_run"},
+        ],
     )
 
 
@@ -2350,6 +2455,58 @@ def _downstream_edges(snapshot: dict[str, Any], component_id: str) -> list[dict[
         for edge in snapshot["pipeline"]["edges"]
         if edge["from"] == component_id
     ]
+
+
+def _component_by_id(snapshot: dict[str, Any], component_id: str) -> dict[str, Any]:
+    return next(
+        (
+            component
+            for component in snapshot["pipeline"]["stations"]
+            if component["component_id"] == component_id
+        ),
+        {
+            "component_id": component_id,
+            "health": "unknown",
+            "reason_codes": ["read-model-missing"],
+            "data_quality": {},
+            "records": [],
+        },
+    )
+
+
+def _storage_relations(component: dict[str, Any]) -> list[dict[str, Any]]:
+    relations: list[dict[str, Any]] = []
+    for record in component.get("records", []):
+        if not isinstance(record, dict) or record.get("record_type") != "storage_relation":
+            continue
+        summary = _dict(record.get("summary"))
+        if not summary:
+            continue
+        relations.append(
+            {
+                "table_name": str(summary.get("table_name") or "unknown"),
+                "table_bytes": _int(summary.get("table_bytes")),
+                "index_bytes": _int(summary.get("index_bytes")),
+                "total_bytes": _int(summary.get("total_bytes")),
+                "estimated_rows": _int(summary.get("estimated_rows")),
+            }
+        )
+    return relations
+
+
+def _int(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
 
 
 def _dedupe_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
