@@ -16,6 +16,21 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory guarded action idempotency now returns existing
+  content-safe action receipts instead of creating duplicate audit/live-event
+  side effects. `/admin/api/v1/actions` fingerprints the redacted request
+  shape, checks `admin_action_audit` by actor/action/target/idempotency key
+  before appending new records, reports `idempotency-replay` and
+  `idempotency-collision` metadata when a retried payload diverges, and keeps
+  confirmation text/raw content out of receipts. This advances core handoff
+  Sections 5.2-5.3 and 5.12 plus Observatory Sections 4.3, 8.22, 12.6,
+  16.3, and 16.4. Validation passed with focused Observatory action tests
+  (`5 passed`), focused ruff checks, `uv run ruff check sidecar`,
+  `uv run pytest` (`372 passed`), `uv run python -m compileall -q sidecar`,
+  `docker compose config --quiet`, `git diff --check`, the Observatory
+  acceptance report (`ready=true`, `86` satisfied, `0` validation errors), and
+  a compose/Postgres smoke proving async action-audit idempotency lookup/upsert
+  replays the same action id and cleans the smoke row.
 - 2026-06-05: Deployment readiness and broker-policy review now distinguish
   mere production replay presence from operator-reviewed/source-linked replay
   evidence. `/v1/deployment/readiness` samples the production replay corpus,

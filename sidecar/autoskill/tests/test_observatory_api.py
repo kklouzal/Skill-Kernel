@@ -2448,6 +2448,56 @@ def test_observatory_high_impact_action_requires_confirmation() -> None:
     assert audit_store.records[0].details["confirmation_required"] is True
 
 
+def test_observatory_action_idempotency_replays_existing_audit_without_side_effects() -> None:
+    audit_store = MemoryAuditStore()
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(audit_store=audit_store, observatory_admin_store=observatory_admin)
+    route = _routes(app)[("/admin/api/v1/actions", "POST")]
+
+    async def run():
+        first = await route.endpoint(
+            http_request=None,
+            request=ObservatoryActionRequest(
+                workspace_id="dev-01",
+                action="verify_audit_chain",
+                idempotency_key="obs-idempotent-1",
+                reason="operator requested audit proof",
+                metadata={"ticket": "INC-1"},
+            ),
+        )
+        replay = await route.endpoint(
+            http_request=None,
+            request=ObservatoryActionRequest(
+                workspace_id="dev-01",
+                action="verify_audit_chain",
+                idempotency_key="obs-idempotent-1",
+                reason="operator retried with different local note",
+                metadata={"ticket": "INC-2"},
+            ),
+        )
+        return first, replay
+
+    first, replay = asyncio.run(run())
+
+    assert first.receipt["idempotency"] == {"replay": False, "collision": False}
+    assert replay.receipt["accepted"] is True
+    assert replay.receipt["idempotency"] == {"replay": True, "collision": True}
+    assert replay.receipt["policy"]["reason_codes"] == [
+        "idempotency-replay",
+        "idempotency-collision",
+    ]
+    assert replay.receipt["action_audit"]["action_id"] == (
+        first.receipt["action_audit"]["action_id"]
+    )
+    assert replay.receipt["action_audit"]["request_payload_redacted"][
+        "request_fingerprint"
+    ].startswith("sha256:")
+    assert replay.receipt["live_event"] is None
+    assert len(observatory_admin.actions) == 1
+    assert len(observatory_admin.live_events) == 1
+    assert len(audit_store.records) == 1
+
+
 def test_observatory_raw_reveal_action_fails_closed_by_default() -> None:
     observatory_admin = NullObservatoryAdminStore()
     app = create_app(audit_store=MemoryAuditStore(), observatory_admin_store=observatory_admin)

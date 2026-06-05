@@ -516,6 +516,17 @@ class ObservatoryAdminStore(Protocol):
     ) -> AdminActionAuditRecord:
         """Persist a content-safe Observatory operator action audit row."""
 
+    async def get_action_audit_by_idempotency(
+        self,
+        *,
+        actor_id: str,
+        action_kind: str,
+        target_type: str,
+        target_id: str,
+        idempotency_key: str,
+    ) -> AdminActionAuditRecord | None:
+        """Fetch an existing content-safe action audit by idempotency identity."""
+
     async def list_action_audits(
         self,
         *,
@@ -742,6 +753,26 @@ class NullObservatoryAdminStore:
         )
         self.actions.append(record)
         return record
+
+    async def get_action_audit_by_idempotency(
+        self,
+        *,
+        actor_id: str,
+        action_kind: str,
+        target_type: str,
+        target_id: str,
+        idempotency_key: str,
+    ) -> AdminActionAuditRecord | None:
+        for record in self.actions:
+            if (
+                record.actor_id == actor_id
+                and record.action_kind == action_kind
+                and record.target_type == target_type
+                and record.target_id == target_id
+                and record.idempotency_key == idempotency_key
+            ):
+                return record
+        return None
 
     async def list_action_audits(
         self,
@@ -1120,6 +1151,35 @@ class AsyncpgObservatoryAdminStore(AsyncpgPoolOwner):
                 linked_audit_id,
             )
         return AdminActionAuditRecord.from_row(row)
+
+    async def get_action_audit_by_idempotency(
+        self,
+        *,
+        actor_id: str,
+        action_kind: str,
+        target_type: str,
+        target_id: str,
+        idempotency_key: str,
+    ) -> AdminActionAuditRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT *
+                FROM autoskill.admin_action_audit
+                WHERE actor_id = $1
+                  AND action_kind = $2
+                  AND target_type = $3
+                  AND target_id = $4
+                  AND idempotency_key = $5
+                """,
+                actor_id,
+                action_kind,
+                target_type,
+                target_id,
+                idempotency_key,
+            )
+        return AdminActionAuditRecord.from_row(row) if row else None
 
     async def list_action_audits(
         self,

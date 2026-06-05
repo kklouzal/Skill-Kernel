@@ -925,12 +925,18 @@ def action_receipt(
     action_audit: dict[str, Any] | None = None,
     live_event: dict[str, Any] | None = None,
     raw_reveal_grant: dict[str, Any] | None = None,
+    idempotency_replay: bool = False,
+    idempotency_collision: bool = False,
 ) -> dict[str, Any]:
     return {
         "action": action,
         "accepted": accepted,
         "role": role,
         "idempotency_key": idempotency_key,
+        "idempotency": {
+            "replay": idempotency_replay,
+            "collision": idempotency_collision,
+        },
         "policy": {
             "allowed": accepted,
             "reason_codes": reason_codes,

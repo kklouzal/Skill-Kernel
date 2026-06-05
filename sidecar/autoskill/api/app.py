@@ -2080,6 +2080,26 @@ def _source_identity(request: Request | None) -> dict[str, object]:
     return {"ip": client_ip, "proxy": proxy}
 
 
+def _observatory_action_request_fingerprint(
+    *,
+    request: ObservatoryActionRequest,
+    target_type: str,
+    target_id: str,
+    confirmation_hash: str | None,
+) -> str:
+    payload = {
+        "workspace_id": request.workspace_id,
+        "action": request.action,
+        "target_type": target_type,
+        "target_id": target_id,
+        "dry_run": request.dry_run,
+        "metadata_keys": sorted(str(key) for key in request.metadata),
+        "confirmation_hash": confirmation_hash,
+        "reason_hash": sha256_text(request.reason or ""),
+    }
+    return f"sha256:{sha256_text(json.dumps(payload, sort_keys=True))}"
+
+
 def _encode_admin_cursor(item: dict[str, Any]) -> str | None:
     object_id = _admin_cursor_object_id(item)
     if not object_id:
@@ -6228,6 +6248,11 @@ def create_app(
                 accepted = False
                 reason_codes = ["reveal-reason-required"]
         confirmation_required = request.action in high_impact_actions
+        confirmation_hash = (
+            f"sha256:{sha256_text(request.confirmation)}"
+            if request.confirmation
+            else None
+        )
         if (
             accepted
             and confirmation_required
@@ -6241,6 +6266,42 @@ def create_app(
             request.action,
             request.target,
         )
+        request_fingerprint = _observatory_action_request_fingerprint(
+            request=request,
+            target_type=target_type,
+            target_id=target_id,
+            confirmation_hash=confirmation_hash,
+        )
+        existing_action = await observatory_admin.get_action_audit_by_idempotency(
+            actor_id=str(principal["subject"]),
+            action_kind=request.action,
+            target_type=target_type,
+            target_id=target_id,
+            idempotency_key=request.idempotency_key,
+        )
+        if existing_action is not None:
+            existing_payload = existing_action.request_payload_redacted
+            existing_fingerprint = existing_payload.get("request_fingerprint")
+            idempotency_collision = (
+                isinstance(existing_fingerprint, str)
+                and existing_fingerprint != request_fingerprint
+            )
+            replay_reason_codes = ["idempotency-replay"]
+            if idempotency_collision:
+                replay_reason_codes.append("idempotency-collision")
+            return ObservatoryActionResponse(
+                receipt=action_receipt(
+                    action=request.action,
+                    role=str(principal["role"]),
+                    idempotency_key=request.idempotency_key,
+                    accepted=existing_action.result in {"accepted", "completed"},
+                    reason_codes=replay_reason_codes,
+                    action_audit=existing_action.to_json(),
+                    idempotency_replay=True,
+                    idempotency_collision=idempotency_collision,
+                ),
+                meta=response_meta,
+            )
         if accepted and request.action == "reveal_raw_content" and not request.dry_run:
             reveal_token = f"skor_{secrets.token_urlsafe(32)}"
             expires_at = datetime.now(UTC) + timedelta(minutes=5)
@@ -6253,11 +6314,6 @@ def create_app(
                 "target_id": target_id,
                 "raw_content_included": False,
             }
-        confirmation_hash = (
-            f"sha256:{sha256_text(request.confirmation)}"
-            if request.confirmation
-            else None
-        )
         action_request_payload = {
             "schema_version": "skillkernel.observatory.admin-action-request.v1",
             "request_id": response_meta["request_id"],
@@ -6267,6 +6323,7 @@ def create_app(
             "metadata_keys": sorted(request.metadata.keys()),
             "confirmation_present": request.confirmation is not None,
             "confirmation_hash": confirmation_hash,
+            "request_fingerprint": request_fingerprint,
             "source": _source_identity(http_request),
         }
         if reveal_grant is not None:
@@ -6341,6 +6398,8 @@ def create_app(
                 action_audit=action_audit.to_json(),
                 live_event=live_event.to_json(),
                 raw_reveal_grant=reveal_grant,
+                idempotency_replay=False,
+                idempotency_collision=False,
             ),
             meta=response_meta,
         )
