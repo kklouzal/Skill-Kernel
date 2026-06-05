@@ -3,6 +3,24 @@
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
 2026-06-05 update: Observatory object microscopes now include a dedicated
+content-safe `action_attribution_check` detail path backed by the attribution
+store. `/admin/api/v1/objects/action_attribution_check/{id}` resolves the
+deterministic operator-action boundary check behind admin action receipts,
+including verdict, risk tier, hashed user intent and idempotency identity,
+reason codes, target refs, bounded contributing object refs, broker-policy
+refs, and source-presence flags. Raw operator reason text, confirmation text,
+metadata values, raw IP/proxy values, and arbitrary metric payloads remain
+unavailable. This advances core Sections 1.2, 27, and 28.2 plus Observatory
+Sections 7.6, 7.7, 8.20, 8.22, 12.6, 16.1, and 16.3 by closing the drill-down
+gap from administrative actions to their deterministic attribution checks.
+Validation passed with focused action-attribution microscope coverage, broader
+Observatory action/attribution tests, full sidecar ruff/pytest/compileall gates,
+compose config, core and Observatory acceptance reports, diff-check, and an
+isolated compose/Postgres smoke that migrated a fresh database and round-tripped
+an action-attribution check lookup with workspace filtering through the asyncpg
+store.
+
+2026-06-05 update: Observatory object microscopes now include a dedicated
 content-safe `llm_invocation` detail path backed by the LLM invocation store.
 `/admin/api/v1/objects/llm_invocation/{id}` resolves purpose, model/profile
 route identity, thinking fallback state, token estimates, status, trace/span

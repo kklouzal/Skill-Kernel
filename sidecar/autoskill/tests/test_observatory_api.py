@@ -2993,9 +2993,17 @@ def test_observatory_action_audit_read_model_exposes_receipts_without_raw_conten
             object_type="admin_action",
             object_id=first.receipt["action_audit"]["action_id"],
         )
-        return first, collection, detail, microscope
+        attribution_microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="action_attribution_check",
+            object_id=first.receipt["action_attribution_check"][
+                "action_attribution_check_id"
+            ],
+        )
+        return first, collection, detail, microscope, attribution_microscope
 
-    first, collection, detail, microscope = asyncio.run(run())
+    first, collection, detail, microscope, attribution_microscope = asyncio.run(run())
 
     assert collection.collection["source"] == "observatory_admin_store.list_action_audits"
     assert collection.collection["object_type"] == "admin_action"
@@ -3024,6 +3032,23 @@ def test_observatory_action_audit_read_model_exposes_receipts_without_raw_conten
     assert "INC-1" not in str(detail.object["request_payload_redacted"])
     assert microscope.object["object_type"] == "admin_action"
     assert microscope.object["audit"]["chain_visible"] is True
+    attribution_detail = attribution_microscope.object
+    assert attribution_detail["object_type"] == "action_attribution_check"
+    assert attribution_detail["verdict"] == "allowed"
+    assert attribution_detail["risk_tier"] == "low"
+    assert attribution_detail["metrics"]["request_id"] == first.meta["request_id"]
+    assert attribution_detail["metrics"]["idempotency_key_hash"] == sha256_text(
+        "obs-audit-list-1"
+    )
+    assert attribution_detail["metrics"]["source"] == {
+        "ip_present": False,
+        "proxy_present": False,
+    }
+    assert attribution_detail["effects"]["target_type"] == "audit"
+    assert attribution_detail["effects"]["raw_content_included"] is False
+    assert attribution_detail["diagnostics"]["reason_codes"] == []
+    assert "operator requested audit proof" not in str(attribution_detail)
+    assert "INC-1" not in str(attribution_detail)
 
 
 def test_observatory_high_impact_action_requires_confirmation() -> None:

@@ -17,6 +17,29 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 ## Current State
 
 - 2026-06-05: Observatory object microscopes now resolve
+  `action_attribution_check` links from admin action receipts to content-safe
+  deterministic boundary-check detail instead of falling through to a generic
+  snapshot object. The attribution store exposes a workspace-filtered lookup by
+  action-attribution check ID; the admin object route returns verdict, risk
+  tier, hashed user intent/idempotency identity, bounded contributing
+  skill/memory/evidence and broker-policy refs, reason codes, target refs, and
+  source-presence flags while withholding raw operator reason text,
+  confirmation text, metadata values, raw IP/proxy values, and arbitrary metric
+  payloads. This advances core handoff Sections 1.2, 27, and 28.2 plus
+  Observatory Sections 7.6, 7.7, 8.20, 8.22, 12.6, 16.1, and 16.3 by making
+  administrative action attribution checks traversable through the sidecar
+  object microscope without adding UI-local authority. Validation passed with
+  focused action-attribution microscope coverage (`1 passed`), broader
+  Observatory action/attribution coverage (`9 passed`), focused ruff checks,
+  `uv run ruff check sidecar`, `uv run pytest` (`376 passed`), `uv run python
+  -m compileall -q sidecar`, `docker compose config --quiet`, `git diff
+  --check`, core and Observatory acceptance reports (`ready=true`, `70`
+  implemented and `86` satisfied, `0` validation errors), and an isolated
+  compose/Postgres smoke on port `59489` that migrated a fresh database, wrote
+  one action-attribution check through `AsyncpgAttributionStore`, fetched it by
+  workspace/check ID, verified workspace isolation, and removed the temporary
+  compose project/volume.
+- 2026-06-05: Observatory object microscopes now resolve
   `llm_invocation` links to content-safe model-call audit detail instead of
   falling through to a generic snapshot object. The LLM invocation store exposes
   a bounded lookup by workspace and invocation ID; the admin object route returns

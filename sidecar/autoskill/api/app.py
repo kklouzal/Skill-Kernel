@@ -6325,6 +6325,145 @@ def create_app(
             },
         }
 
+    def _action_attribution_check_safe_metrics(
+        metrics: dict[str, Any],
+    ) -> dict[str, Any]:
+        safe = {
+            key: metrics.get(key)
+            for key in (
+                "schema_version",
+                "request_id",
+                "workspace_id",
+                "action",
+                "target_type",
+                "target_id",
+                "dry_run",
+                "accepted",
+                "reason_codes",
+                "confirmation_required",
+                "confirmation_hash_present",
+                "idempotency_key_hash",
+                "raw_content_included",
+                "revoked",
+                "revoked_at",
+                "revocation_reason",
+            )
+            if key in metrics
+        }
+        source = metrics.get("source")
+        if isinstance(source, dict):
+            safe["source"] = {
+                "ip_present": bool(source.get("ip")),
+                "proxy_present": bool(source.get("proxy")),
+            }
+        return safe
+
+    def _action_attribution_check_microscope(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        metrics = payload.get("metrics")
+        if not isinstance(metrics, dict):
+            metrics = {}
+        safe_metrics = _action_attribution_check_safe_metrics(metrics)
+        upstream = [
+            {
+                "object_type": "skill",
+                "object_id": skill_id,
+                "relationship": "contributing_skill",
+            }
+            for skill_id in payload["contributing_skill_ids"]
+        ]
+        upstream.extend(
+            {
+                "object_type": "memory",
+                "object_id": memory_id,
+                "relationship": "contributing_memory",
+            }
+            for memory_id in payload["contributing_memory_ids"]
+        )
+        upstream.extend(
+            {
+                "object_type": "evidence",
+                "object_id": evidence_id,
+                "relationship": "contributing_evidence",
+            }
+            for evidence_id in payload["contributing_evidence_ids"]
+        )
+        if payload.get("broker_policy_version_id"):
+            upstream.append(
+                {
+                    "object_type": "broker_policy_version",
+                    "object_id": payload["broker_policy_version_id"],
+                    "relationship": "policy_version",
+                }
+            )
+        target_type = safe_metrics.get("target_type")
+        target_id = safe_metrics.get("target_id")
+        downstream = []
+        if isinstance(target_type, str) and isinstance(target_id, str):
+            downstream.append({"object_type": target_type, "object_id": target_id})
+        return {
+            "object_type": "action_attribution_check",
+            "object_id": payload["action_attribution_check_id"],
+            "workspace_id": payload["workspace_id"],
+            "workspace_key": payload["workspace_key"],
+            "title": f"Action attribution check {payload['action_kind']}",
+            "summary": (
+                "Content-safe deterministic boundary check for an Observatory "
+                "operator action."
+            ),
+            "action_kind": payload["action_kind"],
+            "risk_tier": payload["risk_tier"],
+            "verdict": payload["verdict"],
+            "counterfactual_kind": payload["counterfactual_kind"],
+            "user_intent_hash": payload["user_intent_hash"],
+            "session_id": payload["session_id"],
+            "turn_id": payload["turn_id"],
+            "tool_call_id": payload["tool_call_id"],
+            "broker_policy_version_id": payload["broker_policy_version_id"],
+            "created_at": payload["created_at"],
+            "metrics": safe_metrics,
+            "content_policy": {
+                "raw_available": False,
+                "redaction_level": "content_safe_boundary_check",
+            },
+            "timeline": [
+                {
+                    "at": payload["created_at"],
+                    "event": "action_attribution_checked",
+                    "action_kind": payload["action_kind"],
+                    "risk_tier": payload["risk_tier"],
+                    "verdict": payload["verdict"],
+                }
+            ],
+            "provenance": {"upstream": upstream, "downstream": downstream},
+            "effects": {
+                "target_type": target_type,
+                "target_id": target_id,
+                "accepted": safe_metrics.get("accepted"),
+                "dry_run": safe_metrics.get("dry_run"),
+                "raw_content_included": False,
+            },
+            "diagnostics": {
+                "request_id": safe_metrics.get("request_id"),
+                "reason_codes": safe_metrics.get("reason_codes", []),
+                "confirmation_required": safe_metrics.get("confirmation_required"),
+                "confirmation_hash_present": safe_metrics.get(
+                    "confirmation_hash_present"
+                ),
+                "source": safe_metrics.get("source", {}),
+                "metrics_keys": sorted(safe_metrics),
+            },
+            "audit": {
+                "links": [
+                    {
+                        "object_type": "action_attribution_check",
+                        "object_id": payload["action_attribution_check_id"],
+                    }
+                ],
+                "chain_visible": False,
+            },
+        }
+
     def _admin_action_gateway_summary(
         records: list[Any],
         *,
@@ -8313,6 +8452,20 @@ def create_app(
             action = await observatory_admin.get_action_audit(action_id=action_id)
             if action is not None:
                 return ObservatoryObjectResponse(object=_admin_action_microscope(action))
+        if object_type in {
+            "action_attribution_check",
+            "action-attribution-check",
+            "operator_action_attribution",
+        }:
+            check_id = _uuid_or_404(object_id, "action attribution check")
+            check = await attribution.get_action_check(
+                workspace_key=workspace_id,
+                action_attribution_check_id=check_id,
+            )
+            if check is not None:
+                return ObservatoryObjectResponse(
+                    object=_action_attribution_check_microscope(check)
+                )
         if object_type in {"evidence_fidelity_status", "evidence_fidelity"}:
             fidelity = await observatory_admin.get_evidence_fidelity_status(
                 object_id=object_id

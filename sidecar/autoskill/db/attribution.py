@@ -244,6 +244,14 @@ class AttributionStore(Protocol):
     ) -> ActionAttributionCheckRecord:
         """Record a deterministic risky-action attribution check."""
 
+    async def get_action_check(
+        self,
+        *,
+        workspace_key: str | None = None,
+        action_attribution_check_id: UUID,
+    ) -> ActionAttributionCheckRecord | None:
+        """Return one deterministic risky-action attribution check."""
+
 
 def normalize_attribution_outcome(outcome: str | None) -> str | None:
     """Return a section-27 canonical outcome slug for attribution events."""
@@ -351,6 +359,19 @@ class NullAttributionStore:
         )
         self.checks.append(record)
         return record
+
+    async def get_action_check(
+        self,
+        *,
+        workspace_key: str | None = None,
+        action_attribution_check_id: UUID,
+    ) -> ActionAttributionCheckRecord | None:
+        for record in self.checks:
+            if record.action_attribution_check_id == action_attribution_check_id and (
+                workspace_key is None or record.workspace_key == workspace_key
+            ):
+                return record
+        return None
 
 
 class AsyncpgAttributionStore(AsyncpgPoolOwner):
@@ -464,6 +485,29 @@ class AsyncpgAttributionStore(AsyncpgPoolOwner):
             return ActionAttributionCheckRecord.from_row(
                 {**dict(row), "workspace_key": workspace_key}
             )
+
+    async def get_action_check(
+        self,
+        *,
+        workspace_key: str | None = None,
+        action_attribution_check_id: UUID,
+    ) -> ActionAttributionCheckRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT ac.*, w.external_key AS workspace_key
+                FROM autoskill.action_attribution_checks ac
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE ac.action_attribution_check_id = $1
+                  AND ($2::text IS NULL OR w.external_key = $2)
+                """,
+                action_attribution_check_id,
+                workspace_key,
+            )
+            if row is None:
+                return None
+            return ActionAttributionCheckRecord.from_row(row)
 
     async def invalidate_objects(
         self,
