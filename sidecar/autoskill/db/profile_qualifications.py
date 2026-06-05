@@ -186,6 +186,24 @@ class ProfileQualificationStore(Protocol):
     ) -> EmbeddingProfileQualificationRunRecord:
         """Persist one embedding qualification run and update profile status."""
 
+    async def list_model_qualification_runs(
+        self,
+        *,
+        workspace_key: str,
+        profile_key: str,
+        limit: int = 25,
+    ) -> list[ModelProfileQualificationRunRecord]:
+        """List recent text model qualification runs for a profile."""
+
+    async def list_embedding_qualification_runs(
+        self,
+        *,
+        workspace_key: str,
+        profile_key: str,
+        limit: int = 25,
+    ) -> list[EmbeddingProfileQualificationRunRecord]:
+        """List recent embedding qualification runs for a profile."""
+
 
 class NullProfileQualificationStore:
     def __init__(self) -> None:
@@ -261,6 +279,34 @@ class NullProfileQualificationStore:
         )
         self.embedding_runs.append(record)
         return record
+
+    async def list_model_qualification_runs(
+        self,
+        *,
+        workspace_key: str,
+        profile_key: str,
+        limit: int = 25,
+    ) -> list[ModelProfileQualificationRunRecord]:
+        records = [
+            record
+            for record in reversed(self.model_runs)
+            if record.workspace_key == workspace_key and record.profile_key == profile_key
+        ]
+        return records[: max(1, min(limit, 100))]
+
+    async def list_embedding_qualification_runs(
+        self,
+        *,
+        workspace_key: str,
+        profile_key: str,
+        limit: int = 25,
+    ) -> list[EmbeddingProfileQualificationRunRecord]:
+        records = [
+            record
+            for record in reversed(self.embedding_runs)
+            if record.workspace_key == workspace_key and record.profile_key == profile_key
+        ]
+        return records[: max(1, min(limit, 100))]
 
 
 class AsyncpgProfileQualificationStore(AsyncpgPoolOwner):
@@ -426,6 +472,58 @@ class AsyncpgProfileQualificationStore(AsyncpgPoolOwner):
                 ),
             )
         return EmbeddingProfileQualificationRunRecord.from_row(row)
+
+    async def list_model_qualification_runs(
+        self,
+        *,
+        workspace_key: str,
+        profile_key: str,
+        limit: int = 25,
+    ) -> list[ModelProfileQualificationRunRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            rows = await conn.fetch(
+                """
+                SELECT *, $3::text AS workspace_key
+                FROM autoskill.model_profile_qualification_runs
+                WHERE workspace_id = $1
+                  AND profile_key = $2
+                ORDER BY created_at DESC
+                LIMIT $4
+                """,
+                workspace_id,
+                profile_key,
+                workspace_key,
+                max(1, min(limit, 100)),
+            )
+        return [ModelProfileQualificationRunRecord.from_row(row) for row in rows]
+
+    async def list_embedding_qualification_runs(
+        self,
+        *,
+        workspace_key: str,
+        profile_key: str,
+        limit: int = 25,
+    ) -> list[EmbeddingProfileQualificationRunRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            rows = await conn.fetch(
+                """
+                SELECT *, $3::text AS workspace_key
+                FROM autoskill.embedding_profile_qualification_runs
+                WHERE workspace_id = $1
+                  AND profile_key = $2
+                ORDER BY created_at DESC
+                LIMIT $4
+                """,
+                workspace_id,
+                profile_key,
+                workspace_key,
+                max(1, min(limit, 100)),
+            )
+        return [EmbeddingProfileQualificationRunRecord.from_row(row) for row in rows]
 
 
 def _json(value: object) -> str:

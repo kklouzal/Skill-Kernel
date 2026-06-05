@@ -46,6 +46,8 @@ from autoskill.db.observatory_admin import (
     AdminSemanticAdjudicationStatusRecord,
     NullObservatoryAdminStore,
 )
+from autoskill.db.profile_qualifications import NullProfileQualificationStore
+from autoskill.db.profiles import ModelProfileRecord, NullProfileStore
 from autoskill.db.retrieval import RetrievalLog
 from autoskill.db.topology import NullTopologyStore
 from autoskill.services.observatory import (
@@ -154,6 +156,69 @@ class MemoryRetrievalLogStore:
             if log.retrieval_log_id == retrieval_log_id:
                 return log
         return None
+
+
+class MemoryObservatoryProfileStore(NullProfileStore):
+    def __init__(
+        self,
+        *,
+        model_profile: ModelProfileRecord,
+        embedding_profile: ModelProfileRecord,
+    ) -> None:
+        self.model_profile = model_profile
+        self.embedding_profile = embedding_profile
+
+    async def get_model_profile(
+        self,
+        *,
+        workspace_key: str,
+        profile_key: str,
+    ) -> ModelProfileRecord | None:
+        if (
+            workspace_key == self.model_profile.workspace_key
+            and profile_key == self.model_profile.profile_key
+        ):
+            return self.model_profile
+        return None
+
+    async def list_model_profiles(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ModelProfileRecord]:
+        if workspace_key != self.model_profile.workspace_key:
+            return []
+        if status is not None and status != self.model_profile.status:
+            return []
+        return [self.model_profile][:limit]
+
+    async def get_embedding_profile(
+        self,
+        *,
+        workspace_key: str,
+        profile_key: str,
+    ) -> ModelProfileRecord | None:
+        if (
+            workspace_key == self.embedding_profile.workspace_key
+            and profile_key == self.embedding_profile.profile_key
+        ):
+            return self.embedding_profile
+        return None
+
+    async def list_embedding_profiles(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ModelProfileRecord]:
+        if workspace_key != self.embedding_profile.workspace_key:
+            return []
+        if status is not None and status != self.embedding_profile.status:
+            return []
+        return [self.embedding_profile][:limit]
 
 
 class MemoryTraceStore:
@@ -1226,7 +1291,9 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/context/compression-trials", "GET"),
         ("/admin/api/v1/context/compression-trials/{trial_id}", "GET"),
         ("/admin/api/v1/model-profile", "GET"),
+        ("/admin/api/v1/model-profile/{profile_key}", "GET"),
         ("/admin/api/v1/embedding-profile", "GET"),
+        ("/admin/api/v1/embedding-profile/{profile_key}", "GET"),
         ("/admin/api/v1/storage", "GET"),
         ("/admin/api/v1/audit", "GET"),
         ("/admin/api/v1/issues/{issue_id}", "GET"),
@@ -1282,6 +1349,147 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         "rollback-revokes-derived-data",
         "read-models-fresh",
     }.issubset(invariant_ids)
+
+
+def test_observatory_profile_microscopes_show_redacted_qualification_state() -> None:
+    now = datetime.now(UTC)
+    model_profile_id = uuid4()
+    embedding_profile_id = uuid4()
+    model_profile = ModelProfileRecord(
+        profile_id=model_profile_id,
+        workspace_id=None,
+        workspace_key="dev-01",
+        profile_key="semantic-main",
+        provider="openai_compatible",
+        model="reasoning-model",
+        route_kind="openai_compatible",
+        endpoint_ref="https://provider.local/v1",
+        timeout_seconds=45.0,
+        thinking_level="medium",
+        thinking_fallback_policy="downgrade",
+        status="qualified",
+        qualification={},
+        kind="model",
+        embedding_dim=None,
+        created_at=now,
+        updated_at=now,
+        endpoint_kind="responses",
+    )
+    embedding_profile = ModelProfileRecord(
+        profile_id=embedding_profile_id,
+        workspace_id=None,
+        workspace_key="dev-01",
+        profile_key="retrieval-main",
+        provider="hash",
+        model="hash-embedding",
+        route_kind="hash",
+        endpoint_ref="https://embedding.local/v1",
+        timeout_seconds=10.0,
+        thinking_level="off",
+        thinking_fallback_policy="omit",
+        status="active",
+        qualification={},
+        kind="embedding",
+        embedding_dim=16,
+        created_at=now,
+        updated_at=now,
+        endpoint_kind="embeddings",
+    )
+    qualifications = NullProfileQualificationStore()
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        profile_store=MemoryObservatoryProfileStore(
+            model_profile=model_profile,
+            embedding_profile=embedding_profile,
+        ),
+        profile_qualification_store=qualifications,
+    )
+    routes = _routes(app)
+
+    async def run():
+        await qualifications.record_model_qualification_run(
+            workspace_key="dev-01",
+            model_profile_id=model_profile_id,
+            profile_key="semantic-main",
+            route_kind="openai_compatible",
+            provider="openai_compatible",
+            model="reasoning-model",
+            thinking_level="medium",
+            probe_set_version="probe.v1",
+            verdict="qualified_autonomous",
+            probe_results={
+                "checks": {
+                    "json_adherence": True,
+                    "evidence_id_preserved": True,
+                },
+                "output_token_estimate": 42,
+                "invocation_id": str(uuid4()),
+                "error": "provider leaked sk-live-secret in a raw error",
+            },
+        )
+        await qualifications.record_embedding_qualification_run(
+            workspace_key="dev-01",
+            embedding_profile_id=embedding_profile_id,
+            profile_key="retrieval-main",
+            route_kind="hash",
+            provider="hash",
+            model="hash-embedding",
+            embedding_dim=16,
+            distance_metric="cosine",
+            probe_set_version="embedding-probe.v1",
+            verdict="qualified",
+            probe_results={
+                "checks": {
+                    "dimension_matches": True,
+                    "finite_values": True,
+                    "non_zero": True,
+                },
+                "positive_similarity": 1.0,
+                "negative_similarity": 0.2,
+                "error": "embedding endpoint https://embedding.local/v1 failed",
+            },
+        )
+        model_detail = await routes[
+            ("/admin/api/v1/model-profile/{profile_key}", "GET")
+        ].endpoint(profile_key="semantic-main", workspace_id="dev-01")
+        model_object = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="model_profile",
+            object_id="semantic-main",
+            workspace_id="dev-01",
+        )
+        embedding_detail = await routes[
+            ("/admin/api/v1/embedding-profile/{profile_key}", "GET")
+        ].endpoint(profile_key="retrieval-main", workspace_id="dev-01")
+        return model_detail, model_object, embedding_detail
+
+    model_detail, model_object, embedding_detail = asyncio.run(run())
+
+    model_payload = model_detail.object
+    assert model_payload["object_type"] == "model_profile"
+    assert model_payload["configuration"]["endpoint_ref_present"] is True
+    assert "endpoint_ref" not in model_payload["configuration"]
+    assert model_payload["qualification_runs"][0]["checks"]["json_adherence"] is True
+    assert model_payload["qualification_runs"][0]["metrics"]["output_token_estimate"] == 42
+    assert model_payload["qualification_runs"][0]["raw_error_returned"] is False
+    assert model_object.object["profile_id"] == str(model_profile_id)
+
+    embedding_payload = embedding_detail.object
+    assert embedding_payload["object_type"] == "embedding_profile"
+    assert embedding_payload["configuration"]["embedding_dim"] == 16
+    assert embedding_payload["qualification_runs"][0]["checks"]["dimension_matches"] is True
+    assert embedding_payload["qualification_runs"][0]["metrics"]["positive_similarity"] == 1.0
+    serialized = json.dumps(
+        {
+            "model": model_payload,
+            "embedding": embedding_payload,
+        },
+        sort_keys=True,
+    )
+    assert "provider.local" not in serialized
+    assert "embedding.local" not in serialized
+    assert "sk-live-secret" not in serialized
 
 
 def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:

@@ -5371,6 +5371,131 @@ def create_app(
                 return item
         return None
 
+    def _profile_configuration_payload(profile: Any) -> dict[str, Any]:
+        payload = profile.to_json()
+        endpoint_ref = payload.pop("endpoint_ref", None)
+        payload["endpoint_ref_present"] = bool(endpoint_ref)
+        payload["endpoint_ref_sha256"] = (
+            sha256_text(str(endpoint_ref)) if endpoint_ref else None
+        )
+        payload.pop("qualification", None)
+        return payload
+
+    def _qualification_run_summary(run: Any) -> dict[str, Any]:
+        payload = run.to_json()
+        probe_results = payload.pop("probe_results", {})
+        checks = (
+            dict(probe_results.get("checks", {}))
+            if isinstance(probe_results, dict)
+            and isinstance(probe_results.get("checks"), dict)
+            else {}
+        )
+        metrics: dict[str, Any] = {}
+        if isinstance(probe_results, dict):
+            for key in (
+                "output_token_estimate",
+                "positive_similarity",
+                "negative_similarity",
+                "distance_metric",
+            ):
+                if key in probe_results:
+                    metrics[key] = probe_results[key]
+            invocation_id = probe_results.get("invocation_id")
+            if invocation_id:
+                metrics["llm_invocation_ref"] = {
+                    "object_type": "llm_invocation",
+                    "object_id": str(invocation_id),
+                }
+        run_id = (
+            payload.get("model_profile_qualification_run_id")
+            or payload.get("embedding_profile_qualification_run_id")
+        )
+        return {
+            "qualification_run_id": str(run_id) if run_id else None,
+            "profile_key": payload.get("profile_key"),
+            "route_kind": payload.get("route_kind"),
+            "provider": payload.get("provider"),
+            "model": payload.get("model"),
+            "thinking_level": payload.get("thinking_level"),
+            "embedding_dim": payload.get("embedding_dim"),
+            "distance_metric": payload.get("distance_metric"),
+            "probe_set_version": payload.get("probe_set_version"),
+            "verdict": payload.get("verdict"),
+            "checks": checks,
+            "metrics": metrics,
+            "created_at": payload.get("created_at"),
+            "expires_at": payload.get("expires_at"),
+            "raw_probe_results_returned": False,
+            "raw_error_returned": False,
+        }
+
+    def _profile_microscope(
+        *,
+        profile: Any,
+        qualification_runs: list[Any],
+        object_type: str,
+    ) -> dict[str, Any]:
+        latest_qualification = dict(profile.qualification or {})
+        summarized_runs = [
+            _qualification_run_summary(run) for run in qualification_runs
+        ]
+        profile_id = str(profile.profile_id)
+        profile_kind = "Text model" if object_type == "model_profile" else "Embedding"
+        return {
+            "schema_version": "skillkernel.observatory.profile.v1",
+            "object_type": object_type,
+            "object_id": profile.profile_key,
+            "profile_id": profile_id,
+            "title": f"{profile_kind} profile {profile.profile_key}",
+            "summary": (
+                "Content-safe model/embedding profile configuration, latest "
+                "qualification state, and recent qualification checklist outcomes."
+            ),
+            "configuration": _profile_configuration_payload(profile),
+            "qualification": {
+                "status": profile.status,
+                "latest_qualification_run_id": latest_qualification.get(
+                    "latest_qualification_run_id"
+                ),
+                "latest_qualification_verdict": latest_qualification.get(
+                    "latest_qualification_verdict"
+                ),
+                "latest_probe_set_version": latest_qualification.get(
+                    "latest_probe_set_version"
+                ),
+                "qualification_expires_at": latest_qualification.get(
+                    "qualification_expires_at"
+                ),
+            },
+            "qualification_runs": summarized_runs,
+            "provenance": {
+                "upstream": [],
+                "downstream": [
+                    run["metrics"]["llm_invocation_ref"]
+                    for run in summarized_runs
+                    if isinstance(run.get("metrics"), dict)
+                    and run["metrics"].get("llm_invocation_ref")
+                ],
+            },
+            "diagnostics": {
+                "supporting_component": "model_embedding_profiles",
+                "profile_kind": profile.kind,
+                "route_kind": profile.route_kind,
+                "endpoint_kind": profile.endpoint_kind,
+                "qualification_run_count": len(summarized_runs),
+                "raw_probe_results_returned": False,
+                "endpoint_ref_returned": False,
+                "api_key_available": False,
+                "cost_analytics_returned": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "redacted_or_not_applicable",
+            },
+            "audit": {"links": []},
+        }
+
     def _evaluation_microscope(
         evaluation_id: str,
         evaluation: dict[str, Any] | None,
@@ -8193,6 +8318,50 @@ def create_app(
                 return ObservatoryObjectResponse(
                     object=_semantic_compression_trial_admin_record(trial)
                 )
+        if object_type in {"model_profile", "model-profile", "text_model_profile"}:
+            profile = await profiles.get_model_profile(
+                workspace_key=workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+                profile_key=object_id,
+            )
+            if profile is not None:
+                qualification_runs = (
+                    await profile_qualifications.list_model_qualification_runs(
+                        workspace_key=profile.workspace_key
+                        or workspace_id
+                        or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+                        profile_key=profile.profile_key,
+                        limit=25,
+                    )
+                )
+                return ObservatoryObjectResponse(
+                    object=_profile_microscope(
+                        profile=profile,
+                        qualification_runs=qualification_runs,
+                        object_type="model_profile",
+                    )
+                )
+        if object_type in {"embedding_profile", "embedding-profile"}:
+            profile = await profiles.get_embedding_profile(
+                workspace_key=workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+                profile_key=object_id,
+            )
+            if profile is not None:
+                qualification_runs = (
+                    await profile_qualifications.list_embedding_qualification_runs(
+                        workspace_key=profile.workspace_key
+                        or workspace_id
+                        or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+                        profile_key=profile.profile_key,
+                        limit=25,
+                    )
+                )
+                return ObservatoryObjectResponse(
+                    object=_profile_microscope(
+                        profile=profile,
+                        qualification_runs=qualification_runs,
+                        object_type="embedding_profile",
+                    )
+                )
         if object_type in {"topology_operation", "skill_graph_operation"}:
             operation_id = _uuid_or_404(object_id, "topology operation")
             operation = await topology.get_operation_detail(
@@ -9430,6 +9599,40 @@ def create_app(
             source="profile_store.list_model_profiles",
         )
 
+    @app.get(
+        "/admin/api/v1/model-profile/{profile_key}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_model_profile_detail(
+        profile_key: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str = "default",
+        limit: int = 25,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        profile = await profiles.get_model_profile(
+            workspace_key=workspace_id,
+            profile_key=profile_key,
+        )
+        if profile is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="model profile not found",
+            )
+        qualification_runs = await profile_qualifications.list_model_qualification_runs(
+            workspace_key=workspace_id,
+            profile_key=profile.profile_key,
+            limit=max(1, min(limit, 100)),
+        )
+        return ObservatoryObjectResponse(
+            object=_profile_microscope(
+                profile=profile,
+                qualification_runs=qualification_runs,
+                object_type="model_profile",
+            )
+        )
+
     @app.get("/admin/api/v1/embedding-profile", response_model=ObservatoryCollectionResponse)
     async def observatory_embedding_profile(
         authorization: Annotated[str | None, Header()] = None,
@@ -9452,6 +9655,42 @@ def create_app(
             limit=limit,
             cursor=cursor,
             source="profile_store.list_embedding_profiles",
+        )
+
+    @app.get(
+        "/admin/api/v1/embedding-profile/{profile_key}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_embedding_profile_detail(
+        profile_key: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str = "default",
+        limit: int = 25,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        profile = await profiles.get_embedding_profile(
+            workspace_key=workspace_id,
+            profile_key=profile_key,
+        )
+        if profile is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="embedding profile not found",
+            )
+        qualification_runs = (
+            await profile_qualifications.list_embedding_qualification_runs(
+                workspace_key=workspace_id,
+                profile_key=profile.profile_key,
+                limit=max(1, min(limit, 100)),
+            )
+        )
+        return ObservatoryObjectResponse(
+            object=_profile_microscope(
+                profile=profile,
+                qualification_runs=qualification_runs,
+                object_type="embedding_profile",
+            )
         )
 
     @app.get("/admin/api/v1/storage", response_model=ObservatoryObjectResponse)

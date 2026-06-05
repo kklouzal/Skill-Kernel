@@ -2,6 +2,24 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: Observatory model and embedding profile-detail
+read models now expose content-safe qualification evidence. The profile
+qualification store can list recent model/embedding qualification runs by
+workspace/profile key, and `/admin/api/v1/model-profile/{profile_key}`,
+`/admin/api/v1/embedding-profile/{profile_key}`, plus the generic object
+microscope aliases return redacted effective configuration, route/status
+metadata, latest verdict pointers, allowlisted checklist outcomes, safe token
+and embedding sanity metrics, and LLM invocation refs. Raw endpoint URLs, API
+keys, raw probe errors, prompt/response text, provider payloads, and cost
+analytics stay unavailable. This advances core Phase 4 profile qualification and
+invocation-audit requirements plus Observatory Sections 7.6, 7.7, 8.18, 12.1,
+12.6, 13.1, 16.1, and 16.3. Validation passed with focused profile microscope
+coverage, broader Observatory/profile tests, generated OpenAPI client `--check`,
+full sidecar ruff/pytest/compileall gates, compose config, core and Observatory
+acceptance reports, diff-check, and an isolated compose/Postgres smoke that
+migrated a fresh database and round-tripped model/embedding qualification run
+reads through the asyncpg stores.
+
 2026-06-05 update: Observatory object microscopes now include a dedicated
 content-safe `evolution_transaction` detail path backed by the governance
 store. `/admin/api/v1/objects/evolution_transaction/{id}` resolves transaction

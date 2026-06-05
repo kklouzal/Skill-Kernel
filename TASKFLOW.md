@@ -16,6 +16,29 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory model/embedding profile cockpits now have
+  content-safe detail microscopes instead of list-only profile visibility.
+  The profile qualification store exposes bounded recent run reads by
+  workspace/profile key; `/admin/api/v1/model-profile/{profile_key}`,
+  `/admin/api/v1/embedding-profile/{profile_key}`, and generic
+  `model_profile`/`embedding_profile` object microscope aliases return
+  redacted effective profile configuration, route/status metadata, latest
+  qualification verdict pointers, allowlisted checklist outcomes, safe metrics
+  such as token estimates and embedding similarity probes, and LLM invocation
+  object refs without raw endpoint URLs, API keys, raw probe errors, raw prompt
+  or response text, cost analytics, or provider payloads. This advances core
+  handoff Phase 4 text/embedding profile qualification and invocation-audit
+  acceptance plus Observatory Sections 7.6, 7.7, 8.18, 12.1, 12.6, 13.1,
+  16.1, and 16.3. Validation passed with focused profile microscope coverage
+  (`2 passed`), broader Observatory/profile coverage (`57 passed`), generated
+  Observatory OpenAPI client `--check`, `uv run ruff check sidecar`, `uv run
+  pytest` (`375 passed`), `uv run python -m compileall -q sidecar`, `docker
+  compose config --quiet`, `git diff --check`, core and Observatory acceptance
+  reports (`ready=true`, `70` implemented and `86` satisfied, `0` validation
+  errors), and an isolated compose/Postgres smoke on port `56533` that migrated
+  a fresh database, wrote model and embedding profiles plus qualification runs
+  through the asyncpg stores, read both run families through the new bounded
+  list methods (`1`, `1`), and removed the temporary compose project/volume.
 - 2026-06-05: Observatory object microscopes now resolve
   `evolution_transaction` links to content-safe governance transaction detail
   instead of falling through to a generic snapshot object. The governance store
