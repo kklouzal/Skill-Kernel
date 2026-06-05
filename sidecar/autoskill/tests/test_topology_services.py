@@ -97,6 +97,15 @@ class MemoryTopologyActivationGate:
         )
 
 
+class RecordingGovernanceStore(NullGovernanceStore):
+    def __init__(self) -> None:
+        self.status_updates: list[dict[str, object]] = []
+
+    async def update_transaction_status(self, **kwargs):
+        self.status_updates.append(kwargs)
+        return await super().update_transaction_status(**kwargs)
+
+
 def test_create_topology_proposal_is_first_class_operation() -> None:
     proposal = propose_creation(
         CreateTopologyRequest(
@@ -388,7 +397,7 @@ def test_decomposition_proposal_records_coverage_and_rollback_metadata() -> None
 def test_topology_proposal_persistence_records_operation_trials_and_transaction() -> None:
     evidence_id = uuid4()
     topology = NullTopologyStore()
-    governance = NullGovernanceStore()
+    governance = RecordingGovernanceStore()
     result = propose_composition(
         ComposeTopologyRequest(
             components=[
@@ -430,6 +439,37 @@ def test_topology_proposal_persistence_records_operation_trials_and_transaction(
         "shadowing",
         "broker_replay",
         "broker_canary",
+    ]
+    assert len(governance.status_updates) == 1
+    metrics = governance.status_updates[0]["metrics"]
+    assert metrics["topology_operation_kind"] == "compose"
+    assert metrics["topology_status"] == "candidate"
+    assert metrics["plan_hash"] == result.plan_hash
+    assert metrics["evidence_count"] == 1
+    assert metrics["planned_trials"] == 5
+    assert metrics["trial_kinds"] == [
+        "component_baseline",
+        "composed_workflow",
+        "shadowing",
+        "broker_replay",
+        "broker_canary",
+    ]
+    assert metrics["graph_node_count"] == 3
+    assert metrics["graph_edge_count"] == 2
+    assert metrics["graph_node_roles"] == {
+        "component": 2,
+        "composed_output": 1,
+    }
+    assert metrics["graph_edge_kinds"] == {"component_of": 2}
+    assert metrics["effect_coverage_count"] == 2
+    assert metrics["rollback_actions"] == 2
+    assert metrics["rollback_actions_planned"] is True
+    assert metrics["requires_trial_before_apply"] is True
+    assert metrics["writes"] == [
+        "skill_graph_operations",
+        "evolution_transactions",
+        "transaction_items",
+        "planned_topology_trials",
     ]
 
 

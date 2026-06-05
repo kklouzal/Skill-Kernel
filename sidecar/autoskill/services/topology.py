@@ -257,11 +257,7 @@ async def persist_topology_proposal(
     await governance.update_transaction_status(
         evolution_transaction_id=transaction.transaction.evolution_transaction_id,
         status="staged" if proposal.status == "candidate" else "blocked",
-        metrics={
-            "topology_operation_kind": proposal.operation_kind,
-            "planned_trials": len(trials),
-            "blockers": len(proposal.blockers),
-        },
+        metrics=_topology_transaction_metrics(proposal),
     )
     return TopologyPersistenceRecord(operation=operation, trials=trials)
 
@@ -362,6 +358,39 @@ def propose_creation(request: CreateTopologyRequest) -> TopologyProposalResult:
         ],
         rollback_actions=_create_rollback_actions(request),
     )
+
+
+def _topology_transaction_metrics(
+    proposal: TopologyProposalResult,
+) -> dict[str, Any]:
+    graph = proposal.skill_graph_ir
+    nodes = graph.nodes if graph else []
+    edges = graph.edges if graph else []
+    role_counts: dict[str, int] = {}
+    edge_counts: dict[str, int] = {}
+    for node in nodes:
+        role_counts[node.operation_role] = role_counts.get(node.operation_role, 0) + 1
+    for edge in edges:
+        edge_counts[edge.edge_kind] = edge_counts.get(edge.edge_kind, 0) + 1
+    return {
+        "topology_operation_kind": proposal.operation_kind,
+        "topology_status": proposal.status,
+        "plan_hash": proposal.plan_hash,
+        "evidence_count": len(proposal.evidence_ids),
+        "planned_trials": len(proposal.trial_plan),
+        "trial_kinds": [trial.kind for trial in proposal.trial_plan],
+        "blockers": len(proposal.blockers),
+        "graph_node_count": len(nodes),
+        "graph_edge_count": len(edges),
+        "graph_node_roles": dict(sorted(role_counts.items())),
+        "graph_edge_kinds": dict(sorted(edge_counts.items())),
+        "effect_coverage_count": len(graph.effect_coverage) if graph else 0,
+        "rollback_blockers": len(graph.rollback_blockers) if graph else 0,
+        "rollback_actions": len(proposal.transaction.rollback_actions),
+        "rollback_actions_planned": bool(proposal.transaction.rollback_actions),
+        "writes": list(proposal.transaction.writes),
+        "requires_trial_before_apply": True,
+    }
 
 
 def propose_improvement(request: ImproveTopologyRequest) -> TopologyProposalResult:

@@ -2,6 +2,16 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: topology proposal persistence now stamps a content-safe
+transaction review capsule onto the governing evolution transaction. The
+metrics summarize operation kind/status, plan hash, evidence count, planned
+trial kinds, graph node/edge shape, effect coverage, rollback readiness, write
+targets, and the trial-before-apply invariant without copying evidence text,
+skill bodies, or raw operator-facing content into transaction metrics. This
+deepens the core Sections 13.7-13.8 and 17 topology-operation bridge and gives
+the Observatory topology cockpit a transaction-scoped control-plane summary for
+candidate/trial review.
+
 2026-06-05 update: Observatory administrative actions now create a deterministic
 action-attribution boundary check before the normal audit/action receipt. The
 admin action route stores only content-safe causality metadata: request id, risk

@@ -16,6 +16,24 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Topology proposal persistence now records a content-safe
+  transaction review capsule on the governing evolution transaction. Persisted
+  create/improve/compose/decompose proposals stamp operation kind/status, plan
+  hash, evidence count, planned trial kinds, graph node/edge counts, node-role
+  and edge-kind counts, effect coverage count, rollback-blocker/action counts,
+  write targets, and the trial-before-apply invariant without storing evidence
+  text, skill bodies, or raw SkillGraphIR-only details in transaction metrics.
+  This advances core handoff Sections 13.7-13.8 and 17.1-17.9 by making
+  topology decisions more inspectable as transaction-scoped control-plane state,
+  and supports the Observatory Section 8.9 topology cockpit/read-model contract.
+  Validation passed with focused topology tests (`18 passed`), focused ruff
+  checks, `uv run ruff check sidecar`, `uv run pytest` (`373 passed`), `uv run
+  python -m compileall -q sidecar`, `docker compose config --quiet`, `git diff
+  --check`, and an isolated compose/Postgres smoke on port `56432` that migrated
+  a fresh database, persisted a compose topology proposal through the real
+  asyncpg topology/governance stores, verified the JSONB transaction metrics
+  (`operation=compose`, `graph_node_count=3`, `graph_edge_count=2`), and removed
+  the temporary compose project/volume.
 - 2026-06-05: Observatory administrative actions now write a deterministic
   action-attribution boundary check before the normal audit/action receipt.
   `/admin/api/v1/actions` records a content-safe `action_attribution_checks`
