@@ -16,6 +16,7 @@ from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope
 from autoskill.core.hashing import sha256_text
 from autoskill.db import observability as observability_module
+from autoskill.db.attribution import NullAttributionStore
 from autoskill.db.broker_policy import NullBrokerPolicyStore
 from autoskill.db.context import NullContextGovernanceStore
 from autoskill.db.embeddings import (
@@ -2305,8 +2306,13 @@ def test_observatory_evaluation_detail_exposes_autonomy_assurance() -> None:
 
 def test_observatory_action_records_audited_policy_receipt() -> None:
     audit_store = MemoryAuditStore()
+    attribution_store = NullAttributionStore()
     observatory_admin = NullObservatoryAdminStore()
-    app = create_app(audit_store=audit_store, observatory_admin_store=observatory_admin)
+    app = create_app(
+        audit_store=audit_store,
+        attribution_store=attribution_store,
+        observatory_admin_store=observatory_admin,
+    )
     route = _routes(app)[("/admin/api/v1/actions", "POST")]
 
     async def run():
@@ -2335,6 +2341,18 @@ def test_observatory_action_records_audited_policy_receipt() -> None:
         response.meta["request_id"]
     )
     assert response.receipt["action_audit"]["content_policy"]["raw_available"] is False
+    attribution_link = response.receipt["action_attribution_check"]
+    assert attribution_link["action_kind"] == "observatory.verify_audit_chain"
+    assert attribution_link["risk_tier"] == "low"
+    assert attribution_link["verdict"] == "allowed"
+    assert response.receipt["action_audit"]["request_payload_redacted"][
+        "action_attribution_check"
+    ] == attribution_link
+    assert len(attribution_store.checks) == 1
+    assert attribution_store.checks[0].tool_call_id == response.meta["request_id"]
+    assert attribution_store.checks[0].user_intent_hash.startswith("sha256:")
+    assert attribution_store.checks[0].metrics["reason_codes"] == []
+    assert attribution_store.checks[0].metrics["raw_content_included"] is False
     assert response.receipt["live_event"]["event_type"] == "audit_record_appended"
     assert response.receipt["live_event"]["object_type"] == "audit"
     assert observatory_admin.live_events[0].seq == response.receipt["live_event"]["seq"]
@@ -2346,8 +2364,13 @@ def test_observatory_action_records_audited_policy_receipt() -> None:
 
 def test_observatory_action_audit_read_model_exposes_receipts_without_raw_content() -> None:
     audit_store = MemoryAuditStore()
+    attribution_store = NullAttributionStore()
     observatory_admin = NullObservatoryAdminStore()
-    app = create_app(audit_store=audit_store, observatory_admin_store=observatory_admin)
+    app = create_app(
+        audit_store=audit_store,
+        attribution_store=attribution_store,
+        observatory_admin_store=observatory_admin,
+    )
     routes = _routes(app)
 
     async def run():
@@ -2402,6 +2425,12 @@ def test_observatory_action_audit_read_model_exposes_receipts_without_raw_conten
     assert detail.object["object_id"] == first.receipt["action_audit"]["action_id"]
     assert detail.object["provenance"]["upstream"][0]["object_type"] == "audit_record"
     assert detail.object["diagnostics"]["request_id"].startswith("req_")
+    assert detail.object["diagnostics"]["action_attribution_check"]["verdict"] == (
+        "allowed"
+    )
+    assert detail.object["provenance"]["upstream"][1]["object_type"] == (
+        "action_attribution_check"
+    )
     assert detail.object["effects"]["dry_run"] is True
     assert detail.object["content_policy"]["raw_available"] is False
     assert "operator requested audit proof" in detail.object["reason"]
@@ -2413,8 +2442,13 @@ def test_observatory_action_audit_read_model_exposes_receipts_without_raw_conten
 
 def test_observatory_high_impact_action_requires_confirmation() -> None:
     audit_store = MemoryAuditStore()
+    attribution_store = NullAttributionStore()
     observatory_admin = NullObservatoryAdminStore()
-    app = create_app(audit_store=audit_store, observatory_admin_store=observatory_admin)
+    app = create_app(
+        audit_store=audit_store,
+        attribution_store=attribution_store,
+        observatory_admin_store=observatory_admin,
+    )
     route = _routes(app)[("/admin/api/v1/actions", "POST")]
 
     async def run():
@@ -2446,6 +2480,13 @@ def test_observatory_high_impact_action_requires_confirmation() -> None:
     assert response.receipt["action_audit"]["request_payload_redacted"][
         "confirmation_hash"
     ].startswith("sha256:")
+    assert response.receipt["action_attribution_check"]["risk_tier"] == "high"
+    assert response.receipt["action_attribution_check"]["verdict"] == "blocked"
+    assert audit_store.records[0].details["action_attribution_verdict"] == "blocked"
+    assert attribution_store.checks[0].metrics["confirmation_required"] is True
+    assert attribution_store.checks[0].metrics["reason_codes"] == [
+        "confirmation-required"
+    ]
     assert "skill-123" not in str(
         response.receipt["action_audit"]["request_payload_redacted"]["confirmation_hash"]
     )
@@ -2517,6 +2558,8 @@ def test_observatory_action_gateway_summary_exposes_policy_counts_without_raw_co
     assert detail["counts"]["by_result"] == {"rejected": 2, "accepted": 1}
     assert detail["counts"]["by_action_kind"]["rollback_skill"]["rejected"] == 1
     assert detail["counts"]["linked_audit_records"] == 3
+    assert detail["counts"]["action_attribution_checks"] == 3
+    assert detail["counts"]["blocked_action_attribution_checks"] == 2
     assert detail["counts"]["raw_content_reveal"]["rejected"] == 1
     assert detail["policy"]["confirmation_failures"] == 1
     assert detail["policy"]["role_failures"] == 1

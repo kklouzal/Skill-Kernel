@@ -923,6 +923,7 @@ def action_receipt(
     linked_job: dict[str, Any] | None = None,
     audit: dict[str, Any] | None = None,
     action_audit: dict[str, Any] | None = None,
+    action_attribution_check: dict[str, Any] | None = None,
     live_event: dict[str, Any] | None = None,
     raw_reveal_grant: dict[str, Any] | None = None,
     idempotency_replay: bool = False,
@@ -956,6 +957,7 @@ def action_receipt(
         "linked_job": linked_job,
         "audit": audit,
         "action_audit": action_audit,
+        "action_attribution_check": action_attribution_check,
         "live_event": live_event,
         "raw_reveal_grant": raw_reveal_grant,
     }

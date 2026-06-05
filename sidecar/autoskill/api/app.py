@@ -2146,6 +2146,48 @@ def _observatory_action_request_fingerprint(
     return f"sha256:{sha256_text(json.dumps(payload, sort_keys=True))}"
 
 
+def _observatory_action_intent_hash(
+    *,
+    request: ObservatoryActionRequest,
+    target_type: str,
+    target_id: str,
+    confirmation_hash: str | None,
+) -> str:
+    payload = {
+        "workspace_id": request.workspace_id,
+        "action": request.action,
+        "target_type": target_type,
+        "target_id": target_id,
+        "dry_run": request.dry_run,
+        "reason_hash": sha256_text(request.reason or ""),
+        "confirmation_hash": confirmation_hash,
+    }
+    return f"sha256:{sha256_text(json.dumps(payload, sort_keys=True))}"
+
+
+def _observatory_action_risk_tier(action: str, *, dry_run: bool) -> str:
+    if action == "reveal_raw_content" and not dry_run:
+        return "critical"
+    if action in OBSERVATORY_HIGH_IMPACT_ACTIONS and not dry_run:
+        return "high"
+    if action in OBSERVATORY_HIGH_IMPACT_ACTIONS:
+        return "medium"
+    return "low"
+
+
+def _action_attribution_check_receipt(record: Any | None) -> dict[str, object] | None:
+    if record is None:
+        return None
+    return {
+        "schema_version": "skillkernel.observatory.action-attribution-link.v1",
+        "action_attribution_check_id": str(record.action_attribution_check_id),
+        "action_kind": record.action_kind,
+        "risk_tier": record.risk_tier,
+        "verdict": record.verdict,
+        "counterfactual_kind": record.counterfactual_kind,
+    }
+
+
 def _encode_admin_cursor(item: dict[str, Any]) -> str | None:
     object_id = _admin_cursor_object_id(item)
     if not object_id:
@@ -6014,6 +6056,16 @@ def create_app(
             )
         if payload.get("linked_job_id"):
             upstream.append({"object_type": "job", "object_id": payload["linked_job_id"]})
+        action_attribution_check = request_payload.get("action_attribution_check")
+        if isinstance(action_attribution_check, dict) and action_attribution_check.get(
+            "action_attribution_check_id"
+        ):
+            upstream.append(
+                {
+                    "object_type": "action_attribution_check",
+                    "object_id": action_attribution_check["action_attribution_check_id"],
+                }
+            )
         return {
             **payload,
             "title": f"Operator action {payload['action_kind']}",
@@ -6052,6 +6104,7 @@ def create_app(
                 "source": request_payload.get("source", {}),
                 "metadata_keys": request_payload.get("metadata_keys", []),
                 "has_confirmation_hash": bool(request_payload.get("confirmation_hash")),
+                "action_attribution_check": action_attribution_check,
                 "raw_content_included": False,
             },
             "audit": {
@@ -6076,6 +6129,8 @@ def create_app(
         confirmation_failures = 0
         role_failures = 0
         idempotency_collision_records = 0
+        action_attribution_checks = 0
+        blocked_attribution_checks = 0
 
         for record in records:
             payload = record.to_json()
@@ -6105,6 +6160,13 @@ def create_app(
                 role_failures += 1
             if bool(request_payload.get("idempotency_collision")):
                 idempotency_collision_records += 1
+            action_attribution_check = request_payload.get("action_attribution_check")
+            if isinstance(action_attribution_check, dict) and action_attribution_check.get(
+                "action_attribution_check_id"
+            ):
+                action_attribution_checks += 1
+                if action_attribution_check.get("verdict") == "blocked":
+                    blocked_attribution_checks += 1
             if action_kind in OBSERVATORY_HIGH_IMPACT_ACTIONS:
                 high_impact_history.append(
                     {
@@ -6145,6 +6207,8 @@ def create_app(
                 "by_action_kind": action_counts,
                 "linked_jobs": linked_jobs,
                 "linked_audit_records": linked_audits,
+                "action_attribution_checks": action_attribution_checks,
+                "blocked_action_attribution_checks": blocked_attribution_checks,
                 "high_impact_actions": len(high_impact_history),
                 "raw_content_reveal": raw_reveal_counts,
             },
@@ -6461,6 +6525,11 @@ def create_app(
                     accepted=existing_action.result in {"accepted", "completed"},
                     reason_codes=replay_reason_codes,
                     action_audit=existing_action.to_json(),
+                    action_attribution_check=existing_payload.get(
+                        "action_attribution_check"
+                    )
+                    if isinstance(existing_payload, dict)
+                    else None,
                     idempotency_replay=True,
                     idempotency_collision=idempotency_collision,
                 ),
@@ -6500,6 +6569,49 @@ def create_app(
                 "target_id": target_id,
                 "raw_content_included": False,
             }
+        action_attribution_check = await attribution.record_action_check(
+            workspace_key=request.workspace_id,
+            session_id=None,
+            turn_id=None,
+            tool_call_id=response_meta["request_id"],
+            action_kind=f"observatory.{request.action}",
+            risk_tier=_observatory_action_risk_tier(
+                request.action,
+                dry_run=request.dry_run,
+            ),
+            verdict="allowed" if accepted else "blocked",
+            user_intent_hash=_observatory_action_intent_hash(
+                request=request,
+                target_type=target_type,
+                target_id=target_id,
+                confirmation_hash=confirmation_hash,
+            ),
+            counterfactual_kind="admin_policy_gate",
+            metrics={
+                "schema_version": (
+                    "skillkernel.observatory.action-attribution-check.v1"
+                ),
+                "request_id": response_meta["request_id"],
+                "workspace_id": request.workspace_id,
+                "action": request.action,
+                "target_type": target_type,
+                "target_id": target_id,
+                "dry_run": request.dry_run,
+                "accepted": accepted,
+                "reason_codes": reason_codes,
+                "confirmation_required": confirmation_required,
+                "confirmation_hash_present": confirmation_hash is not None,
+                "idempotency_key_hash": sha256_text(request.idempotency_key),
+                "source": _source_identity(http_request),
+                "raw_content_included": False,
+            },
+        )
+        action_attribution_check_receipt = _action_attribution_check_receipt(
+            action_attribution_check
+        )
+        action_request_payload["action_attribution_check"] = (
+            action_attribution_check_receipt
+        )
         audit_record = await audit.append_record(
             AuditRecord(
                 action=f"observatory.{request.action}",
@@ -6519,6 +6631,10 @@ def create_app(
                     "actor_roles": principal["roles"],
                     "confirmation_hash": confirmation_hash,
                     "confirmation_required": confirmation_required,
+                    "action_attribution_check_id": str(
+                        action_attribution_check.action_attribution_check_id
+                    ),
+                    "action_attribution_verdict": action_attribution_check.verdict,
                     "raw_reveal_grant_hash": (
                         reveal_grant["token_hash"] if reveal_grant is not None else None
                     ),
@@ -6562,6 +6678,7 @@ def create_app(
                 reason_codes=reason_codes,
                 audit=audit_record.model_dump(mode="json"),
                 action_audit=action_audit.to_json(),
+                action_attribution_check=action_attribution_check_receipt,
                 live_event=live_event.to_json(),
                 raw_reveal_grant=reveal_grant,
                 idempotency_replay=False,

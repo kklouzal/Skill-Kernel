@@ -16,6 +16,26 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory administrative actions now write a deterministic
+  action-attribution boundary check before the normal audit/action receipt.
+  `/admin/api/v1/actions` records a content-safe `action_attribution_checks`
+  row with request id, risk tier, policy verdict, hashed intent/idempotency
+  values, reason codes, target identity, and source identity metadata without
+  storing raw reason text, confirmation text, raw content, or browser payloads.
+  Fresh and idempotency-replayed receipts expose only a bounded attribution-check
+  link, action-audit microscopes include the check as upstream causality, and
+  `/admin/api/v1/actions/summary` reports attribution-check coverage and blocked
+  check counts. This advances core handoff Section 1.2 action-attribution gate
+  requirements plus Observatory Sections 1.9 and 16.3 by making guarded operator
+  actions causally inspectable through the same sidecar audit path. Validation
+  passed with focused Observatory action tests (`5 passed`), focused ruff
+  checks, `uv run ruff check sidecar`, `uv run pytest` (`373 passed`), `uv run
+  python -m compileall -q sidecar`, `git diff --check`, and an alternate-port
+  compose/Postgres smoke that applied migrations, recorded one admin action,
+  joined `admin_action_audit` to `action_attribution_checks` by the persisted
+  safe receipt link (`verdict=allowed`, `risk_tier=low`,
+  `raw_content_included=false`), deleted the smoke rows, and removed the
+  temporary compose Postgres container.
 - 2026-06-05: Observatory administrative action gateway now exposes a
   content-safe aggregate read model at `/admin/api/v1/actions/summary`.
   The summary is derived from bounded `admin_action_audit` receipts and reports

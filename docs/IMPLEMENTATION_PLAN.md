@@ -2,6 +2,17 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: Observatory administrative actions now create a deterministic
+action-attribution boundary check before the normal audit/action receipt. The
+admin action route stores only content-safe causality metadata: request id, risk
+tier, policy verdict, reason codes, source identity, target identity, and hashed
+intent/idempotency values. Receipts and action microscopes expose the resulting
+`action_attribution_check` link, and `/admin/api/v1/actions/summary` reports
+attribution-check coverage plus blocked-check counts. This advances the core
+Section 1.2 action-attribution gate and Observatory Sections 1.9/16.3 without
+adding a UI-local control plane or exposing raw reason, confirmation, or content
+payloads.
+
 2026-06-05 update: Observatory administrative action gateway summaries are now
 first-class sidecar read models. `/admin/api/v1/actions/summary` derives a
 content-safe cockpit aggregate from bounded `admin_action_audit` receipts,
