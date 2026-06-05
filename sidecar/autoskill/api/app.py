@@ -5399,6 +5399,87 @@ def create_app(
             "audit": {"links": []},
         }
 
+    def _schedule_admin_record(schedule: dict[str, Any]) -> dict[str, Any]:
+        payload = schedule.get("payload")
+        payload_dict = payload if isinstance(payload, dict) else {}
+        payload_keys = (
+            sorted(str(key) for key in payload_dict)
+            if payload_dict
+            else sorted(str(key) for key in schedule.get("payload_keys", []))
+            if isinstance(schedule.get("payload_keys"), list)
+            else []
+        )
+        safe = {
+            "schedule_id": str(schedule.get("schedule_id")),
+            "workspace_key": schedule.get("workspace_key"),
+            "name": schedule.get("name"),
+            "job_kind": schedule.get("job_kind"),
+            "enabled": bool(schedule.get("enabled")),
+            "interval_seconds": schedule.get("interval_seconds"),
+            "next_run_at": schedule.get("next_run_at"),
+            "misfire_policy": schedule.get("misfire_policy"),
+            "payload_keys": payload_keys,
+            "payload_sha256": sha256_text(
+                json.dumps(payload_dict, sort_keys=True, default=str)
+            )
+            if payload_dict
+            else schedule.get("payload_sha256"),
+            "payload_available": False,
+            "payload_redaction": "metadata-only",
+        }
+        safe["object_type"] = "schedule"
+        safe["object_id"] = safe["schedule_id"]
+        safe["title"] = str(safe["name"] or safe["schedule_id"])
+        safe["summary"] = (
+            f"{safe['job_kind']}; every {safe['interval_seconds']}s; "
+            f"enabled={safe['enabled']}; misfire={safe['misfire_policy']}"
+        )
+        return safe
+
+    def _schedule_microscope(
+        schedule_id: str,
+        schedule: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        diagnostics = (
+            _schedule_admin_record(schedule)
+            if schedule
+            else _missing_read_model("schedule", supporting_component="scheduler_jobs")
+        )
+        timeline = []
+        if schedule:
+            timeline.append(
+                {
+                    "at": schedule.get("next_run_at"),
+                    "event": "next_run_scheduled",
+                    "status": "enabled" if schedule.get("enabled") else "paused",
+                    "job_kind": schedule.get("job_kind"),
+                    "misfire_policy": schedule.get("misfire_policy"),
+                }
+            )
+        return {
+            "schema_version": "skillkernel.observatory.schedule.v1",
+            "object_type": "schedule",
+            "object_id": schedule_id,
+            "title": (
+                str(schedule.get("name"))
+                if schedule and schedule.get("name")
+                else f"Schedule {schedule_id}"
+            ),
+            "summary": "Sidecar-owned scheduler configuration and next-run state.",
+            "diagnostics": diagnostics,
+            "timeline": timeline,
+            "provenance": {
+                "upstream": [],
+                "downstream": [],
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "payload_available": False,
+            },
+            "audit": {"links": []},
+        }
+
     def _profile_configuration_payload(profile: Any) -> dict[str, Any]:
         payload = profile.to_json()
         endpoint_ref = payload.pop("endpoint_ref", None)
@@ -8996,6 +9077,21 @@ def create_app(
             job = _find_by_id(listed, object_id, ("job_id", "idempotency_key"))
             if job is not None:
                 return ObservatoryObjectResponse(object=_job_microscope(object_id, job))
+        if object_type in {"schedule", "scheduler_schedule", "sidecar_schedule"}:
+            listed = [
+                _schedule_admin_record(schedule.to_json())
+                for schedule in await scheduler.list_schedules(limit=500)
+            ]
+            schedule = _find_by_id(listed, object_id, ("schedule_id", "name"))
+            if schedule is not None and (
+                workspace_id is None or schedule.get("workspace_key") == workspace_id
+            ):
+                return ObservatoryObjectResponse(
+                    object=_schedule_microscope(
+                        str(schedule.get("schedule_id") or object_id),
+                        schedule,
+                    )
+                )
         if object_type in {
             "action_attribution_check",
             "action-attribution-check",
@@ -9545,10 +9641,15 @@ def create_app(
         return _observatory_collection(
             object_type="schedule",
             title="Sidecar schedules",
-            items=[schedule.to_json() for schedule in listed],
+            items=[_schedule_admin_record(schedule.to_json()) for schedule in listed],
             limit=limit,
             cursor=cursor,
             source="scheduler_store.list_schedules",
+            diagnostics={
+                "supporting_component": "scheduler_jobs",
+                "payload_available": False,
+                "payload_redaction": "metadata-only",
+            },
         )
 
     @app.get("/admin/api/v1/skills", response_model=ObservatoryCollectionResponse)

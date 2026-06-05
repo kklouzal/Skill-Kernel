@@ -51,6 +51,7 @@ from autoskill.db.observatory_admin import (
 from autoskill.db.profile_qualifications import NullProfileQualificationStore
 from autoskill.db.profiles import ModelProfileRecord, NullProfileStore
 from autoskill.db.retrieval import RetrievalLog
+from autoskill.db.scheduler import NullSchedulerStore, ScheduleRecord
 from autoskill.db.topology import NullTopologyStore
 from autoskill.services.observatory import (
     build_live_envelope,
@@ -101,6 +102,14 @@ class MemoryObservatoryJobStore(NullJobStore):
             and (status is None or record.status == status)
         ]
         return records[:limit]
+
+
+class MemoryObservatorySchedulerStore(NullSchedulerStore):
+    def __init__(self, records: list[ScheduleRecord]) -> None:
+        self.records = records
+
+    async def list_schedules(self, *, limit: int = 50) -> list[ScheduleRecord]:
+        return self.records[:limit]
 
 
 class MemoryTopologyGovernanceStore(NullGovernanceStore):
@@ -1490,6 +1499,71 @@ def test_observatory_job_object_microscope_resolves_scheduler_read_model() -> No
     assert {"object_type": "trace_span", "object_id": str(span_id)} in microscope.object[
         "provenance"
     ]["downstream"]
+
+
+def test_observatory_schedule_object_microscope_redacts_payload() -> None:
+    now = datetime.now(UTC)
+    schedule_id = uuid4()
+    scheduler_store = MemoryObservatorySchedulerStore(
+        [
+            ScheduleRecord(
+                schedule_id=schedule_id,
+                workspace_key="dev-01",
+                name="audit-hash-verification",
+                job_kind="audit.verify_hash_chain",
+                enabled=True,
+                interval_seconds=86_400,
+                next_run_at=now,
+                payload={
+                    "workspace_id": "dev-01",
+                    "operator_note": "raw schedule note must not be returned",
+                },
+                misfire_policy="catch_up_limited",
+            )
+        ]
+    )
+    app = create_app(audit_store=MemoryAuditStore(), scheduler_store=scheduler_store)
+    routes = _routes(app)
+
+    async def run():
+        collection = await routes[("/admin/api/v1/schedules", "GET")].endpoint()
+        microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="schedule",
+            object_id=str(schedule_id),
+            workspace_id="dev-01",
+        )
+        alias = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="scheduler_schedule",
+            object_id="audit-hash-verification",
+            workspace_id="dev-01",
+        )
+        return collection, microscope, alias
+
+    collection, microscope, alias = asyncio.run(run())
+
+    item = collection.collection["items"][0]
+    assert item["object_type"] == "schedule"
+    assert item["object_id"] == str(schedule_id)
+    assert item["payload_available"] is False
+    assert item["payload_keys"] == ["operator_note", "workspace_id"]
+    assert "payload" not in item
+
+    payload = microscope.object
+    assert payload["object_type"] == "schedule"
+    assert payload["diagnostics"]["schedule_id"] == str(schedule_id)
+    assert payload["diagnostics"]["job_kind"] == "audit.verify_hash_chain"
+    assert payload["diagnostics"]["misfire_policy"] == "catch_up_limited"
+    assert payload["diagnostics"]["payload_available"] is False
+    assert payload["diagnostics"]["payload_keys"] == ["operator_note", "workspace_id"]
+    assert "payload" not in payload["diagnostics"]
+    assert payload["content_policy"]["raw_available"] is False
+    assert payload["content_policy"]["payload_available"] is False
+    assert alias.object["diagnostics"] == payload["diagnostics"]
+    assert alias.object["object_id"] == str(schedule_id)
 
 
 def test_observatory_profile_microscopes_show_redacted_qualification_state() -> None:

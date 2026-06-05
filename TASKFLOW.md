@@ -16,6 +16,23 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory schedules now have content-safe drill-down evidence
+  instead of remaining list-only scheduler cockpit records. The sidecar
+  schedule collection shapes schedules through a redacted admin record with
+  stable schedule IDs, cadence, enabled state, misfire policy, payload key
+  names, and payload hash identity while withholding raw schedule payloads; the
+  generic `/admin/api/v1/objects/schedule/{id}` and `scheduler_schedule` alias
+  resolve the same redacted schedule microscope through the existing scheduler
+  store. This advances core handoff Sections 26.2-26.4 and Observatory
+  Sections 7.6, 7.7, 8.17, 12.6, 13.1, and 16.1 by closing the schedule
+  aggregate-to-evidence path without adding scheduler mutation authority or
+  exposing raw job payload content. Validation passed with focused schedule/job
+  microscope coverage (`2 passed`), `uv run ruff check sidecar`, `uv run
+  pytest` (`381 passed`), `uv run python -m compileall -q sidecar`, `docker
+  compose config --quiet`, and core and Observatory acceptance reports (`70`
+  implemented, `86` satisfied, `0` validation errors). No compose/Postgres
+  smoke was needed because this slice only reshapes the existing scheduler read
+  path and validates it through an in-memory scheduler store.
 - 2026-06-05: Observatory generic object microscopes now resolve
   `job`/`scheduler_job` links through the existing sidecar scheduler job
   read model instead of falling through to the snapshot placeholder. The

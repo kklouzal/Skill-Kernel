@@ -2,6 +2,22 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: Observatory schedule records now have content-safe
+drill-down evidence. `/admin/api/v1/schedules` returns redacted schedule admin
+records with stable IDs, cadence, enabled state, misfire policy, payload key
+names, and payload hash identity, while withholding raw schedule payloads. The
+generic `/admin/api/v1/objects/schedule/{id}` and `scheduler_schedule` alias
+resolve the same schedule microscope through the existing scheduler store. This
+advances core Sections 26.2-26.4 plus Observatory Sections 7.6, 7.7, 8.17,
+12.6, 13.1, and 16.1 by closing the scheduler aggregate-to-evidence path
+without adding UI-local scheduler authority or exposing raw job payload content.
+Validation passed with focused schedule/job microscope coverage, full sidecar
+ruff/pytest/compileall gates, compose config, and core and Observatory
+acceptance reports (`70` implemented, `86` satisfied, `0` validation errors).
+No compose/Postgres smoke was needed because the slice only reshapes the
+existing scheduler read path and validates it through an in-memory scheduler
+store.
+
 2026-06-05 update: Observatory generic object microscopes now resolve
 sidecar scheduler job refs through the same bounded job read model used by
 `/admin/api/v1/jobs/{job_id}`. The generic
