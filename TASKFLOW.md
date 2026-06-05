@@ -16,6 +16,26 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory skill, skill-version, and candidate drill-downs now
+  resolve through the generic object microscope instead of depending only on
+  dedicated list/detail routes or falling through to the snapshot placeholder.
+  Shared content-safe microscope builders keep `/admin/api/v1/skills/{id}`,
+  `/admin/api/v1/skills/{skill_id}/versions/{version_id}`,
+  `/admin/api/v1/candidates/{id}`, and generic `skill`, `skill_version`, and
+  `candidate` object aliases aligned while exposing only lifecycle,
+  scanner/evaluator, manifest-hash, active-version, candidate transaction, and
+  provenance metadata; raw SkillIR and compiled runtime text remain explicitly
+  unavailable. This advances core handoff Sections 1, 1.2, 1.5, 13, 17, 23,
+  and 28.2 plus Observatory Sections 7.6, 7.7, 8.9, 8.10, 9.1-9.3, 12.6,
+  13.1, and 21.16 by closing the aggregate-to-evidence path for skill-library
+  and candidate-review refs without adding UI-local mutation authority.
+  Validation passed with focused skill/candidate/schedule microscope coverage
+  (`3 passed`), `uv run ruff check sidecar`, `uv run pytest` (`385 passed`),
+  `uv run python -m compileall -q sidecar`, `docker compose config --quiet`,
+  `git diff --check`, and core and Observatory acceptance reports (`70`
+  implemented, `86` satisfied, `0` validation errors). No compose/Postgres
+  smoke was needed because this slice only reuses existing skill/candidate read
+  stores and validates them through in-memory route coverage.
 - 2026-06-05: Observatory storage/read-model health now has a dedicated
   content-safe storage microscope instead of relying on the generic component
   microscope. `/admin/api/v1/storage` returns the bounded storage object with

@@ -18,6 +18,7 @@ from autoskill.core.hashing import sha256_text
 from autoskill.db import observability as observability_module
 from autoskill.db.attribution import NullAttributionStore
 from autoskill.db.broker_policy import NullBrokerPolicyStore
+from autoskill.db.candidates import CandidateReviewRecord, NullCandidateStore
 from autoskill.db.context import NullContextGovernanceStore
 from autoskill.db.embeddings import (
     EMBEDDING_OBJECT_TYPE_BODY_INDEX_DOCUMENT,
@@ -52,6 +53,7 @@ from autoskill.db.profile_qualifications import NullProfileQualificationStore
 from autoskill.db.profiles import ModelProfileRecord, NullProfileStore
 from autoskill.db.retrieval import RetrievalLog
 from autoskill.db.scheduler import NullSchedulerStore, ScheduleRecord
+from autoskill.db.skills import SkillRecord
 from autoskill.db.topology import NullTopologyStore
 from autoskill.services.observatory import (
     build_live_envelope,
@@ -111,6 +113,26 @@ class MemoryObservatorySchedulerStore(NullSchedulerStore):
 
     async def list_schedules(self, *, limit: int = 50) -> list[ScheduleRecord]:
         return self.records[:limit]
+
+
+class MemoryObservatorySkillStore:
+    def __init__(self, records: list[SkillRecord]) -> None:
+        self.records = records
+
+    async def list_skills(
+        self,
+        *,
+        workspace_key: str | None = None,
+        lifecycle_state: str | None = None,
+        limit: int = 100,
+    ) -> list[SkillRecord]:
+        records = [
+            record
+            for record in self.records
+            if (workspace_key is None or record.workspace_key == workspace_key)
+            and (lifecycle_state is None or record.lifecycle_state == lifecycle_state)
+        ]
+        return records[:limit]
 
 
 class MemoryTopologyGovernanceStore(NullGovernanceStore):
@@ -1709,6 +1731,142 @@ def test_observatory_schedule_object_microscope_redacts_payload() -> None:
     assert payload["content_policy"]["payload_available"] is False
     assert alias.object["diagnostics"] == payload["diagnostics"]
     assert alias.object["object_id"] == str(schedule_id)
+
+
+def test_observatory_skill_object_microscopes_resolve_skill_store() -> None:
+    now = datetime.now(UTC)
+    skill_id = uuid4()
+    active_version_id = uuid4()
+    skill_store = MemoryObservatorySkillStore(
+        [
+            SkillRecord(
+                skill_id=skill_id,
+                workspace_id=uuid4(),
+                workspace_key="dev-01",
+                slug="context-artifact-curator",
+                name="Context Artifact Curator",
+                source="autoskill",
+                lifecycle_state="active",
+                active_version_id=active_version_id,
+                active_version=3,
+                scanner_status="passed",
+                evaluator_status="passed",
+                compiled_sha256="compiled-hash",
+                manifest={"schema_version": "autoskill.writer-manifest.v1"},
+                last_canary_status="passed",
+                freeze_reason=None,
+                created_at=now,
+                updated_at=now,
+                frozen_at=None,
+            )
+        ]
+    )
+    app = create_app(skill_store=skill_store)
+    routes = _routes(app)
+
+    async def run():
+        skill_detail = await routes[("/admin/api/v1/skills/{skill_id}", "GET")].endpoint(
+            skill_id=str(skill_id),
+            workspace_id="dev-01",
+        )
+        skill_object = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="skill",
+            object_id="context-artifact-curator",
+            workspace_id="dev-01",
+        )
+        version_detail = await routes[
+            ("/admin/api/v1/skills/{skill_id}/versions/{version_id}", "GET")
+        ].endpoint(
+            skill_id=str(skill_id),
+            version_id=str(active_version_id),
+            workspace_id="dev-01",
+        )
+        version_object = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="skill_version",
+            object_id=str(active_version_id),
+            workspace_id="dev-01",
+        )
+        return skill_detail, skill_object, version_detail, version_object
+
+    skill_detail, skill_object, version_detail, version_object = asyncio.run(run())
+
+    assert skill_detail.object["object_type"] == "skill"
+    assert skill_object.object["object_type"] == "skill"
+    assert skill_object.object["diagnostics"]["slug"] == "context-artifact-curator"
+    assert {"object_type": "skill_version", "object_id": str(active_version_id)} in (
+        skill_object.object["provenance"]["downstream"]
+    )
+    assert version_detail.object["object_type"] == "skill_version"
+    assert version_object.object["object_type"] == "skill_version"
+    assert version_object.object["diagnostics"]["compiled_sha256"] == "compiled-hash"
+    assert {"object_type": "skill", "object_id": str(skill_id)} in (
+        version_object.object["provenance"]["upstream"]
+    )
+    assert version_object.object["content_policy"]["skillir_available"] is False
+    assert version_object.object["content_policy"]["compiled_text_available"] is False
+
+
+def test_observatory_candidate_object_microscope_resolves_candidate_store() -> None:
+    now = datetime.now(UTC)
+    skill_id = uuid4()
+    skill_version_id = uuid4()
+    transaction_id = uuid4()
+    candidate_store = NullCandidateStore()
+    candidate_store.reviews = [
+        CandidateReviewRecord(
+            workspace_id=uuid4(),
+            workspace_key="dev-01",
+            skill_id=skill_id,
+            skill_version_id=skill_version_id,
+            slug="compose-diagnostics",
+            name="Compose Diagnostics",
+            lifecycle_state="candidate",
+            version=1,
+            scanner_status="passed",
+            evaluator_status="planned",
+            latest_evaluation_status="planned",
+            created_by_transaction_id=transaction_id,
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    app = create_app(candidate_store=candidate_store)
+    routes = _routes(app)
+
+    async def run():
+        detail = await routes[("/admin/api/v1/candidates/{candidate_id}", "GET")].endpoint(
+            candidate_id=str(skill_version_id),
+            workspace_id="dev-01",
+        )
+        microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="candidate",
+            object_id="compose-diagnostics",
+            workspace_id="dev-01",
+        )
+        return detail, microscope
+
+    detail, microscope = asyncio.run(run())
+
+    assert detail.object["object_type"] == "candidate"
+    assert microscope.object["object_type"] == "candidate"
+    assert microscope.object["diagnostics"]["scanner_status"] == "passed"
+    assert {"object_type": "evolution_transaction", "object_id": str(transaction_id)} in (
+        microscope.object["provenance"]["upstream"]
+    )
+    assert {"object_type": "skill", "object_id": str(skill_id)} in (
+        microscope.object["provenance"]["downstream"]
+    )
+    assert {"object_type": "skill_version", "object_id": str(skill_version_id)} in (
+        microscope.object["provenance"]["downstream"]
+    )
+    assert microscope.object["content_policy"]["skillir_available"] is False
+    assert microscope.object["content_policy"]["compiled_text_available"] is False
 
 
 def test_observatory_profile_microscopes_show_redacted_qualification_state() -> None:

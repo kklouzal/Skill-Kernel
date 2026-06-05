@@ -2,6 +2,23 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: Observatory skill, skill-version, and candidate records now
+have generic object-microscope drill-downs backed by the existing skill and
+candidate read stores. Shared content-safe payload builders align the dedicated
+skill/candidate detail routes with generic `skill`, `skill_version`, and
+`candidate` object aliases, expose lifecycle state, scanner/evaluator status,
+manifest-hash metadata, active-version links, candidate transaction refs, and
+safe provenance, and explicitly withhold raw SkillIR plus compiled runtime text.
+This advances core Sections 1, 1.2, 1.5, 13, 17, 23, and 28.2 plus Observatory
+Sections 7.6, 7.7, 8.9, 8.10, 9.1-9.3, 12.6, 13.1, and 21.16 by closing the
+skill-library/candidate aggregate-to-evidence path without adding UI-local
+mutation authority. Validation passed with focused skill/candidate/schedule
+microscope coverage, full sidecar ruff/pytest/compileall gates, compose config,
+diff-check, and core and Observatory acceptance reports (`70` implemented, `86`
+satisfied, `0` validation errors). No compose/Postgres smoke was needed because
+the slice only reuses existing read stores and validates them through in-memory
+route coverage.
+
 2026-06-05 update: Observatory storage/read-model health now has a dedicated
 content-safe storage microscope. `/admin/api/v1/storage` returns a storage
 object with relation counts, table/index/total byte summaries, estimated rows,

@@ -5372,6 +5372,89 @@ def create_app(
                 return item
         return None
 
+    def _skill_microscope(
+        skill_id: str,
+        skill: dict[str, Any] | None,
+        *,
+        object_type: str = "skill",
+    ) -> dict[str, Any]:
+        upstream: list[dict[str, str]] = []
+        downstream: list[dict[str, str]] = []
+        if skill and object_type == "skill_version" and skill.get("skill_id"):
+            upstream.append({"object_type": "skill", "object_id": str(skill["skill_id"])})
+        if skill and object_type == "skill" and skill.get("active_version_id"):
+            downstream.append(
+                {
+                    "object_type": "skill_version",
+                    "object_id": str(skill["active_version_id"]),
+                }
+            )
+        return {
+            "schema_version": "skillkernel.observatory.skill.v1",
+            "object_type": object_type,
+            "object_id": skill_id,
+            "title": skill.get("name", skill_id) if skill else skill_id,
+            "summary": (
+                "Skill lifecycle, active version, scanner/evaluator state, "
+                "and manifest metadata."
+            ),
+            "diagnostics": skill
+            or _missing_read_model("skill", supporting_component="skill_ir_graph_ir"),
+            "timeline": [],
+            "provenance": {"upstream": upstream, "downstream": downstream},
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "skillir_available": False,
+                "compiled_text_available": False,
+            },
+            "audit": {"links": []},
+        }
+
+    def _candidate_microscope(
+        candidate_id: str,
+        candidate: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        upstream: list[dict[str, str]] = []
+        downstream: list[dict[str, str]] = []
+        if candidate:
+            if candidate.get("created_by_transaction_id"):
+                upstream.append(
+                    {
+                        "object_type": "evolution_transaction",
+                        "object_id": str(candidate["created_by_transaction_id"]),
+                    }
+                )
+            if candidate.get("skill_id"):
+                downstream.append(
+                    {"object_type": "skill", "object_id": str(candidate["skill_id"])}
+                )
+            if candidate.get("skill_version_id"):
+                downstream.append(
+                    {
+                        "object_type": "skill_version",
+                        "object_id": str(candidate["skill_version_id"]),
+                    }
+                )
+        return {
+            "schema_version": "skillkernel.observatory.candidate.v1",
+            "object_type": "candidate",
+            "object_id": candidate_id,
+            "title": candidate.get("name", candidate_id) if candidate else candidate_id,
+            "summary": "Candidate SkillIR/proposal review state.",
+            "diagnostics": candidate
+            or _missing_read_model("candidate", supporting_component="opportunity_mining"),
+            "timeline": [],
+            "provenance": {"upstream": upstream, "downstream": downstream},
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "skillir_available": False,
+                "compiled_text_available": False,
+            },
+            "audit": {"links": []},
+        }
+
     def _job_microscope(job_id: str, job: dict[str, Any] | None) -> dict[str, Any]:
         downstream: list[dict[str, str]] = []
         if job:
@@ -9093,6 +9176,56 @@ def create_app(
                         schedule,
                     )
                 )
+        if object_type in {"skill", "runtime_skill"}:
+            listed = [
+                skill.to_json()
+                for skill in await skills.list_skills(
+                    workspace_key=workspace_id,
+                    lifecycle_state=None,
+                    limit=500,
+                )
+            ]
+            skill = _find_by_id(listed, object_id, ("skill_id", "slug", "active_version_id"))
+            if skill is not None:
+                return ObservatoryObjectResponse(
+                    object=_skill_microscope(object_id, skill)
+                )
+        if object_type in {"skill_version", "skill-version", "skillir_revision"}:
+            listed = [
+                skill.to_json()
+                for skill in await skills.list_skills(
+                    workspace_key=workspace_id,
+                    lifecycle_state=None,
+                    limit=500,
+                )
+            ]
+            skill = _find_by_id(listed, object_id, ("active_version_id",))
+            if skill is not None:
+                return ObservatoryObjectResponse(
+                    object=_skill_microscope(
+                        object_id,
+                        skill,
+                        object_type="skill_version",
+                    )
+                )
+        if object_type in {"candidate", "candidate_skill", "skill_candidate"}:
+            listed = [
+                candidate.to_json()
+                for candidate in await candidates.list_candidate_reviews(
+                    workspace_key=workspace_id,
+                    lifecycle_state=None,
+                    limit=250,
+                )
+            ]
+            candidate = _find_by_id(
+                listed,
+                object_id,
+                ("skill_id", "skill_version_id", "slug", "name"),
+            )
+            if candidate is not None:
+                return ObservatoryObjectResponse(
+                    object=_candidate_microscope(object_id, candidate)
+                )
         if object_type in {
             "action_attribution_check",
             "action-attribution-check",
@@ -9695,27 +9828,7 @@ def create_app(
             )
         ]
         skill = _find_by_id(listed, skill_id, ("skill_id", "slug", "active_version_id"))
-        return ObservatoryObjectResponse(
-            object={
-                "schema_version": "skillkernel.observatory.skill.v1",
-                "object_type": "skill",
-                "object_id": skill_id,
-                "title": skill.get("name", skill_id) if skill else skill_id,
-                "summary": (
-                    "Skill lifecycle, active version, scanner/evaluator state, "
-                    "and manifest metadata."
-                ),
-                "diagnostics": skill
-                or _missing_read_model("skill", supporting_component="skill_ir_graph_ir"),
-                "timeline": [],
-                "provenance": {"upstream": [], "downstream": []},
-                "content_policy": {
-                    "raw_available": False,
-                    "raw_reason": "raw-content-disabled",
-                },
-                "audit": {"links": []},
-            }
-        )
+        return ObservatoryObjectResponse(object=_skill_microscope(skill_id, skill))
 
     @app.get(
         "/admin/api/v1/skills/{skill_id}/versions/{version_id}",
@@ -9728,11 +9841,22 @@ def create_app(
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
         workspace_id: str | None = None,
     ) -> ObservatoryObjectResponse:
-        return await observatory_skill_detail(
-            skill_id=version_id or skill_id,
-            authorization=authorization,
-            x_skillkernel_roles=x_skillkernel_roles,
-            workspace_id=workspace_id,
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        listed = [
+            skill.to_json()
+            for skill in await skills.list_skills(
+                workspace_key=workspace_id,
+                lifecycle_state=None,
+                limit=500,
+            )
+        ]
+        skill = _find_by_id(listed, version_id or skill_id, ("active_version_id",))
+        return ObservatoryObjectResponse(
+            object=_skill_microscope(
+                version_id or skill_id,
+                skill,
+                object_type="skill_version",
+            )
         )
 
     @app.get("/admin/api/v1/topology", response_model=ObservatoryObjectResponse)
@@ -9870,19 +9994,7 @@ def create_app(
             ("skill_id", "skill_version_id", "slug", "name"),
         )
         return ObservatoryObjectResponse(
-            object={
-                "schema_version": "skillkernel.observatory.candidate.v1",
-                "object_type": "candidate",
-                "object_id": candidate_id,
-                "title": candidate.get("name", candidate_id) if candidate else candidate_id,
-                "summary": "Candidate SkillIR/proposal review state.",
-                "diagnostics": candidate
-                or _missing_read_model("candidate", supporting_component="opportunity_mining"),
-                "content_policy": {
-                    "raw_available": False,
-                    "raw_reason": "raw-content-disabled",
-                },
-            }
+            object=_candidate_microscope(candidate_id, candidate)
         )
 
     @app.get("/admin/api/v1/evaluations", response_model=ObservatoryCollectionResponse)
