@@ -9414,6 +9414,30 @@ def create_app(
             or _missing_read_model("scanner_finding", supporting_component="scanner_security"),
         )
 
+    @app.get(
+        "/admin/api/v1/scanner-findings/{finding_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_scanner_finding_detail(
+        finding_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        window_minutes: int = 60,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        snapshot = await _observatory_snapshot(
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+        return ObservatoryObjectResponse(
+            object=object_microscope(
+                snapshot,
+                object_type="scanner_finding",
+                object_id=finding_id,
+            )
+        )
+
     @app.get("/admin/api/v1/artifacts/{artifact_id}", response_model=ObservatoryObjectResponse)
     async def observatory_artifact_detail(
         artifact_id: str,

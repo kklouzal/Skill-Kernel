@@ -16,6 +16,25 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory scanner findings now have a content-safe detail
+  microscope instead of remaining list-only scanner cockpit records. The
+  scanner station record is normalized as a stable `scanner_finding` object,
+  `/admin/api/v1/scanner-findings/{finding_id}` returns the same object
+  microscope shape as the generic `/admin/api/v1/objects/scanner_finding/{id}`
+  path, and the payload exposes scanner component health, reason codes, data
+  quality, bounded scanner-reject counts, upstream scanner-gate provenance, and
+  the downstream `gates-cover-writer-activation` invariant without raw artifact
+  or skill content. This advances core handoff Section 24 scanner/security
+  diagnostics plus Observatory Sections 7.6, 7.7, 8.13, 12.1, 12.6, 13.1, and
+  16.1 by closing the drill-down path from scanner pressure aggregates to
+  governed sidecar evidence. Validation passed with focused scanner microscope
+  coverage (`2 passed`), generated Observatory OpenAPI client `--check`, `uv
+  run ruff check sidecar`, `uv run pytest` (`377 passed`), `uv run python -m
+  compileall -q sidecar`, `docker compose config --quiet`, `git diff --check`,
+  and core and Observatory acceptance reports (`ready=true`, `70` implemented
+  and `86` satisfied, `0` validation errors). No compose/Postgres smoke was
+  needed because the slice only shapes an existing snapshot-backed scanner read
+  model and does not touch persistence.
 - 2026-06-05: Observatory object microscopes now resolve `evaluation`,
   `evaluation_run`, and `probe_evaluation` links through the existing
   evaluator read model instead of falling through to the generic snapshot

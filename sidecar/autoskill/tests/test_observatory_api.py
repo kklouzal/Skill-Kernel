@@ -1276,6 +1276,7 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/evaluations", "GET"),
         ("/admin/api/v1/evaluations/{evaluation_id}", "GET"),
         ("/admin/api/v1/scanner-findings", "GET"),
+        ("/admin/api/v1/scanner-findings/{finding_id}", "GET"),
         ("/admin/api/v1/artifacts/{artifact_id}", "GET"),
         ("/admin/api/v1/historical/imports", "GET"),
         ("/admin/api/v1/historical/imports/{historical_import_id}", "GET"),
@@ -1328,12 +1329,21 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
             workspace_id="dev-01",
             window_minutes=10,
         )
-        return reason_code, invariants
+        scanner_finding = await routes[
+            ("/admin/api/v1/scanner-findings/{finding_id}", "GET")
+        ].endpoint(
+            finding_id="scanner_reject_counts",
+            workspace_id="dev-01",
+            window_minutes=10,
+        )
+        return reason_code, invariants, scanner_finding
 
-    reason_code, invariants = asyncio.run(run())
+    reason_code, invariants, scanner_finding = asyncio.run(run())
 
     assert reason_code.object["object_type"] == "reason_code"
     assert reason_code.object["content_policy"]["raw_available"] is False
+    assert scanner_finding.object["object_type"] == "scanner_finding"
+    assert scanner_finding.object["content_policy"]["raw_available"] is False
     invariant_ids = {
         item["invariant_id"] for item in invariants.collection["items"]
     }
@@ -2839,6 +2849,82 @@ def test_observatory_missing_required_signal_issue_cites_metric_contract() -> No
         "quality",
     ]
     assert detail["provenance"]["upstream"][1]["object_type"] == "required_signal_metric"
+
+
+def test_observatory_scanner_finding_microscope_exposes_gate_signal_without_raw_content() -> None:
+    settings = get_settings().model_copy(
+        update={
+            "database_url": "postgresql://autoskill:autoskill-dev@127.0.0.1/autoskill",
+            "control_token": "control-token",
+        }
+    )
+    snapshot = build_observatory_snapshot(
+        settings=settings,
+        status={
+            "mode": "dev",
+            "database_configured": True,
+            "ingest_auth_configured": True,
+            "control_auth_configured": True,
+            "runtime_context_broker": {"enabled": True},
+            "jobs": {},
+            "workers": {},
+        },
+        operator_metrics={
+            "captured_at": datetime.now(UTC).isoformat(),
+            "metrics": {
+                "ingest": {"events_in_window": 1, "total_events": 1},
+                "redaction_counts": {},
+                "spool_backlog": {},
+                "retrieval_decisions": {},
+                "embedding_backlog": {},
+                "context_hint_injection_count": 0,
+                "context_hint_token_cost": 0,
+                "context_hint_token_ledger_count": 0,
+                "skill_creation_improvement_counts": {},
+                "skill_lifecycle_counts": {},
+                "scanner_reject_counts": {"skill_versions": 2},
+                "evaluation_pass_fail_counts": {},
+                "rollback_freeze_counts": {},
+                "job_queue_depth": {},
+                "postgres_table_index_growth": [],
+                "audit": {},
+                "sidecar_latency_ms": {},
+            },
+            "dashboards": {},
+        },
+        worker_health={},
+        audit_chain_valid=True,
+        static_available=True,
+        workspace_id="dev-01",
+        window_minutes=10,
+    )
+
+    scanner = next(
+        station
+        for station in snapshot["pipeline"]["stations"]  # type: ignore[index]
+        if station["component_id"] == "scanner_security"
+    )
+    assert scanner["records"][0]["object_id"] == "scanner_reject_counts"
+
+    detail = object_microscope(
+        snapshot,
+        object_type="scanner_finding",
+        object_id="scanner_reject_counts",
+    )
+
+    assert detail["object_type"] == "scanner_finding"
+    assert detail["diagnostics"]["gate_effect"] == "blocks_writer_activation"
+    assert detail["diagnostics"]["record"]["summary"]["skill_versions"] == 2
+    assert detail["content_policy"]["raw_available"] is False
+    assert detail["provenance"]["upstream"][0] == {
+        "object_type": "component",
+        "object_id": "scanner_security",
+        "relationship": "owning_gate",
+    }
+    assert {
+        "object_type": "pipeline_invariant",
+        "object_id": "gates-cover-writer-activation",
+    } in detail["provenance"]["downstream"]
 
 
 def test_observatory_evaluation_detail_exposes_autonomy_assurance() -> None:

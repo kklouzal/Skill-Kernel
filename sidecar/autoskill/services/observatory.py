@@ -728,6 +728,59 @@ def object_microscope(
                 upstream=[{"object_type": "component", "object_id": invariant["component_id"]}],
                 downstream=[{"object_type": "issue", "object_id": invariant["deep_link"]}],
             )
+    if object_type in {"scanner_finding", "scanner-finding"}:
+        for component in snapshot["pipeline"]["stations"]:
+            if component["component_id"] != "scanner_security":
+                continue
+            for record in component.get("records", []):
+                if not isinstance(record, dict):
+                    continue
+                record_id = str(
+                    record.get("object_id")
+                    or record.get("scanner_finding_id")
+                    or record.get("finding_id")
+                    or record.get("record_type")
+                    or ""
+                )
+                if record_id != object_id:
+                    continue
+                diagnostics = {
+                    "component_id": component["component_id"],
+                    "component_health": component["health"],
+                    "reason_codes": list(component.get("reason_codes", [])),
+                    "data_quality": component.get("data_quality", {}),
+                    "record": record,
+                    "gate_effect": (
+                        "blocks_writer_activation"
+                        if int(component.get("blocked_count") or 0) > 0
+                        else "no_current_block"
+                    ),
+                }
+                return _microscope_payload(
+                    object_type="scanner_finding",
+                    object_id=record_id,
+                    title=str(record.get("record_type") or record_id).replace("_", " ").title(),
+                    summary=(
+                        "Content-safe scanner/security gate signal derived from the "
+                        "sidecar Observatory snapshot."
+                    ),
+                    diagnostics=diagnostics,
+                    upstream=[
+                        {
+                            "object_type": "component",
+                            "object_id": component["component_id"],
+                            "relationship": "owning_gate",
+                        },
+                        *_upstream_edges(snapshot, component["component_id"]),
+                    ],
+                    downstream=[
+                        *_downstream_edges(snapshot, component["component_id"]),
+                        {
+                            "object_type": "pipeline_invariant",
+                            "object_id": "gates-cover-writer-activation",
+                        },
+                    ],
+                )
     for reason_code, description in REASON_CODES.items():
         if object_type == "reason_code" and reason_code == object_id:
             supporting_components = [
@@ -1631,6 +1684,16 @@ def _station_records(
                     "hint_token_cost": metrics.get("context_hint_token_cost", 0),
                     "ledger_count": metrics.get("context_hint_token_ledger_count", 0),
                 },
+            }
+        ]
+    if metric_family == "scanner":
+        return [
+            {
+                "object_type": "scanner_finding",
+                "object_id": "scanner_reject_counts",
+                "record_type": "scanner_reject_counts",
+                "component_id": "scanner_security",
+                "summary": metrics.get("scanner_reject_counts", {}),
             }
         ]
     return [{"record_type": metric_family, "summary": metrics.get(metric_family, {})}]

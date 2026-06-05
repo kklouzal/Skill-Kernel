@@ -2,6 +2,22 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: Observatory scanner findings now have a dedicated
+content-safe detail read model. The scanner station emits a stable
+`scanner_finding` object for scanner reject counts, and
+`/admin/api/v1/scanner-findings/{finding_id}` plus the generic
+`/admin/api/v1/objects/scanner_finding/{id}` microscope expose component
+health, reason codes, data quality, bounded gate counts, scanner-gate
+provenance, and the downstream `gates-cover-writer-activation` invariant
+without raw artifact or skill content. This advances core Section 24
+scanner/security diagnostics plus Observatory Sections 7.6, 7.7, 8.13, 12.1,
+12.6, 13.1, and 16.1 by closing the scanner-pressure aggregate-to-evidence
+drill-down path. Validation passed with focused scanner microscope coverage,
+generated OpenAPI client `--check`, full sidecar ruff/pytest/compileall gates,
+compose config, diff-check, and core and Observatory acceptance reports. No
+compose/Postgres smoke was needed because the slice only shapes the existing
+snapshot-backed scanner read model.
+
 2026-06-05 update: Observatory object microscopes now include a dedicated
 content-safe `evaluation`/`evaluation_run`/`probe_evaluation` path backed by
 the evaluator read model. `/admin/api/v1/objects/evaluation/{id}` resolves the
