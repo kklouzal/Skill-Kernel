@@ -1525,6 +1525,49 @@ def test_observatory_topology_exposes_operation_metrics_read_model() -> None:
                     "rollback_actions_planned": True,
                     "writes": ["skills/autoskill/split-successor"],
                     "requires_trial_before_apply": True,
+                    "data_to_skill_trace": {
+                        "schema_version": "skillkernel.data-to-skill-trace.topology.v1",
+                        "operation_kind": "decompose",
+                        "status": "candidate",
+                        "plan_hash": "topology-plan-hash",
+                        "terminal_stage": "planned_trials",
+                        "failure_exit": None,
+                        "stage_count": 2,
+                        "stages": [
+                            {
+                                "name": "evidence_packet",
+                                "status": "present",
+                                "reason_codes": ["cited-evidence"],
+                                "input_refs": [
+                                    {
+                                        "object_type": "evidence_item",
+                                        "object_id": "safe-evidence-id",
+                                        "raw_text": "raw supporting transcript",
+                                    }
+                                ],
+                                "output_refs": [
+                                    {
+                                        "object_type": "topology_evidence_packet",
+                                        "object_id": "topology-plan-hash",
+                                    }
+                                ],
+                                "raw_stage_payload": "raw skill body must not leak",
+                            },
+                            {
+                                "name": "planned_trials",
+                                "status": "planned",
+                                "reason_codes": ["trial-before-apply-required"],
+                                "input_refs": [],
+                                "output_refs": [
+                                    {
+                                        "object_type": "planned_topology_trial",
+                                        "object_id": "trial-id",
+                                    }
+                                ],
+                            },
+                        ],
+                        "raw_trace_payload": "raw operator content",
+                    },
                     "raw_plan_text": "raw skill body must not leak",
                 },
                 rollback_of_transaction_id=None,
@@ -1573,7 +1616,19 @@ def test_observatory_topology_exposes_operation_metrics_read_model() -> None:
     assert review["recent"][0]["evidence_count"] == 2
     assert review["recent"][0]["graph_node_roles"] == {"subject": 1, "successor": 2}
     assert review["recent"][0]["requires_trial_before_apply"] is True
+    trace = review["recent"][0]["data_to_skill_trace"]
+    assert trace["schema_version"] == "skillkernel.data-to-skill-trace.topology.v1"
+    assert trace["terminal_stage"] == "planned_trials"
+    assert trace["content_policy"]["raw_available"] is False
+    assert trace["stages"][0]["input_refs"] == [
+        {"object_type": "evidence_item", "object_id": "safe-evidence-id"}
+    ]
+    assert trace["stages"][1]["output_refs"] == [
+        {"object_type": "planned_topology_trial", "object_id": "trial-id"}
+    ]
     assert "raw skill body" not in json.dumps(review, sort_keys=True)
+    assert "raw supporting transcript" not in json.dumps(review, sort_keys=True)
+    assert "raw operator content" not in json.dumps(review, sort_keys=True)
 
 
 def test_observatory_broker_decisions_use_content_safe_retrieval_logs() -> None:

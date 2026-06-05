@@ -471,6 +471,31 @@ def test_topology_proposal_persistence_records_operation_trials_and_transaction(
         "transaction_items",
         "planned_topology_trials",
     ]
+    trace = metrics["data_to_skill_trace"]
+    assert trace["schema_version"] == "skillkernel.data-to-skill-trace.topology.v1"
+    assert trace["operation_kind"] == "compose"
+    assert trace["status"] == "candidate"
+    assert trace["failure_exit"] is None
+    assert trace["terminal_stage"] == "planned_trials"
+    assert trace["content_policy"]["raw_available"] is False
+    stages = {stage["name"]: stage for stage in trace["stages"]}
+    assert stages["evidence_packet"]["input_refs"] == [
+        {"object_type": "evidence_item", "object_id": str(evidence_id)}
+    ]
+    assert stages["operation_plan"]["output_refs"] == [
+        {
+            "object_type": "skill_graph_operation",
+            "object_id": str(persisted.operation.skill_graph_operation_id),
+        }
+    ]
+    assert stages["evaluation_result"]["output_refs"] == [
+        {
+            "object_type": "planned_topology_trial",
+            "object_id": str(trial.planned_topology_trial_id),
+        }
+        for trial in persisted.trials
+    ]
+    assert "inspect-and-repair" not in str(trace)
 
 
 def test_topology_apply_requires_passed_trials() -> None:

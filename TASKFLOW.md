@@ -16,6 +16,31 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Topology proposal persistence now records a content-safe
+  data-to-skill trace capsule inside the governing `topology_*`
+  `evolution_transactions.metrics` record. The trace exposes stage names,
+  statuses, reason codes, bounded object refs, terminal stage, and non-skill
+  failure exit for source/evidence packet, operation candidate/plan,
+  SkillGraphIR revision, artifact-plan, evaluation/trial, transaction, and
+  propose-only activation/broker-outcome phases without storing raw evidence,
+  SkillIR/SkillGraphIR bodies, skill text, or operator content. The
+  Observatory topology transaction-review read model now allowlists the trace
+  into `/admin/api/v1/topology` while stripping arbitrary raw fields from
+  transaction metrics. This advances core handoff Sections 1.2, 13.8.10,
+  13.8.11, 13.8.12, and 17.1-17.9 plus Observatory Sections 7.6, 7.7, 8.9,
+  8.10, 12.6, 13.1, and 16.1. Validation passed with topology
+  persistence/read-model tests (`2 passed`), focused ruff checks, `uv run ruff
+  check sidecar`, `uv run pytest` (`373 passed`), `uv run python -m compileall
+  -q sidecar`, `docker compose config --quiet`, `git diff --check`, `uv run
+  python scripts/autoskill_acceptance.py --json` (`ready=true`, `70`
+  implemented, `0` validation errors), `uv run python
+  scripts/autoskill_observatory_acceptance.py --json` (`ready=true`, `86`
+  satisfied, `0` validation errors), and a real compose/Postgres smoke on port
+  `56509` that migrated a fresh database, persisted a `topology_compose`
+  proposal through `AsyncpgTopologyStore`/`AsyncpgGovernanceStore`, read the
+  stored trace back through authenticated `/admin/api/v1/topology`, verified
+  the operation/trial refs (`5` trials, `11` trace stages), and removed the
+  temporary compose project/volume.
 - 2026-06-05: Observatory topology cockpit now includes a content-safe
   transaction-review read model derived from `evolution_transactions.metrics`.
   The governance store exposes bounded recent transaction listing by workspace

@@ -257,7 +257,14 @@ async def persist_topology_proposal(
     await governance.update_transaction_status(
         evolution_transaction_id=transaction.transaction.evolution_transaction_id,
         status="staged" if proposal.status == "candidate" else "blocked",
-        metrics=_topology_transaction_metrics(proposal),
+        metrics=_topology_transaction_metrics(
+            proposal,
+            evolution_transaction_id=transaction.transaction.evolution_transaction_id,
+            skill_graph_operation_id=operation.skill_graph_operation_id,
+            planned_topology_trial_ids=[
+                trial.planned_topology_trial_id for trial in trials
+            ],
+        ),
     )
     return TopologyPersistenceRecord(operation=operation, trials=trials)
 
@@ -362,6 +369,10 @@ def propose_creation(request: CreateTopologyRequest) -> TopologyProposalResult:
 
 def _topology_transaction_metrics(
     proposal: TopologyProposalResult,
+    *,
+    evolution_transaction_id: UUID,
+    skill_graph_operation_id: UUID,
+    planned_topology_trial_ids: list[UUID],
 ) -> dict[str, Any]:
     graph = proposal.skill_graph_ir
     nodes = graph.nodes if graph else []
@@ -390,7 +401,213 @@ def _topology_transaction_metrics(
         "rollback_actions_planned": bool(proposal.transaction.rollback_actions),
         "writes": list(proposal.transaction.writes),
         "requires_trial_before_apply": True,
+        "data_to_skill_trace": _topology_data_to_skill_trace(
+            proposal,
+            evolution_transaction_id=evolution_transaction_id,
+            skill_graph_operation_id=skill_graph_operation_id,
+            planned_topology_trial_ids=planned_topology_trial_ids,
+        ),
     }
+
+
+def _topology_data_to_skill_trace(
+    proposal: TopologyProposalResult,
+    *,
+    evolution_transaction_id: UUID,
+    skill_graph_operation_id: UUID,
+    planned_topology_trial_ids: list[UUID],
+) -> dict[str, Any]:
+    graph = proposal.skill_graph_ir
+    blocker_codes = _topology_blocker_codes(proposal.blockers)
+    terminal_stage = "planned_trials" if proposal.status == "candidate" else "operation_candidate"
+    return {
+        "schema_version": "skillkernel.data-to-skill-trace.topology.v1",
+        "operation_kind": proposal.operation_kind,
+        "status": proposal.status,
+        "plan_hash": proposal.plan_hash,
+        "terminal_stage": terminal_stage,
+        "failure_exit": _topology_failure_exit(proposal.blockers),
+        "stage_count": 11,
+        "stages": [
+            {
+                "name": "source_item",
+                "status": "deferred_to_evidence_provenance",
+                "reason_codes": ["source-lineage-via-evidence"],
+                "input_refs": [],
+                "output_refs": _object_refs("evidence_item", proposal.evidence_ids),
+            },
+            {
+                "name": "evidence_packet",
+                "status": "present" if proposal.evidence_ids else "missing",
+                "reason_codes": ["cited-evidence"] if proposal.evidence_ids else blocker_codes,
+                "input_refs": _object_refs("evidence_item", proposal.evidence_ids),
+                "output_refs": [
+                    {"object_type": "topology_evidence_packet", "object_id": proposal.plan_hash}
+                ],
+            },
+            {
+                "name": "operation_candidate",
+                "status": proposal.status,
+                "reason_codes": blocker_codes,
+                "input_refs": [
+                    {"object_type": "topology_evidence_packet", "object_id": proposal.plan_hash}
+                ],
+                "output_refs": [
+                    {
+                        "object_type": "evolution_transaction",
+                        "object_id": str(evolution_transaction_id),
+                    }
+                ],
+            },
+            {
+                "name": "operation_plan",
+                "status": proposal.status,
+                "reason_codes": ["plan-hash-recorded"],
+                "input_refs": [
+                    {
+                        "object_type": "evolution_transaction",
+                        "object_id": str(evolution_transaction_id),
+                    }
+                ],
+                "output_refs": [
+                    {
+                        "object_type": "skill_graph_operation",
+                        "object_id": str(skill_graph_operation_id),
+                    }
+                ],
+            },
+            {
+                "name": "skill_graph_ir_revision",
+                "status": "present" if graph else "blocked",
+                "reason_codes": ["skillgraphir-present"] if graph else blocker_codes,
+                "input_refs": [
+                    {
+                        "object_type": "skill_graph_operation",
+                        "object_id": str(skill_graph_operation_id),
+                    }
+                ],
+                "output_refs": [
+                    {
+                        "object_type": "skill_graph_operation",
+                        "object_id": str(skill_graph_operation_id),
+                    }
+                ]
+                if graph
+                else [],
+            },
+            {
+                "name": "artifact_plan",
+                "status": "pending" if proposal.status == "candidate" else "blocked",
+                "reason_codes": ["propose-only-no-runtime-write"],
+                "input_refs": [
+                    {
+                        "object_type": "skill_graph_operation",
+                        "object_id": str(skill_graph_operation_id),
+                    }
+                ],
+                "output_refs": [
+                    {"object_type": "planned_write_target", "object_id": target}
+                    for target in proposal.transaction.writes
+                ],
+            },
+            {
+                "name": "compiled_artifact",
+                "status": "not_started_propose_only",
+                "reason_codes": ["compiler-gate-not-run"],
+                "input_refs": [],
+                "output_refs": [],
+            },
+            {
+                "name": "staged_package",
+                "status": "not_started_propose_only",
+                "reason_codes": ["writer-gate-not-run"],
+                "input_refs": [],
+                "output_refs": [],
+            },
+            {
+                "name": "evaluation_result",
+                "status": "planned" if proposal.status == "candidate" else "blocked",
+                "reason_codes": ["trial-before-apply-required"],
+                "input_refs": [
+                    {
+                        "object_type": "skill_graph_operation",
+                        "object_id": str(skill_graph_operation_id),
+                    }
+                ],
+                "output_refs": _object_refs(
+                    "planned_topology_trial",
+                    [str(value) for value in planned_topology_trial_ids],
+                ),
+            },
+            {
+                "name": "evolution_transaction",
+                "status": "staged" if proposal.status == "candidate" else "blocked",
+                "reason_codes": ["transaction-recorded"],
+                "input_refs": [
+                    {
+                        "object_type": "skill_graph_operation",
+                        "object_id": str(skill_graph_operation_id),
+                    }
+                ],
+                "output_refs": [
+                    {
+                        "object_type": "evolution_transaction",
+                        "object_id": str(evolution_transaction_id),
+                    }
+                ],
+            },
+            {
+                "name": "active_broker_outcome",
+                "status": "not_started_propose_only",
+                "reason_codes": ["activation-gate-not-run"],
+                "input_refs": [],
+                "output_refs": [],
+            },
+        ],
+        "content_policy": {
+            "raw_available": False,
+            "redaction_state": "content_safe_trace_refs_only",
+        },
+    }
+
+
+def _topology_blocker_codes(blockers: list[str]) -> list[str]:
+    if not blockers:
+        return ["deterministic-gates-passed"]
+    codes: list[str] = []
+    for blocker in blockers:
+        lowered = blocker.lower()
+        if "evidence" in lowered:
+            codes.append("missing-evidence")
+        elif "effect" in lowered or "cover" in lowered:
+            codes.append("effect-contract-blocked")
+        elif "duplicate" in lowered:
+            codes.append("duplicate-topology-member")
+        elif "bounded" in lowered:
+            codes.append("topology-bound-exceeded")
+        elif "reason" in lowered:
+            codes.append("missing-deterministic-reason")
+        else:
+            codes.append("topology-proposal-blocked")
+    return sorted(set(codes))
+
+
+def _topology_failure_exit(blockers: list[str]) -> str | None:
+    if not blockers:
+        return None
+    lowered = " ".join(blockers).lower()
+    if "evidence" in lowered or "reason" in lowered:
+        return "no_op"
+    if "duplicate" in lowered:
+        return "merge_candidate"
+    return "quarantine"
+
+
+def _object_refs(object_type: str, values: list[str]) -> list[dict[str, str]]:
+    return [
+        {"object_type": object_type, "object_id": str(value)}
+        for value in values[:50]
+    ]
 
 
 def propose_improvement(request: ImproveTopologyRequest) -> TopologyProposalResult:

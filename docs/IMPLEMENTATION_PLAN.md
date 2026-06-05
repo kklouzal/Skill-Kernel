@@ -2,6 +2,21 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: topology proposal persistence now stamps a content-safe
+data-to-skill trace capsule into the governing `topology_*`
+`evolution_transactions.metrics` row. The trace records stage status, reason
+codes, bounded object refs, terminal stage, and safe non-skill failure exits for
+the candidate-to-trial/transaction portion of the bridge, while keeping raw
+evidence, SkillIR/SkillGraphIR bodies, skill text, and operator content out of
+metrics. `/admin/api/v1/topology` exposes the trace through an allowlisted
+transaction-review read model and strips arbitrary raw fields. This advances
+core Sections 1.2, 13.8.10-13.8.12, and 17 plus Observatory Sections 7.6, 7.7,
+8.9, 8.10, 12.6, 13.1, and 16.1. Validation passed with focused trace
+persistence/read-model tests, full sidecar ruff/pytest/compileall gates,
+compose config, core and Observatory acceptance reports, diff-check, and a real
+compose/Postgres smoke that persisted a compose proposal through asyncpg stores
+and read the trace back through authenticated `/admin/api/v1/topology`.
+
 2026-06-05 update: Observatory topology review now consumes the topology
 transaction capsule persisted on `evolution_transactions.metrics`.
 `/admin/api/v1/topology` combines operation/trial metrics from the topology

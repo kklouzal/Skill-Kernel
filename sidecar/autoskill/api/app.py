@@ -6435,6 +6435,9 @@ def create_app(
                     "requires_trial_before_apply": bool(
                         metrics.get("requires_trial_before_apply", False)
                     ),
+                    "data_to_skill_trace": _safe_data_to_skill_trace(
+                        metrics.get("data_to_skill_trace")
+                    ),
                     "started_at": payload["started_at"],
                     "committed_at": payload.get("committed_at"),
                     "rolled_back_at": payload.get("rolled_back_at"),
@@ -6453,6 +6456,60 @@ def create_app(
                 "redaction_state": "topology_transaction_metrics_only",
             },
         }
+
+    def _safe_data_to_skill_trace(value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        stages = value.get("stages", [])
+        if not isinstance(stages, list):
+            stages = []
+        return {
+            "schema_version": str(
+                value.get("schema_version")
+                or "skillkernel.data-to-skill-trace.unknown"
+            ),
+            "operation_kind": value.get("operation_kind"),
+            "status": value.get("status"),
+            "plan_hash": value.get("plan_hash"),
+            "terminal_stage": value.get("terminal_stage"),
+            "failure_exit": value.get("failure_exit"),
+            "stage_count": value.get("stage_count", len(stages)),
+            "stages": [_safe_data_to_skill_stage(stage) for stage in stages[:20]],
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "content_safe_trace_refs_only",
+            },
+        }
+
+    def _safe_data_to_skill_stage(value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            value = {}
+        reason_codes = value.get("reason_codes", [])
+        if not isinstance(reason_codes, list):
+            reason_codes = []
+        return {
+            "name": value.get("name"),
+            "status": value.get("status"),
+            "reason_codes": [str(code) for code in reason_codes[:20]],
+            "input_refs": _safe_object_refs(value.get("input_refs")),
+            "output_refs": _safe_object_refs(value.get("output_refs")),
+        }
+
+    def _safe_object_refs(value: Any) -> list[dict[str, str | None]]:
+        if not isinstance(value, list):
+            return []
+        refs: list[dict[str, str | None]] = []
+        for item in value[:20]:
+            if not isinstance(item, dict):
+                continue
+            refs.append(
+                {
+                    "object_type": str(item.get("object_type") or "unknown"),
+                    "object_id": str(item.get("object_id")) if item.get("object_id") else None,
+                }
+            )
+        return refs
 
     async def _record_observatory_action(
         request: ObservatoryActionRequest,
