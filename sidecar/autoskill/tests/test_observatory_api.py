@@ -2103,6 +2103,126 @@ def test_observatory_evolution_transaction_object_microscope_is_content_safe() -
     assert "raw rollback text" not in rendered
 
 
+def test_observatory_writer_transaction_object_microscope_is_content_safe() -> None:
+    transaction_id = uuid4()
+    manifest_item_id = uuid4()
+    file_item_id = uuid4()
+    governance = MemoryTopologyGovernanceStore(
+        [
+            EvolutionTransactionRecord(
+                evolution_transaction_id=transaction_id,
+                workspace_id=uuid4(),
+                workspace_key="dev-01",
+                transaction_kind="compile_skill",
+                status="applied",
+                idempotency_key="raw writer idempotency text",
+                plan_hash="writer-plan-hash",
+                actor="autoskill-sidecar",
+                cause={"raw_reason": "raw writer rationale"},
+                source_evidence_ids=[],
+                source_memory_ids=[],
+                policy_snapshot={"policy": "writer_policy.v1"},
+                metrics={
+                    "slug": "context-repair",
+                    "active_relative_path": "skills/autoskill/context-repair",
+                    "manifest_sha256": "manifest-safe-hash",
+                    "file_count": 2,
+                    "previous_snapshot": ".autoskill/archive/skill/v1/.autoskill-manifest.json",
+                    "manifest_relative_path": "staged/context-repair/.autoskill-manifest.json",
+                    "activation_deferred": True,
+                    "activation_window": {
+                        "allowed": False,
+                        "status": "deferred",
+                        "reason": "session_active",
+                        "raw_session_note": "raw session content",
+                    },
+                    "raw_manifest_payload": "raw generated skill text",
+                },
+                rollback_of_transaction_id=None,
+                started_at=datetime.now(UTC),
+                committed_at=datetime.now(UTC),
+                rolled_back_at=None,
+            )
+        ],
+        items=[
+            EvolutionTransactionItemRecord(
+                transaction_item_id=uuid4(),
+                evolution_transaction_id=transaction_id,
+                item_kind="artifact_manifest",
+                item_id=manifest_item_id,
+                relative_path="skills/autoskill/context-repair/.autoskill-manifest.json",
+                before_hash=None,
+                after_hash="manifest-safe-hash",
+                activation_state="active",
+                rollback_action={
+                    "operation": "restore_archive_manifest",
+                    "raw_instruction": "raw rollback text",
+                },
+                created_at=datetime.now(UTC),
+            ),
+            EvolutionTransactionItemRecord(
+                transaction_item_id=uuid4(),
+                evolution_transaction_id=transaction_id,
+                item_kind="compiled_skill_file",
+                item_id=file_item_id,
+                relative_path="skills/autoskill/context-repair/SKILL.md",
+                before_hash="old-hash",
+                after_hash="new-hash",
+                activation_state="active",
+                rollback_action={"operation": "restore_archive_manifest"},
+                created_at=datetime.now(UTC),
+            ),
+        ],
+    )
+    app = create_app(governance_store=governance, audit_store=MemoryAuditStore())
+    route = next(
+        route for route in app.routes if route.path == "/admin/api/v1/objects/{object_type}/{object_id}"
+    )
+
+    async def run():
+        return await route.endpoint(
+            object_type="writer_transaction",
+            object_id=str(transaction_id),
+            authorization=None,
+            x_skillkernel_roles=None,
+            workspace_id="dev-01",
+            window_minutes=60,
+        )
+
+    response = asyncio.run(run())
+    payload = response.object
+
+    assert payload["schema_version"] == "skillkernel.observatory.writer-transaction.v1"
+    assert payload["object_type"] == "writer_transaction"
+    assert payload["object_id"] == str(transaction_id)
+    assert payload["content_policy"]["raw_available"] is False
+    assert payload["diagnostics"]["supporting_component"] == "deterministic_writer"
+    assert payload["diagnostics"]["activation_deferred"] is True
+    assert payload["effects"]["writer_metrics"]["manifest_sha256"] == "manifest-safe-hash"
+    assert payload["effects"]["writer_metrics"]["activation_window"] == {
+        "raw_window_payload_returned": False,
+        "key_count": 4,
+        "allowed": False,
+        "status": "deferred",
+        "reason": "session_active",
+    }
+    assert payload["effects"]["items"][0]["item_kind"] == "artifact_manifest"
+    assert payload["effects"]["items"][0]["rollback_operation"] == (
+        "restore_archive_manifest"
+    )
+    assert payload["effects"]["rollback_metadata_present"] is True
+    assert payload["audit"]["links"] == [
+        {"object_type": "evolution_transaction", "object_id": str(transaction_id)},
+        {"object_type": "writer_transaction", "object_id": str(transaction_id)},
+    ]
+    rendered = json.dumps(payload, sort_keys=True)
+    assert "raw writer idempotency text" not in rendered
+    assert "raw writer rationale" not in rendered
+    assert "raw generated skill text" not in rendered
+    assert "raw session content" not in rendered
+    assert "raw rollback text" not in rendered
+
+
 def test_observatory_revocation_request_object_microscope_is_content_safe() -> None:
     revocation_request_id = uuid4()
     root_object_id = uuid4()

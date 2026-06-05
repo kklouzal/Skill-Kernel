@@ -16,6 +16,26 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory object microscopes now resolve deterministic
+  `writer_transaction` links through governance-backed evolution transaction
+  rows instead of forcing operators to infer writer state from generic
+  transaction detail or trace replay alone. The new microscope exposes
+  content-safe writer metadata including manifest hash, active relative path,
+  file count, previous snapshot pointer, staged manifest path, activation
+  deferral/window status, bounded transaction items, rollback operation names,
+  and audit links while withholding raw metric payloads, raw activation-window
+  notes, raw idempotency/cause text, raw generated skill text, and arbitrary
+  rollback instructions. This advances core handoff Sections 1.2, 25, and
+  28.2 plus Observatory Sections 7.6, 7.7, 8.15, 12.6, 13.1, and 16.1 by
+  making deterministic writer apply/rollback evidence traversable through the
+  sidecar object microscope without adding any runtime mutation authority.
+  Validation passed with focused writer/evolution microscope coverage (`2
+  passed`), focused ruff checks, `uv run ruff check sidecar`, `uv run pytest`
+  (`379 passed`), `uv run python -m compileall -q sidecar`, `docker compose
+  config --quiet`, `git diff --check`, and core and Observatory acceptance
+  reports (`ready=true`, `70` implemented and `86` satisfied, `0` validation
+  errors). No compose/Postgres smoke was needed because the slice only adds a
+  content-safe read-model alias over existing governance transaction lookups.
 - 2026-06-05: Observatory object microscopes now resolve
   `revocation_request` links to content-safe rollback/revocation request
   detail backed by the governance store instead of falling through to the

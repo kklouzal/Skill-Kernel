@@ -7031,6 +7031,79 @@ def create_app(
             "created_at": payload["created_at"],
         }
 
+    def _safe_writer_transaction_metrics(metrics: Any) -> dict[str, Any]:
+        if not isinstance(metrics, dict):
+            metrics = {}
+        safe: dict[str, Any] = {
+            "metric_key_count": len(metrics),
+            "raw_metrics_returned": False,
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "allowlisted_writer_metrics_only",
+            },
+        }
+        for key in (
+            "slug",
+            "active_relative_path",
+            "manifest_sha256",
+            "file_count",
+            "previous_snapshot",
+            "manifest_relative_path",
+            "activation_deferred",
+        ):
+            if key not in metrics:
+                continue
+            value = metrics.get(key)
+            if isinstance(value, str | int | bool) or value is None:
+                safe[key] = value
+        window = metrics.get("activation_window")
+        if isinstance(window, dict):
+            safe_window: dict[str, Any] = {
+                "raw_window_payload_returned": False,
+                "key_count": len(window),
+            }
+            for key in ("allowed", "status", "reason", "policy", "deferred_until"):
+                if key not in window:
+                    continue
+                value = window.get(key)
+                if isinstance(value, str | int | bool | float) or value is None:
+                    safe_window[key] = value
+            safe["activation_window"] = safe_window
+        return safe
+
+    def _is_writer_transaction(payload: dict[str, Any], items: list[dict[str, Any]]) -> bool:
+        metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+        transaction_kind = str(payload.get("transaction_kind") or "")
+        if transaction_kind in {
+            "compile_skill",
+            "support_artifact_update",
+            "rollback_skill",
+            "archive_skill",
+            "promote_skill",
+        } and any(
+            key in metrics
+            for key in (
+                "manifest_sha256",
+                "active_relative_path",
+                "previous_snapshot",
+                "activation_window",
+                "activation_deferred",
+            )
+        ):
+            return True
+        return any(
+            item.get("item_kind")
+            in {
+                "compiled_skill_file",
+                "artifact_manifest",
+                "archive_snapshot",
+                "filesystem_path",
+                "compiled_bundle",
+            }
+            for item in items
+        )
+
     def _safe_revocation_traversal_summary(summary: dict[str, Any]) -> dict[str, Any]:
         safe: dict[str, Any] = {
             "summary_keys": sorted(str(key) for key in summary),
@@ -7195,6 +7268,114 @@ def create_app(
             },
             "audit": {
                 "links": [{"object_type": "revocation_request", "object_id": request_id}],
+                "chain_visible": True,
+            },
+        }
+
+    def _writer_transaction_microscope(
+        transaction: Any,
+        items: list[Any],
+    ) -> dict[str, Any] | None:
+        payload = transaction.to_json()
+        transaction_id = payload["evolution_transaction_id"]
+        safe_items = [_safe_transaction_item(item) for item in items[:100]]
+        if not _is_writer_transaction(payload, safe_items):
+            return None
+        safe_metrics = _safe_writer_transaction_metrics(payload.get("metrics"))
+        rollback_refs = [
+            {
+                "object_type": item["item_kind"],
+                "object_id": item.get("item_id") or item["transaction_item_id"],
+                "relationship": item.get("rollback_operation") or "writer_item",
+            }
+            for item in safe_items
+            if item.get("rollback_operation")
+        ]
+        timeline = [
+            {
+                "at": payload["started_at"],
+                "event": "writer_transaction_started",
+                "status": payload["status"],
+                "transaction_kind": payload["transaction_kind"],
+            }
+        ]
+        if safe_metrics.get("activation_deferred"):
+            timeline.append(
+                {
+                    "at": payload.get("committed_at") or payload["started_at"],
+                    "event": "activation_window_deferred",
+                    "status": payload["status"],
+                }
+            )
+        if payload.get("committed_at"):
+            timeline.append(
+                {
+                    "at": payload["committed_at"],
+                    "event": "writer_transaction_committed",
+                    "status": payload["status"],
+                }
+            )
+        if payload.get("rolled_back_at"):
+            timeline.append(
+                {
+                    "at": payload["rolled_back_at"],
+                    "event": "writer_transaction_rolled_back",
+                    "status": payload["status"],
+                }
+            )
+        return {
+            "schema_version": "skillkernel.observatory.writer-transaction.v1",
+            "object_type": "writer_transaction",
+            "object_id": transaction_id,
+            "title": f"Writer transaction {transaction_id}",
+            "summary": (
+                f"{payload['transaction_kind']} / {payload['status']}; "
+                f"files={safe_metrics.get('file_count', 'unknown')}; "
+                f"items={len(safe_items)}"
+            ),
+            "workspace_key": payload.get("workspace_key"),
+            "transaction_kind": payload["transaction_kind"],
+            "status": payload["status"],
+            "plan_hash": payload["plan_hash"],
+            "timeline": timeline,
+            "provenance": {
+                "upstream": [
+                    {
+                        "object_type": "evolution_transaction",
+                        "object_id": transaction_id,
+                        "relationship": "governance_transaction",
+                    }
+                ],
+                "downstream": rollback_refs[:100],
+            },
+            "effects": {
+                "writer_metrics": safe_metrics,
+                "items": safe_items,
+                "item_count": len(safe_items),
+                "transaction_item_limit": 100,
+                "rollback_metadata_present": any(
+                    item.get("rollback_operation") for item in safe_items
+                ),
+            },
+            "diagnostics": {
+                "supporting_component": "deterministic_writer",
+                "transaction_kind": payload["transaction_kind"],
+                "status": payload["status"],
+                "activation_deferred": bool(safe_metrics.get("activation_deferred")),
+                "activation_window_visible": "activation_window" in safe_metrics,
+                "manifest_hash_visible": bool(safe_metrics.get("manifest_sha256")),
+                "raw_metrics_returned": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "content_safe_writer_transaction_metadata",
+            },
+            "audit": {
+                "links": [
+                    {"object_type": "evolution_transaction", "object_id": transaction_id},
+                    {"object_type": "writer_transaction", "object_id": transaction_id},
+                ],
                 "chain_visible": True,
             },
         }
@@ -8964,6 +9145,25 @@ def create_app(
                 return ObservatoryObjectResponse(
                     object=_evolution_transaction_microscope(transaction, items)
                 )
+        if object_type in {
+            "writer_transaction",
+            "writer-transaction",
+            "writer_manifest",
+            "writer-apply",
+            "writer_apply",
+        }:
+            transaction_id = _uuid_or_404(object_id, "writer transaction")
+            transaction = await governance.get_transaction(
+                workspace_key=workspace_id,
+                evolution_transaction_id=transaction_id,
+            )
+            if transaction is not None:
+                items = await governance.list_transaction_items(
+                    evolution_transaction_id=transaction_id,
+                )
+                writer_object = _writer_transaction_microscope(transaction, items)
+                if writer_object is not None:
+                    return ObservatoryObjectResponse(object=writer_object)
         if object_type in {
             "revocation_request",
             "revocation-request",

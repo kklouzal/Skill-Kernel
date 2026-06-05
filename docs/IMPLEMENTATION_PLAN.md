@@ -3,6 +3,24 @@
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
 2026-06-05 update: Observatory object microscopes now include a dedicated
+content-safe `writer_transaction` path backed by governance evolution
+transactions. `/admin/api/v1/objects/writer_transaction/{id}` resolves
+deterministic writer apply/rollback evidence, including manifest hash, active
+relative path, file count, previous snapshot pointer, staged manifest path,
+activation deferral/window state, bounded transaction items, rollback operation
+names, and audit links. Raw metric payloads, raw activation-window notes, raw
+idempotency/cause text, raw generated skill text, and arbitrary rollback
+instructions remain unavailable. This advances core Sections 1.2, 25, and 28.2
+plus Observatory Sections 7.6, 7.7, 8.15, 12.6, 13.1, and 16.1 by closing the
+drill-down gap from deterministic writer transactions to governed sidecar
+evidence without adding UI-local mutation authority. Validation passed with
+focused writer/evolution microscope coverage, full sidecar ruff/pytest/
+compileall gates, compose config, diff-check, and core and Observatory
+acceptance reports. No compose/Postgres smoke was needed because the slice only
+adds a content-safe read-model alias over existing governance transaction
+lookups.
+
+2026-06-05 update: Observatory object microscopes now include a dedicated
 content-safe `revocation_request` path backed by the governance store.
 `/admin/api/v1/objects/revocation_request/{id}` resolves rollback/revocation
 request status, root object, created-by job, bounded impacted objects, bounded
