@@ -33,7 +33,7 @@ from autoskill.db.governance import (
     NullGovernanceStore,
     RevocationRequestRecord,
 )
-from autoskill.db.jobs import JobQueueSummary
+from autoskill.db.jobs import JobQueueSummary, JobRecord, NullJobStore
 from autoskill.db.llm_invocations import NullLLMInvocationStore
 from autoskill.db.memory import NullMemoryGovernanceStore
 from autoskill.db.observability import (
@@ -81,6 +81,26 @@ class MemoryAuditStore:
 
     async def verify_chain(self, *, workspace_key: str | None = None, limit: int = 1000) -> bool:
         return verify_hash_chain(self.records[-limit:])
+
+
+class MemoryObservatoryJobStore(NullJobStore):
+    def __init__(self, records: list[JobRecord]) -> None:
+        self.records = records
+
+    async def list_jobs(
+        self,
+        *,
+        workspace_key: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[JobRecord]:
+        records = [
+            record
+            for record in self.records
+            if (workspace_key is None or record.workspace_key == workspace_key)
+            and (status is None or record.status == status)
+        ]
+        return records[:limit]
 
 
 class MemoryTopologyGovernanceStore(NullGovernanceStore):
@@ -1401,6 +1421,75 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         "rollback-revokes-derived-data",
         "read-models-fresh",
     }.issubset(invariant_ids)
+
+
+def test_observatory_job_object_microscope_resolves_scheduler_read_model() -> None:
+    now = datetime.now(UTC)
+    job_id = uuid4()
+    trace_id = uuid4()
+    span_id = uuid4()
+    job_store = MemoryObservatoryJobStore(
+        [
+            JobRecord(
+                job_id=job_id,
+                workspace_id=None,
+                workspace_key="dev-01",
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=None,
+                job_kind="revocations.rollback",
+                status="queued",
+                idempotency_key="revocation-job-1",
+                payload={"revocation_request_id": "request-1"},
+                priority=25,
+                lease_owner=None,
+                lease_expires_at=None,
+                attempts=0,
+                max_attempts=3,
+                available_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+        ]
+    )
+    app = create_app(audit_store=MemoryAuditStore(), job_store=job_store)
+    routes = _routes(app)
+
+    async def run():
+        direct = await routes[("/admin/api/v1/jobs/{job_id}", "GET")].endpoint(
+            job_id=str(job_id),
+        )
+        microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="job",
+            object_id=str(job_id),
+            workspace_id="dev-01",
+        )
+        scheduler_alias = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="scheduler_job",
+            object_id="revocation-job-1",
+            workspace_id="dev-01",
+        )
+        return direct, microscope, scheduler_alias
+
+    direct, microscope, scheduler_alias = asyncio.run(run())
+
+    assert direct.object["object_type"] == "job"
+    assert microscope.object["object_type"] == "job"
+    assert scheduler_alias.object["object_type"] == "job"
+    assert microscope.object["diagnostics"]["job_kind"] == "revocations.rollback"
+    assert scheduler_alias.object["diagnostics"]["job_id"] == str(job_id)
+    assert microscope.object["diagnostics"] == direct.object["diagnostics"]
+    assert microscope.object["content_policy"]["raw_available"] is False
+    assert {"object_type": "trace", "object_id": str(trace_id)} in microscope.object[
+        "provenance"
+    ]["downstream"]
+    assert {"object_type": "trace_span", "object_id": str(span_id)} in microscope.object[
+        "provenance"
+    ]["downstream"]
 
 
 def test_observatory_profile_microscopes_show_redacted_qualification_state() -> None:

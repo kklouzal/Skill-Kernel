@@ -2,6 +2,23 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: Observatory generic object microscopes now resolve
+sidecar scheduler job refs through the same bounded job read model used by
+`/admin/api/v1/jobs/{job_id}`. The generic
+`/admin/api/v1/objects/job/{id}` and `scheduler_job` alias now return the
+content-policy-safe job microscope with scheduler diagnostics and trace/span
+provenance links instead of falling back to the snapshot `read-model-missing`
+placeholder. This advances core Sections 26.2-26.3 and 28.2 plus Observatory
+Sections 1.9, 21.16, 21.27, and 24.27 by closing the drill-down path from
+audited rollback/revocation job refs to scheduler evidence without adding UI
+mutation authority. Validation passed with focused job microscope coverage,
+`uv run ruff check sidecar`, `uv run pytest` (`380 passed`), `uv run python -m
+compileall -q sidecar`, `docker compose config --quiet`, `git diff --check`,
+and core and Observatory acceptance reports (`ready=true`, `70` implemented,
+`86` satisfied, `0` validation errors). No compose/Postgres smoke was needed
+because this slice only aliases an existing scheduler read model and validates
+it through an in-memory job store.
+
 2026-06-05 update: Observatory artifact drill-downs now resolve UUID-backed
 compiled/context artifacts through the governed context-artifact read model
 instead of leaving the broader `/admin/api/v1/artifacts/{id}` and generic

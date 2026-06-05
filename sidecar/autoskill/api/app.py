@@ -5371,6 +5371,34 @@ def create_app(
                 return item
         return None
 
+    def _job_microscope(job_id: str, job: dict[str, Any] | None) -> dict[str, Any]:
+        downstream: list[dict[str, str]] = []
+        if job:
+            if job.get("trace_id"):
+                downstream.append(
+                    {"object_type": "trace", "object_id": str(job["trace_id"])}
+                )
+            if job.get("span_id"):
+                downstream.append(
+                    {"object_type": "trace_span", "object_id": str(job["span_id"])}
+                )
+        return {
+            "schema_version": "skillkernel.observatory.job.v1",
+            "object_type": "job",
+            "object_id": job_id,
+            "title": f"Job {job_id}",
+            "summary": "Sidecar scheduler job detail.",
+            "diagnostics": job
+            or _missing_read_model("job", supporting_component="scheduler_jobs"),
+            "timeline": [],
+            "provenance": {"upstream": [], "downstream": downstream},
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+            },
+            "audit": {"links": []},
+        }
+
     def _profile_configuration_payload(profile: Any) -> dict[str, Any]:
         payload = profile.to_json()
         endpoint_ref = payload.pop("endpoint_ref", None)
@@ -8957,6 +8985,17 @@ def create_app(
             action = await observatory_admin.get_action_audit(action_id=action_id)
             if action is not None:
                 return ObservatoryObjectResponse(object=_admin_action_microscope(action))
+        if object_type in {"job", "scheduler_job", "sidecar_job"}:
+            listed = [
+                job.to_json()
+                for job in await jobs.list_jobs(
+                    workspace_key=workspace_id,
+                    limit=500,
+                )
+            ]
+            job = _find_by_id(listed, object_id, ("job_id", "idempotency_key"))
+            if job is not None:
+                return ObservatoryObjectResponse(object=_job_microscope(object_id, job))
         if object_type in {
             "action_attribution_check",
             "action-attribution-check",
@@ -9492,24 +9531,7 @@ def create_app(
         _require_admin_auth(authorization, x_skillkernel_roles)
         listed = [job.to_json() for job in await jobs.list_jobs(limit=max(1, min(limit, 500)))]
         job = _find_by_id(listed, job_id, ("job_id", "idempotency_key"))
-        return ObservatoryObjectResponse(
-            object={
-                "schema_version": "skillkernel.observatory.job.v1",
-                "object_type": "job",
-                "object_id": job_id,
-                "title": f"Job {job_id}",
-                "summary": "Sidecar scheduler job detail.",
-                "diagnostics": job
-                or _missing_read_model("job", supporting_component="scheduler_jobs"),
-                "timeline": [],
-                "provenance": {"upstream": [], "downstream": []},
-                "content_policy": {
-                    "raw_available": False,
-                    "raw_reason": "raw-content-disabled",
-                },
-                "audit": {"links": []},
-            }
-        )
+        return ObservatoryObjectResponse(object=_job_microscope(job_id, job))
 
     @app.get("/admin/api/v1/schedules", response_model=ObservatoryCollectionResponse)
     async def observatory_schedules(

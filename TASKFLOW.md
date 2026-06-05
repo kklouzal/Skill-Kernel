@@ -16,6 +16,23 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory generic object microscopes now resolve
+  `job`/`scheduler_job` links through the existing sidecar scheduler job
+  read model instead of falling through to the snapshot placeholder. The
+  shared job microscope keeps `/admin/api/v1/jobs/{job_id}` and
+  `/admin/api/v1/objects/job/{id}` behavior aligned, exposes trace/span
+  downstream refs for job provenance, and preserves the redacted/no-raw-content
+  object policy without adding scheduler mutation authority. This advances
+  core handoff Sections 26.2-26.3 and 28.2 plus Observatory Sections 1.9,
+  21.16, 21.27, and 24.27 by closing the drill-down path from audited
+  revocation/provenance job refs to scheduler job evidence. Validation passed
+  with focused job object microscope coverage (`1 passed`), `uv run ruff check
+  sidecar`, `uv run pytest` (`380 passed`), `uv run python -m compileall -q
+  sidecar`, `docker compose config --quiet`, `git diff --check`, and core and
+  Observatory acceptance reports (`ready=true`, `70` implemented and `86`
+  satisfied, `0` validation errors). No compose/Postgres smoke was needed
+  because this slice only aliases an existing scheduler read model and
+  validates it through an in-memory job store.
 - 2026-06-05: Observatory artifact drill-downs now resolve UUID-backed
   `artifact`/`compiled_artifact` aliases through the existing content-safe
   context-artifact read model instead of dead-ending at the placeholder
