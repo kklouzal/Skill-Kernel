@@ -2034,6 +2034,13 @@ def _admin_static_dir() -> Path:
     return (Path(__file__).resolve().parents[1] / "observatory" / "dist").resolve()
 
 
+def _admin_static_available() -> bool:
+    settings = get_settings()
+    if settings.web_admin_static_external:
+        return True
+    return (_admin_static_dir() / "index.html").exists()
+
+
 def _admin_base_path() -> str:
     value = get_settings().web_admin_base_path.strip() or "/admin"
     if not value.startswith("/"):
@@ -5088,7 +5095,7 @@ def create_app(
             workspace_key=effective_workspace_id,
             limit=max(1, min(audit_limit, 10_000)),
         )
-        static_available = (_admin_static_dir() / "index.html").exists()
+        static_available = _admin_static_available()
         return build_observatory_snapshot(
             settings=settings,
             status=status_payload,
@@ -6669,7 +6676,8 @@ def create_app(
                 "api_base_path": f"{_admin_base_path()}/api/v1",
                 "live_path": f"{_admin_base_path()}/live",
                 "enabled": settings.web_admin_enabled,
-                "static_available": (static_dir / "index.html").exists(),
+                "static_available": _admin_static_available(),
+                "static_external": settings.web_admin_static_external,
                 "static_dir": str(static_dir),
                 "principal": principal,
                 "raw_content": {"enabled": settings.web_admin_raw_content_enabled},

@@ -177,6 +177,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("SKILLKERNEL_ADMIN_TOKEN", "AUTOSKILL_WEB_ADMIN_TOKEN"),
     )
     web_admin_static_dir: Path = Path("sidecar/autoskill/observatory/dist")
+    web_admin_static_external: bool = False
     web_admin_raw_content_enabled: bool = False
     web_admin_csrf_enabled: bool = True
     web_admin_issue_board_enabled: bool = True
