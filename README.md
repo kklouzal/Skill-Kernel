@@ -79,6 +79,43 @@ Run the sidecar locally:
 uv run uvicorn autoskill.main:app --app-dir sidecar --host 127.0.0.1 --port 8765
 ```
 
+## Docker Deployment
+
+The portable Docker deployment is split into two SkillKernel application
+images plus a stock pgvector Postgres container:
+
+- `Dockerfile.core` builds the Python SkillKernel core image. It contains the
+  sidecar API, migrations, scripts, and worker entrypoints.
+- `Dockerfile.observatory` builds the Observatory web image. It contains the
+  compiled React UI and an nginx reverse proxy for `/admin/api`, `/admin/live`,
+  and `/admin/live-sse` back to the core container.
+- `postgres` uses `pgvector/pgvector:pg17`. Postgres stores vectors; it does
+  not generate embeddings.
+
+SkillKernel expects user-supplied OpenAI-compatible model services:
+
+- `AUTOSKILL_LLM_API_BASE_URL` / `AUTOSKILL_LLM_API_KEY` configure the LLM
+  endpoint.
+- `AUTOSKILL_EMBEDDING_API_BASE_URL` / `AUTOSKILL_EMBEDDING_API_KEY`,
+  `AUTOSKILL_EMBEDDING_MODEL`, and `AUTOSKILL_EMBEDDING_DIM` configure the
+  embedding endpoint.
+
+Dev-01 currently points those values at the local `llama-cpp-compaction` and
+`llama-cpp-embeddings` containers. Other installs can point them at any
+compatible local or hosted provider.
+
+Prepare a local environment file and start the portable stack:
+
+```bash
+cp .env.example .env
+mkdir -p .skillkernel/workspace .skillkernel/openclaw
+docker compose up --build
+```
+
+By default, the core API is published on `127.0.0.1:8765` and Observatory is
+published on `127.0.0.1:8757/admin/`. Set `SKILLKERNEL_CORE_BIND` or
+`SKILLKERNEL_OBSERVATORY_BIND` to expose them on another interface.
+
 Validate the OpenClaw plugin skeleton:
 
 ```bash

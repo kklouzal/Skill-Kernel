@@ -1,3 +1,43 @@
+x-skillkernel-core-build: &skillkernel-core-build
+  context: .
+  dockerfile: Dockerfile.core
+
+x-skillkernel-env: &skillkernel-env
+  AUTOSKILL_DATABASE_URL: postgresql://autoskill:${AUTOSKILL_POSTGRES_PASSWORD:-autoskill-dev}@postgres:5432/autoskill
+  PYTHONPATH: /app/sidecar
+  AUTOSKILL_DB_POOL_MIN_SIZE: ${AUTOSKILL_DB_POOL_MIN_SIZE:-0}
+  AUTOSKILL_DB_POOL_MAX_SIZE: ${AUTOSKILL_DB_POOL_MAX_SIZE:-5}
+  AUTOSKILL_WORKSPACE_ID: ${AUTOSKILL_WORKSPACE_ID:-dev-01}
+  AUTOSKILL_INGEST_TOKEN: ${AUTOSKILL_INGEST_TOKEN:-}
+  AUTOSKILL_CONTROL_TOKEN: ${AUTOSKILL_CONTROL_TOKEN:-}
+  AUTOSKILL_MODE: ${AUTOSKILL_MODE:-autonomous_guarded}
+  AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED: ${AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED:-false}
+  AUTOSKILL_RUNTIME_CONTEXT_TIMEOUT_MS: ${AUTOSKILL_RUNTIME_CONTEXT_TIMEOUT_MS:-150}
+  AUTOSKILL_MAX_CONTEXT_HINT_TOKENS: ${AUTOSKILL_MAX_CONTEXT_HINT_TOKENS:-800}
+  AUTOSKILL_LLM_API_BASE_URL: ${AUTOSKILL_LLM_API_BASE_URL:-http://host.docker.internal:18080/v1}
+  AUTOSKILL_LLM_API_KEY: ${AUTOSKILL_LLM_API_KEY:-autoskill-local}
+  AUTOSKILL_EMBEDDING_PROVIDER: ${AUTOSKILL_EMBEDDING_PROVIDER:-openai_compatible}
+  AUTOSKILL_EMBEDDING_MODEL: ${AUTOSKILL_EMBEDDING_MODEL:-Qwen3-Embedding-4B-Q8_0.gguf}
+  AUTOSKILL_EMBEDDING_DIM: ${AUTOSKILL_EMBEDDING_DIM:-1536}
+  AUTOSKILL_EMBEDDING_API_BASE_URL: ${AUTOSKILL_EMBEDDING_API_BASE_URL:-http://host.docker.internal:18081/v1}
+  AUTOSKILL_EMBEDDING_API_KEY: ${AUTOSKILL_EMBEDDING_API_KEY:-autoskill-local}
+  AUTOSKILL_EMBEDDING_TIMEOUT_SECONDS: ${AUTOSKILL_EMBEDDING_TIMEOUT_SECONDS:-30}
+  AUTOSKILL_ACTIVE_ROOT: ${AUTOSKILL_ACTIVE_ROOT:-skills/autoskill}
+  AUTOSKILL_ARCHIVE_ROOT: ${AUTOSKILL_ARCHIVE_ROOT:-.autoskill/archive}
+  AUTOSKILL_STAGING_ROOT: ${AUTOSKILL_STAGING_ROOT:-.autoskill/staging}
+  AUTOSKILL_WEB_ADMIN_ENABLED: ${AUTOSKILL_WEB_ADMIN_ENABLED:-true}
+  AUTOSKILL_WEB_ADMIN_BASE_PATH: ${AUTOSKILL_WEB_ADMIN_BASE_PATH:-/admin}
+  AUTOSKILL_WEB_ADMIN_STATIC_DIR: ${AUTOSKILL_WEB_ADMIN_STATIC_DIR:-/opt/skillkernel/no-observatory-static}
+  AUTOSKILL_WEB_ADMIN_TOKEN: ${AUTOSKILL_WEB_ADMIN_TOKEN:-}
+  AUTOSKILL_WEB_ADMIN_RAW_CONTENT_ENABLED: ${AUTOSKILL_WEB_ADMIN_RAW_CONTENT_ENABLED:-false}
+  AUTOSKILL_ALLOW_NETWORK_IN_GENERATED_SKILLS: ${AUTOSKILL_ALLOW_NETWORK_IN_GENERATED_SKILLS:-false}
+  AUTOSKILL_ALLOW_SHELL_IN_GENERATED_SKILLS: ${AUTOSKILL_ALLOW_SHELL_IN_GENERATED_SKILLS:-false}
+  AUTOSKILL_FORBID_HIDDEN_MARKDOWN: ${AUTOSKILL_FORBID_HIDDEN_MARKDOWN:-true}
+  AUTOSKILL_REDACT_BEFORE_STORE: ${AUTOSKILL_REDACT_BEFORE_STORE:-true}
+  AUTOSKILL_REDACT_BEFORE_EMBED: ${AUTOSKILL_REDACT_BEFORE_EMBED:-true}
+  OPENCLAW_HOME: ${OPENCLAW_HOME:-/openclaw}
+  OPENCLAW_STATE_DIR: ${OPENCLAW_STATE_DIR:-/openclaw}
+
 services:
   postgres:
     image: pgvector/pgvector:pg17
@@ -6,7 +46,7 @@ services:
       POSTGRES_USER: autoskill
       POSTGRES_PASSWORD: ${AUTOSKILL_POSTGRES_PASSWORD:-autoskill-dev}
     ports:
-      - "127.0.0.1:55432:5432"
+      - "${SKILLKERNEL_POSTGRES_BIND:-127.0.0.1}:${SKILLKERNEL_POSTGRES_PORT:-55432}:5432"
     volumes:
       - autoskill-postgres:/var/lib/postgresql/data
     healthcheck:
@@ -16,70 +56,55 @@ services:
       retries: 20
 
   migrate:
-    build: .
-    environment: &autoskill-env
-      AUTOSKILL_DATABASE_URL: postgresql://autoskill:${AUTOSKILL_POSTGRES_PASSWORD:-autoskill-dev}@127.0.0.1:55432/autoskill
-      PYTHONPATH: /app/sidecar
-      AUTOSKILL_DB_POOL_MIN_SIZE: ${AUTOSKILL_DB_POOL_MIN_SIZE:-0}
-      AUTOSKILL_DB_POOL_MAX_SIZE: ${AUTOSKILL_DB_POOL_MAX_SIZE:-1}
-      AUTOSKILL_INGEST_TOKEN: ${AUTOSKILL_INGEST_TOKEN:-}
-      AUTOSKILL_CONTROL_TOKEN: ${AUTOSKILL_CONTROL_TOKEN:-}
-      AUTOSKILL_MODE: ${AUTOSKILL_MODE:-autonomous_guarded}
-      AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED: ${AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED:-false}
-      AUTOSKILL_RUNTIME_CONTEXT_TIMEOUT_MS: ${AUTOSKILL_RUNTIME_CONTEXT_TIMEOUT_MS:-150}
-      AUTOSKILL_MAX_CONTEXT_HINT_TOKENS: ${AUTOSKILL_MAX_CONTEXT_HINT_TOKENS:-800}
-      AUTOSKILL_LLM_API_BASE_URL: ${AUTOSKILL_LLM_API_BASE_URL:-http://127.0.0.1:18080/v1}
-      AUTOSKILL_LLM_API_KEY: ${AUTOSKILL_LLM_API_KEY:-autoskill-local}
-      AUTOSKILL_EMBEDDING_PROVIDER: ${AUTOSKILL_EMBEDDING_PROVIDER:-openai_compatible}
-      AUTOSKILL_EMBEDDING_MODEL: ${AUTOSKILL_EMBEDDING_MODEL:-Qwen3-Embedding-4B-Q8_0.gguf}
-      AUTOSKILL_EMBEDDING_DIM: ${AUTOSKILL_EMBEDDING_DIM:-1536}
-      AUTOSKILL_EMBEDDING_API_BASE_URL: ${AUTOSKILL_EMBEDDING_API_BASE_URL:-http://127.0.0.1:18081/v1}
-      AUTOSKILL_EMBEDDING_API_KEY: ${AUTOSKILL_EMBEDDING_API_KEY:-autoskill-local}
-      AUTOSKILL_EMBEDDING_TIMEOUT_SECONDS: ${AUTOSKILL_EMBEDDING_TIMEOUT_SECONDS:-30}
-      AUTOSKILL_ACTIVE_ROOT: ${AUTOSKILL_ACTIVE_ROOT:-skills/autoskill}
-      AUTOSKILL_ARCHIVE_ROOT: ${AUTOSKILL_ARCHIVE_ROOT:-.autoskill/archive}
-      AUTOSKILL_STAGING_ROOT: ${AUTOSKILL_STAGING_ROOT:-.autoskill/staging}
-      AUTOSKILL_WEB_ADMIN_ENABLED: ${AUTOSKILL_WEB_ADMIN_ENABLED:-true}
-      AUTOSKILL_WEB_ADMIN_BASE_PATH: ${AUTOSKILL_WEB_ADMIN_BASE_PATH:-/admin}
-      AUTOSKILL_WEB_ADMIN_TOKEN: ${AUTOSKILL_WEB_ADMIN_TOKEN:-}
-      AUTOSKILL_WEB_ADMIN_RAW_CONTENT_ENABLED: ${AUTOSKILL_WEB_ADMIN_RAW_CONTENT_ENABLED:-false}
-      AUTOSKILL_ALLOW_NETWORK_IN_GENERATED_SKILLS: ${AUTOSKILL_ALLOW_NETWORK_IN_GENERATED_SKILLS:-false}
-      AUTOSKILL_ALLOW_SHELL_IN_GENERATED_SKILLS: ${AUTOSKILL_ALLOW_SHELL_IN_GENERATED_SKILLS:-false}
-      AUTOSKILL_FORBID_HIDDEN_MARKDOWN: ${AUTOSKILL_FORBID_HIDDEN_MARKDOWN:-true}
-      AUTOSKILL_REDACT_BEFORE_STORE: ${AUTOSKILL_REDACT_BEFORE_STORE:-true}
-      AUTOSKILL_REDACT_BEFORE_EMBED: ${AUTOSKILL_REDACT_BEFORE_EMBED:-true}
-      OPENCLAW_HOME: ${OPENCLAW_HOME:-/openclaw}
-      OPENCLAW_STATE_DIR: ${OPENCLAW_STATE_DIR:-/openclaw}
+    build: *skillkernel-core-build
+    environment: *skillkernel-env
     command: ["python", "scripts/migrate.py"]
-    network_mode: host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
 
-  sidecar:
-    build: .
-    environment: *autoskill-env
+  core:
+    build: *skillkernel-core-build
+    environment: *skillkernel-env
     command:
       - uvicorn
       - autoskill.main:app
       - --app-dir
       - /app/sidecar
       - --host
-      - 127.0.0.1
+      - 0.0.0.0
       - --port
       - "8765"
     working_dir: /workspace
     volumes:
-      - /home/kklouzal/.openclaw/workspace:/workspace
-      - /home/kklouzal/.openclaw:/openclaw:ro
-    network_mode: host
+      - ${SKILLKERNEL_WORKSPACE_ROOT:-./.skillkernel/workspace}:/workspace
+      - ${OPENCLAW_HOST_DIR:-./.skillkernel/openclaw}:/openclaw:ro
+    ports:
+      - "${SKILLKERNEL_CORE_BIND:-127.0.0.1}:${SKILLKERNEL_CORE_PORT:-8765}:8765"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       migrate:
         condition: service_completed_successfully
 
+  observatory:
+    build:
+      context: .
+      dockerfile: Dockerfile.observatory
+    environment:
+      SKILLKERNEL_OBSERVATORY_PORT: ${SKILLKERNEL_OBSERVATORY_CONTAINER_PORT:-8757}
+      SKILLKERNEL_CORE_UPSTREAM: ${SKILLKERNEL_CORE_UPSTREAM:-http://core:8765}
+    ports:
+      - "${SKILLKERNEL_OBSERVATORY_BIND:-127.0.0.1}:${SKILLKERNEL_OBSERVATORY_PORT:-8757}:${SKILLKERNEL_OBSERVATORY_CONTAINER_PORT:-8757}"
+    depends_on:
+      core:
+        condition: service_started
+
   worker-scheduler:
-    build: .
-    environment: *autoskill-env
+    build: *skillkernel-core-build
+    environment: *skillkernel-env
     command:
       - python
       - -m
@@ -89,23 +114,24 @@ services:
       - --worker-id
       - autoskill-scheduler-1
       - --workspace-id
-      - dev-01
+      - ${AUTOSKILL_WORKSPACE_ID:-dev-01}
       - --workspace-root
       - /workspace
       - --external-skill-root
       - /workspace/skills
     working_dir: /workspace
     volumes:
-      - /home/kklouzal/.openclaw/workspace:/workspace
-      - /home/kklouzal/.openclaw:/openclaw:ro
-    network_mode: host
+      - ${SKILLKERNEL_WORKSPACE_ROOT:-./.skillkernel/workspace}:/workspace
+      - ${OPENCLAW_HOST_DIR:-./.skillkernel/openclaw}:/openclaw:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       migrate:
         condition: service_completed_successfully
 
   worker-maintenance:
-    build: .
-    environment: *autoskill-env
+    build: *skillkernel-core-build
+    environment: *skillkernel-env
     command:
       - python
       - -m
@@ -115,23 +141,24 @@ services:
       - --worker-id
       - autoskill-maintenance-1
       - --workspace-id
-      - dev-01
+      - ${AUTOSKILL_WORKSPACE_ID:-dev-01}
       - --workspace-root
       - /workspace
       - --external-skill-root
       - /workspace/skills
     working_dir: /workspace
     volumes:
-      - /home/kklouzal/.openclaw/workspace:/workspace
-      - /home/kklouzal/.openclaw:/openclaw:ro
-    network_mode: host
+      - ${SKILLKERNEL_WORKSPACE_ROOT:-./.skillkernel/workspace}:/workspace
+      - ${OPENCLAW_HOST_DIR:-./.skillkernel/openclaw}:/openclaw:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       migrate:
         condition: service_completed_successfully
 
   worker-mutation:
-    build: .
-    environment: *autoskill-env
+    build: *skillkernel-core-build
+    environment: *skillkernel-env
     command:
       - python
       - -m
@@ -141,13 +168,14 @@ services:
       - --worker-id
       - autoskill-mutation-1
       - --workspace-id
-      - dev-01
+      - ${AUTOSKILL_WORKSPACE_ID:-dev-01}
       - --workspace-root
       - /workspace
     working_dir: /workspace
     volumes:
-      - /home/kklouzal/.openclaw/workspace:/workspace
-    network_mode: host
+      - ${SKILLKERNEL_WORKSPACE_ROOT:-./.skillkernel/workspace}:/workspace
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       migrate:
         condition: service_completed_successfully
