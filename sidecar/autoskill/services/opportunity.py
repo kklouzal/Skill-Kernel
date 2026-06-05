@@ -6,7 +6,11 @@ from typing import Any
 
 from autoskill.db.evidence import EvidenceRecord, EvidenceStore
 from autoskill.db.retrieval import RetrievalStore
-from autoskill.services.matching import SkillMatchRequest, SkillMatchResult, match_existing_skills
+from autoskill.services.matching import (
+    SkillMatchRequest,
+    SkillMatchResult,
+    match_existing_skills,
+)
 
 
 @dataclass(frozen=True)

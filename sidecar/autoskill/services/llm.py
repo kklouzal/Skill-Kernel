@@ -8,7 +8,11 @@ from urllib import error, request
 from uuid import UUID
 
 from autoskill.db.llm_invocations import LLMInvocationRecord, LLMInvocationStore
-from autoskill.db.observability import NullObservabilityStore, ObservabilityStore, TraceStatus
+from autoskill.db.observability import (
+    NullObservabilityStore,
+    ObservabilityStore,
+    TraceStatus,
+)
 from autoskill.db.profiles import ModelProfileRecord, ProfileStore
 
 

@@ -2,7 +2,11 @@ import asyncio
 from dataclasses import replace
 from uuid import uuid4
 
-from autoskill.api.app import TopologyApplyRequest, TopologyUsageProposalRequest, create_app
+from autoskill.api.app import (
+    TopologyApplyRequest,
+    TopologyUsageProposalRequest,
+    create_app,
+)
 from autoskill.core.skillir import EffectSignature
 from autoskill.db.activation import ActivationReadiness
 from autoskill.db.governance import NullGovernanceStore

@@ -16,7 +16,7 @@ dependencies = [
 dev = [
   "pytest>=8.3.0",
   "pytest-asyncio>=0.25.0",
-  "ruff>=0.9.0",
+  "ruff==0.15.13",
 ]
 
 [tool.uv]
@@ -27,9 +27,217 @@ testpaths = ["sidecar/autoskill/tests"]
 pythonpath = ["sidecar"]
 
 [tool.ruff]
-line-length = 100
 target-version = "py312"
+line-length = 88
+extend-exclude = [
+    ".venv",
+    ".ruff_cache",
+]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+preview = true
+select = ["ALL"]
+ignore = [
+    # Ownership/legal boilerplate is not a useful quality gate.
+    "CPY001",
 
+    # Enforce behavior and maintainability, not boilerplate documentation churn.
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D105",
+    "D107",
+    "D401",
+    "DOC201",
+    "DOC501",
+
+    # Duplicate pydocstyle opinions; keep the compatible counterparts enabled.
+    "D203",
+    "D213",
+
+    # Annotation-presence rules cause broad retrofits without proving runtime
+    # correctness. Keep real type errors for type checkers, not Ruff ceremony.
+    "ANN001",
+    "ANN002",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "ANN204",
+    "ANN401",
+
+    # Existing route/service complexity should be refactored deliberately, not
+    # because a lint gate picked an arbitrary threshold.
+    "C901",
+    "PLR0904",
+    "PLR0911",
+    "PLR0912",
+    "PLR0913",
+    "PLR0914",
+    "PLR0915",
+    "PLR0916",
+    "PLR0917",
+    "PLR1702",
+
+    # SkillKernel intentionally degrades around optional runtime, database, and
+    # model-service boundaries. Keep exception chaining and bad raise structure
+    # enabled.
+    "BLE001",
+    "S110",
+    "S112",
+
+    # Ruff format owns wrapping; residual long lines are usually literals,
+    # command snippets, generated messages, URLs, or SQL fragments.
+    "E501",
+
+    # Boolean argument/call and magic-value style checks are too noisy for
+    # compact policy/config data and HTTP/status-code heavy code.
+    "FBT001",
+    "FBT002",
+    "FBT003",
+    "PLR2004",
+
+    # Service modules use intentional lazy imports/globals for
+    # environment-sensitive initialization and monkeypatchable operational state.
+    "PLC0415",
+    "PLW0603",
+
+    # Internal modules intentionally share private helpers/state.
+    "PLC2701",
+    "SLF001",
+
+    # Blanket type ignores are mostly compatibility/import shims here.
+    "PGH003",
+
+    # Subprocess usage is against fixed local/runtime tools with shell=False; the
+    # code commonly inspects return codes instead of raising immediately.
+    "PLW1510",
+    "S404",
+    "S603",
+    "S607",
+
+    # Explicit empty-string comparisons often document None-vs-empty intent.
+    "PLC1901",
+
+    # Avoid churning cohesive service APIs into staticmethod-heavy classes.
+    "PLR6301",
+
+    # Pathlib/file-read modernization is not a material quality gate.
+    "FURB101",
+    "PTH116",
+    "PTH118",
+    "PTH122",
+    "PTH208",
+
+    # Legacy package layout and __init__ behavior are intentional.
+    "INP001",
+    "RUF067",
+
+    # Style-only simplifications are not worth broad churn here.
+    "A002",
+    "ARG001",
+    "ARG002",
+    "B023",
+    "B903",
+    "C416",
+    "C420",
+    "D202",
+    "DTZ005",
+    "EM101",
+    "EM102",
+    "ERA001",
+    "EXE001",
+    "FLY002",
+    "FURB110",
+    "FURB113",
+    "FURB118",
+    "FURB142",
+    "FURB162",
+    "FURB167",
+    "FURB171",
+    "FURB192",
+    "PERF401",
+    "PIE810",
+    "PLR1714",
+    "PLR6104",
+    "PLW2901",
+    "PT011",
+    "PT012",
+    "PT017",
+    "PT019",
+    "PT028",
+    "RET504",
+    "RUF015",
+    "RUF027",
+    "RUF029",
+    "RUF031",
+    "RUF052",
+    "RUF069",
+    "SIM102",
+    "SIM105",
+    "SIM115",
+    "SIM117",
+    "T201",
+    "TC001",
+    "TC002",
+    "TC003",
+    "TRY003",
+    "TRY004",
+    "TRY300",
+    "TRY301",
+
+    # Operator/archive tooling intentionally favors ordinary tarfile and local
+    # filesystem APIs guarded by the surrounding command contract.
+    "ASYNC240",
+    "S202",
+
+    # Keep formatter-only style out of the blocking lint gate.
+    "COM812",
+    "ISC001",
+    "Q000",
+    "Q001",
+    "Q002",
+    "Q003",
+    "Q004",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Pytest asserts and fixture secrets are idiomatic test scaffolding.
+"sidecar/autoskill/tests/**/*.py" = [
+    "ARG001",
+    "ARG002",
+    "ARG005",
+    "PLC0415",
+    "S101",
+    "S105",
+    "S106",
+    "S107",
+    "S108",
+    "S310",
+    "S608",
+]
+
+# CLI/operator scripts intentionally use prints, direct exception messages, and
+# simple local IO patterns for readable operational failures.
+"scripts/**/*.py" = ["E402", "S101", "S310", "S608"]
+
+# These modules use asserts as post-validation narrowing invariants.
+"sidecar/autoskill/db/candidates.py" = ["S101"]
+"sidecar/autoskill/services/historical_import.py" = ["S101"]
+
+# These modules compose SQL from fixed table/conflict-target maps and bound
+# parameters; Ruff cannot see those guards.
+"sidecar/autoskill/db/context.py" = ["S608"]
+"sidecar/autoskill/db/embeddings.py" = ["S608"]
+
+# URL requests are constrained by higher-level profile/probe contracts.
+"sidecar/autoskill/db/contracts.py" = ["S310"]
+"sidecar/autoskill/services/embedding_generation.py" = ["S310"]
+"sidecar/autoskill/services/llm.py" = ["S310"]
+
+# Diagnostic copy uses adjacent string literals for readable tuple data.
+"sidecar/autoskill/services/observatory.py" = ["ISC004"]
+
+# Test-local settings doubles intentionally use class-level mutable defaults.
+"sidecar/autoskill/tests/test_historical_import.py" = ["RUF012"]

@@ -5,7 +5,10 @@ from typing import Any
 
 from autoskill.db.evidence import EvidenceRecord, EvidenceStore
 from autoskill.db.retrieval import RetrievalStore
-from autoskill.services.candidates import CandidateProposalResult, propose_candidate_skills
+from autoskill.services.candidates import (
+    CandidateProposalResult,
+    propose_candidate_skills,
+)
 from autoskill.services.opportunity import OpportunityMineResult, mine_opportunities
 
 

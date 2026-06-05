@@ -11,7 +11,12 @@ from autoskill.api.app import (
     create_app,
 )
 from autoskill.core.config import get_settings
-from autoskill.db.jobs import JobEnqueueResult, JobQueueSummary, JobRecord, WorkerHeartbeatRecord
+from autoskill.db.jobs import (
+    JobEnqueueResult,
+    JobQueueSummary,
+    JobRecord,
+    WorkerHeartbeatRecord,
+)
 from fastapi import HTTPException
 
 

@@ -5,7 +5,10 @@ from uuid import UUID
 
 from autoskill.core.hashing import sha256_json
 from autoskill.core.skillir import SkillIR
-from autoskill.services.candidates import CandidateProposalResult, CandidateSkillProposal
+from autoskill.services.candidates import (
+    CandidateProposalResult,
+    CandidateSkillProposal,
+)
 from autoskill.services.compiler import compile_skill, description_style_errors_for
 from autoskill.services.probes import plan_candidate_probes
 from pydantic import ValidationError

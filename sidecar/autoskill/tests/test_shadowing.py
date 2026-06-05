@@ -3,8 +3,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from autoskill.api.app import ActionAttributionCheckRequest, ShadowingDetectRequest, create_app
-from autoskill.db.attribution import ActionAttributionCheckRecord, AttributionEventRecord
+from autoskill.api.app import (
+    ActionAttributionCheckRequest,
+    ShadowingDetectRequest,
+    create_app,
+)
+from autoskill.db.attribution import (
+    ActionAttributionCheckRecord,
+    AttributionEventRecord,
+)
 from autoskill.db.evidence import EvidenceRecord
 from autoskill.services.shadowing import detect_shadowing_events
 

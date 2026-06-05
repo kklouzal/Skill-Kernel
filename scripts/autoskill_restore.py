@@ -10,7 +10,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from autoskill_backup import DEFAULT_CONFIRM_RESTORE, SCHEMA, _file_sha256, copy_tree_replace
+from autoskill_backup import (
+    DEFAULT_CONFIRM_RESTORE,
+    SCHEMA,
+    _file_sha256,
+    copy_tree_replace,
+)
 
 
 def main() -> None:

@@ -8,7 +8,11 @@ from autoskill.api.app import WorkerRunOnceRequest, create_app
 from autoskill.core.hashing import sha256_text
 from autoskill.db.activation import ActivationReadiness
 from autoskill.db.context import NullContextGovernanceStore
-from autoskill.db.contracts import ContractExtractResult, DriftCheckResult, DriftRepairEventRecord
+from autoskill.db.contracts import (
+    ContractExtractResult,
+    DriftCheckResult,
+    DriftRepairEventRecord,
+)
 from autoskill.db.diagnostics import DiagnosticMomentumRecord
 from autoskill.db.evaluations import EvaluationRunResult
 from autoskill.db.evidence import EvidenceDeriveResult
@@ -18,7 +22,11 @@ from autoskill.db.observability import TraceSpanRecord
 from autoskill.db.scheduler import SchedulerTickResult
 from autoskill.db.topology import NullTopologyStore
 from autoskill.db.usage import UsageAggregationResult, UsageTopologyRecommendation
-from autoskill.db.utility import CurationActionRecord, CurationRunResult, UtilityRollupResult
+from autoskill.db.utility import (
+    CurationActionRecord,
+    CurationRunResult,
+    UtilityRollupResult,
+)
 from autoskill.services.worker import (
     WorkerLoopConfig,
     WorkerStores,
@@ -26,7 +34,10 @@ from autoskill.services.worker import (
     run_worker_loop,
     run_worker_once,
 )
-from autoskill.services.writer import apply_staged_manifest_with_governance, stage_compiled_skill
+from autoskill.services.writer import (
+    apply_staged_manifest_with_governance,
+    stage_compiled_skill,
+)
 from autoskill.tests.test_embedding_generation import (
     MemoryEmbeddingProfileStore,
     MemoryPendingEmbeddingStore,

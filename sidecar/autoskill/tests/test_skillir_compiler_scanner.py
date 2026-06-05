@@ -3,8 +3,15 @@ import asyncio
 import pytest
 from autoskill.core.skillir import RuntimeGuardTemplate, SkillIR, SupportArtifact
 from autoskill.db.context import NullContextGovernanceStore
-from autoskill.services.compiler import compile_skill, compile_skill_with_context_governance
-from autoskill.services.scanner import has_blocking_findings, scan_text, scan_text_bundle
+from autoskill.services.compiler import (
+    compile_skill,
+    compile_skill_with_context_governance,
+)
+from autoskill.services.scanner import (
+    has_blocking_findings,
+    scan_text,
+    scan_text_bundle,
+)
 from pydantic import ValidationError
 
 

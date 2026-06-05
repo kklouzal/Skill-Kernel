@@ -19,4 +19,3 @@ def sha256_bytes(value: bytes) -> str:
 
 def sha256_json(value: Any) -> str:
     return sha256_text(canonical_json(value))
-

@@ -45,4 +45,3 @@ class LifecycleState(StrEnum):
     FROZEN = "frozen"
     SUPERSEDED = "superseded"
     DELETED = "deleted"
-

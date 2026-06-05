@@ -98,7 +98,11 @@ def _parse_args() -> argparse.Namespace:
 
 
 def run_red_team_cases(cases: list[RedTeamCase]) -> dict[str, Any]:
-    from autoskill.services.scanner import has_blocking_findings, scan_text, scan_text_bundle
+    from autoskill.services.scanner import (
+        has_blocking_findings,
+        scan_text,
+        scan_text_bundle,
+    )
 
     results = []
     failed = 0

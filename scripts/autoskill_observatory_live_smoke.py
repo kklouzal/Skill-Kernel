@@ -16,10 +16,10 @@ import asyncpg
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "sidecar"))
 
-from autoskill.api.app import create_app  # noqa: E402
-from autoskill.core.config import get_settings  # noqa: E402
-from autoskill.db.audit import NullAuditStore  # noqa: E402
-from autoskill.db.observatory_admin import AsyncpgObservatoryAdminStore  # noqa: E402
+from autoskill.api.app import create_app
+from autoskill.core.config import get_settings
+from autoskill.db.audit import NullAuditStore
+from autoskill.db.observatory_admin import AsyncpgObservatoryAdminStore
 
 
 def main() -> None:

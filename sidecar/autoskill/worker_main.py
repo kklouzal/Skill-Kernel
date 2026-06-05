@@ -34,7 +34,12 @@ from autoskill.services.historical_discovery import (
     resolve_historical_import_roots,
 )
 from autoskill.services.scheduler_defaults import ensure_core_schedules
-from autoskill.services.worker import WorkerLoopConfig, WorkerPool, WorkerStores, run_worker_loop
+from autoskill.services.worker import (
+    WorkerLoopConfig,
+    WorkerPool,
+    WorkerStores,
+    run_worker_loop,
+)
 
 
 async def run_worker(args: argparse.Namespace) -> int:

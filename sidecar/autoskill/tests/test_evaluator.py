@@ -9,7 +9,10 @@ from autoskill.db.evaluations import (
     _finish_evaluation,
 )
 from autoskill.db.observability import TraceSpanRecord
-from autoskill.services.evaluator import detect_threshold_deadlocks, evaluate_proposal_gate
+from autoskill.services.evaluator import (
+    detect_threshold_deadlocks,
+    evaluate_proposal_gate,
+)
 
 
 def skill_ir() -> dict[str, object]:
