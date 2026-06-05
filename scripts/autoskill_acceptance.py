@@ -451,6 +451,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         "Every LLM adjudication record stores evidence identity, exposure level, declassification state, confidence, deterministic checks, decision, and escalation reason.",
         (
             "LLM invocation and trace-spine records link model calls to safe attributes and object refs",
+            "llm_invocation object microscope exposes content-safe model-call audit detail",
             "autonomy assurance payloads expose evidence fidelity and policy gates",
             "Observatory playbook and microscope tests",
         ),

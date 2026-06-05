@@ -2,6 +2,23 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: Observatory object microscopes now include a dedicated
+content-safe `llm_invocation` detail path backed by the LLM invocation store.
+`/admin/api/v1/objects/llm_invocation/{id}` resolves purpose, model/profile
+route identity, thinking fallback state, token estimates, status, trace/span
+refs, and allowlisted endpoint/finish metadata while hashing provider request
+and error identity. Raw provider errors, prompt/response text, API keys,
+endpoint URLs, arbitrary audit payloads, and cost analytics remain unavailable.
+This advances core Sections 3.2.7, 3.3, 5.12, 13.8.12, and 28.2 plus
+Observatory Sections 7.6, 7.7, 8.18, 12.6, 13.1, 16.1, and 16.3 by making
+model/embedding profile qualification refs traversable through sidecar-hosted
+audit evidence. Validation passed with focused profile/invocation microscope
+coverage, broader Observatory/LLM/profile tests, full sidecar
+ruff/pytest/compileall gates, compose config, core and Observatory acceptance
+reports, diff-check, and an isolated compose/Postgres smoke that migrated a
+fresh database and round-tripped an LLM invocation through the asyncpg store
+lookup with workspace filtering.
+
 2026-06-05 update: Observatory model and embedding profile-detail
 read models now expose content-safe qualification evidence. The profile
 qualification store can list recent model/embedding qualification runs by

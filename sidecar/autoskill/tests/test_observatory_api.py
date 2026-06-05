@@ -33,6 +33,7 @@ from autoskill.db.governance import (
     NullGovernanceStore,
 )
 from autoskill.db.jobs import JobQueueSummary
+from autoskill.db.llm_invocations import NullLLMInvocationStore
 from autoskill.db.memory import NullMemoryGovernanceStore
 from autoskill.db.observability import (
     TraceSpanRecord,
@@ -1490,6 +1491,81 @@ def test_observatory_profile_microscopes_show_redacted_qualification_state() -> 
     assert "provider.local" not in serialized
     assert "embedding.local" not in serialized
     assert "sk-live-secret" not in serialized
+
+
+def test_observatory_llm_invocation_object_microscope_is_content_safe() -> None:
+    invocations = NullLLMInvocationStore()
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        llm_invocation_store=invocations,
+    )
+    routes = _routes(app)
+    trace_id = uuid4()
+    span_id = uuid4()
+
+    async def run():
+        record = await invocations.record_invocation(
+            workspace_key="dev-01",
+            purpose="model_profile_qualification",
+            profile_key="semantic-main",
+            route_kind="openai_compatible",
+            provider="test-provider",
+            model="reasoning-model",
+            status="error",
+            trace_id=trace_id,
+            span_id=span_id,
+            requested_thinking_level="high",
+            effective_thinking_level="medium",
+            thinking_fallback_policy="downgrade",
+            thinking_downgraded=True,
+            prompt_token_estimate=17,
+            output_token_estimate=5,
+            error="provider https://provider.local leaked sk-live-secret in raw error",
+            audit={
+                "endpoint_route": "responses",
+                "finish_reason": "error",
+                "provider_request_id": "req-secret-provider-id",
+                "prompt": "Return a JSON proposal.",
+                "api_key": "sk-live-secret",
+                "raw_response": "sensitive model output",
+            },
+        )
+        return await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="llm_invocation",
+            object_id=str(record.llm_invocation_id),
+            workspace_id="dev-01",
+        )
+
+    detail = asyncio.run(run())
+
+    payload = detail.object
+    assert payload["object_type"] == "llm_invocation"
+    assert payload["workspace_key"] == "dev-01"
+    assert payload["profile"]["profile_key"] == "semantic-main"
+    assert payload["thinking"]["downgraded"] is True
+    assert payload["token_estimates"] == {"prompt": 17, "output": 5}
+    assert payload["status"]["state"] == "error"
+    assert payload["status"]["error_present"] is True
+    assert payload["status"]["error_sha256"]
+    assert payload["status"]["raw_error_returned"] is False
+    assert payload["audit"]["endpoint_route"] == "responses"
+    assert payload["audit"]["finish_reason"] == "error"
+    assert payload["audit"]["provider_request_id_sha256"]
+    assert payload["audit"]["raw_audit_payload_returned"] is False
+    assert {"object_type": "trace", "object_id": str(trace_id)} in payload[
+        "provenance"
+    ]["downstream"]
+    assert {"object_type": "trace_span", "object_id": str(span_id)} in payload[
+        "provenance"
+    ]["downstream"]
+    serialized = json.dumps(payload, sort_keys=True)
+    assert "provider.local" not in serialized
+    assert "sk-live-secret" not in serialized
+    assert "Return a JSON proposal." not in serialized
+    assert "sensitive model output" not in serialized
+    assert "req-secret-provider-id" not in serialized
 
 
 def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:

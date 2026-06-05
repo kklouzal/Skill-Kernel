@@ -115,8 +115,19 @@ class LLMInvocationStore(Protocol):
     ) -> LLMInvocationRecord:
         """Record one content-safe LLM invocation audit row."""
 
+    async def get_invocation(
+        self,
+        *,
+        workspace_key: str | None = None,
+        llm_invocation_id: UUID,
+    ) -> LLMInvocationRecord | None:
+        """Return one content-safe LLM invocation audit row."""
+
 
 class NullLLMInvocationStore:
+    def __init__(self) -> None:
+        self.records: list[LLMInvocationRecord] = []
+
     async def record_invocation(
         self,
         *,
@@ -139,7 +150,7 @@ class NullLLMInvocationStore:
         error: str | None = None,
         audit: dict[str, Any] | None = None,
     ) -> LLMInvocationRecord:
-        return LLMInvocationRecord(
+        record = LLMInvocationRecord(
             llm_invocation_id=uuid4(),
             workspace_id=None,
             workspace_key=workspace_key,
@@ -162,6 +173,21 @@ class NullLLMInvocationStore:
             audit=audit or {},
             created_at=datetime.now(UTC),
         )
+        self.records.append(record)
+        return record
+
+    async def get_invocation(
+        self,
+        *,
+        workspace_key: str | None = None,
+        llm_invocation_id: UUID,
+    ) -> LLMInvocationRecord | None:
+        for record in self.records:
+            if record.llm_invocation_id == llm_invocation_id and (
+                workspace_key is None or record.workspace_key == workspace_key
+            ):
+                return record
+        return None
 
 
 class AsyncpgLLMInvocationStore(AsyncpgPoolOwner):
@@ -240,6 +266,29 @@ class AsyncpgLLMInvocationStore(AsyncpgPoolOwner):
                 workspace_key,
             )
         return LLMInvocationRecord.from_row(row)
+
+    async def get_invocation(
+        self,
+        *,
+        workspace_key: str | None = None,
+        llm_invocation_id: UUID,
+    ) -> LLMInvocationRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT inv.*, w.external_key AS workspace_key
+                FROM autoskill.llm_invocations inv
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE inv.llm_invocation_id = $1
+                  AND ($2::text IS NULL OR w.external_key = $2)
+                """,
+                llm_invocation_id,
+                workspace_key,
+            )
+            if row is None:
+                return None
+            return LLMInvocationRecord.from_row(row)
 
 
 def _json(value: object) -> str:

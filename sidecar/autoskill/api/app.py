@@ -5496,6 +5496,93 @@ def create_app(
             "audit": {"links": []},
         }
 
+    def _llm_invocation_safe_audit(audit: dict[str, Any]) -> dict[str, Any]:
+        safe: dict[str, Any] = {}
+        endpoint_route = audit.get("endpoint_route")
+        if endpoint_route:
+            safe["endpoint_route"] = str(endpoint_route)
+        finish_reason = audit.get("finish_reason")
+        if finish_reason:
+            safe["finish_reason"] = str(finish_reason)
+        provider_request_id = audit.get("provider_request_id")
+        if provider_request_id:
+            safe["provider_request_id_sha256"] = sha256_text(str(provider_request_id))
+        safe["raw_audit_payload_returned"] = False
+        return safe
+
+    def _llm_invocation_microscope(record: Any) -> dict[str, Any]:
+        invocation_id = str(record.llm_invocation_id)
+        trace_refs = []
+        if record.trace_id is not None:
+            trace_refs.append({"object_type": "trace", "object_id": str(record.trace_id)})
+        if record.span_id is not None:
+            trace_refs.append(
+                {"object_type": "trace_span", "object_id": str(record.span_id)}
+            )
+        return {
+            "schema_version": "skillkernel.observatory.llm-invocation.v1",
+            "object_type": "llm_invocation",
+            "object_id": invocation_id,
+            "title": f"LLM invocation {invocation_id}",
+            "summary": (
+                "Content-safe LLM invocation audit metadata for semantic proposal "
+                "and profile-qualification calls."
+            ),
+            "workspace_key": record.workspace_key,
+            "purpose": record.purpose,
+            "profile": {
+                "profile_key": record.profile_key,
+                "model_profile_id": (
+                    str(record.model_profile_id) if record.model_profile_id else None
+                ),
+                "route_kind": record.route_kind,
+                "provider": record.provider,
+                "model": record.model,
+            },
+            "thinking": {
+                "requested_level": record.requested_thinking_level,
+                "effective_level": record.effective_thinking_level,
+                "fallback_policy": record.thinking_fallback_policy,
+                "downgraded": record.thinking_downgraded,
+            },
+            "token_estimates": {
+                "prompt": record.prompt_token_estimate,
+                "output": record.output_token_estimate,
+            },
+            "status": {
+                "state": record.status,
+                "error_present": record.error is not None,
+                "error_sha256": sha256_text(record.error) if record.error else None,
+                "raw_error_returned": False,
+            },
+            "audit": _llm_invocation_safe_audit(record.audit),
+            "provenance": {
+                "upstream": [
+                    {
+                        "object_type": "model_profile",
+                        "object_id": record.profile_key,
+                    }
+                ],
+                "downstream": trace_refs,
+            },
+            "diagnostics": {
+                "supporting_component": "model_embedding_profiles",
+                "trace_id": str(record.trace_id) if record.trace_id else None,
+                "span_id": str(record.span_id) if record.span_id else None,
+                "created_at": record.created_at.isoformat(),
+                "endpoint_url_returned": False,
+                "api_key_available": False,
+                "prompt_returned": False,
+                "response_returned": False,
+                "cost_analytics_returned": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "redacted_or_not_applicable",
+            },
+        }
+
     def _evaluation_microscope(
         evaluation_id: str,
         evaluation: dict[str, Any] | None,
@@ -8317,6 +8404,16 @@ def create_app(
             if trial is not None:
                 return ObservatoryObjectResponse(
                     object=_semantic_compression_trial_admin_record(trial)
+                )
+        if object_type in {"llm_invocation", "llm-invocation", "model_invocation"}:
+            invocation_id = _uuid_or_404(object_id, "LLM invocation")
+            invocation = await llm_invocations.get_invocation(
+                workspace_key=workspace_id,
+                llm_invocation_id=invocation_id,
+            )
+            if invocation is not None:
+                return ObservatoryObjectResponse(
+                    object=_llm_invocation_microscope(invocation)
                 )
         if object_type in {"model_profile", "model-profile", "text_model_profile"}:
             profile = await profiles.get_model_profile(

@@ -16,6 +16,27 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory object microscopes now resolve
+  `llm_invocation` links to content-safe model-call audit detail instead of
+  falling through to a generic snapshot object. The LLM invocation store exposes
+  a bounded lookup by workspace and invocation ID; the admin object route returns
+  purpose, model/profile route identity, thinking fallback state, token
+  estimates, status, trace/span refs, allowlisted endpoint/finish metadata, and
+  hashed provider request/error identity while withholding raw provider errors,
+  prompt/response text, API keys, endpoint URLs, arbitrary audit payloads, and
+  cost analytics. This advances core handoff Sections 3.2.7, 3.3, 5.12,
+  13.8.12, and 28.2 plus Observatory Sections 7.6, 7.7, 8.18, 12.6, 13.1,
+  16.1, and 16.3 by making the model/embedding profile qualification refs
+  traversable through sidecar-hosted audit evidence. Validation passed with
+  focused profile/invocation microscope coverage (`2 passed`), broader
+  Observatory/LLM/profile coverage (`53 passed`), focused ruff checks, `uv run
+  ruff check sidecar`, `uv run pytest` (`376 passed`), `uv run python -m
+  compileall -q sidecar`, `docker compose config --quiet`, `git diff --check`,
+  core and Observatory acceptance reports (`ready=true`, `70` implemented and
+  `86` satisfied, `0` validation errors), and an isolated compose/Postgres smoke
+  on port `56547` that migrated a fresh database, wrote one LLM invocation
+  through `AsyncpgLLMInvocationStore`, fetched it by workspace/invocation ID,
+  verified workspace isolation, and removed the temporary compose project/volume.
 - 2026-06-05: Observatory model/embedding profile cockpits now have
   content-safe detail microscopes instead of list-only profile visibility.
   The profile qualification store exposes bounded recent run reads by
