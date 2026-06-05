@@ -773,6 +773,7 @@ def test_broker_policy_review_reports_active_policy_replay_and_audit_state() -> 
                 redacted_user_intent="redacted runtime intent",
                 expected_decision="no_skill",
                 tags=["production", "operator-reviewed"],
+                source_retrieval_log_id=uuid4(),
             )
         )
         return await review.endpoint(workspace_id="dev-01")
@@ -785,6 +786,8 @@ def test_broker_policy_review_reports_active_policy_replay_and_audit_state() -> 
     assert response.active_policy["version"] == "broker-policy-review.v1"
     assert response.replay_corpus["sampled_total"] == 1
     assert response.replay_corpus["sampled_production"] == 1
+    assert response.replay_corpus["sampled_operator_reviewed_production"] == 1
+    assert response.replay_corpus["sampled_source_linked_production"] == 1
     assert response.audit["chain_valid"] is True
 
 

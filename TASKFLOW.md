@@ -16,6 +16,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Deployment readiness and broker-policy review now distinguish
+  mere production replay presence from operator-reviewed/source-linked replay
+  evidence. `/v1/deployment/readiness` samples the production replay corpus,
+  blocks readiness when no `operator-reviewed` replay episode is present, and
+  warns when sampled production replay has no source-linked telemetry. Broker
+  policy review now exposes the same operator-reviewed/source-linked/telemetry
+  counts without replay intent text. This advances the Phase 10 sustained
+  replay/canary gate and Observatory replay/canary visibility rules while
+  preserving sidecar-state-only, read-only preflight behavior. Validation
+  passed with focused deployment-readiness tests (`3 passed`), focused broker
+  policy review tests (`2 passed`), `uv run ruff check sidecar`, `uv run
+  pytest` (`371 passed`), `uv run python -m compileall -q sidecar`, `docker
+  compose config --quiet`, and `git diff --check`.
 - 2026-06-05: Portable Observatory deployment is now modeled as split-container
   from first principles: the core container owns FastAPI admin APIs/live streams
   and reports Observatory frontend serving as owned by the Observatory nginx

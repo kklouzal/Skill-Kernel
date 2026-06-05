@@ -346,7 +346,8 @@ def test_deployment_readiness_passes_when_required_gates_are_present(
             episode_key="prod-episode-1",
             redacted_user_intent="Diagnose a bounded OpenClaw failure.",
             expected_decision="skill_hint",
-            tags=["production"],
+            tags=["production", "operator-reviewed", "telemetry-derived"],
+            source_retrieval_log_id=uuid4(),
         )
 
     asyncio.run(seed_broker_policy())
@@ -371,6 +372,73 @@ def test_deployment_readiness_passes_when_required_gates_are_present(
     assert response.blockers == []
     assert response.checks["active_broker_policy"]["version"] == "prod.v1"
     assert response.checks["active_embedding_profile"]["dimensions"] == [768]
+    assert response.checks["operator_reviewed_broker_replay_corpus"]["status"] == (
+        "passed"
+    )
+    assert response.checks["telemetry_linked_broker_replay_corpus"]["status"] == (
+        "passed"
+    )
+
+    get_settings.cache_clear()
+
+
+def test_deployment_readiness_blocks_production_replay_without_operator_review(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    monkeypatch.setenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", "true")
+    get_settings.cache_clear()
+
+    broker_policies = NullBrokerPolicyStore()
+
+    async def seed_broker_policy() -> None:
+        await broker_policies.upsert_policy_version(
+            workspace_key="dev-01",
+            version="prod.v1",
+            policy={"max_tokens": 800},
+            status="active",
+        )
+        await broker_policies.record_replay_episode(
+            workspace_key="dev-01",
+            episode_key="prod-episode-1",
+            redacted_user_intent="Diagnose a bounded OpenClaw failure.",
+            expected_decision="skill_hint",
+            tags=["production", "telemetry-derived"],
+            source_retrieval_log_id=uuid4(),
+        )
+
+    asyncio.run(seed_broker_policy())
+
+    app = create_app(
+        job_store=NullJobStore(),
+        profile_store=MemoryReadinessProfileStore(),
+        broker_policy_store=broker_policies,
+    )
+    route = next(route for route in app.routes if route.path == "/v1/deployment/readiness")
+
+    async def run():
+        return await route.endpoint(
+            authorization="Bearer control-token",
+            workspace_id="dev-01",
+            replay_tag="production",
+        )
+
+    response = asyncio.run(run())
+
+    assert response.ready is False
+    assert "operator_reviewed_broker_replay_corpus" in response.blockers
+    assert response.checks["broker_replay_corpus"]["sampled"] == 1
+    assert response.checks["operator_reviewed_broker_replay_corpus"] == {
+        "status": "blocked",
+        "tag": "production",
+        "operator_reviewed": 0,
+        "sampled": 1,
+    }
+    assert response.checks["telemetry_linked_broker_replay_corpus"]["status"] == (
+        "passed"
+    )
 
     get_settings.cache_clear()
 
@@ -398,7 +466,8 @@ def test_deployment_readiness_ignores_failed_jobs_from_other_workspaces(
             episode_key="prod-episode-1",
             redacted_user_intent="Diagnose a bounded OpenClaw failure.",
             expected_decision="skill_hint",
-            tags=["production"],
+            tags=["production", "operator-reviewed", "telemetry-derived"],
+            source_retrieval_log_id=uuid4(),
         )
 
     asyncio.run(seed_broker_policy())

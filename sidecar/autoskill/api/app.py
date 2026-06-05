@@ -2203,6 +2203,48 @@ def _readiness_check(
         warnings.append(name)
 
 
+def _broker_replay_corpus_detail(
+    episodes: list[Any],
+    *,
+    replay_tag: str,
+) -> dict[str, object]:
+    operator_reviewed = 0
+    source_linked = 0
+    telemetry_derived = 0
+    degraded_fidelity = 0
+    expected_decisions: dict[str, int] = {}
+    episode_keys: list[str] = []
+    distinct_episode_keys: set[str] = set()
+    for episode in episodes:
+        tags = set(getattr(episode, "tags", []) or [])
+        metadata = getattr(episode, "metadata", {}) or {}
+        if getattr(episode, "episode_key", None):
+            episode_key = str(episode.episode_key)
+            episode_keys.append(episode_key)
+            distinct_episode_keys.add(episode_key)
+        if "operator-reviewed" in tags:
+            operator_reviewed += 1
+        if getattr(episode, "source_retrieval_log_id", None):
+            source_linked += 1
+        if "telemetry-derived" in tags or metadata.get("source") == "automatic_replay_synthesis":
+            telemetry_derived += 1
+        if metadata.get("evidence_fidelity") in {"metadata_only", "hash_only"}:
+            degraded_fidelity += 1
+        decision = str(getattr(episode, "expected_decision", None) or "unspecified")
+        expected_decisions[decision] = expected_decisions.get(decision, 0) + 1
+    return {
+        "tag": replay_tag,
+        "sampled": len(episodes),
+        "distinct_sampled": len(distinct_episode_keys),
+        "operator_reviewed": operator_reviewed,
+        "source_linked": source_linked,
+        "telemetry_derived": telemetry_derived,
+        "degraded_fidelity": degraded_fidelity,
+        "expected_decisions": expected_decisions,
+        "episode_keys": episode_keys[:25],
+    }
+
+
 async def _deployment_readiness_report(
     *,
     workspace_id: str,
@@ -2363,7 +2405,11 @@ async def _deployment_readiness_report(
     replay_episodes = await broker_policies.list_replay_episodes(
         workspace_key=workspace_id,
         tags=replay_tags,
-        limit=1,
+        limit=100,
+    )
+    replay_detail = _broker_replay_corpus_detail(
+        replay_episodes,
+        replay_tag=replay_tag,
     )
     _readiness_check(
         checks,
@@ -2371,7 +2417,33 @@ async def _deployment_readiness_report(
         warnings,
         "broker_replay_corpus",
         passed=bool(replay_episodes),
-        detail={"tag": replay_tag, "sampled": len(replay_episodes)},
+        detail=replay_detail,
+    )
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "operator_reviewed_broker_replay_corpus",
+        passed=int(replay_detail["operator_reviewed"]) > 0,
+        detail={
+            "tag": replay_tag,
+            "operator_reviewed": replay_detail["operator_reviewed"],
+            "sampled": replay_detail["sampled"],
+        },
+    )
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "telemetry_linked_broker_replay_corpus",
+        passed=int(replay_detail["source_linked"]) > 0,
+        required=False,
+        detail={
+            "tag": replay_tag,
+            "source_linked": replay_detail["source_linked"],
+            "telemetry_derived": replay_detail["telemetry_derived"],
+            "sampled": replay_detail["sampled"],
+        },
     )
 
     job_summary = await jobs.summary(workspace_key=workspace_id)
@@ -4330,6 +4402,14 @@ def create_app(
             warnings.append("broker replay corpus is empty")
         if not production_replay_episodes:
             warnings.append("production-tagged broker replay corpus is empty")
+        production_replay_detail = _broker_replay_corpus_detail(
+            production_replay_episodes,
+            replay_tag="production",
+        )
+        if production_replay_episodes and not production_replay_detail["operator_reviewed"]:
+            warnings.append("operator-reviewed production broker replay corpus is empty")
+        if production_replay_episodes and not production_replay_detail["source_linked"]:
+            warnings.append("source-linked production broker replay corpus is empty")
         if not audit_chain_valid:
             blockers.append("audit hash chain failed bounded verification")
 
@@ -4343,6 +4423,15 @@ def create_app(
             replay_corpus={
                 "sampled_total": len(replay_episodes),
                 "sampled_production": len(production_replay_episodes),
+                "sampled_operator_reviewed_production": production_replay_detail[
+                    "operator_reviewed"
+                ],
+                "sampled_source_linked_production": production_replay_detail[
+                    "source_linked"
+                ],
+                "sampled_telemetry_derived_production": production_replay_detail[
+                    "telemetry_derived"
+                ],
                 "limit": bounded_replay_limit,
                 "episode_keys": [episode.episode_key for episode in replay_episodes[:25]],
             },

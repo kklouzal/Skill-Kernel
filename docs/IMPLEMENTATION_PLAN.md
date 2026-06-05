@@ -632,7 +632,8 @@ Deliverables:
   `GET /v1/deployment/readiness`, which reports pass/block/warn state for
   database/auth/redaction, runtime broker config, writer root containment,
   active executor/text/embedding profiles, active broker policy, replay corpus,
-  worker concurrency, and workspace-scoped job-queue health;
+  operator-reviewed/source-linked production replay coverage, worker
+  concurrency, and workspace-scoped job-queue health;
 - operator disaster-recovery bundle export and guarded restore; implemented as
   `scripts/autoskill_backup.py` and `scripts/autoskill_restore.py`, covering a
   verifiable Postgres `autoskill` schema dump plus active/archive/staging runtime
@@ -663,8 +664,10 @@ Acceptance:
 - missing production safety/configuration gates produce explicit blockers instead
   of a permissive status;
 - persisted executor, qualified text model, active embedding profile, active
-  broker policy, and production replay records can make the readiness report pass
-  through the real asyncpg stores after compose migrations;
+  broker policy, and operator-reviewed production replay records can make the
+  readiness report pass through the real asyncpg stores after compose
+  migrations, while source-linked replay coverage is surfaced as an explicit
+  warning gate for sustained replay/canary growth;
 - readiness reporting is an operator preflight; the current Dev-01 deployment
   also passed live gateway capture/hint validation, active-profile semantic
   broker paraphrase validation, stored broker replay, production embedding
@@ -673,6 +676,13 @@ Acceptance:
   prompts; missing intents can be synthesized only from content-safe retrieval
   context, and degraded hash-only/metadata-only/no-safe-context cases return
   explicit skip reasons instead of entering the full-autonomy replay corpus.
+- validation evidence for the replay-corpus readiness tightening passed on the
+  final tree: focused deployment-readiness tests (`3 passed`), focused broker
+  policy review tests (`2 passed`), `uv run ruff check sidecar`, `uv run
+  pytest` (`371 passed`), `uv run python -m compileall -q sidecar`, `docker
+  compose config --quiet`, and `git diff --check`. No compose/Postgres smoke was
+  needed because the slice only changes existing read-only readiness/review
+  shaping over already persisted replay records.
 
 ## Phase 11 - Observatory Web Administration and Diagnostics
 
