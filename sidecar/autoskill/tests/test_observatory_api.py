@@ -2600,9 +2600,18 @@ def test_observatory_event_and_trace_read_models_are_bounded_and_content_safe() 
             object_id=str(event.event_id),
             workspace_id="dev-01",
         )
-        return events, traces, detail, replay, object_detail
+        trace_object_detail = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="trace",
+            object_id=str(trace_id),
+            workspace_id="dev-01",
+        )
+        return events, traces, detail, replay, object_detail, trace_object_detail
 
-    events, traces, detail, replay, object_detail = asyncio.run(run())
+    events, traces, detail, replay, object_detail, trace_object_detail = asyncio.run(
+        run()
+    )
 
     assert events.collection["source"] == "event_store.list_events"
     assert events.collection["items"][0]["event_id"] == str(event.event_id)
@@ -2638,6 +2647,17 @@ def test_observatory_event_and_trace_read_models_are_bounded_and_content_safe() 
     assert object_detail.object["object_type"] == "captured_event"
     assert object_detail.object["effects"]["payload_hash"] == event.payload_hash
     assert object_detail.object["content_policy"]["raw_available"] is False
+    assert trace_object_detail.object["object_type"] == "trace"
+    assert trace_object_detail.object["object_id"] == str(trace_id)
+    assert trace_object_detail.object["diagnostics"]["supporting_component"] == (
+        "audit_trace"
+    )
+    assert trace_object_detail.object["diagnostics"]["span_count"] == 2
+    assert trace_object_detail.object["diagnostics"]["raw_span_attributes_returned"] is False
+    assert trace_object_detail.object["provenance"]["downstream"][0]["object_id"] == str(
+        event.event_id
+    )
+    assert trace_object_detail.object["content_policy"]["raw_available"] is False
 
 
 def test_observatory_comparisons_and_diagnostic_bundles_are_persisted() -> None:

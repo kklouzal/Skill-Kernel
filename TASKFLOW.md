@@ -16,6 +16,24 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory object microscopes now resolve `trace` refs through
+  the observability store instead of falling through to the generic snapshot
+  placeholder. The shared trace-detail microscope exposes the ordered
+  content-safe span timeline, downstream object refs, operation/status
+  summaries, and explicit raw-span denial metadata, and the dedicated
+  `/admin/api/v1/traces/{trace_id}` route now reuses the same payload builder.
+  This advances core handoff Sections 28.2 and 28.3 plus Observatory Sections
+  7.6, 7.7, 8.20, 12.6, 16.1, and 21.16 by making trace refs emitted by model,
+  broker, writer, event, and replay microscopes directly traversable through
+  the canonical object route without re-executing work or adding mutation
+  authority. Validation passed with focused trace/object microscope coverage
+  (`1 passed`), focused ruff checks, `uv run ruff check sidecar`, `uv run
+  pytest` (`379 passed`), `uv run python -m compileall -q sidecar`, `docker
+  compose config --quiet`, `git diff --check`, and core and Observatory
+  acceptance reports (`ready=true`, `70` implemented and `86` satisfied, `0`
+  validation errors). No compose/Postgres smoke was needed because the slice
+  only reuses the existing observability-store read path and validates it
+  through the in-memory trace store.
 - 2026-06-05: Observatory object microscopes now resolve deterministic
   `writer_transaction` links through governance-backed evolution transaction
   rows instead of forcing operators to infer writer state from generic

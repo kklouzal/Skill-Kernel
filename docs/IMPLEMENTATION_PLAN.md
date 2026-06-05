@@ -3,6 +3,20 @@
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
 2026-06-05 update: Observatory object microscopes now include a dedicated
+content-safe `trace` path backed by the observability store.
+`/admin/api/v1/objects/trace/{trace_id}` resolves the same ordered trace detail
+as `/admin/api/v1/traces/{trace_id}`, including span timeline, downstream
+object refs, operation/status summaries, and raw-span denial metadata. This
+advances core Sections 28.2 and 28.3 plus Observatory Sections 7.6, 7.7, 8.20,
+12.6, 16.1, and 21.16 by closing the drill-down gap from emitted trace refs to
+governed sidecar evidence without replaying work or adding UI-local mutation
+authority. Validation passed with focused trace/object microscope coverage,
+full sidecar ruff/pytest/compileall gates, compose config, diff-check, and core
+and Observatory acceptance reports. No compose/Postgres smoke was needed
+because the slice only reuses the existing observability-store read path and
+validates it through the in-memory trace store.
+
+2026-06-05 update: Observatory object microscopes now include a dedicated
 content-safe `writer_transaction` path backed by governance evolution
 transactions. `/admin/api/v1/objects/writer_transaction/{id}` resolves
 deterministic writer apply/rollback evidence, including manifest hash, active

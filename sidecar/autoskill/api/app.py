@@ -8079,6 +8079,60 @@ def create_app(
             },
         }
 
+    def _trace_detail_microscope(
+        trace_id: UUID,
+        *,
+        spans: list[Any],
+    ) -> dict[str, Any]:
+        span_payloads = sorted(
+            (span.to_json() for span in spans),
+            key=lambda payload: (payload["started_at"], payload["span_id"]),
+        )
+        downstream = [
+            ref
+            for span in span_payloads
+            for ref in span.get("object_refs", [])
+            if isinstance(ref, dict)
+        ]
+        return {
+            "schema_version": "skillkernel.observatory.trace-detail.v1",
+            "object_type": "trace",
+            "object_id": str(trace_id),
+            "title": f"Trace {trace_id}",
+            "summary": "Content-safe trace detail assembled from recorded spans.",
+            "timeline": span_payloads,
+            "provenance": {
+                "upstream": [],
+                "downstream": downstream,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+            },
+            "diagnostics": {
+                "supporting_component": "audit_trace",
+                "span_count": len(span_payloads),
+                "operation_kinds": sorted(
+                    {
+                        str(span.get("operation_kind"))
+                        for span in span_payloads
+                        if span.get("operation_kind")
+                    }
+                ),
+                "statuses": sorted(
+                    {
+                        str(span.get("status"))
+                        for span in span_payloads
+                        if span.get("status")
+                    }
+                ),
+                "object_ref_count": len(downstream),
+                "raw_span_attributes_returned": False,
+                "replay_reexecutes_work": False,
+            },
+            "audit": {"links": []},
+        }
+
     def _snapshot_live_fallback(
         snapshot: dict[str, object],
         *,
@@ -9178,6 +9232,17 @@ def create_app(
                 return ObservatoryObjectResponse(
                     object=_revocation_request_microscope(revocation)
                 )
+        if object_type in {"trace", "trace_replay", "trace-replay"}:
+            trace_id = _uuid_or_404(object_id, "trace")
+            spans = await observability.list_trace(
+                workspace_key=workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+                trace_id=trace_id,
+                limit=500,
+            )
+            if spans:
+                return ObservatoryObjectResponse(
+                    object=_trace_detail_microscope(trace_id, spans=spans)
+                )
         snapshot = await _observatory_snapshot(
             workspace_id=workspace_id,
             window_minutes=window_minutes,
@@ -9389,32 +9454,7 @@ def create_app(
             limit=max(1, min(limit, 500)),
         )
         return ObservatoryObjectResponse(
-            object={
-                "schema_version": "skillkernel.observatory.trace-detail.v1",
-                "object_type": "trace",
-                "object_id": str(trace_id),
-                "title": f"Trace {trace_id}",
-                "summary": "Content-safe trace detail assembled from recorded spans.",
-                "timeline": [span.to_json() for span in spans],
-                "provenance": {
-                    "upstream": [],
-                    "downstream": [
-                        ref
-                        for span in spans
-                        for ref in span.to_json().get("object_refs", [])
-                        if isinstance(ref, dict)
-                    ],
-                },
-                "content_policy": {
-                    "raw_available": False,
-                    "raw_reason": "raw-content-disabled",
-                },
-                "diagnostics": {
-                    "span_count": len(spans),
-                    "replay_reexecutes_work": False,
-                },
-                "audit": {"links": []},
-            }
+            object=_trace_detail_microscope(trace_id, spans=spans)
         )
 
     @app.get("/admin/api/v1/jobs", response_model=ObservatoryCollectionResponse)
