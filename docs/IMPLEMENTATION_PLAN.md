@@ -3,6 +3,22 @@
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
 2026-06-05 update: Observatory object microscopes now include a dedicated
+content-safe `evaluation`/`evaluation_run`/`probe_evaluation` path backed by
+the evaluator read model. `/admin/api/v1/objects/evaluation/{id}` resolves the
+same evaluation/probe autonomy-assurance detail as
+`/admin/api/v1/evaluations/{id}`, including hard-invariant failures,
+soft-threshold misses, autonomous fallback actions, policy-blocked actions,
+skill-version provenance, and raw-content denial metadata. This advances core
+Section 23 evaluator/probe acceptance behavior plus Observatory Sections 7.6,
+7.7, 8.14, 12.6, 21.16, and 21.22 by closing the drill-down gap from
+evaluation/probe aggregates to governed sidecar evidence. Validation passed
+with focused Observatory evaluation microscope coverage, full sidecar
+ruff/pytest/compileall gates, compose config, diff-check, and core and
+Observatory acceptance reports. No compose/Postgres smoke was needed because
+the slice reuses the existing evaluator-store read path and validates it
+through the in-memory evaluation store.
+
+2026-06-05 update: Observatory object microscopes now include a dedicated
 content-safe `broker_decision`/`retrieval_log` path backed by the retrieval
 store. `/admin/api/v1/objects/broker_decision/{id}` resolves the same broker
 decision detail as `/admin/api/v1/broker/decisions/{id}`, including decision

@@ -8732,6 +8732,25 @@ def create_app(
                 return ObservatoryObjectResponse(
                     object=_topology_operation_microscope(operation)
                 )
+        if object_type in {"evaluation", "evaluation_run", "probe_evaluation"}:
+            evaluation_id = _uuid_or_404(object_id, "evaluation")
+            listed = [
+                evaluation.to_json()
+                for evaluation in await evaluations.list_evaluation_reviews(
+                    workspace_key=workspace_id,
+                    status=None,
+                    limit=250,
+                )
+            ]
+            evaluation = _find_by_id(
+                listed,
+                str(evaluation_id),
+                ("evaluation_id", "skill_id", "skill_version_id"),
+            )
+            if evaluation is not None:
+                return ObservatoryObjectResponse(
+                    object=_evaluation_microscope(str(evaluation_id), evaluation)
+                )
         if object_type in {"memory_quarantine", "quarantined_memory"}:
             quarantine_id = _uuid_or_404(object_id, "memory quarantine")
             memory = await memory_governance.get_memory_quarantine(

@@ -2879,16 +2879,34 @@ def test_observatory_evaluation_detail_exposes_autonomy_assurance() -> None:
         )
     ]
     app = create_app(evaluation_store=evaluation_store)
-    route = _routes(app)[("/admin/api/v1/evaluations/{evaluation_id}", "GET")]
+    routes = _routes(app)
 
     async def run():
-        return await route.endpoint(evaluation_id=str(evaluation_id), workspace_id="dev-01")
+        direct = await routes[("/admin/api/v1/evaluations/{evaluation_id}", "GET")].endpoint(
+            evaluation_id=str(evaluation_id),
+            workspace_id="dev-01",
+        )
+        microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="evaluation",
+            object_id=str(evaluation_id),
+            workspace_id="dev-01",
+        )
+        return direct, microscope
 
-    response = asyncio.run(run())
+    response, microscope_response = asyncio.run(run())
     detail = response.object
+    microscope = microscope_response.object
     diagnostics = detail["diagnostics"]
 
     assert detail["content_policy"]["raw_available"] is False
+    assert microscope["object_type"] == "evaluation"
+    assert microscope["object_id"] == str(evaluation_id)
+    assert microscope["diagnostics"]["autonomy_decision"] == diagnostics[
+        "autonomy_decision"
+    ]
+    assert microscope["content_policy"]["raw_available"] is False
     assert diagnostics["autonomy_decision"]["state"] == "soft_threshold_stalled"
     assert diagnostics["autonomy_decision"]["threshold_deadlock_candidate"] is True
     assert diagnostics["soft_threshold_misses"] == ["intervention-required"]

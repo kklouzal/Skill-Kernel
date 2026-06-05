@@ -16,6 +16,24 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory object microscopes now resolve `evaluation`,
+  `evaluation_run`, and `probe_evaluation` links through the existing
+  evaluator read model instead of falling through to the generic snapshot
+  fallback. The generic object route reuses the content-safe evaluation
+  microscope behind `/admin/api/v1/evaluations/{evaluation_id}`, preserving
+  autonomy-assurance diagnostics, hard-invariant failures, soft-threshold
+  misses, fallback actions, skill-version provenance refs, and raw-content
+  denial metadata without adding any UI-local evaluator authority. This
+  advances core handoff Section 23 evaluator/probe acceptance behavior plus
+  Observatory Sections 7.6, 7.7, 8.14, 12.6, and 21.16/21.22 by making
+  aggregate evaluation/probe refs drill into the governed sidecar record.
+  Validation passed with focused Observatory evaluation microscope coverage
+  (`1 passed`), `uv run ruff check sidecar`, `uv run pytest` (`376 passed`),
+  `uv run python -m compileall -q sidecar`, `docker compose config --quiet`,
+  `git diff --check`, and core and Observatory acceptance reports
+  (`ready=true`, `70` implemented and `86` satisfied, `0` validation errors).
+  No compose/Postgres smoke was needed because the slice only reuses the
+  existing evaluator-store list/read path and in-memory route coverage.
 - 2026-06-05: Observatory object microscopes now resolve
   `broker_decision`/`retrieval_log` links to the same content-safe retrieval-log
   detail used by `/admin/api/v1/broker/decisions/{id}` instead of falling
