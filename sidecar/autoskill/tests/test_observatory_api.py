@@ -17,6 +17,7 @@ from autoskill.core.events import EventEnvelope
 from autoskill.core.hashing import sha256_text
 from autoskill.db import observability as observability_module
 from autoskill.db.broker_policy import NullBrokerPolicyStore
+from autoskill.db.context import NullContextGovernanceStore
 from autoskill.db.embeddings import (
     EMBEDDING_OBJECT_TYPE_BODY_INDEX_DOCUMENT,
     EMBEDDING_OBJECT_TYPE_EVIDENCE_ITEM,
@@ -870,6 +871,193 @@ def test_observatory_memory_and_control_flow_read_models_are_content_safe() -> N
     assert event_object.object["object_type"] == "control_flow_event"
 
 
+def test_observatory_context_compiler_read_models_are_store_backed_and_content_safe() -> None:
+    context = NullContextGovernanceStore()
+    skill_id = uuid4()
+    skill_version_id = uuid4()
+
+    async def seed():
+        artifact = await context.record_artifact(
+            workspace_key="dev-01",
+            artifact_kind="skill_md",
+            source_object_type="skill_version",
+            source_object_id=skill_version_id,
+            skill_id=skill_id,
+            skill_version_id=skill_version_id,
+            text="WHEN raw operator request appears DO never expose this text",
+            max_tokens=30,
+            safety_status="passed",
+            equivalence_status="passed",
+            shadowing_status="passed",
+            metadata={"gate": "context-loadability", "raw_note": "do not render"},
+        )
+        run = await context.record_compile_run(
+            workspace_key="dev-01",
+            compiler_version="context-compiler.v1",
+            input_skillir_hash="skillir-hash",
+            output_manifest_hash="manifest-hash",
+            actual_runtime_tokens=14,
+            status="passed",
+            skill_id=skill_id,
+            skill_version_id=skill_version_id,
+            context_artifact_id=artifact.context_artifact_id,
+            target_runtime_tokens=30,
+            compression_ratio=0.42,
+            semantic_equivalence_score=0.97,
+            metadata={"compile": "passed", "note": "do not render"},
+        )
+        event = await context.record_budget_event(
+            workspace_key="dev-01",
+            event_type="skill_md_budget",
+            decision="accept",
+            skill_id=skill_id,
+            skill_version_id=skill_version_id,
+            context_artifact_id=artifact.context_artifact_id,
+            tokens_delta=-12,
+            marginal_success_delta=0.1,
+            evidence={"private_probe": "do not render"},
+            metadata={"budget": "passed"},
+        )
+        trial = await context.record_semantic_compression_trial(
+            workspace_key="dev-01",
+            skill_id=skill_id,
+            source_context_artifact_id=artifact.context_artifact_id,
+            candidate_context_artifact_id=artifact.context_artifact_id,
+            source_tokens=40,
+            candidate_tokens=14,
+            preserved_requirements=5,
+            lost_requirements=0,
+            added_unsupported_requirements=0,
+            equivalence_score=0.97,
+            status="passed",
+            metadata={"trial": "passed", "note": "do not render"},
+        )
+        return artifact, run, event, trial
+
+    artifact, run, event, trial = asyncio.run(seed())
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        context_governance_store=context,
+    )
+    routes = _routes(app)
+
+    async def read():
+        artifacts = await routes[("/admin/api/v1/context/artifacts", "GET")].endpoint(
+            workspace_id="dev-01",
+            limit=10,
+        )
+        artifact_detail = await routes[
+            ("/admin/api/v1/context/artifacts/{artifact_id}", "GET")
+        ].endpoint(
+            artifact_id=str(artifact.context_artifact_id),
+            workspace_id="dev-01",
+        )
+        runs = await routes[("/admin/api/v1/context/compile-runs", "GET")].endpoint(
+            workspace_id="dev-01",
+            limit=10,
+        )
+        run_detail = await routes[
+            ("/admin/api/v1/context/compile-runs/{run_id}", "GET")
+        ].endpoint(
+            run_id=str(run.context_compile_run_id),
+            workspace_id="dev-01",
+        )
+        events = await routes[("/admin/api/v1/context/budget-events", "GET")].endpoint(
+            workspace_id="dev-01",
+            limit=10,
+        )
+        event_detail = await routes[
+            ("/admin/api/v1/context/budget-events/{event_id}", "GET")
+        ].endpoint(
+            event_id=str(event.context_budget_event_id),
+            workspace_id="dev-01",
+        )
+        trials = await routes[
+            ("/admin/api/v1/context/compression-trials", "GET")
+        ].endpoint(workspace_id="dev-01", limit=10)
+        trial_detail = await routes[
+            ("/admin/api/v1/context/compression-trials/{trial_id}", "GET")
+        ].endpoint(
+            trial_id=str(trial.semantic_compression_trial_id),
+            workspace_id="dev-01",
+        )
+        microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="context_compile_run",
+            object_id=str(run.context_compile_run_id),
+            workspace_id="dev-01",
+        )
+        return (
+            artifacts,
+            artifact_detail,
+            runs,
+            run_detail,
+            events,
+            event_detail,
+            trials,
+            trial_detail,
+            microscope,
+        )
+
+    (
+        artifacts,
+        artifact_detail,
+        runs,
+        run_detail,
+        events,
+        event_detail,
+        trials,
+        trial_detail,
+        microscope,
+    ) = asyncio.run(read())
+
+    artifact_item = artifacts.collection["items"][0]
+    assert artifacts.collection["source"] == "context_governance_store.list_artifacts"
+    assert artifact_item["object_type"] == "context_artifact"
+    assert artifact_item["text_hash"] == artifact.text_hash
+    assert artifact_item["metadata_keys"] == ["gate", "raw_note"]
+    assert artifact_detail.object["effects"]["raw_text_returned"] is False
+
+    run_item = runs.collection["items"][0]
+    assert runs.collection["source"] == "context_governance_store.list_compile_runs"
+    assert run_item["status"] == "passed"
+    assert run_item["input_skillir_hash"] == "skillir-hash"
+    assert run_detail.object["content_policy"]["skillir_returned"] is False
+    assert run_detail.object["effects"]["activation_proof_candidate"] is True
+    assert microscope.object["object_type"] == "context_compile_run"
+
+    event_item = events.collection["items"][0]
+    assert events.collection["source"] == "context_governance_store.list_budget_events"
+    assert event_item["decision"] == "accept"
+    assert event_item["evidence_keys"] == ["private_probe"]
+    assert event_detail.object["content_policy"]["evidence_payload_returned"] is False
+
+    trial_item = trials.collection["items"][0]
+    assert trials.collection["source"] == (
+        "context_governance_store.list_semantic_compression_trials"
+    )
+    assert trial_item["equivalence_score"] == 0.97
+    assert trial_detail.object["effects"]["token_delta"] == -26
+    assert trial_detail.object["content_policy"]["artifact_text_returned"] is False
+
+    combined = json.dumps(
+        [
+            artifacts.collection,
+            artifact_detail.object,
+            runs.collection,
+            run_detail.object,
+            events.collection,
+            event_detail.object,
+            trials.collection,
+            trial_detail.object,
+        ],
+        sort_keys=True,
+    )
+    assert "WHEN raw operator request appears" not in combined
+    assert "do not render" not in combined
+
+
 def test_observatory_admin_routes_include_browser_security_headers() -> None:
     app = create_app(audit_store=MemoryAuditStore())
 
@@ -933,6 +1121,13 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/broker/replay-episodes", "GET"),
         ("/admin/api/v1/broker/replay-episodes/{episode_id}", "GET"),
         ("/admin/api/v1/context/artifacts", "GET"),
+        ("/admin/api/v1/context/artifacts/{artifact_id}", "GET"),
+        ("/admin/api/v1/context/compile-runs", "GET"),
+        ("/admin/api/v1/context/compile-runs/{run_id}", "GET"),
+        ("/admin/api/v1/context/budget-events", "GET"),
+        ("/admin/api/v1/context/budget-events/{event_id}", "GET"),
+        ("/admin/api/v1/context/compression-trials", "GET"),
+        ("/admin/api/v1/context/compression-trials/{trial_id}", "GET"),
         ("/admin/api/v1/model-profile", "GET"),
         ("/admin/api/v1/embedding-profile", "GET"),
         ("/admin/api/v1/storage", "GET"),

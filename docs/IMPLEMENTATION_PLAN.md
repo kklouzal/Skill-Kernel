@@ -1038,6 +1038,24 @@ Acceptance:
   sidecar`, `npm run build --prefix sidecar/autoskill/observatory`, `docker
   compose config --quiet`, `git diff --check`, and the Observatory acceptance
   report (`86` satisfied, `0` validation errors).
+- validation evidence for the Observatory context compiler read-model slice
+  passed on the final tree: persisted context-governance records now have
+  bounded list/detail store methods and sidecar-hosted admin routes for
+  context artifacts, context compile runs, context budget events, and semantic
+  compression trials. `/admin/api/v1/context/artifacts`,
+  `/context/compile-runs`, `/context/budget-events`, `/context/compression-trials`,
+  their detail routes, and generic object-microscope aliases expose hashes,
+  gate statuses, token counts, semantic-equivalence/compression metrics,
+  evidence/metadata key summaries, and provenance refs without returning
+  compiled text, raw SkillIR, prompt bodies, raw evidence, or artifact text.
+  This advances core handoff Sections 11.12-11.15 and Observatory Sections
+  8.12, 12.1, 12.6, and 13.1 without adding mutation authority or a second
+  control plane. Focused context/route validation passed with `2 passed`;
+  focused Observatory API validation passed with `39 passed`; generated
+  OpenAPI client `--check`, `uv run ruff check sidecar`, `uv run pytest`
+  (`369 passed`), `uv run python -m compileall -q sidecar`,
+  `npm run build --prefix sidecar/autoskill/observatory`, and
+  `docker compose config --quiet` passed.
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and

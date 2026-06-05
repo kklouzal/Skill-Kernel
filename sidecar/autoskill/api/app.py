@@ -5367,6 +5367,272 @@ def create_app(
             },
         }
 
+    def _context_artifact_admin_record(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        object_id = str(payload["context_artifact_id"])
+        return {
+            "schema_version": "skillkernel.observatory.context-artifact.v1",
+            "object_type": "context_artifact",
+            "object_id": object_id,
+            "context_artifact_id": object_id,
+            "workspace_id": payload.get("workspace_key") or payload.get("workspace_id"),
+            "artifact_kind": payload["artifact_kind"],
+            "source_object_type": payload["source_object_type"],
+            "source_object_id": payload.get("source_object_id"),
+            "skill_id": payload.get("skill_id"),
+            "skill_version_id": payload.get("skill_version_id"),
+            "broker_policy_version_id": payload.get("broker_policy_version_id"),
+            "text_hash": payload["text_hash"],
+            "token_count": payload["token_count"],
+            "max_tokens": payload["max_tokens"],
+            "safety_status": payload["safety_status"],
+            "equivalence_status": payload["equivalence_status"],
+            "budget_status": payload["budget_status"],
+            "shadowing_status": payload["shadowing_status"],
+            "metadata_keys": sorted(str(key) for key in metadata),
+            "created_at": payload["created_at"],
+            "title": f"Context artifact {object_id}",
+            "summary": (
+                f"{payload['artifact_kind']} {payload['budget_status']} "
+                f"{payload['token_count']}/{payload['max_tokens']} tokens"
+            ),
+            "timeline": [
+                {"at": payload["created_at"], "event": "context_artifact_recorded"}
+            ],
+            "provenance": {
+                "upstream": [
+                    {
+                        "object_type": payload["source_object_type"],
+                        "object_id": payload.get("source_object_id"),
+                        "relationship": "source_object",
+                    }
+                ]
+                if payload.get("source_object_id")
+                else [],
+                "downstream": [],
+            },
+            "effects": {
+                "context_loadability": {
+                    "safety_status": payload["safety_status"],
+                    "equivalence_status": payload["equivalence_status"],
+                    "budget_status": payload["budget_status"],
+                    "shadowing_status": payload["shadowing_status"],
+                },
+                "raw_text_returned": False,
+            },
+            "diagnostics": {
+                "supporting_component": "context_compiler",
+                "metadata_keys": sorted(str(key) for key in metadata),
+                "token_budget": {
+                    "token_count": payload["token_count"],
+                    "max_tokens": payload["max_tokens"],
+                    "status": payload["budget_status"],
+                },
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "hashes_and_gate_status_only",
+                "compiled_text_returned": False,
+            },
+        }
+
+    def _context_compile_run_admin_record(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        object_id = str(payload["context_compile_run_id"])
+        return {
+            "schema_version": "skillkernel.observatory.context-compile-run.v1",
+            "object_type": "context_compile_run",
+            "object_id": object_id,
+            "context_compile_run_id": object_id,
+            "workspace_id": payload.get("workspace_key") or payload.get("workspace_id"),
+            "skill_id": payload.get("skill_id"),
+            "skill_version_id": payload.get("skill_version_id"),
+            "candidate_id": payload.get("candidate_id"),
+            "context_artifact_id": payload.get("context_artifact_id"),
+            "compiler_version": payload["compiler_version"],
+            "model_assist_used": payload["model_assist_used"],
+            "input_skillir_hash": payload["input_skillir_hash"],
+            "output_manifest_hash": payload["output_manifest_hash"],
+            "target_runtime_tokens": payload.get("target_runtime_tokens"),
+            "actual_runtime_tokens": payload["actual_runtime_tokens"],
+            "compression_ratio": payload.get("compression_ratio"),
+            "semantic_equivalence_score": payload.get("semantic_equivalence_score"),
+            "status": payload["status"],
+            "reject_reason": payload.get("reject_reason"),
+            "metadata_keys": sorted(str(key) for key in metadata),
+            "created_at": payload["created_at"],
+            "title": f"Context compile run {object_id}",
+            "summary": (
+                f"{payload['status']} compile; "
+                f"{payload['actual_runtime_tokens']} runtime tokens"
+            ),
+            "timeline": [{"at": payload["created_at"], "event": "context_compile_run"}],
+            "provenance": {
+                "upstream": [
+                    {
+                        "object_type": "context_artifact",
+                        "object_id": payload["context_artifact_id"],
+                        "relationship": "compiled_artifact",
+                    }
+                ]
+                if payload.get("context_artifact_id")
+                else [],
+                "downstream": [],
+            },
+            "effects": {
+                "activation_proof_candidate": payload["status"] == "passed",
+                "raw_skillir_returned": False,
+                "compiled_text_returned": False,
+            },
+            "diagnostics": {
+                "supporting_component": "context_compiler",
+                "metadata_keys": sorted(str(key) for key in metadata),
+                "semantic_equivalence_score": payload.get("semantic_equivalence_score"),
+                "compression_ratio": payload.get("compression_ratio"),
+                "reject_reason": payload.get("reject_reason"),
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "hashes_and_metrics_only",
+                "skillir_returned": False,
+                "compiled_text_returned": False,
+            },
+        }
+
+    def _context_budget_event_admin_record(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        evidence = payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        object_id = str(payload["context_budget_event_id"])
+        return {
+            "schema_version": "skillkernel.observatory.context-budget-event.v1",
+            "object_type": "context_budget_event",
+            "object_id": object_id,
+            "context_budget_event_id": object_id,
+            "workspace_id": payload.get("workspace_key") or payload.get("workspace_id"),
+            "skill_id": payload.get("skill_id"),
+            "skill_version_id": payload.get("skill_version_id"),
+            "context_artifact_id": payload.get("context_artifact_id"),
+            "event_type": payload["event_type"],
+            "decision": payload["decision"],
+            "tokens_delta": payload.get("tokens_delta"),
+            "marginal_success_delta": payload.get("marginal_success_delta"),
+            "false_positive_load_delta": payload.get("false_positive_load_delta"),
+            "ignored_load_delta": payload.get("ignored_load_delta"),
+            "shadowing_delta": payload.get("shadowing_delta"),
+            "evidence_keys": sorted(str(key) for key in evidence),
+            "metadata_keys": sorted(str(key) for key in metadata),
+            "created_at": payload["created_at"],
+            "title": f"Context budget event {object_id}",
+            "summary": f"{payload['event_type']} -> {payload['decision']}",
+            "timeline": [{"at": payload["created_at"], "event": "context_budget_event"}],
+            "provenance": {
+                "upstream": [
+                    {
+                        "object_type": "context_artifact",
+                        "object_id": payload["context_artifact_id"],
+                        "relationship": "budgeted_artifact",
+                    }
+                ]
+                if payload.get("context_artifact_id")
+                else [],
+                "downstream": [],
+            },
+            "effects": {
+                "decision": payload["decision"],
+                "raw_evidence_returned": False,
+            },
+            "diagnostics": {
+                "supporting_component": "context_compiler",
+                "evidence_keys": sorted(str(key) for key in evidence),
+                "metadata_keys": sorted(str(key) for key in metadata),
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "metrics_and_key_summaries_only",
+                "evidence_payload_returned": False,
+            },
+        }
+
+    def _semantic_compression_trial_admin_record(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        object_id = str(payload["semantic_compression_trial_id"])
+        return {
+            "schema_version": "skillkernel.observatory.semantic-compression-trial.v1",
+            "object_type": "semantic_compression_trial",
+            "object_id": object_id,
+            "semantic_compression_trial_id": object_id,
+            "workspace_id": payload.get("workspace_key") or payload.get("workspace_id"),
+            "skill_id": payload.get("skill_id"),
+            "source_revision_id": payload.get("source_revision_id"),
+            "candidate_revision_id": payload.get("candidate_revision_id"),
+            "source_context_artifact_id": payload.get("source_context_artifact_id"),
+            "candidate_context_artifact_id": payload.get("candidate_context_artifact_id"),
+            "source_tokens": payload["source_tokens"],
+            "candidate_tokens": payload["candidate_tokens"],
+            "preserved_requirements": payload["preserved_requirements"],
+            "lost_requirements": payload["lost_requirements"],
+            "added_unsupported_requirements": payload["added_unsupported_requirements"],
+            "equivalence_score": payload["equivalence_score"],
+            "target_probe_pass_rate": payload.get("target_probe_pass_rate"),
+            "regression_probe_pass_rate": payload.get("regression_probe_pass_rate"),
+            "status": payload["status"],
+            "metadata_keys": sorted(str(key) for key in metadata),
+            "created_at": payload["created_at"],
+            "title": f"Semantic compression trial {object_id}",
+            "summary": (
+                f"{payload['status']} compression trial; "
+                f"{payload['source_tokens']} -> {payload['candidate_tokens']} tokens"
+            ),
+            "timeline": [
+                {"at": payload["created_at"], "event": "semantic_compression_trial"}
+            ],
+            "provenance": {
+                "upstream": [
+                    ref
+                    for ref in (
+                        {
+                            "object_type": "context_artifact",
+                            "object_id": payload.get("source_context_artifact_id"),
+                            "relationship": "source_artifact",
+                        },
+                        {
+                            "object_type": "context_artifact",
+                            "object_id": payload.get("candidate_context_artifact_id"),
+                            "relationship": "candidate_artifact",
+                        },
+                    )
+                    if ref["object_id"]
+                ],
+                "downstream": [],
+            },
+            "effects": {
+                "token_delta": payload["candidate_tokens"] - payload["source_tokens"],
+                "raw_artifact_text_returned": False,
+            },
+            "diagnostics": {
+                "supporting_component": "context_compiler",
+                "metadata_keys": sorted(str(key) for key in metadata),
+                "equivalence_score": payload["equivalence_score"],
+                "lost_requirements": payload["lost_requirements"],
+                "added_unsupported_requirements": payload[
+                    "added_unsupported_requirements"
+                ],
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "metrics_and_refs_only",
+                "artifact_text_returned": False,
+            },
+        }
+
     def _event_microscope(record: Any) -> dict[str, Any]:
         payload = record.to_json()
         upstream = []
@@ -7168,6 +7434,52 @@ def create_app(
                 return ObservatoryObjectResponse(
                     object=_broker_replay_episode_microscope(episode)
                 )
+        if object_type in {"context_artifact", "context-artifact"}:
+            context_artifact_id = _uuid_or_404(object_id, "context artifact")
+            artifact = await context_governance.get_artifact(
+                workspace_key=workspace_id,
+                context_artifact_id=context_artifact_id,
+            )
+            if artifact is not None:
+                return ObservatoryObjectResponse(
+                    object=_context_artifact_admin_record(artifact)
+                )
+        if object_type in {"context_compile_run", "context-compile-run"}:
+            context_compile_run_id = _uuid_or_404(object_id, "context compile run")
+            compile_run = await context_governance.get_compile_run(
+                workspace_key=workspace_id,
+                context_compile_run_id=context_compile_run_id,
+            )
+            if compile_run is not None:
+                return ObservatoryObjectResponse(
+                    object=_context_compile_run_admin_record(compile_run)
+                )
+        if object_type in {"context_budget_event", "context-budget-event"}:
+            context_budget_event_id = _uuid_or_404(object_id, "context budget event")
+            budget_event = await context_governance.get_budget_event(
+                workspace_key=workspace_id,
+                context_budget_event_id=context_budget_event_id,
+            )
+            if budget_event is not None:
+                return ObservatoryObjectResponse(
+                    object=_context_budget_event_admin_record(budget_event)
+                )
+        if object_type in {
+            "semantic_compression_trial",
+            "semantic-compression-trial",
+        }:
+            semantic_compression_trial_id = _uuid_or_404(
+                object_id,
+                "semantic compression trial",
+            )
+            trial = await context_governance.get_semantic_compression_trial(
+                workspace_key=workspace_id,
+                semantic_compression_trial_id=semantic_compression_trial_id,
+            )
+            if trial is not None:
+                return ObservatoryObjectResponse(
+                    object=_semantic_compression_trial_admin_record(trial)
+                )
         if object_type in {"topology_operation", "skill_graph_operation"}:
             operation_id = _uuid_or_404(object_id, "topology operation")
             operation = await topology.get_operation_detail(
@@ -8136,29 +8448,223 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
         workspace_id: str | None = None,
-        window_minutes: int = 60,
         limit: int = 50,
         cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
-        snapshot = await _observatory_snapshot(
-            workspace_id=workspace_id,
-            window_minutes=window_minutes,
-        )
-        context = _find_by_id(
-            list(snapshot["pipeline"]["stations"]),  # type: ignore[index]
-            "context_compiler",
-            ("component_id",),
+        artifacts = await context_governance.list_artifacts(
+            workspace_key=workspace_id,
+            limit=500,
         )
         return _observatory_collection(
             object_type="context_artifact",
             title="Context artifacts",
-            items=list(context.get("records", [])) if context else [],
+            items=[_context_artifact_admin_record(artifact) for artifact in artifacts],
             limit=limit,
             cursor=cursor,
-            source="observatory_snapshot.context_compiler.records",
-            diagnostics=context
-            or _missing_read_model("context_artifact", supporting_component="context_compiler"),
+            source="context_governance_store.list_artifacts",
+            diagnostics={
+                "supporting_component": "context_compiler",
+                "raw_text_returned": False,
+                "workspace_id": workspace_id,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/context/artifacts/{artifact_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_context_artifact_detail(
+        artifact_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        context_artifact_id = _uuid_or_404(artifact_id, "context artifact")
+        artifact = await context_governance.get_artifact(
+            context_artifact_id=context_artifact_id,
+            workspace_key=workspace_id,
+        )
+        if artifact is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="context artifact not found",
+            )
+        return ObservatoryObjectResponse(
+            object=_context_artifact_admin_record(artifact)
+        )
+
+    @app.get(
+        "/admin/api/v1/context/compile-runs",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_context_compile_runs(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        runs = await context_governance.list_compile_runs(
+            workspace_key=workspace_id,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="context_compile_run",
+            title="Context compile runs",
+            items=[_context_compile_run_admin_record(run) for run in runs],
+            limit=limit,
+            cursor=cursor,
+            source="context_governance_store.list_compile_runs",
+            diagnostics={
+                "supporting_component": "context_compiler",
+                "skillir_returned": False,
+                "compiled_text_returned": False,
+                "workspace_id": workspace_id,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/context/compile-runs/{run_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_context_compile_run_detail(
+        run_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        context_compile_run_id = _uuid_or_404(run_id, "context compile run")
+        run = await context_governance.get_compile_run(
+            context_compile_run_id=context_compile_run_id,
+            workspace_key=workspace_id,
+        )
+        if run is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="context compile run not found",
+            )
+        return ObservatoryObjectResponse(
+            object=_context_compile_run_admin_record(run)
+        )
+
+    @app.get(
+        "/admin/api/v1/context/budget-events",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_context_budget_events(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        events = await context_governance.list_budget_events(
+            workspace_key=workspace_id,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="context_budget_event",
+            title="Context budget events",
+            items=[_context_budget_event_admin_record(event) for event in events],
+            limit=limit,
+            cursor=cursor,
+            source="context_governance_store.list_budget_events",
+            diagnostics={
+                "supporting_component": "context_compiler",
+                "evidence_payload_returned": False,
+                "workspace_id": workspace_id,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/context/budget-events/{event_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_context_budget_event_detail(
+        event_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        context_budget_event_id = _uuid_or_404(event_id, "context budget event")
+        event = await context_governance.get_budget_event(
+            context_budget_event_id=context_budget_event_id,
+            workspace_key=workspace_id,
+        )
+        if event is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="context budget event not found",
+            )
+        return ObservatoryObjectResponse(
+            object=_context_budget_event_admin_record(event)
+        )
+
+    @app.get(
+        "/admin/api/v1/context/compression-trials",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_context_compression_trials(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        trials = await context_governance.list_semantic_compression_trials(
+            workspace_key=workspace_id,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="semantic_compression_trial",
+            title="Semantic compression trials",
+            items=[
+                _semantic_compression_trial_admin_record(trial)
+                for trial in trials
+            ],
+            limit=limit,
+            cursor=cursor,
+            source="context_governance_store.list_semantic_compression_trials",
+            diagnostics={
+                "supporting_component": "context_compiler",
+                "artifact_text_returned": False,
+                "workspace_id": workspace_id,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/context/compression-trials/{trial_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_context_compression_trial_detail(
+        trial_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        semantic_compression_trial_id = _uuid_or_404(
+            trial_id,
+            "semantic compression trial",
+        )
+        trial = await context_governance.get_semantic_compression_trial(
+            semantic_compression_trial_id=semantic_compression_trial_id,
+            workspace_key=workspace_id,
+        )
+        if trial is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="semantic compression trial not found",
+            )
+        return ObservatoryObjectResponse(
+            object=_semantic_compression_trial_admin_record(trial)
         )
 
     @app.get("/admin/api/v1/model-profile", response_model=ObservatoryCollectionResponse)

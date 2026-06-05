@@ -359,6 +359,70 @@ class SemanticCompressionTrialRecord:
 
 
 class ContextGovernanceStore(Protocol):
+    async def list_artifacts(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[ContextArtifactRecord]:
+        """Return bounded context-loadable artifact gate records."""
+
+    async def get_artifact(
+        self,
+        *,
+        context_artifact_id: UUID,
+        workspace_key: str | None = None,
+    ) -> ContextArtifactRecord | None:
+        """Return one context artifact gate record."""
+
+    async def list_compile_runs(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[ContextCompileRunRecord]:
+        """Return bounded context compiler run records."""
+
+    async def get_compile_run(
+        self,
+        *,
+        context_compile_run_id: UUID,
+        workspace_key: str | None = None,
+    ) -> ContextCompileRunRecord | None:
+        """Return one context compiler run record."""
+
+    async def list_budget_events(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[ContextBudgetEventRecord]:
+        """Return bounded token-budget governor decisions."""
+
+    async def get_budget_event(
+        self,
+        *,
+        context_budget_event_id: UUID,
+        workspace_key: str | None = None,
+    ) -> ContextBudgetEventRecord | None:
+        """Return one token-budget governor decision."""
+
+    async def list_semantic_compression_trials(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[SemanticCompressionTrialRecord]:
+        """Return bounded semantic compression trial records."""
+
+    async def get_semantic_compression_trial(
+        self,
+        *,
+        semantic_compression_trial_id: UUID,
+        workspace_key: str | None = None,
+    ) -> SemanticCompressionTrialRecord | None:
+        """Return one semantic compression trial record."""
+
     async def record_artifact(
         self,
         *,
@@ -483,6 +547,101 @@ class ContextGovernanceStore(Protocol):
 
 
 class NullContextGovernanceStore:
+    def __init__(self) -> None:
+        self.artifacts: list[ContextArtifactRecord] = []
+        self.token_ledgers: list[TokenLedgerRecord] = []
+        self.compile_runs: list[ContextCompileRunRecord] = []
+        self.budget_events: list[ContextBudgetEventRecord] = []
+        self.semantic_compression_trials: list[SemanticCompressionTrialRecord] = []
+
+    async def list_artifacts(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[ContextArtifactRecord]:
+        return _bounded_recent(self.artifacts, workspace_key=workspace_key, limit=limit)
+
+    async def get_artifact(
+        self,
+        *,
+        context_artifact_id: UUID,
+        workspace_key: str | None = None,
+    ) -> ContextArtifactRecord | None:
+        return _find_record(
+            self.artifacts,
+            "context_artifact_id",
+            context_artifact_id,
+            workspace_key=workspace_key,
+        )
+
+    async def list_compile_runs(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[ContextCompileRunRecord]:
+        return _bounded_recent(self.compile_runs, workspace_key=workspace_key, limit=limit)
+
+    async def get_compile_run(
+        self,
+        *,
+        context_compile_run_id: UUID,
+        workspace_key: str | None = None,
+    ) -> ContextCompileRunRecord | None:
+        return _find_record(
+            self.compile_runs,
+            "context_compile_run_id",
+            context_compile_run_id,
+            workspace_key=workspace_key,
+        )
+
+    async def list_budget_events(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[ContextBudgetEventRecord]:
+        return _bounded_recent(self.budget_events, workspace_key=workspace_key, limit=limit)
+
+    async def get_budget_event(
+        self,
+        *,
+        context_budget_event_id: UUID,
+        workspace_key: str | None = None,
+    ) -> ContextBudgetEventRecord | None:
+        return _find_record(
+            self.budget_events,
+            "context_budget_event_id",
+            context_budget_event_id,
+            workspace_key=workspace_key,
+        )
+
+    async def list_semantic_compression_trials(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[SemanticCompressionTrialRecord]:
+        return _bounded_recent(
+            self.semantic_compression_trials,
+            workspace_key=workspace_key,
+            limit=limit,
+        )
+
+    async def get_semantic_compression_trial(
+        self,
+        *,
+        semantic_compression_trial_id: UUID,
+        workspace_key: str | None = None,
+    ) -> SemanticCompressionTrialRecord | None:
+        return _find_record(
+            self.semantic_compression_trials,
+            "semantic_compression_trial_id",
+            semantic_compression_trial_id,
+            workspace_key=workspace_key,
+        )
+
     async def record_artifact(
         self,
         *,
@@ -503,7 +662,7 @@ class NullContextGovernanceStore:
         from uuid import uuid4
 
         token_count = _estimate_tokens(text)
-        return ContextArtifactRecord(
+        record = ContextArtifactRecord(
             context_artifact_id=uuid4(),
             workspace_id=None,
             workspace_key=workspace_key,
@@ -523,6 +682,8 @@ class NullContextGovernanceStore:
             metadata=metadata or {},
             created_at=datetime.now(),
         )
+        self.artifacts.append(record)
+        return record
 
     async def record_token_ledger(
         self,
@@ -541,7 +702,7 @@ class NullContextGovernanceStore:
     ) -> TokenLedgerRecord:
         from uuid import uuid4
 
-        return TokenLedgerRecord(
+        record = TokenLedgerRecord(
             context_token_ledger_id=uuid4(),
             workspace_id=None,
             workspace_key=workspace_key,
@@ -557,6 +718,8 @@ class NullContextGovernanceStore:
             metadata=metadata or {},
             created_at=datetime.now(),
         )
+        self.token_ledgers.append(record)
+        return record
 
     async def invalidate_objects(
         self,
@@ -599,7 +762,7 @@ class NullContextGovernanceStore:
             "marginal_value": value,
             "context_value_per_token": value / max(token_count, 1),
         }
-        return TokenLedgerRecord(
+        record = TokenLedgerRecord(
             context_token_ledger_id=context_token_ledger_id or uuid4(),
             workspace_id=None,
             workspace_key=workspace_key,
@@ -618,6 +781,13 @@ class NullContextGovernanceStore:
             },
             created_at=datetime.now(),
         )
+        self.token_ledgers = [
+            existing
+            for existing in self.token_ledgers
+            if existing.context_token_ledger_id != record.context_token_ledger_id
+        ]
+        self.token_ledgers.append(record)
+        return record
 
     async def record_compile_run(
         self,
@@ -641,7 +811,7 @@ class NullContextGovernanceStore:
     ) -> ContextCompileRunRecord:
         from uuid import uuid4
 
-        return ContextCompileRunRecord(
+        record = ContextCompileRunRecord(
             context_compile_run_id=uuid4(),
             workspace_id=None,
             workspace_key=workspace_key,
@@ -662,6 +832,8 @@ class NullContextGovernanceStore:
             metadata=metadata or {},
             created_at=datetime.now(),
         )
+        self.compile_runs.append(record)
+        return record
 
     async def record_budget_event(
         self,
@@ -682,7 +854,7 @@ class NullContextGovernanceStore:
     ) -> ContextBudgetEventRecord:
         from uuid import uuid4
 
-        return ContextBudgetEventRecord(
+        record = ContextBudgetEventRecord(
             context_budget_event_id=uuid4(),
             workspace_id=None,
             workspace_key=workspace_key,
@@ -700,6 +872,8 @@ class NullContextGovernanceStore:
             metadata=metadata or {},
             created_at=datetime.now(),
         )
+        self.budget_events.append(record)
+        return record
 
     async def record_semantic_compression_trial(
         self,
@@ -723,7 +897,7 @@ class NullContextGovernanceStore:
     ) -> SemanticCompressionTrialRecord:
         from uuid import uuid4
 
-        return SemanticCompressionTrialRecord(
+        record = SemanticCompressionTrialRecord(
             semantic_compression_trial_id=uuid4(),
             workspace_id=None,
             workspace_key=workspace_key,
@@ -744,9 +918,169 @@ class NullContextGovernanceStore:
             metadata=metadata or {},
             created_at=datetime.now(),
         )
+        self.semantic_compression_trials.append(record)
+        return record
 
 
 class AsyncpgContextGovernanceStore(AsyncpgPoolOwner):
+    async def list_artifacts(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[ContextArtifactRecord]:
+        rows = await self._fetch_context_rows(
+            table="context_artifacts",
+            id_column="context_artifact_id",
+            workspace_key=workspace_key,
+            limit=limit,
+        )
+        return [ContextArtifactRecord.from_row(row) for row in rows]
+
+    async def get_artifact(
+        self,
+        *,
+        context_artifact_id: UUID,
+        workspace_key: str | None = None,
+    ) -> ContextArtifactRecord | None:
+        row = await self._fetch_context_row(
+            table="context_artifacts",
+            id_column="context_artifact_id",
+            record_id=context_artifact_id,
+            workspace_key=workspace_key,
+        )
+        return ContextArtifactRecord.from_row(row) if row is not None else None
+
+    async def list_compile_runs(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[ContextCompileRunRecord]:
+        rows = await self._fetch_context_rows(
+            table="context_compile_runs",
+            id_column="context_compile_run_id",
+            workspace_key=workspace_key,
+            limit=limit,
+        )
+        return [ContextCompileRunRecord.from_row(row) for row in rows]
+
+    async def get_compile_run(
+        self,
+        *,
+        context_compile_run_id: UUID,
+        workspace_key: str | None = None,
+    ) -> ContextCompileRunRecord | None:
+        row = await self._fetch_context_row(
+            table="context_compile_runs",
+            id_column="context_compile_run_id",
+            record_id=context_compile_run_id,
+            workspace_key=workspace_key,
+        )
+        return ContextCompileRunRecord.from_row(row) if row is not None else None
+
+    async def list_budget_events(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[ContextBudgetEventRecord]:
+        rows = await self._fetch_context_rows(
+            table="context_budget_events",
+            id_column="context_budget_event_id",
+            workspace_key=workspace_key,
+            limit=limit,
+        )
+        return [ContextBudgetEventRecord.from_row(row) for row in rows]
+
+    async def get_budget_event(
+        self,
+        *,
+        context_budget_event_id: UUID,
+        workspace_key: str | None = None,
+    ) -> ContextBudgetEventRecord | None:
+        row = await self._fetch_context_row(
+            table="context_budget_events",
+            id_column="context_budget_event_id",
+            record_id=context_budget_event_id,
+            workspace_key=workspace_key,
+        )
+        return ContextBudgetEventRecord.from_row(row) if row is not None else None
+
+    async def list_semantic_compression_trials(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[SemanticCompressionTrialRecord]:
+        rows = await self._fetch_context_rows(
+            table="semantic_compression_trials",
+            id_column="semantic_compression_trial_id",
+            workspace_key=workspace_key,
+            limit=limit,
+        )
+        return [SemanticCompressionTrialRecord.from_row(row) for row in rows]
+
+    async def get_semantic_compression_trial(
+        self,
+        *,
+        semantic_compression_trial_id: UUID,
+        workspace_key: str | None = None,
+    ) -> SemanticCompressionTrialRecord | None:
+        row = await self._fetch_context_row(
+            table="semantic_compression_trials",
+            id_column="semantic_compression_trial_id",
+            record_id=semantic_compression_trial_id,
+            workspace_key=workspace_key,
+        )
+        return SemanticCompressionTrialRecord.from_row(row) if row is not None else None
+
+    async def _fetch_context_rows(
+        self,
+        *,
+        table: str,
+        id_column: str,
+        workspace_key: str | None,
+        limit: int,
+    ) -> list[asyncpg.Record]:
+        pool = await self._get_pool()
+        bounded_limit = max(1, min(limit, 500))
+        async with pool.acquire() as conn:
+            return await conn.fetch(
+                f"""
+                SELECT t.*, w.external_key AS workspace_key
+                FROM autoskill.{table} t
+                JOIN autoskill.workspaces w ON w.workspace_id = t.workspace_id
+                WHERE ($1::text IS NULL OR w.external_key = $1)
+                ORDER BY t.created_at DESC, t.{id_column} DESC
+                LIMIT $2
+                """,
+                workspace_key,
+                bounded_limit,
+            )
+
+    async def _fetch_context_row(
+        self,
+        *,
+        table: str,
+        id_column: str,
+        record_id: UUID,
+        workspace_key: str | None,
+    ) -> asyncpg.Record | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchrow(
+                f"""
+                SELECT t.*, w.external_key AS workspace_key
+                FROM autoskill.{table} t
+                JOIN autoskill.workspaces w ON w.workspace_id = t.workspace_id
+                WHERE t.{id_column} = $1
+                  AND ($2::text IS NULL OR w.external_key = $2)
+                """,
+                record_id,
+                workspace_key,
+            )
+
     async def record_artifact(
         self,
         *,
@@ -1258,6 +1592,40 @@ def _estimate_tokens(text: str) -> int:
 
 def _budget_status(token_count: int, max_tokens: int) -> str:
     return "passed" if token_count <= max_tokens else "over_budget"
+
+
+def _bounded_recent(
+    records: list[Any],
+    *,
+    workspace_key: str | None,
+    limit: int,
+) -> list[Any]:
+    filtered = [
+        record
+        for record in records
+        if workspace_key is None or record.workspace_key == workspace_key
+    ]
+    return sorted(
+        filtered,
+        key=lambda record: record.created_at,
+        reverse=True,
+    )[: max(1, min(limit, 500))]
+
+
+def _find_record(
+    records: list[Any],
+    id_attribute: str,
+    record_id: UUID,
+    *,
+    workspace_key: str | None,
+) -> Any | None:
+    for record in records:
+        if getattr(record, id_attribute) != record_id:
+            continue
+        if workspace_key is not None and record.workspace_key != workspace_key:
+            continue
+        return record
+    return None
 
 
 async def _update_context_artifact_marginal_value(
