@@ -313,6 +313,14 @@ class GovernanceStore(Protocol):
     ) -> list[EvolutionTransactionRecord]:
         """Return recent evolution transactions for content-safe read models."""
 
+    async def get_transaction(
+        self,
+        *,
+        workspace_key: str | None = None,
+        evolution_transaction_id: UUID,
+    ) -> EvolutionTransactionRecord | None:
+        """Return one evolution transaction for a content-safe object microscope."""
+
     async def record_provenance_edge(
         self,
         *,
@@ -481,6 +489,14 @@ class NullGovernanceStore:
         limit: int = 50,
     ) -> list[EvolutionTransactionRecord]:
         return []
+
+    async def get_transaction(
+        self,
+        *,
+        workspace_key: str | None = None,
+        evolution_transaction_id: UUID,
+    ) -> EvolutionTransactionRecord | None:
+        return None
 
     async def record_provenance_edge(
         self,
@@ -768,6 +784,29 @@ class AsyncpgGovernanceStore(AsyncpgPoolOwner):
                 max(1, min(limit, 250)),
             )
             return [EvolutionTransactionRecord.from_row(row) for row in rows]
+
+    async def get_transaction(
+        self,
+        *,
+        workspace_key: str | None = None,
+        evolution_transaction_id: UUID,
+    ) -> EvolutionTransactionRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT tx.*, w.external_key AS workspace_key
+                FROM autoskill.evolution_transactions tx
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE tx.evolution_transaction_id = $1
+                  AND ($2::text IS NULL OR w.external_key = $2)
+                """,
+                evolution_transaction_id,
+                workspace_key,
+            )
+            if row is None:
+                return None
+            return EvolutionTransactionRecord.from_row(row)
 
     async def record_provenance_edge(
         self,

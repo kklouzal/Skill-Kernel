@@ -27,7 +27,11 @@ from autoskill.db.embeddings import (
 )
 from autoskill.db.evaluations import EvaluationReviewRecord, NullEvaluationStore
 from autoskill.db.events import NullEventStore
-from autoskill.db.governance import EvolutionTransactionRecord, NullGovernanceStore
+from autoskill.db.governance import (
+    EvolutionTransactionItemRecord,
+    EvolutionTransactionRecord,
+    NullGovernanceStore,
+)
 from autoskill.db.jobs import JobQueueSummary
 from autoskill.db.memory import NullMemoryGovernanceStore
 from autoskill.db.observability import (
@@ -76,8 +80,13 @@ class MemoryAuditStore:
 
 
 class MemoryTopologyGovernanceStore(NullGovernanceStore):
-    def __init__(self, transactions: list[EvolutionTransactionRecord]) -> None:
+    def __init__(
+        self,
+        transactions: list[EvolutionTransactionRecord],
+        items: list[EvolutionTransactionItemRecord] | None = None,
+    ) -> None:
         self.transactions = transactions
+        self.items = items or []
 
     async def list_transactions(
         self,
@@ -96,6 +105,31 @@ class MemoryTopologyGovernanceStore(NullGovernanceStore):
             )
         ]
         return records[:limit]
+
+    async def get_transaction(
+        self,
+        *,
+        workspace_key: str | None = None,
+        evolution_transaction_id,
+    ) -> EvolutionTransactionRecord | None:
+        for transaction in self.transactions:
+            if (
+                transaction.evolution_transaction_id == evolution_transaction_id
+                and (workspace_key is None or transaction.workspace_key == workspace_key)
+            ):
+                return transaction
+        return None
+
+    async def list_transaction_items(
+        self,
+        *,
+        evolution_transaction_id,
+    ) -> list[EvolutionTransactionItemRecord]:
+        return [
+            item
+            for item in self.items
+            if item.evolution_transaction_id == evolution_transaction_id
+        ]
 
 
 class MemoryRetrievalLogStore:
@@ -1629,6 +1663,133 @@ def test_observatory_topology_exposes_operation_metrics_read_model() -> None:
     assert "raw skill body" not in json.dumps(review, sort_keys=True)
     assert "raw supporting transcript" not in json.dumps(review, sort_keys=True)
     assert "raw operator content" not in json.dumps(review, sort_keys=True)
+
+
+def test_observatory_evolution_transaction_object_microscope_is_content_safe() -> None:
+    transaction_id = uuid4()
+    evidence_id = uuid4()
+    item_id = uuid4()
+    governance = MemoryTopologyGovernanceStore(
+        [
+            EvolutionTransactionRecord(
+                evolution_transaction_id=transaction_id,
+                workspace_id=uuid4(),
+                workspace_key="dev-01",
+                transaction_kind="topology_compose",
+                status="committed",
+                idempotency_key="raw operator idempotency text",
+                plan_hash="compose-plan-hash",
+                actor="autoskill-sidecar",
+                cause={"raw_reason": "raw operator rationale"},
+                source_evidence_ids=[evidence_id],
+                source_memory_ids=[],
+                policy_snapshot={"policy": "topology_policy.v1"},
+                metrics={
+                    "topology_operation_kind": "compose",
+                    "topology_status": "accepted",
+                    "evidence_count": 1,
+                    "planned_trials": 2,
+                    "trial_kinds": ["component_only", "composed"],
+                    "graph_node_count": 3,
+                    "graph_edge_count": 2,
+                    "rollback_actions": 1,
+                    "rollback_actions_planned": True,
+                    "writes": ["skills/autoskill/compose-workflow"],
+                    "requires_trial_before_apply": True,
+                    "data_to_skill_trace": {
+                        "schema_version": "skillkernel.data-to-skill-trace.topology.v1",
+                        "operation_kind": "compose",
+                        "status": "candidate",
+                        "plan_hash": "compose-plan-hash",
+                        "terminal_stage": "transaction",
+                        "failure_exit": None,
+                        "stages": [
+                            {
+                                "name": "transaction",
+                                "status": "recorded",
+                                "reason_codes": ["transaction-recorded"],
+                                "input_refs": [
+                                    {
+                                        "object_type": "evidence_item",
+                                        "object_id": str(evidence_id),
+                                        "raw_text": "raw evidence text",
+                                    }
+                                ],
+                                "output_refs": [
+                                    {
+                                        "object_type": "evolution_transaction",
+                                        "object_id": str(transaction_id),
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    "raw_plan_text": "raw skill body",
+                },
+                rollback_of_transaction_id=None,
+                started_at=datetime.now(UTC),
+                committed_at=datetime.now(UTC),
+                rolled_back_at=None,
+            )
+        ],
+        items=[
+            EvolutionTransactionItemRecord(
+                transaction_item_id=uuid4(),
+                evolution_transaction_id=transaction_id,
+                item_kind="compiled_skill_package",
+                item_id=item_id,
+                relative_path="skills/autoskill/compose-workflow/SKILL.md",
+                before_hash=None,
+                after_hash="package-after-hash",
+                activation_state="staged",
+                rollback_action={
+                    "operation": "archive_created_skill",
+                    "raw_instruction": "raw rollback text",
+                },
+                created_at=datetime.now(UTC),
+            )
+        ],
+    )
+    app = create_app(governance_store=governance, audit_store=MemoryAuditStore())
+    route = next(
+        route for route in app.routes if route.path == "/admin/api/v1/objects/{object_type}/{object_id}"
+    )
+
+    async def run():
+        return await route.endpoint(
+            object_type="evolution_transaction",
+            object_id=str(transaction_id),
+            authorization=None,
+            x_skillkernel_roles=None,
+            workspace_id="dev-01",
+            window_minutes=60,
+        )
+
+    response = asyncio.run(run())
+    payload = response.object
+
+    assert payload["object_type"] == "evolution_transaction"
+    assert payload["object_id"] == str(transaction_id)
+    assert payload["content_policy"]["raw_available"] is False
+    assert payload["idempotency_key_hash"] == sha256_text("raw operator idempotency text")
+    assert payload["provenance"]["upstream"] == [
+        {"object_type": "evidence", "object_id": str(evidence_id)}
+    ]
+    assert payload["effects"]["items"][0]["item_kind"] == "compiled_skill_package"
+    assert payload["effects"]["items"][0]["item_id"] == str(item_id)
+    assert payload["effects"]["items"][0]["rollback_operation"] == "archive_created_skill"
+    metrics = payload["diagnostics"]["metrics"]
+    assert metrics["topology_operation_kind"] == "compose"
+    assert metrics["requires_trial_before_apply"] is True
+    assert metrics["data_to_skill_trace"]["stages"][0]["input_refs"] == [
+        {"object_type": "evidence_item", "object_id": str(evidence_id)}
+    ]
+    rendered = json.dumps(payload, sort_keys=True)
+    assert "raw operator idempotency text" not in rendered
+    assert "raw operator rationale" not in rendered
+    assert "raw evidence text" not in rendered
+    assert "raw skill body" not in rendered
+    assert "raw rollback text" not in rendered
 
 
 def test_observatory_broker_decisions_use_content_safe_retrieval_logs() -> None:

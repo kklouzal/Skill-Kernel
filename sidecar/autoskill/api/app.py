@@ -6511,6 +6511,180 @@ def create_app(
             )
         return refs
 
+    def _safe_transaction_metrics(metrics: Any) -> dict[str, Any]:
+        if not isinstance(metrics, dict):
+            metrics = {}
+        writes = metrics.get("writes", [])
+        if not isinstance(writes, list):
+            writes = []
+        trial_kinds = metrics.get("trial_kinds", [])
+        if not isinstance(trial_kinds, list):
+            trial_kinds = []
+        safe: dict[str, Any] = {
+            "metric_key_count": len(metrics),
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "allowlisted_transaction_metrics_only",
+            },
+        }
+        allowlist = (
+            "topology_operation_kind",
+            "topology_status",
+            "plan_hash",
+            "evidence_count",
+            "planned_trials",
+            "blockers",
+            "graph_node_count",
+            "graph_edge_count",
+            "graph_node_roles",
+            "graph_edge_kinds",
+            "effect_coverage_count",
+            "rollback_blockers",
+            "rollback_actions",
+            "rollback_actions_planned",
+            "requires_trial_before_apply",
+        )
+        for key in allowlist:
+            if key in metrics:
+                safe[key] = metrics[key]
+        safe["trial_kinds"] = [str(kind) for kind in trial_kinds[:20]]
+        safe["write_targets"] = [str(target) for target in writes[:20]]
+        safe["write_target_count"] = len(writes)
+        trace = _safe_data_to_skill_trace(metrics.get("data_to_skill_trace"))
+        if trace is not None:
+            safe["data_to_skill_trace"] = trace
+        return safe
+
+    def _safe_transaction_item(item: Any) -> dict[str, Any]:
+        payload = item.to_json()
+        rollback_action = payload.get("rollback_action")
+        rollback_operation = None
+        rollback_key_count = 0
+        if isinstance(rollback_action, dict):
+            rollback_key_count = len(rollback_action)
+            if isinstance(rollback_action.get("operation"), str):
+                rollback_operation = rollback_action["operation"]
+        return {
+            "transaction_item_id": payload["transaction_item_id"],
+            "item_kind": payload["item_kind"],
+            "item_id": payload.get("item_id"),
+            "relative_path": payload.get("relative_path"),
+            "before_hash": payload.get("before_hash"),
+            "after_hash": payload.get("after_hash"),
+            "activation_state": payload["activation_state"],
+            "rollback_operation": rollback_operation,
+            "rollback_action_key_count": rollback_key_count,
+            "created_at": payload["created_at"],
+        }
+
+    def _evolution_transaction_microscope(
+        transaction: Any,
+        items: list[Any],
+    ) -> dict[str, Any]:
+        payload = transaction.to_json()
+        transaction_id = payload["evolution_transaction_id"]
+        safe_items = [_safe_transaction_item(item) for item in items[:100]]
+        source_refs = [
+            {"object_type": "evidence", "object_id": str(evidence_id)}
+            for evidence_id in payload.get("source_evidence_ids", [])
+        ] + [
+            {"object_type": "memory", "object_id": str(memory_id)}
+            for memory_id in payload.get("source_memory_ids", [])
+        ]
+        if payload.get("rollback_of_transaction_id"):
+            source_refs.append(
+                {
+                    "object_type": "evolution_transaction",
+                    "object_id": payload["rollback_of_transaction_id"],
+                }
+            )
+        downstream_refs = [
+            {
+                "object_type": item["item_kind"],
+                "object_id": item.get("item_id") or item["transaction_item_id"],
+            }
+            for item in safe_items
+        ]
+        timeline = [
+            {
+                "at": payload["started_at"],
+                "event": "evolution_transaction_started",
+                "status": payload["status"],
+                "transaction_kind": payload["transaction_kind"],
+            }
+        ]
+        if payload.get("committed_at"):
+            timeline.append(
+                {
+                    "at": payload["committed_at"],
+                    "event": "evolution_transaction_committed",
+                    "status": payload["status"],
+                }
+            )
+        if payload.get("rolled_back_at"):
+            timeline.append(
+                {
+                    "at": payload["rolled_back_at"],
+                    "event": "evolution_transaction_rolled_back",
+                    "status": payload["status"],
+                }
+            )
+        return {
+            "schema_version": "skillkernel.observatory.evolution-transaction.v1",
+            "object_type": "evolution_transaction",
+            "object_id": transaction_id,
+            "title": f"{payload['transaction_kind']} transaction {transaction_id}",
+            "summary": (
+                f"{payload['transaction_kind']} / {payload['status']}; "
+                f"items={len(safe_items)}; evidence={len(payload.get('source_evidence_ids', []))}"
+            ),
+            "workspace_key": payload.get("workspace_key"),
+            "transaction_kind": payload["transaction_kind"],
+            "status": payload["status"],
+            "plan_hash": payload["plan_hash"],
+            "actor": payload["actor"],
+            "idempotency_key_hash": sha256_text(payload["idempotency_key"]),
+            "timeline": timeline,
+            "provenance": {
+                "upstream": source_refs,
+                "downstream": downstream_refs,
+            },
+            "effects": {
+                "items": safe_items,
+                "item_count": len(safe_items),
+                "transaction_item_limit": 100,
+            },
+            "diagnostics": {
+                "supporting_component": "audit_trace",
+                "transaction_kind": payload["transaction_kind"],
+                "status": payload["status"],
+                "source_evidence_count": len(payload.get("source_evidence_ids", [])),
+                "source_memory_count": len(payload.get("source_memory_ids", [])),
+                "policy_snapshot_keys": sorted(
+                    str(key)
+                    for key in (
+                        payload["policy_snapshot"].keys()
+                        if isinstance(payload.get("policy_snapshot"), dict)
+                        else []
+                    )
+                ),
+                "metrics": _safe_transaction_metrics(payload.get("metrics")),
+                "cause_key_count": (
+                    len(payload["cause"]) if isinstance(payload.get("cause"), dict) else 0
+                ),
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "content_safe_transaction_metadata",
+            },
+            "audit": {
+                "links": [{"object_type": "evolution_transaction", "object_id": transaction_id}],
+                "chain_visible": True,
+            },
+        }
+
     async def _record_observatory_action(
         request: ObservatoryActionRequest,
         authorization: str | None,
@@ -8056,6 +8230,23 @@ def create_app(
             if event is not None:
                 return ObservatoryObjectResponse(
                     object=_control_flow_event_admin_record(event)
+                )
+        if object_type in {
+            "evolution_transaction",
+            "evolution-transaction",
+            "transaction",
+        }:
+            transaction_id = _uuid_or_404(object_id, "evolution transaction")
+            transaction = await governance.get_transaction(
+                workspace_key=workspace_id,
+                evolution_transaction_id=transaction_id,
+            )
+            if transaction is not None:
+                items = await governance.list_transaction_items(
+                    evolution_transaction_id=transaction_id,
+                )
+                return ObservatoryObjectResponse(
+                    object=_evolution_transaction_microscope(transaction, items)
                 )
         snapshot = await _observatory_snapshot(
             workspace_id=workspace_id,

@@ -16,6 +16,28 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory object microscopes now resolve
+  `evolution_transaction` links to content-safe governance transaction detail
+  instead of falling through to a generic snapshot object. The governance store
+  exposes a bounded transaction lookup by workspace and transaction ID; the
+  admin object route returns transaction status/timeline, source evidence/memory
+  refs, downstream transaction items, rollback-operation names, hashed
+  idempotency identity, policy keys, and allowlisted topology/data-to-skill
+  metrics while withholding raw cause text, raw metric payloads, raw evidence,
+  and arbitrary rollback payload text. This advances core handoff Sections 1.2,
+  17.1, 28.2, and 28.3 plus Observatory Sections 7.6, 7.7, 11.1, 12.6, 13.1,
+  16.1, and 16.3 by making transaction-level why/provenance drill-down a real
+  sidecar read model. Validation passed with focused evolution-transaction
+  microscope coverage (`1 passed`), focused topology read-model coverage (`2
+  passed`), Observatory acceptance-report tests (`9 passed`), focused ruff
+  checks, `uv run ruff check sidecar`, `uv run pytest` (`374 passed`), `uv run
+  python -m compileall -q sidecar`, `docker compose config --quiet`, core and
+  Observatory acceptance reports (`ready=true`, `70` implemented and `86`
+  satisfied, `0` validation errors), and an isolated compose/Postgres smoke on
+  port `56521` that migrated a fresh database, wrote/read a
+  `topology_compose` transaction and transaction item through
+  `AsyncpgGovernanceStore`, verified the fetched workspace/metrics/item, and
+  removed the temporary compose project/volume.
 - 2026-06-05: Topology proposal persistence now records a content-safe
   data-to-skill trace capsule inside the governing `topology_*`
   `evolution_transactions.metrics` record. The trace exposes stage names,

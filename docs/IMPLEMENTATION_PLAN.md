@@ -2,6 +2,21 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: Observatory object microscopes now include a dedicated
+content-safe `evolution_transaction` detail path backed by the governance
+store. `/admin/api/v1/objects/evolution_transaction/{id}` resolves transaction
+status, timeline, source evidence/memory refs, downstream transaction items,
+rollback-operation names, hashed idempotency identity, policy keys, and
+allowlisted topology/data-to-skill metrics without exposing raw cause text, raw
+metric payloads, raw evidence, or arbitrary rollback payload text. This advances
+core Sections 1.2, 17.1, 28.2, and 28.3 plus Observatory Sections 7.6, 7.7,
+11.1, 12.6, 13.1, 16.1, and 16.3 by closing a transaction-level drill-down gap
+from topology review links to governance/audit evidence. Validation passed with
+focused Observatory API tests, full sidecar ruff/pytest/compileall gates, compose
+config, core and Observatory acceptance reports, diff-check, and an isolated
+compose/Postgres smoke that migrated a fresh database and round-tripped a
+topology transaction plus transaction item through `AsyncpgGovernanceStore`.
+
 2026-06-05 update: topology proposal persistence now stamps a content-safe
 data-to-skill trace capsule into the governing `topology_*`
 `evolution_transactions.metrics` row. The trace records stage status, reason
