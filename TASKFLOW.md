@@ -16,6 +16,31 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory topology cockpit now includes a content-safe
+  transaction-review read model derived from `evolution_transactions.metrics`.
+  The governance store exposes bounded recent transaction listing by workspace
+  and transaction-kind prefix; `/admin/api/v1/topology` now joins topology
+  operation metrics with recent `topology_*` transaction capsules showing
+  transaction status, plan hash, operation/status, evidence and trial counts,
+  trial kinds, SkillGraphIR node/edge counts, effect coverage, rollback
+  readiness, write targets, and the trial-before-apply invariant without
+  echoing raw plan text, evidence text, skill bodies, confirmation text, or
+  raw operator content. This advances core handoff Sections 1.2, 1.3, 9.6,
+  9.7, 13.7-13.8, and 17.1-17.9 plus Observatory Sections 7.7, 8.9, 12.1,
+  12.6, 13.1, and 16.1 by making topology proposal review visible through
+  the sidecar control-plane read model rather than a UI-local interpretation.
+  Validation passed with focused topology Observatory API coverage (`1
+  passed`), focused ruff checks, `uv run ruff check sidecar`, `uv run pytest`
+  (`373 passed`), `uv run python -m compileall -q sidecar`, `docker compose
+  config --quiet`, `git diff --check`, `uv run python
+  scripts/autoskill_acceptance.py --json` (`ready=true`, `70` implemented,
+  `0` validation errors), `uv run python
+  scripts/autoskill_observatory_acceptance.py --json` (`ready=true`, `86`
+  satisfied, `0` validation errors), and an isolated compose/Postgres smoke on
+  port `56452` that migrated a fresh database, wrote a staged
+  `topology_compose` transaction with metrics through `AsyncpgGovernanceStore`,
+  read it back via the new bounded transaction query, and removed the temporary
+  compose project/volume.
 - 2026-06-05: Topology proposal persistence now records a content-safe
   transaction review capsule on the governing evolution transaction. Persisted
   create/improve/compose/decompose proposals stamp operation kind/status, plan

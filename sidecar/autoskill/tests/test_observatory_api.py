@@ -27,6 +27,7 @@ from autoskill.db.embeddings import (
 )
 from autoskill.db.evaluations import EvaluationReviewRecord, NullEvaluationStore
 from autoskill.db.events import NullEventStore
+from autoskill.db.governance import EvolutionTransactionRecord, NullGovernanceStore
 from autoskill.db.jobs import JobQueueSummary
 from autoskill.db.memory import NullMemoryGovernanceStore
 from autoskill.db.observability import (
@@ -72,6 +73,29 @@ class MemoryAuditStore:
 
     async def verify_chain(self, *, workspace_key: str | None = None, limit: int = 1000) -> bool:
         return verify_hash_chain(self.records[-limit:])
+
+
+class MemoryTopologyGovernanceStore(NullGovernanceStore):
+    def __init__(self, transactions: list[EvolutionTransactionRecord]) -> None:
+        self.transactions = transactions
+
+    async def list_transactions(
+        self,
+        *,
+        workspace_key: str | None = None,
+        transaction_kind_prefix: str | None = None,
+        limit: int = 50,
+    ) -> list[EvolutionTransactionRecord]:
+        records = [
+            transaction
+            for transaction in self.transactions
+            if (workspace_key is None or transaction.workspace_key == workspace_key)
+            and (
+                transaction_kind_prefix is None
+                or transaction.transaction_kind.startswith(transaction_kind_prefix)
+            )
+        ]
+        return records[:limit]
 
 
 class MemoryRetrievalLogStore:
@@ -1445,6 +1469,7 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
 
 def test_observatory_topology_exposes_operation_metrics_read_model() -> None:
     topology = NullTopologyStore()
+    transaction_id = uuid4()
 
     async def seed() -> None:
         operation = await topology.record_operation(
@@ -1453,6 +1478,7 @@ def test_observatory_topology_exposes_operation_metrics_read_model() -> None:
             status="accepted",
             subject_skill_ids=[uuid4()],
             output_skill_ids=[uuid4(), uuid4()],
+            evolution_transaction_id=transaction_id,
             effect_coverage={"context_value_gate": "passed"},
             trial_summary={"decision": "split broad context"},
         )
@@ -1466,7 +1492,53 @@ def test_observatory_topology_exposes_operation_metrics_read_model() -> None:
         )
 
     asyncio.run(seed())
-    app = create_app(topology_store=topology, audit_store=MemoryAuditStore())
+    governance = MemoryTopologyGovernanceStore(
+        [
+            EvolutionTransactionRecord(
+                evolution_transaction_id=transaction_id,
+                workspace_id=uuid4(),
+                workspace_key="dev-01",
+                transaction_kind="topology_decompose",
+                status="staged",
+                idempotency_key="topology:decompose:safe",
+                plan_hash="topology-plan-hash",
+                actor="autoskill-sidecar",
+                cause={"redacted": True},
+                source_evidence_ids=[uuid4(), uuid4()],
+                source_memory_ids=[],
+                policy_snapshot={"policy": "topology_policy.v1"},
+                metrics={
+                    "topology_operation_kind": "decompose",
+                    "topology_status": "accepted",
+                    "plan_hash": "topology-plan-hash",
+                    "evidence_count": 2,
+                    "planned_trials": 1,
+                    "trial_kinds": ["context_value"],
+                    "blockers": 0,
+                    "graph_node_count": 3,
+                    "graph_edge_count": 2,
+                    "graph_node_roles": {"subject": 1, "successor": 2},
+                    "graph_edge_kinds": {"decomposes_to": 2},
+                    "effect_coverage_count": 1,
+                    "rollback_blockers": 0,
+                    "rollback_actions": 1,
+                    "rollback_actions_planned": True,
+                    "writes": ["skills/autoskill/split-successor"],
+                    "requires_trial_before_apply": True,
+                    "raw_plan_text": "raw skill body must not leak",
+                },
+                rollback_of_transaction_id=None,
+                started_at=datetime.now(UTC),
+                committed_at=None,
+                rolled_back_at=None,
+            )
+        ]
+    )
+    app = create_app(
+        topology_store=topology,
+        governance_store=governance,
+        audit_store=MemoryAuditStore(),
+    )
     route = next(route for route in app.routes if route.path == "/admin/api/v1/topology")
 
     async def run():
@@ -1482,12 +1554,26 @@ def test_observatory_topology_exposes_operation_metrics_read_model() -> None:
     payload = response.object
     metrics = payload["operation_metrics"]
 
-    assert payload["read_model"]["source"] == "topology_store.metrics"
+    assert (
+        payload["read_model"]["source"]
+        == "topology_store.metrics+governance.evolution_transactions.metrics"
+    )
     assert payload["content_policy"]["raw_available"] is False
     assert metrics["operations_by_kind"]["decompose"]["accepted"] == 1
     assert metrics["operations_by_kind"]["create"]["total"] == 0
     assert metrics["trials_by_operation_kind"]["decompose"]["context_value"]["passed"] == 1
     assert metrics["recent_operations"][0]["operation_kind"] == "decompose"
+    review = payload["transaction_review"]
+    assert review["source"] == "governance.evolution_transactions.metrics"
+    assert review["counts_by_transaction_kind"]["topology_decompose"] == 1
+    assert review["counts_by_status"]["staged"] == 1
+    assert review["content_policy"]["raw_available"] is False
+    assert review["recent"][0]["evolution_transaction_id"] == str(transaction_id)
+    assert review["recent"][0]["topology_operation_kind"] == "decompose"
+    assert review["recent"][0]["evidence_count"] == 2
+    assert review["recent"][0]["graph_node_roles"] == {"subject": 1, "successor": 2}
+    assert review["recent"][0]["requires_trial_before_apply"] is True
+    assert "raw skill body" not in json.dumps(review, sort_keys=True)
 
 
 def test_observatory_broker_decisions_use_content_safe_retrieval_logs() -> None:

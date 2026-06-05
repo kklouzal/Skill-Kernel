@@ -6394,6 +6394,66 @@ def create_app(
             "audit": {"links": transaction_refs, "chain_visible": True},
         }
 
+    def _topology_transaction_review(transactions: list[Any]) -> dict[str, Any]:
+        reviews: list[dict[str, Any]] = []
+        for transaction in transactions:
+            payload = transaction.to_json()
+            metrics = payload.get("metrics", {})
+            if not isinstance(metrics, dict):
+                metrics = {}
+            writes = metrics.get("writes", [])
+            if not isinstance(writes, list):
+                writes = []
+            trial_kinds = metrics.get("trial_kinds", [])
+            if not isinstance(trial_kinds, list):
+                trial_kinds = []
+            reviews.append(
+                {
+                    "evolution_transaction_id": payload["evolution_transaction_id"],
+                    "workspace_key": payload.get("workspace_key"),
+                    "transaction_kind": payload["transaction_kind"],
+                    "status": payload["status"],
+                    "plan_hash": payload["plan_hash"],
+                    "topology_operation_kind": metrics.get("topology_operation_kind"),
+                    "topology_status": metrics.get("topology_status"),
+                    "evidence_count": metrics.get("evidence_count", 0),
+                    "planned_trials": metrics.get("planned_trials", 0),
+                    "trial_kinds": [str(kind) for kind in trial_kinds[:20]],
+                    "blockers": metrics.get("blockers", 0),
+                    "graph_node_count": metrics.get("graph_node_count", 0),
+                    "graph_edge_count": metrics.get("graph_edge_count", 0),
+                    "graph_node_roles": metrics.get("graph_node_roles", {}),
+                    "graph_edge_kinds": metrics.get("graph_edge_kinds", {}),
+                    "effect_coverage_count": metrics.get("effect_coverage_count", 0),
+                    "rollback_blockers": metrics.get("rollback_blockers", 0),
+                    "rollback_actions": metrics.get("rollback_actions", 0),
+                    "rollback_actions_planned": bool(
+                        metrics.get("rollback_actions_planned", False)
+                    ),
+                    "write_targets": [str(target) for target in writes[:20]],
+                    "write_target_count": len(writes),
+                    "requires_trial_before_apply": bool(
+                        metrics.get("requires_trial_before_apply", False)
+                    ),
+                    "started_at": payload["started_at"],
+                    "committed_at": payload.get("committed_at"),
+                    "rolled_back_at": payload.get("rolled_back_at"),
+                }
+            )
+        return {
+            "source": "governance.evolution_transactions.metrics",
+            "data_quality": "content-safe-transaction-metrics-only",
+            "recent": reviews,
+            "counts_by_transaction_kind": _count_by(reviews, "transaction_kind"),
+            "counts_by_status": _count_by(reviews, "status"),
+            "count": len(reviews),
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "topology_transaction_metrics_only",
+            },
+        }
+
     async def _record_observatory_action(
         request: ObservatoryActionRequest,
         authorization: str | None,
@@ -8344,6 +8404,11 @@ def create_app(
             workspace_key=workspace_id,
             limit=max(1, min(limit, 100)),
         )
+        topology_transactions = await governance.list_transactions(
+            workspace_key=workspace_id,
+            transaction_kind_prefix="topology_",
+            limit=max(1, min(limit, 100)),
+        )
         return ObservatoryObjectResponse(
             object={
                 "schema_version": "skillkernel.observatory.topology.v1",
@@ -8355,13 +8420,17 @@ def create_app(
                     "states, and planned trial signals."
                 ),
                 "read_model": {
-                    "source": "topology_store.metrics",
+                    "source": "topology_store.metrics+governance.evolution_transactions.metrics",
                     "workspace_id": workspace_id,
                     "window_minutes": window_minutes,
                     "recent_operation_limit": max(1, min(limit, 100)),
+                    "recent_transaction_limit": max(1, min(limit, 100)),
                     "data_quality": "content-safe-derived",
                 },
                 "operation_metrics": topology_metrics,
+                "transaction_review": _topology_transaction_review(
+                    topology_transactions
+                ),
                 "nodes": [
                     station
                     for station in snapshot["pipeline"]["stations"]  # type: ignore[index]

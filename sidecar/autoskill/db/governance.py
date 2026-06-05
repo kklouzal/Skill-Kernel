@@ -304,6 +304,15 @@ class GovernanceStore(Protocol):
     ) -> list[EvolutionTransactionItemRecord]:
         """Return transaction items newest-first for rollback planning."""
 
+    async def list_transactions(
+        self,
+        *,
+        workspace_key: str | None = None,
+        transaction_kind_prefix: str | None = None,
+        limit: int = 50,
+    ) -> list[EvolutionTransactionRecord]:
+        """Return recent evolution transactions for content-safe read models."""
+
     async def record_provenance_edge(
         self,
         *,
@@ -462,6 +471,15 @@ class NullGovernanceStore:
         *,
         evolution_transaction_id: UUID,
     ) -> list[EvolutionTransactionItemRecord]:
+        return []
+
+    async def list_transactions(
+        self,
+        *,
+        workspace_key: str | None = None,
+        transaction_kind_prefix: str | None = None,
+        limit: int = 50,
+    ) -> list[EvolutionTransactionRecord]:
         return []
 
     async def record_provenance_edge(
@@ -725,6 +743,31 @@ class AsyncpgGovernanceStore(AsyncpgPoolOwner):
                 evolution_transaction_id,
             )
             return [EvolutionTransactionItemRecord.from_row(row) for row in rows]
+
+    async def list_transactions(
+        self,
+        *,
+        workspace_key: str | None = None,
+        transaction_kind_prefix: str | None = None,
+        limit: int = 50,
+    ) -> list[EvolutionTransactionRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT tx.*, w.external_key AS workspace_key
+                FROM autoskill.evolution_transactions tx
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE ($1::text IS NULL OR w.external_key = $1)
+                  AND ($2::text IS NULL OR tx.transaction_kind LIKE $2 || '%')
+                ORDER BY tx.started_at DESC, tx.evolution_transaction_id DESC
+                LIMIT $3
+                """,
+                workspace_key,
+                transaction_kind_prefix,
+                max(1, min(limit, 250)),
+            )
+            return [EvolutionTransactionRecord.from_row(row) for row in rows]
 
     async def record_provenance_edge(
         self,

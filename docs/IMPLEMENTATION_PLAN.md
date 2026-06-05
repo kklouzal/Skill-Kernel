@@ -2,6 +2,17 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: Observatory topology review now consumes the topology
+transaction capsule persisted on `evolution_transactions.metrics`.
+`/admin/api/v1/topology` combines operation/trial metrics from the topology
+store with a bounded `topology_*` transaction-review section from the
+governance store. The response exposes only transaction IDs, status, plan hash,
+operation/status, evidence and trial counts, graph shape, effect coverage,
+rollback readiness, write-target metadata, and the trial-before-apply invariant;
+raw plan text, evidence text, skill bodies, and operator content remain
+unavailable. This advances core Sections 1.2, 1.3, 9.6, 9.7, 13.7-13.8, and 17
+plus Observatory Sections 7.7, 8.9, 12.1, 12.6, 13.1, and 16.1.
+
 2026-06-05 update: topology proposal persistence now stamps a content-safe
 transaction review capsule onto the governing evolution transaction. The
 metrics summarize operation kind/status, plan hash, evidence count, planned
