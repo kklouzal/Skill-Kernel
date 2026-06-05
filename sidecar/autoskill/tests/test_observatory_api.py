@@ -1183,6 +1183,7 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/diagnostics/bundles/{bundle_id}", "GET"),
         ("/admin/api/v1/actions/jobs/{id}/retry", "POST"),
         ("/admin/api/v1/actions/audit", "GET"),
+        ("/admin/api/v1/actions/summary", "GET"),
         ("/admin/api/v1/actions/audit/{action_id}", "GET"),
         ("/admin/api/v1/actions/skills/{id}/freeze", "POST"),
         ("/admin/api/v1/actions/revocation/revoke-source", "POST"),
@@ -2394,6 +2395,10 @@ def test_observatory_action_audit_read_model_exposes_receipts_without_raw_conten
     assert collection.collection["items"][0]["action_kind"] == "verify_audit_chain"
     assert collection.collection["items"][0]["diagnostics"]["metadata_keys"] == ["ticket"]
     assert collection.collection["items"][0]["content_policy"]["raw_available"] is False
+    assert (
+        collection.collection["items"][0]["request_payload_redacted"]["reason_codes"]
+        == []
+    )
     assert detail.object["object_id"] == first.receipt["action_audit"]["action_id"]
     assert detail.object["provenance"]["upstream"][0]["object_type"] == "audit_record"
     assert detail.object["diagnostics"]["request_id"].startswith("req_")
@@ -2446,6 +2451,93 @@ def test_observatory_high_impact_action_requires_confirmation() -> None:
     )
     assert observatory_admin.actions[0].linked_audit_id == audit_store.records[0].audit_id
     assert audit_store.records[0].details["confirmation_required"] is True
+
+
+def test_observatory_action_gateway_summary_exposes_policy_counts_without_raw_content(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
+    monkeypatch.setenv("AUTOSKILL_WEB_ADMIN_RAW_CONTENT_ENABLED", "true")
+    get_settings.cache_clear()
+    audit_store = MemoryAuditStore()
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(audit_store=audit_store, observatory_admin_store=observatory_admin)
+    routes = _routes(app)
+
+    async def run():
+        await routes[("/admin/api/v1/actions", "POST")].endpoint(
+            http_request=None,
+            request=ObservatoryActionRequest(
+                workspace_id="dev-01",
+                action="verify_audit_chain",
+                idempotency_key="obs-summary-accepted",
+                reason="operator requested audit proof",
+            ),
+        )
+        rejected = await routes[("/admin/api/v1/actions", "POST")].endpoint(
+            http_request=None,
+            request=ObservatoryActionRequest(
+                workspace_id="dev-01",
+                action="rollback_skill",
+                idempotency_key="obs-summary-confirmation",
+                target={"id": "skill-123"},
+                reason="operator requested rollback",
+                confirmation="wrong rollback confirmation text",
+                dry_run=False,
+            ),
+        )
+        await routes[("/admin/api/v1/actions", "POST")].endpoint(
+            http_request=None,
+            request=ObservatoryActionRequest(
+                workspace_id="dev-01",
+                action="reveal_raw_content",
+                idempotency_key="obs-summary-role",
+                target={"object_type": "raw_event", "id": "event-123"},
+                reason="operator requested reveal",
+                confirmation="confirm",
+                dry_run=False,
+            ),
+            x_skillkernel_roles="operator",
+        )
+        summary = await routes[("/admin/api/v1/actions/summary", "GET")].endpoint(
+            workspace_id="dev-01"
+        )
+        return rejected, summary
+
+    try:
+        rejected, summary = asyncio.run(run())
+    finally:
+        get_settings.cache_clear()
+
+    detail = summary.object
+    assert detail["schema_version"] == (
+        "skillkernel.observatory.admin-action-summary.v1"
+    )
+    assert detail["object_type"] == "admin_action_gateway_summary"
+    assert detail["counts"]["by_result"] == {"rejected": 2, "accepted": 1}
+    assert detail["counts"]["by_action_kind"]["rollback_skill"]["rejected"] == 1
+    assert detail["counts"]["linked_audit_records"] == 3
+    assert detail["counts"]["raw_content_reveal"]["rejected"] == 1
+    assert detail["policy"]["confirmation_failures"] == 1
+    assert detail["policy"]["role_failures"] == 1
+    assert detail["policy"]["blocked_by_reason"] == {
+        "admin-role-required": 1,
+        "confirmation-required": 1,
+    }
+    assert detail["policy"]["idempotency_replays_return_existing_receipts"] is True
+    assert len(detail["high_impact_history"]) == 2
+    assert detail["high_impact_history"][0]["action_kind"] == "reveal_raw_content"
+    assert detail["high_impact_history"][1]["action_kind"] == "rollback_skill"
+    assert detail["high_impact_history"][1]["target_id"] == "skill-123"
+    assert detail["high_impact_history"][1]["confirmation_hash_present"] is True
+    assert "wrong rollback confirmation text" not in str(
+        detail["high_impact_history"][1]
+    )
+    assert detail["content_policy"]["raw_available"] is False
+    assert detail["data_quality"]["auth_failures_before_action_parsing_not_counted"] is True
+    assert rejected.receipt["action_audit"]["request_payload_redacted"][
+        "reason_codes"
+    ] == ["confirmation-required"]
 
 
 def test_observatory_action_idempotency_replays_existing_audit_without_side_effects() -> None:

@@ -85,6 +85,7 @@ def test_observatory_generated_openapi_client_is_fresh() -> None:
     assert len(routes) >= 70
     assert len(route_paths) >= 70
     assert "/summary" in generated
+    assert "/actions/summary" in generated
     assert "/actions/audit" in generated
     assert "/replay/traces/{trace_id}" in generated
 

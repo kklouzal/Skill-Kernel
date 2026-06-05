@@ -16,6 +16,27 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-05: Observatory administrative action gateway now exposes a
+  content-safe aggregate read model at `/admin/api/v1/actions/summary`.
+  The summary is derived from bounded `admin_action_audit` receipts and reports
+  accepted/rejected counts by action kind, linked audit/job coverage,
+  confirmation and role-policy failures, raw-content reveal outcomes,
+  high-impact action history, and explicit data-quality limits without exposing
+  confirmation text, raw content, or adding mutation authority. New action
+  receipts persist redacted `reason_codes` and confirmation-required metadata so
+  the cockpit can distinguish policy blocks. This advances Observatory Sections
+  4.3, 8.22, 12.1, 12.6, 13.1, and 16.3 while preserving the existing sidecar
+  action gateway and audit chain. Validation passed with focused Observatory
+  action tests (`4 passed`), Observatory acceptance-report tests (`9 passed`),
+  generated OpenAPI client `--check`, `uv run ruff check sidecar`, `uv run
+  pytest` (`373 passed`), `uv run python -m compileall -q sidecar`, `docker
+  compose config --quiet`, `uv run python scripts/autoskill_observatory_acceptance.py
+  --json` (`ready=true`, `86` satisfied, `0` validation errors), `uv run python
+  scripts/autoskill_acceptance.py --json` (`ready=true`, `70` implemented,
+  `0` validation errors), `npm run build --prefix sidecar/autoskill/observatory`,
+  and `git diff --check`. No compose/Postgres smoke was needed because this
+  slice adds a derived API read model over the existing action-audit store and
+  exercises it through the in-memory store.
 - 2026-06-05: Observatory guarded action idempotency now returns existing
   content-safe action receipts instead of creating duplicate audit/live-event
   side effects. `/admin/api/v1/actions` fingerprints the redacted request

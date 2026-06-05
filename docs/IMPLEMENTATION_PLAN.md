@@ -2,6 +2,17 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-05 update: Observatory administrative action gateway summaries are now
+first-class sidecar read models. `/admin/api/v1/actions/summary` derives a
+content-safe cockpit aggregate from bounded `admin_action_audit` receipts,
+including accepted/rejected counts by action kind, linked audit/job counts,
+confirmation failures, role-policy failures, raw-content reveal outcomes,
+high-impact action history, and explicit data-quality limits. New receipts
+persist redacted `reason_codes` and confirmation-required metadata so the
+summary can explain policy blocks without storing confirmation text or raw
+content. This advances Observatory Sections 4.3, 8.22, 12.1, 12.6, 13.1, and
+16.3 without adding action authority outside the audited sidecar gateway.
+
 2026-06-05 update: Observatory guarded action idempotency now replays existing
 content-safe action receipts before writing new action-audit or live-event side
 effects. The admin action route stores a redacted request fingerprint, looks up
@@ -747,10 +758,14 @@ Deliverables:
   Action receipts now also persist dedicated `admin_action_audit` rows linked to
   the generic audit hash-chain record, preserving actor roles, target identity,
   idempotency key, result, request ID, metadata-key summary, and confirmation
-  hashes without storing raw confirmation text. The raw-content reveal action is
-  implemented as an admin-only, config-gated grant primitive that returns a
-  short-lived token only in the accepted response and persists only token hashes
-  and content-safe request metadata;
+  hashes without storing raw confirmation text. Action-gateway summary reads now
+  expose bounded accepted/rejected counts, confirmation/role-policy failures,
+  raw-content reveal outcomes, high-impact action history, linked audit/job
+  coverage, and data-quality caveats from those persisted receipts without
+  creating a second control plane. The raw-content reveal action is implemented
+  as an admin-only, config-gated grant primitive that returns a short-lived token
+  only in the accepted response and persists only token hashes and content-safe
+  request metadata;
 - collection pagination and browser action protection; implemented as bounded
   cursor metadata on Observatory collection envelopes, malformed/stale cursor
   rejection, browser-session CSRF header enforcement for POST actions, and
@@ -779,7 +794,10 @@ Acceptance:
   object microscope routing for persisted captured-event/comparison/bundle
   records. Operator action audit receipt tests cover bounded filtering, detail
   retrieval, content-policy metadata, linked audit references, and generic
-  object microscope routing for `admin_action` objects;
+  object microscope routing for `admin_action` objects. Operator action summary
+  tests cover accepted/rejected counts, confirmation and role-policy failures,
+  raw-content reveal outcomes, high-impact history, linked audit coverage, and
+  data-quality metadata;
 - validation evidence for the broker-decision drill-down slice passed on the
   final tree: focused Observatory tests `9 passed`, `uv run ruff check sidecar`,
   `uv run pytest` with 312 tests, `uv run python -m compileall -q sidecar`, a

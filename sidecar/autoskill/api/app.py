@@ -427,6 +427,16 @@ ADMIN_CSRF_HEADER = "X-SkillKernel-CSRF"
 ADMIN_BROWSER_SESSION_HEADER = "X-SkillKernel-Browser-Session"
 ADMIN_ACTION_RATE_LIMIT = 60
 ADMIN_RAW_REVEAL_RATE_LIMIT = 10
+OBSERVATORY_HIGH_IMPACT_ACTIONS = {
+    "historical_import",
+    "quarantine_candidate",
+    "freeze_skill",
+    "unfreeze_skill",
+    "rollback_skill",
+    "rollback_transaction",
+    "reveal_raw_content",
+    "revoke_source",
+}
 
 
 class DiagnosticSignalRequest(BaseModel):
@@ -6014,6 +6024,124 @@ def create_app(
             },
         }
 
+    def _admin_action_gateway_summary(
+        records: list[Any],
+        *,
+        workspace_id: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        result_counts: dict[str, int] = {}
+        action_counts: dict[str, dict[str, int]] = {}
+        reason_counts: dict[str, int] = {}
+        raw_reveal_counts: dict[str, int] = {}
+        high_impact_history: list[dict[str, Any]] = []
+        linked_jobs = 0
+        linked_audits = 0
+        confirmation_failures = 0
+        role_failures = 0
+        idempotency_collision_records = 0
+
+        for record in records:
+            payload = record.to_json()
+            request_payload = payload["request_payload_redacted"]
+            action_kind = str(payload["action_kind"])
+            result = str(payload["result"])
+            result_counts[result] = result_counts.get(result, 0) + 1
+            action_bucket = action_counts.setdefault(action_kind, {})
+            action_bucket[result] = action_bucket.get(result, 0) + 1
+            if payload.get("linked_job_id"):
+                linked_jobs += 1
+            if payload.get("linked_audit_id"):
+                linked_audits += 1
+            if action_kind == "reveal_raw_content":
+                raw_reveal_counts[result] = raw_reveal_counts.get(result, 0) + 1
+
+            reason_codes = [
+                str(reason)
+                for reason in request_payload.get("reason_codes", [])
+                if reason is not None
+            ]
+            for reason in reason_codes:
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            if "confirmation-required" in reason_codes:
+                confirmation_failures += 1
+            if "admin-role-required" in reason_codes:
+                role_failures += 1
+            if bool(request_payload.get("idempotency_collision")):
+                idempotency_collision_records += 1
+            if action_kind in OBSERVATORY_HIGH_IMPACT_ACTIONS:
+                high_impact_history.append(
+                    {
+                        "action_id": payload["action_id"],
+                        "action_kind": action_kind,
+                        "target_type": payload["target_type"],
+                        "target_id": payload["target_id"],
+                        "result": result,
+                        "created_at": payload["created_at"],
+                        "reason_codes": reason_codes,
+                        "confirmation_present": bool(
+                            request_payload.get("confirmation_present")
+                        ),
+                        "confirmation_hash_present": bool(
+                            request_payload.get("confirmation_hash")
+                        ),
+                    }
+                )
+
+        return {
+            "schema_version": "skillkernel.observatory.admin-action-summary.v1",
+            "object_type": "admin_action_gateway_summary",
+            "object_id": workspace_id or "all-workspaces",
+            "title": "Administrative action gateway summary",
+            "summary": (
+                "Content-safe aggregate view over persisted Observatory action "
+                "audit receipts."
+            ),
+            "workspace_id": workspace_id,
+            "sample": {
+                "requested_limit": limit,
+                "record_count": len(records),
+                "bounded": True,
+                "source": "observatory_admin_store.list_action_audits",
+            },
+            "counts": {
+                "by_result": result_counts,
+                "by_action_kind": action_counts,
+                "linked_jobs": linked_jobs,
+                "linked_audit_records": linked_audits,
+                "high_impact_actions": len(high_impact_history),
+                "raw_content_reveal": raw_reveal_counts,
+            },
+            "policy": {
+                "blocked_by_reason": {
+                    reason: count
+                    for reason, count in sorted(reason_counts.items())
+                    if reason != "idempotency-replay"
+                },
+                "confirmation_failures": confirmation_failures,
+                "role_failures": role_failures,
+                "idempotency_collision_records": idempotency_collision_records,
+                "idempotency_replays_return_existing_receipts": True,
+            },
+            "high_impact_history": high_impact_history[:50],
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "aggregated_action_receipts",
+            },
+            "data_quality": {
+                "derived_from_recent_bounded_receipts": True,
+                "full_table_scan": False,
+                "auth_failures_before_action_parsing_not_counted": True,
+                "raw_confirmation_text_returned": False,
+            },
+            "diagnostics": {
+                "supporting_component": "operator_action_gateway",
+                "recent_action_ids": [str(record.action_id) for record in records[:10]],
+                "reason_code_count": len(reason_counts),
+            },
+        }
+
     def _broker_replay_episode_microscope(record: Any) -> dict[str, Any]:
         payload = record.to_json()
         source_log_id = payload.get("source_retrieval_log_id")
@@ -6323,6 +6451,8 @@ def create_app(
             "metadata_keys": sorted(request.metadata.keys()),
             "confirmation_present": request.confirmation is not None,
             "confirmation_hash": confirmation_hash,
+            "confirmation_required": confirmation_required,
+            "reason_codes": reason_codes,
             "request_fingerprint": request_fingerprint,
             "source": _source_identity(http_request),
         }
@@ -8932,6 +9062,27 @@ def create_app(
                     "result": result,
                 },
             },
+        )
+
+    @app.get("/admin/api/v1/actions/summary", response_model=ObservatoryObjectResponse)
+    async def observatory_action_gateway_summary(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        limit: int = 500,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        bounded_limit = max(1, min(limit, 500))
+        action_audits = await observatory_admin.list_action_audits(
+            workspace_key=workspace_id,
+            limit=bounded_limit,
+        )
+        return ObservatoryObjectResponse(
+            object=_admin_action_gateway_summary(
+                action_audits,
+                workspace_id=workspace_id,
+                limit=bounded_limit,
+            )
         )
 
     @app.get(
