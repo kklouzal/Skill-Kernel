@@ -1055,7 +1055,10 @@ Acceptance:
   OpenAPI client `--check`, `uv run ruff check sidecar`, `uv run pytest`
   (`369 passed`), `uv run python -m compileall -q sidecar`,
   `npm run build --prefix sidecar/autoskill/observatory`, and
-  `docker compose config --quiet` passed.
+  `docker compose config --quiet` passed. A real compose/Postgres smoke applied
+  migrations, recorded/listed/detail-read all four context-governance record
+  families through `AsyncpgContextGovernanceStore`, and stopped the Postgres
+  service afterward.
 - the Observatory subsystem/component catalog is now present in durable schema,
   not only in runtime Python constants: `migrations/0001_autoskill_schema.sql`
   creates and idempotently seeds `admin_component_catalog` and
