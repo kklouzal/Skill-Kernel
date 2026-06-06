@@ -121,3 +121,24 @@ def test_admin_token_script_reads_dotenv_and_masks_value(tmp_path: Path) -> None
 
     assert admin_token._token_from_dotenv(dotenv) == "admin-token-value"
     assert admin_token.mask_token("1234567890abcdef") == "123456...abcdef (16 chars)"
+
+
+def test_admin_token_script_verifies_observatory_config_endpoint() -> None:
+    admin_token = _load_script("autoskill_admin_token")
+
+    assert admin_token.DEFAULT_API_BASE == "http://127.0.0.1:8757/admin/api/v1"
+    assert admin_token._verification_url("http://127.0.0.1:8757/admin/api/v1/") == (
+        "http://127.0.0.1:8757/admin/api/v1/config"
+    )
+
+
+def test_admin_token_script_discovers_repo_root_from_nested_cwd(tmp_path: Path) -> None:
+    admin_token = _load_script("autoskill_admin_token")
+    repo = tmp_path / "repo"
+    nested = repo / "nested"
+    (repo / "scripts").mkdir(parents=True)
+    nested.mkdir()
+    (repo / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (repo / "scripts" / "autoskill_admin_token.py").write_text("", encoding="utf-8")
+
+    assert admin_token._repo_root(nested) == repo

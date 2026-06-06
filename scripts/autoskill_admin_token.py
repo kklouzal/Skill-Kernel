@@ -13,6 +13,9 @@ TOKEN_KEYS = (
     "AUTOSKILL_WEB_ADMIN_TOKEN",
     "AUTOSKILL_CONTROL_TOKEN",
 )
+SCRIPT_REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_API_BASE = "http://127.0.0.1:8757/admin/api/v1"
+VERIFY_PATH = "/config"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,12 +30,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--api-base",
-        default="http://127.0.0.1:8765/admin/api/v1",
-        help="admin API base URL used by --check",
+        default=DEFAULT_API_BASE,
+        help="Observatory admin API base URL used by --check",
     )
     args = parser.parse_args(argv)
 
-    token, source = resolve_token(Path.cwd())
+    token, source = resolve_token(_repo_root(Path.cwd()))
     if not token:
         print("No admin token found in the live core container, environment, or .env.")
         return 1
@@ -70,7 +73,7 @@ def mask_token(token: str) -> str:
 
 
 def verify_token(api_base: str, token: str) -> bool:
-    url = f"{api_base.rstrip('/')}/summary?workspace_id=dev-01&window_minutes=5"
+    url = _verification_url(api_base)
     request = urllib.request.Request(
         url,
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
@@ -80,6 +83,19 @@ def verify_token(api_base: str, token: str) -> bool:
             return 200 <= response.status < 300
     except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError):
         return False
+
+
+def _verification_url(api_base: str) -> str:
+    return f"{api_base.rstrip('/')}{VERIFY_PATH}"
+
+
+def _repo_root(start: Path) -> Path:
+    for candidate in (start, *start.parents):
+        if (candidate / "docker-compose.yml").is_file() and (
+            candidate / "scripts" / "autoskill_admin_token.py"
+        ).is_file():
+            return candidate
+    return SCRIPT_REPO_ROOT
 
 
 def _token_from_container(repo_root: Path) -> str | None:
