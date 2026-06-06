@@ -347,6 +347,27 @@ def _check_container_packaging_assets() -> StaticCheck:
         details.append("compose files do not build the first-class Core Dockerfile")
     if "containers/observatory/Dockerfile" not in compose:
         details.append("compose files do not build the first-class Observatory Dockerfile")
+    if "SKILLKERNEL_DATABASE_URL_FILE" not in compose:
+        details.append("reference compose does not mount database URL as a Core secret file")
+    if "SKILLKERNEL_SIDECAR_TOKEN_FILE" not in compose:
+        details.append("reference compose does not mount plugin ingest token as a Core secret file")
+    if "SKILLKERNEL_CONTROL_TOKEN_FILE" not in compose:
+        details.append("reference compose does not mount control token as a Core secret file")
+    if "SKILLKERNEL_ADMIN_TOKEN_FILE" not in compose:
+        details.append("reference compose does not mount admin token as a Core secret file")
+    reference_compose = (ROOT / "compose" / "compose.example.yml").read_text(encoding="utf-8")
+    observatory_section = _read_between(reference_compose, "  observatory:", "\nnetworks:")
+    if "depends_on:" in observatory_section:
+        details.append("reference Observatory service has a startup dependency despite independence contract")
+    core_entrypoint = (ROOT / "containers" / "core" / "entrypoint.sh").read_text(encoding="utf-8")
+    for expected in (
+        'load_secret_file "SKILLKERNEL_DATABASE_URL"',
+        'load_secret_file "SKILLKERNEL_SIDECAR_TOKEN"',
+        'load_secret_file "SKILLKERNEL_CONTROL_TOKEN"',
+        'load_secret_file "SKILLKERNEL_ADMIN_TOKEN"',
+    ):
+        if expected not in core_entrypoint:
+            details.append(f"core entrypoint missing secret-file expansion: {expected}")
     return _result(
         "SKX-STATIC-011",
         "first-class split-container packaging assets are present",

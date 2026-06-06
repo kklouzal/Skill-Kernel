@@ -25,7 +25,10 @@ services:
       - env.core.example
       - env.postgres.example
     environment:
-      AUTOSKILL_DATABASE_URL: postgresql://skillkernel:${SKILLKERNEL_POSTGRES_PASSWORD:-change-me}@postgres:5432/skillkernel
+      SKILLKERNEL_DATABASE_URL_FILE: /run/secrets/database_url
+      SKILLKERNEL_SIDECAR_TOKEN_FILE: /run/secrets/plugin_shared_secret
+      SKILLKERNEL_CONTROL_TOKEN_FILE: /run/secrets/control_token
+      SKILLKERNEL_ADMIN_TOKEN_FILE: /run/secrets/admin_token
       SKILLKERNEL_CORE_PORT: 8765
     volumes:
       - skillkernel-runtime:/var/lib/skillkernel
@@ -40,6 +43,16 @@ services:
       - skillkernel-models
     ports:
       - "127.0.0.1:8765:8765"
+    secrets:
+      - database_url
+      - plugin_shared_secret
+      - control_token
+      - admin_token
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py", "core"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   observatory:
     build:
@@ -51,16 +64,16 @@ services:
     environment:
       SKILLKERNEL_CORE_UPSTREAM: http://core:8765
       SKILLKERNEL_OBSERVATORY_PORT: 8757
-    depends_on:
-      core:
-        condition: service_started
-      postgres:
-        condition: service_healthy
     networks:
       - skillkernel-data
       - skillkernel-control
     ports:
       - "127.0.0.1:8757:8757"
+    healthcheck:
+      test: ["CMD", "python3", "/app/healthcheck.py", "observatory"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
 networks:
   skillkernel-data: {}
@@ -74,3 +87,11 @@ volumes:
 secrets:
   postgres_password:
     file: ./secrets/postgres_password.txt
+  database_url:
+    file: ./secrets/database_url.txt
+  plugin_shared_secret:
+    file: ./secrets/plugin_shared_secret.txt
+  control_token:
+    file: ./secrets/control_token.txt
+  admin_token:
+    file: ./secrets/admin_token.txt

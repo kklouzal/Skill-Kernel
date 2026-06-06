@@ -122,6 +122,12 @@ production both use the same contract: rebuild/redeploy the split containers so
 the nginx Observatory image serves the compiled React app while core serves the
 API, live streams, and readiness routes.
 
+The portable reference topology in `compose/` uses Docker secrets for the
+database URL and plugin/control/admin tokens. The Core entrypoint expands the
+corresponding `*_FILE` variables before starting the API or worker process, and
+the Observatory image has no startup dependency on Core or Postgres so it can
+serve the UI shell during degraded dependency states.
+
 Validate the OpenClaw plugin skeleton:
 
 ```bash

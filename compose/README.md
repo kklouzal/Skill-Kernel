@@ -16,8 +16,18 @@ Run the reference topology from this directory after creating the secret files:
 ```bash
 mkdir -p secrets ../.skillkernel/workspace ../.skillkernel/openclaw
 printf '%s\n' 'change-me' > secrets/postgres_password.txt
+printf '%s\n' 'postgresql://skillkernel:change-me@postgres:5432/skillkernel' > secrets/database_url.txt
+printf '%s\n' 'replace-with-plugin-shared-secret' > secrets/plugin_shared_secret.txt
+printf '%s\n' 'replace-with-control-token' > secrets/control_token.txt
+printf '%s\n' 'replace-with-admin-token' > secrets/admin_token.txt
 docker compose -f compose.example.yml config --quiet
 ```
+
+Core expands the reference `*_FILE` variables at container start, so the
+database URL and plugin/control/admin credentials remain mounted secrets rather
+than inline environment values. The Observatory web container has no
+`depends_on` edge to Core or Postgres; it can serve the UI shell and show
+upstream/database degraded states through the proxied admin surfaces.
 
 The root `docker-compose.yml` remains the Dev-01 oriented deployment file. This
 reference directory is the portable topology and packaging contract surface.
