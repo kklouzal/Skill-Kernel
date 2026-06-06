@@ -16,6 +16,27 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory historical import sources now have a content-safe
+  source microscope instead of returning raw historical source records directly
+  to the admin UI. `/admin/api/v1/historical/imports`,
+  `/admin/api/v1/historical/imports/{historical_import_id}`, and generic
+  `historical_import`, `historical_import_source`, and `historical_source`
+  object aliases expose stable source IDs, source kind, parser/redaction
+  versions, trust/status, taint and metadata key names, timestamps, and source
+  key/fingerprint hashes while withholding raw source locators, arbitrary
+  metadata values, taint values, and raw historical content. This advances
+  core handoff Sections 14.1-14.5 and 14.12 plus Observatory Sections 8.2,
+  12.1, 12.6, 16.1, 21.16, 21.21, 21.30, and 21.40 by closing the
+  historical-ingestion aggregate-to-evidence path without making the frontend
+  the security boundary or adding UI-local import authority. Validation passed
+  with focused Observatory API coverage (`56 passed`), `uv run ruff check
+  sidecar`, `uv run pytest` (`387 passed`), `uv run python -m compileall -q
+  sidecar`, `docker compose config --quiet`, `git diff --check`, and core and
+  Observatory acceptance reports (`63` production criteria, `7` context
+  criteria, `42` Observatory criteria, `44` checklist items, ready=true). No
+  compose/Postgres smoke was needed because this slice only reshapes the
+  existing historical import read path and validates it through in-memory route
+  coverage.
 - 2026-06-06: Observatory canary results now have a content-safe lifecycle
   drill-down instead of remaining visible only as aggregate counters or skill
   lifecycle side effects. The lifecycle store exposes bounded asyncpg

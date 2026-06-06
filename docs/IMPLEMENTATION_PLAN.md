@@ -2,6 +2,24 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-06 update: Observatory historical import source records now use a
+content-safe source microscope. `/admin/api/v1/historical/imports`,
+`/admin/api/v1/historical/imports/{historical_import_id}`, and generic
+`historical_import`, `historical_import_source`, and `historical_source`
+object aliases expose source IDs, source kind, parser/redaction versions,
+trust/status, taint and metadata key names, timestamps, and source
+key/fingerprint hashes while suppressing raw source locators, arbitrary
+metadata values, taint values, and raw historical content. This advances core
+Sections 14.1-14.5 and 14.12 plus Observatory Sections 8.2, 12.1, 12.6, 16.1,
+21.16, 21.21, 21.30, and 21.40 by making historical-ingestion evidence
+drill-downs policy-safe at the sidecar API boundary. Validation passed with
+focused Observatory API coverage, full sidecar ruff/pytest/compileall gates,
+compose config, diff-check, and core and Observatory acceptance reports (`63`
+production criteria, `7` context criteria, `42` Observatory criteria, `44`
+checklist items, ready=true). No compose/Postgres smoke was needed because the
+slice only reshapes the existing historical import read path and validates it
+through in-memory route coverage.
+
 2026-06-06 update: Observatory canary results now have content-safe lifecycle
 read models and drill-down routes. `AsyncpgLifecycleStore` can list and detail
 read canary results with workspace filtering, and

@@ -34,6 +34,7 @@ from autoskill.db.governance import (
     NullGovernanceStore,
     RevocationRequestRecord,
 )
+from autoskill.db.historical import HistoricalSourceRecord, NullHistoricalImportStore
 from autoskill.db.jobs import JobQueueSummary, JobRecord, NullJobStore
 from autoskill.db.lifecycle import CanaryResultRecord, NullLifecycleStore
 from autoskill.db.llm_invocations import NullLLMInvocationStore
@@ -167,6 +168,26 @@ class MemoryObservatoryLifecycleStore(NullLifecycleStore):
             if (workspace_key is None or canary.workspace_key == workspace_key)
             and (skill_id is None or canary.skill_id == skill_id)
             and (status is None or canary.status == status)
+        ]
+        return records[:limit]
+
+
+class MemoryObservatoryHistoricalImportStore(NullHistoricalImportStore):
+    def __init__(self, sources: list[HistoricalSourceRecord]) -> None:
+        self.sources = sources
+
+    async def list_sources(
+        self,
+        *,
+        workspace_key: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[HistoricalSourceRecord]:
+        records = [
+            source
+            for source in self.sources
+            if (workspace_key is None or source.workspace_key == workspace_key)
+            and (status is None or source.status == status)
         ]
         return records[:limit]
 
@@ -1386,6 +1407,75 @@ def test_observatory_canary_result_microscope_is_content_safe() -> None:
     )
     assert "raw rollback reason" not in combined
     assert "do not expose metric text" not in combined
+
+
+def test_observatory_historical_import_source_microscope_is_content_safe() -> None:
+    source = HistoricalSourceRecord(
+        historical_import_source_id=uuid4(),
+        workspace_id=uuid4(),
+        workspace_key="dev-01",
+        source_kind="transcript",
+        source_key="/home/kklouzal/private/session.jsonl",
+        fingerprint="sha256:historical-source",
+        parser_version="historical-import.v1",
+        redaction_policy_version="redaction.v1",
+        trust_level="tainted",
+        taint={"raw_historical": True},
+        metadata={"absolute_path": "/home/kklouzal/private/session.jsonl"},
+        status="imported",
+        last_seen_at=datetime.now(UTC),
+        imported_at=datetime.now(UTC),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        historical_import_store=MemoryObservatoryHistoricalImportStore([source]),
+    )
+    routes = _routes(app)
+
+    async def read():
+        sources = await routes[("/admin/api/v1/historical/imports", "GET")].endpoint(
+            workspace_id="dev-01",
+        )
+        detail = await routes[
+            ("/admin/api/v1/historical/imports/{historical_import_id}", "GET")
+        ].endpoint(
+            historical_import_id=str(source.historical_import_source_id),
+            workspace_id="dev-01",
+        )
+        microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="historical_source",
+            object_id=str(source.historical_import_source_id),
+            workspace_id="dev-01",
+        )
+        hidden = await routes[("/admin/api/v1/historical/imports", "GET")].endpoint(
+            workspace_id="other-workspace",
+        )
+        return sources, detail, microscope, hidden
+
+    sources, detail, microscope, hidden = asyncio.run(read())
+
+    item = sources.collection["items"][0]
+    assert sources.collection["object_type"] == "historical_import_source"
+    assert item["source_kind"] == "transcript"
+    assert item["source_key_sha256"].startswith("sha256:")
+    assert item["metadata_keys"] == ["absolute_path"]
+    assert item["taint_keys"] == ["raw_historical"]
+    assert item["diagnostics"]["source_key_returned"] is False
+    assert item["diagnostics"]["metadata_values_returned"] is False
+    assert detail.object["object_type"] == "historical_import_source"
+    assert microscope.object["object_type"] == "historical_import_source"
+    assert hidden.collection["items"] == []
+    combined = json.dumps(
+        [sources.collection, detail.object, microscope.object],
+        sort_keys=True,
+    )
+    assert "private/session.jsonl" not in combined
+    assert "absolute_path\": \"/home" not in combined
+    assert "raw_historical\": true" not in combined
 
 
 def test_observatory_admin_routes_include_browser_security_headers() -> None:

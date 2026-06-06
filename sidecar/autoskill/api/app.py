@@ -6615,6 +6615,79 @@ def create_app(
             },
         }
 
+    def _historical_import_source_admin_record(
+        record: Any,
+        *,
+        requested_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload = record.to_json() if hasattr(record, "to_json") else dict(record)
+        source_id = str(payload["historical_import_source_id"])
+        object_id = requested_id or source_id
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        taint = payload.get("taint") if isinstance(payload.get("taint"), dict) else {}
+        source_key = str(payload.get("source_key") or "")
+        fingerprint = str(payload.get("fingerprint") or "")
+        return {
+            "schema_version": "skillkernel.observatory.historical-import-source.v1",
+            "object_type": "historical_import_source",
+            "object_id": object_id,
+            "historical_import_source_id": source_id,
+            "workspace_id": payload.get("workspace_id"),
+            "workspace_key": payload.get("workspace_key"),
+            "title": f"Historical import source {source_id}",
+            "summary": (
+                f"{payload['status']} {payload['source_kind']} source; "
+                f"trust={payload['trust_level']}"
+            ),
+            "source_kind": payload["source_kind"],
+            "source_key_sha256": "sha256:" + sha256_text(source_key),
+            "fingerprint": fingerprint,
+            "fingerprint_sha256": "sha256:" + sha256_text(fingerprint),
+            "parser_version": payload["parser_version"],
+            "redaction_policy_version": payload["redaction_policy_version"],
+            "trust_level": payload["trust_level"],
+            "taint_keys": sorted(str(key) for key in taint),
+            "metadata_keys": sorted(str(key) for key in metadata),
+            "status": payload["status"],
+            "last_seen_at": payload["last_seen_at"],
+            "imported_at": payload.get("imported_at"),
+            "created_at": payload["created_at"],
+            "updated_at": payload["updated_at"],
+            "details_url": f"/admin/historical/imports/{source_id}",
+            "timeline": [
+                {
+                    "at": payload["created_at"],
+                    "event": "historical_import_source_observed",
+                    "status": payload["status"],
+                },
+                {
+                    "at": payload["updated_at"],
+                    "event": "historical_import_source_updated",
+                    "status": payload["status"],
+                },
+            ],
+            "provenance": {"upstream": [], "downstream": []},
+            "effects": {
+                "revocation_root_type": "historical_import_source",
+                "revocation_root_id": source_id,
+                "source_revocation_supported": True,
+                "derived_data_traversal_required": True,
+                "raw_content_returned": False,
+            },
+            "diagnostics": {
+                "supporting_component": "historical_ingestion",
+                "source_key_returned": False,
+                "metadata_values_returned": False,
+                "taint_values_returned": False,
+                "raw_content_returned": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "content_safe_historical_source_metadata",
+            },
+        }
+
     def _action_attribution_check_safe_metrics(
         metrics: dict[str, Any],
     ) -> dict[str, Any]:
@@ -9392,6 +9465,35 @@ def create_app(
             if log is not None:
                 return ObservatoryObjectResponse(object=_broker_decision_microscope(log))
         if object_type in {
+            "historical_import",
+            "historical_import_source",
+            "historical-source",
+            "historical_source",
+        }:
+            listed = [
+                source.to_json()
+                for source in await historical_import.list_sources(
+                    workspace_key=workspace_id,
+                    limit=500,
+                )
+            ]
+            source = _find_by_id(
+                listed,
+                object_id,
+                (
+                    "historical_import_source_id",
+                    "external_source_id",
+                    "source_kind",
+                ),
+            )
+            if source is not None:
+                return ObservatoryObjectResponse(
+                    object=_historical_import_source_admin_record(
+                        source,
+                        requested_id=object_id,
+                    )
+                )
+        if object_type in {
             "context_artifact",
             "context-artifact",
             "artifact",
@@ -10326,12 +10428,18 @@ def create_app(
             limit=250,
         )
         return _observatory_collection(
-            object_type="historical_import",
+            object_type="historical_import_source",
             title="Historical import sources",
-            items=[source.to_json() for source in sources],
+            items=[_historical_import_source_admin_record(source) for source in sources],
             limit=limit,
             cursor=cursor,
             source="historical_import_store.list_sources",
+            diagnostics={
+                "supporting_component": "historical_ingestion",
+                "source_key_returned": False,
+                "metadata_values_returned": False,
+                "raw_content_returned": False,
+            },
         )
 
     @app.get(
@@ -10358,6 +10466,13 @@ def create_app(
             historical_import_id,
             ("historical_import_source_id", "external_source_id", "source_kind"),
         )
+        if source is not None:
+            return ObservatoryObjectResponse(
+                object=_historical_import_source_admin_record(
+                    source,
+                    requested_id=historical_import_id,
+                )
+            )
         return ObservatoryObjectResponse(
             object={
                 "schema_version": "skillkernel.observatory.historical-import.v1",
