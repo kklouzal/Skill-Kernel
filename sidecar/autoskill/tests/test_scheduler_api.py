@@ -8,6 +8,7 @@ from autoskill.db.scheduler import (
     ScheduleRecord,
     SchedulerTickResult,
     ScheduleUpsertResult,
+    _has_active_scheduled_job,
     _json_object,
     _missed_run_count,
     _next_run_after,
@@ -101,6 +102,16 @@ class MemorySchedulerStore:
         return list(self.schedules.values())[:limit]
 
 
+class FakeSchedulerConnection:
+    def __init__(self, *, active: bool) -> None:
+        self.active = active
+        self.calls: list[tuple[object, ...]] = []
+
+    async def fetchval(self, _query: str, *args):
+        self.calls.append(args)
+        return self.active
+
+
 def _job_for_schedule(schedule: ScheduleRecord) -> JobRecord:
     now = datetime.now(UTC)
     return JobRecord(
@@ -123,6 +134,19 @@ def _job_for_schedule(schedule: ScheduleRecord) -> JobRecord:
         created_at=now,
         updated_at=now,
     )
+
+
+def test_active_scheduled_job_probe_scopes_workspace_and_kind() -> None:
+    schedule = {
+        "workspace_id": uuid4(),
+        "job_kind": "embeddings.generate",
+    }
+    conn = FakeSchedulerConnection(active=True)
+
+    result = asyncio.run(_has_active_scheduled_job(conn, schedule))
+
+    assert result is True
+    assert conn.calls == [(schedule["workspace_id"], "embeddings.generate")]
 
 
 def test_scheduler_api_upserts_and_ticks_due_schedules() -> None:

@@ -221,10 +221,13 @@ class AsyncpgSchedulerStore(AsyncpgPoolOwner):
                     now,
                 )
                 if _should_enqueue_misfire(schedule["next_run_at"], policy, missed_runs):
-                    idempotency_key = _schedule_job_key(schedule)
-                    job = await _enqueue_scheduled_job(conn, schedule, idempotency_key)
-                    if job is not None:
-                        jobs.append(job)
+                    if await _has_active_scheduled_job(conn, schedule):
+                        skipped += 1
+                    else:
+                        idempotency_key = _schedule_job_key(schedule)
+                        job = await _enqueue_scheduled_job(conn, schedule, idempotency_key)
+                        if job is not None:
+                            jobs.append(job)
                 else:
                     skipped += 1
                 misfires_coalesced += max(0, missed_runs - 1)
@@ -265,6 +268,27 @@ class AsyncpgSchedulerStore(AsyncpgPoolOwner):
                 limit,
             )
             return [ScheduleRecord.from_row(row) for row in rows]
+
+
+async def _has_active_scheduled_job(
+    conn: asyncpg.Connection,
+    schedule: asyncpg.Record,
+) -> bool:
+    return bool(
+        await conn.fetchval(
+            """
+            SELECT EXISTS (
+              SELECT 1
+              FROM autoskill.jobs
+              WHERE workspace_id = $1
+                AND job_kind = $2
+                AND status IN ('queued', 'leased')
+            )
+            """,
+            schedule["workspace_id"],
+            schedule["job_kind"],
+        )
+    )
 
 
 async def _enqueue_scheduled_job(
