@@ -2,6 +2,14 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-06 update: Observatory station catalog coverage now includes the
+Part II autonomy/adjudication workcell as a first-class overview subsystem.
+The runtime station map and SQL seed expose raw-vault, evidence-fidelity,
+semantic-adjudication, autonomy-orchestrator, replay-corpus, and
+administrative-escalation stations, and quality gates now include the replay
+corpus station as required by the unified spec. Focused validation passed with
+the Observatory summary regression covering 30 stations and 9 subsystems.
+
 2026-06-06 update: Historical bootstrap consolidation now emits propose-only
 topology recommendations from historical evidence. Historical payloads can
 contribute guarded `improve`, `compose`, and `decompose` recommendations with

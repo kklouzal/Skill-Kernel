@@ -16,6 +16,25 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Part II/III Observatory control-plane topology gap remediated:
+  the station/subsystem catalog now exposes the autonomy/adjudication workcell
+  as a first-class overview path. Runtime `STATIONS`, SQL seed rows, and
+  subsystem wiring include `raw_evidence_vault`, `evidence_fidelity`,
+  `semantic_adjudication`, `autonomy_orchestrator`, `replay_corpus`, and
+  `administrative_escalation`; quality gates now link replay corpus evidence.
+  Regression coverage now asserts the runtime station/subsystem catalogs
+  rather than stale fixed counts, plus the autonomy workcell membership.
+  Validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py -q -k
+  'summary_exposes_all_pipeline_stations or comparisons_and_diagnostic_bundles
+  or required_signal or station_latency'` (`5 passed, 52 deselected`), `uv run
+  pytest sidecar/autoskill/tests/test_observatory_acceptance_report.py -q` (`9
+  passed`), `uv run ruff check
+  sidecar/autoskill/services/observatory.py
+  sidecar/autoskill/tests/test_observatory_api.py
+  scripts/autoskill_observatory_acceptance.py`, `uv run python
+  scripts/autoskill_observatory_acceptance.py --json` (`ready=true`, 86
+  satisfied), and `git diff --check`.
 - 2026-06-06: Exhaustive unified-spec pass continued after pushing
   `8721d71`. CI for the current head is in progress. A bounded
   `codex-worker` slice was launched for Part II/III scheduler, governance,

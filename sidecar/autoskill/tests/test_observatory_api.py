@@ -58,6 +58,8 @@ from autoskill.db.scheduler import NullSchedulerStore, ScheduleRecord
 from autoskill.db.skills import SkillRecord
 from autoskill.db.topology import NullTopologyStore
 from autoskill.services.observatory import (
+    STATIONS,
+    SUBSYSTEMS,
     build_live_envelope,
     build_observatory_snapshot,
     object_microscope,
@@ -573,8 +575,29 @@ def test_observatory_summary_exposes_all_pipeline_stations_and_truth_states() ->
     assert response.meta["redaction_level"] == "default"
     assert snapshot["schema_version"] == "skillkernel.observatory.v1"
     assert snapshot["workspace_id"] == "dev-01"
-    assert len(snapshot["pipeline"]["stations"]) == 24
-    assert len(snapshot["subsystems"]) == 8
+    assert len(snapshot["pipeline"]["stations"]) == len(STATIONS)
+    assert len(snapshot["subsystems"]) == len(SUBSYSTEMS)
+    autonomy = next(
+        subsystem
+        for subsystem in snapshot["subsystems"]
+        if subsystem["subsystem_id"] == "autonomy_adjudication"
+    )
+    assert autonomy["station_ids"] == [
+        "raw_evidence_vault",
+        "evidence_fidelity",
+        "semantic_adjudication",
+        "autonomy_orchestrator",
+        "replay_corpus",
+        "administrative_escalation",
+        "model_embedding",
+        "audit_trace",
+    ]
+    quality_gates = next(
+        subsystem
+        for subsystem in snapshot["subsystems"]
+        if subsystem["subsystem_id"] == "quality_gates"
+    )
+    assert "replay_corpus" in quality_gates["station_ids"]
     assert snapshot["global_health"] in {"blocked", "degraded", "unknown"}
     assert any(
         issue["reason_codes"] == ["database-not-configured"] for issue in snapshot["issue_board"]
@@ -3483,9 +3506,9 @@ def test_observatory_comparisons_and_diagnostic_bundles_are_persisted() -> None:
     assert bundle.object["object_type"] == "diagnostic_bundle"
     assert bundle.object["content_policy"]["raw_available"] is False
     assert bundle_detail.object["object_id"] == bundle.object["object_id"]
-    assert bundle_detail.object["manifest"]["component_count"] == 24
+    assert bundle_detail.object["manifest"]["component_count"] == len(STATIONS)
     assert comparison_object.object["effects"]["mutates_policy"] is False
-    assert bundle_object.object["effects"]["manifest"]["component_count"] == 24
+    assert bundle_object.object["effects"]["manifest"]["component_count"] == len(STATIONS)
     assert audit_store.records[-1].subject_id == bundle.object["object_id"]
     assert bundle.object["live_event"]["object_type"] == "diagnostic_bundle"
     assert bundle.object["live_event"]["redaction_level"] == "default"
