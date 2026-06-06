@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from autoskill.services.scanner import scan_text
 
@@ -86,57 +86,288 @@ class ProposalGateEvaluation:
         }
 
 
+@dataclass(frozen=True)
+class EvaluationFixture:
+    skill_ir: dict[str, Any]
+    scanner_status: str
+    probes: list[dict[str, Any]]
+    adapter_version: str
+    sandbox: str
+
+
+class EvaluatorAdapter(Protocol):
+    adapter_version: str
+    sandbox: str
+
+    def prepare_fixture(
+        self,
+        *,
+        skill_ir: dict[str, Any],
+        scanner_status: str,
+        probes: list[dict[str, Any]],
+    ) -> EvaluationFixture:
+        """Normalize a candidate/probe bundle before any scoring work begins."""
+
+    def render_candidate_context(self, fixture: EvaluationFixture) -> dict[str, Any]:
+        """Build the content-safe candidate context used by adapter runs."""
+
+    def run_baseline_no_skill(self, fixture: EvaluationFixture) -> dict[str, Any]:
+        """Run or synthesize the no-skill baseline for comparison."""
+
+    def run_baseline_current_skill(self, fixture: EvaluationFixture) -> dict[str, Any]:
+        """Run or synthesize the current-skill baseline for comparison."""
+
+    def run_candidate_skill(self, fixture: EvaluationFixture) -> dict[str, Any]:
+        """Run or synthesize the candidate-skill outcome."""
+
+    def run_component_only(self, fixture: EvaluationFixture) -> dict[str, Any]:
+        """Run or synthesize a component-only outcome for topology trials."""
+
+    def run_composed_or_decomposed(self, fixture: EvaluationFixture) -> dict[str, Any]:
+        """Run or synthesize composed/decomposed topology outcomes."""
+
+    def collect_artifacts(
+        self,
+        fixture: EvaluationFixture,
+        runs: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Collect deterministic adapter artifacts for scoring and audit."""
+
+    def verify_deterministically(
+        self,
+        fixture: EvaluationFixture,
+        artifacts: dict[str, Any],
+    ) -> list[ProbeEvaluation]:
+        """Return deterministic probe verdicts; LLM judgment is not sufficient."""
+
+    def score_outcome(
+        self,
+        fixture: EvaluationFixture,
+        probe_results: list[ProbeEvaluation],
+    ) -> dict[str, Any]:
+        """Convert deterministic probe results into the production gate verdict."""
+
+    def record_trace(
+        self,
+        fixture: EvaluationFixture,
+        score: dict[str, Any],
+        artifacts: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return a content-safe trace payload for adapter execution."""
+
+
+class DeterministicProposalGateAdapter:
+    adapter_version = "autoskill-deterministic-proposal-gate-adapter.v1"
+    sandbox = "deterministic_no_network"
+
+    def prepare_fixture(
+        self,
+        *,
+        skill_ir: dict[str, Any],
+        scanner_status: str,
+        probes: list[dict[str, Any]],
+    ) -> EvaluationFixture:
+        return EvaluationFixture(
+            skill_ir=dict(skill_ir),
+            scanner_status=scanner_status,
+            probes=[dict(probe) for probe in probes],
+            adapter_version=self.adapter_version,
+            sandbox=self.sandbox,
+        )
+
+    def render_candidate_context(self, fixture: EvaluationFixture) -> dict[str, Any]:
+        return {
+            "schema": "autoskill.evaluator-context.v1",
+            "candidate_slug": str(fixture.skill_ir.get("slug", "unknown")),
+            "skillir_schema": str(fixture.skill_ir.get("schema", "unknown")),
+            "scanner_status": fixture.scanner_status,
+            "probe_count": len(fixture.probes),
+            "evidence_count": len(fixture.skill_ir.get("evidence_ids") or []),
+            "topology": {
+                "granularity": fixture.skill_ir.get("granularity"),
+                "scope": fixture.skill_ir.get("scope"),
+                "topology_role": fixture.skill_ir.get("topology_role"),
+                "component_policy": fixture.skill_ir.get("component_policy"),
+                "runtime_visibility_policy": fixture.skill_ir.get(
+                    "runtime_visibility_policy"
+                ),
+            },
+        }
+
+    def run_baseline_no_skill(self, fixture: EvaluationFixture) -> dict[str, Any]:
+        return {
+            "mode": "no_skill",
+            "probe_hashes": [
+                str(probe.get("probe_hash", ""))
+                for probe in fixture.probes
+                if probe.get("kind") == "no_skill_control"
+            ],
+            "deterministic": True,
+        }
+
+    def run_baseline_current_skill(self, fixture: EvaluationFixture) -> dict[str, Any]:
+        return {
+            "mode": "current_skill",
+            "available": False,
+            "reason": "proposal gate has no active current-skill baseline fixture",
+            "deterministic": True,
+        }
+
+    def run_candidate_skill(self, fixture: EvaluationFixture) -> dict[str, Any]:
+        return {
+            "mode": "candidate_skill",
+            "candidate_slug": str(fixture.skill_ir.get("slug", "unknown")),
+            "scanner_status": fixture.scanner_status,
+            "deterministic": True,
+        }
+
+    def run_component_only(self, fixture: EvaluationFixture) -> dict[str, Any]:
+        return {
+            "mode": "component_only",
+            "supported": False,
+            "reason": "proposal gate candidate is not a topology component trial",
+            "deterministic": True,
+        }
+
+    def run_composed_or_decomposed(self, fixture: EvaluationFixture) -> dict[str, Any]:
+        return {
+            "mode": "composed_or_decomposed",
+            "supported": False,
+            "reason": "proposal gate candidate is not a topology compose/decompose trial",
+            "deterministic": True,
+        }
+
+    def collect_artifacts(
+        self,
+        fixture: EvaluationFixture,
+        runs: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        return {
+            "schema": "autoskill.evaluator-artifacts.v1",
+            "adapter_version": fixture.adapter_version,
+            "sandbox": fixture.sandbox,
+            "candidate_context": self.render_candidate_context(fixture),
+            "runs": runs,
+            "probe_hashes": [
+                str(probe.get("probe_hash", "")) for probe in fixture.probes
+            ],
+        }
+
+    def verify_deterministically(
+        self,
+        fixture: EvaluationFixture,
+        artifacts: dict[str, Any],
+    ) -> list[ProbeEvaluation]:
+        if fixture.scanner_status != "passed":
+            return [
+                _result(probe, status="blocked", score=0.0, reason="scanner did not pass")
+                for probe in fixture.probes
+            ]
+        return [
+            _evaluate_probe(skill_ir=fixture.skill_ir, probe=probe)
+            for probe in fixture.probes
+        ]
+
+    def score_outcome(
+        self,
+        fixture: EvaluationFixture,
+        probe_results: list[ProbeEvaluation],
+    ) -> dict[str, Any]:
+        if fixture.scanner_status != "passed":
+            return {
+                "status": "blocked",
+                "reason_codes": ["scanner-blocked"],
+                "acceptance_metrics": _acceptance_metrics([], probes=[]),
+            }
+        acceptance_metrics = _acceptance_metrics(probe_results, probes=fixture.probes)
+        if any(result.status == "failed" for result in probe_results):
+            status = "failed"
+            reason_codes = ["probe-failed"]
+        elif any(result.status == "needs_intervention" for result in probe_results):
+            status = "needs_intervention"
+            reason_codes = ["intervention-required"]
+        elif policy_reason_codes := _acceptance_policy_reason_codes(acceptance_metrics):
+            status = "failed"
+            reason_codes = policy_reason_codes
+        else:
+            status = "passed"
+            reason_codes = ["all-deterministic-probes-passed"]
+        return {
+            "status": status,
+            "reason_codes": reason_codes,
+            "acceptance_metrics": acceptance_metrics,
+        }
+
+    def record_trace(
+        self,
+        fixture: EvaluationFixture,
+        score: dict[str, Any],
+        artifacts: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "schema": "autoskill.evaluator-trace.v1",
+            "adapter_version": fixture.adapter_version,
+            "sandbox": fixture.sandbox,
+            "deterministic": True,
+            "llm_as_judge": False,
+            "candidate_slug": str(fixture.skill_ir.get("slug", "unknown")),
+            "probe_count": len(fixture.probes),
+            "artifact_schema": artifacts.get("schema"),
+            "status": score["status"],
+            "reason_codes": score["reason_codes"],
+        }
+
+    def evaluate(
+        self,
+        *,
+        skill_ir: dict[str, Any],
+        scanner_status: str,
+        probes: list[dict[str, Any]],
+    ) -> ProposalGateEvaluation:
+        fixture = self.prepare_fixture(
+            skill_ir=skill_ir,
+            scanner_status=scanner_status,
+            probes=probes,
+        )
+        runs = {
+            "baseline_no_skill": self.run_baseline_no_skill(fixture),
+            "baseline_current_skill": self.run_baseline_current_skill(fixture),
+            "candidate_skill": self.run_candidate_skill(fixture),
+            "component_only": self.run_component_only(fixture),
+            "composed_or_decomposed": self.run_composed_or_decomposed(fixture),
+        }
+        artifacts = self.collect_artifacts(fixture, runs)
+        probe_results = self.verify_deterministically(fixture, artifacts)
+        score = self.score_outcome(fixture, probe_results)
+        adapter_trace = self.record_trace(fixture, score, artifacts)
+        return ProposalGateEvaluation(
+            status=score["status"],
+            probe_results=probe_results,
+            reason_codes=score["reason_codes"],
+            acceptance_policy=ACCEPTANCE_POLICY,
+            acceptance_metrics=score["acceptance_metrics"],
+            autonomy_assurance={
+                **_autonomy_assurance(
+                    status=score["status"],
+                    probe_results=probe_results,
+                    reason_codes=score["reason_codes"],
+                    acceptance_metrics=score["acceptance_metrics"],
+                ),
+                "evaluator_adapter": adapter_trace,
+            },
+        )
+
+
 def evaluate_proposal_gate(
     *,
     skill_ir: dict[str, Any],
     scanner_status: str,
     probes: list[dict[str, Any]],
 ) -> ProposalGateEvaluation:
-    if scanner_status != "passed":
-        return ProposalGateEvaluation(
-            status="blocked",
-            probe_results=[
-                _result(probe, status="blocked", score=0.0, reason="scanner did not pass")
-                for probe in probes
-            ],
-            reason_codes=["scanner-blocked"],
-            acceptance_policy=ACCEPTANCE_POLICY,
-            acceptance_metrics=_acceptance_metrics([], probes=[]),
-            autonomy_assurance=_autonomy_assurance(
-                status="blocked",
-                probe_results=[],
-                reason_codes=["scanner-blocked"],
-                acceptance_metrics=_acceptance_metrics([], probes=[]),
-            ),
-        )
-
-    probe_results = [_evaluate_probe(skill_ir=skill_ir, probe=probe) for probe in probes]
-    acceptance_metrics = _acceptance_metrics(probe_results, probes=probes)
-    if any(result.status == "failed" for result in probe_results):
-        status = "failed"
-        reason_codes = ["probe-failed"]
-    elif any(result.status == "needs_intervention" for result in probe_results):
-        status = "needs_intervention"
-        reason_codes = ["intervention-required"]
-    elif policy_reason_codes := _acceptance_policy_reason_codes(acceptance_metrics):
-        status = "failed"
-        reason_codes = policy_reason_codes
-    else:
-        status = "passed"
-        reason_codes = ["all-deterministic-probes-passed"]
-
-    return ProposalGateEvaluation(
-        status=status,
-        probe_results=probe_results,
-        reason_codes=reason_codes,
-        acceptance_policy=ACCEPTANCE_POLICY,
-        acceptance_metrics=acceptance_metrics,
-        autonomy_assurance=_autonomy_assurance(
-            status=status,
-            probe_results=probe_results,
-            reason_codes=reason_codes,
-            acceptance_metrics=acceptance_metrics,
-        ),
+    return DeterministicProposalGateAdapter().evaluate(
+        skill_ir=skill_ir,
+        scanner_status=scanner_status,
+        probes=probes,
     )
 
 

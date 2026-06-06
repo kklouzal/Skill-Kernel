@@ -10,6 +10,8 @@ from autoskill.db.evaluations import (
 )
 from autoskill.db.observability import TraceSpanRecord
 from autoskill.services.evaluator import (
+    DeterministicProposalGateAdapter,
+    EvaluatorAdapter,
     detect_threshold_deadlocks,
     evaluate_proposal_gate,
 )
@@ -97,6 +99,56 @@ def test_proposal_gate_reports_target_no_skill_and_regression_results() -> None:
     assert payload["acceptance_policy"]["adversarial_critical_budget"] == 0
     assert payload["acceptance_metrics"]["adversarial_failures"] == 0
     assert payload["reason_codes"] == ["intervention-required"]
+    trace = payload["autonomy_assurance"]["evaluator_adapter"]
+    assert trace["adapter_version"] == "autoskill-deterministic-proposal-gate-adapter.v1"
+    assert trace["sandbox"] == "deterministic_no_network"
+    assert trace["llm_as_judge"] is False
+
+
+def test_evaluator_adapter_exposes_stable_benchmark_interface() -> None:
+    adapter: EvaluatorAdapter = DeterministicProposalGateAdapter()
+    expected_methods = [
+        "prepare_fixture",
+        "render_candidate_context",
+        "run_baseline_no_skill",
+        "run_baseline_current_skill",
+        "run_candidate_skill",
+        "run_component_only",
+        "run_composed_or_decomposed",
+        "collect_artifacts",
+        "verify_deterministically",
+        "score_outcome",
+        "record_trace",
+    ]
+
+    for method in expected_methods:
+        assert callable(getattr(adapter, method))
+
+    fixture = adapter.prepare_fixture(
+        skill_ir=skill_ir(),
+        scanner_status="passed",
+        probes=replayed_probes(),
+    )
+    runs = {
+        "baseline_no_skill": adapter.run_baseline_no_skill(fixture),
+        "baseline_current_skill": adapter.run_baseline_current_skill(fixture),
+        "candidate_skill": adapter.run_candidate_skill(fixture),
+        "component_only": adapter.run_component_only(fixture),
+        "composed_or_decomposed": adapter.run_composed_or_decomposed(fixture),
+    }
+    artifacts = adapter.collect_artifacts(fixture, runs)
+    probe_results = adapter.verify_deterministically(fixture, artifacts)
+    score = adapter.score_outcome(fixture, probe_results)
+    trace = adapter.record_trace(fixture, score, artifacts)
+
+    assert artifacts["adapter_version"] == adapter.adapter_version
+    assert artifacts["sandbox"] == "deterministic_no_network"
+    assert artifacts["candidate_context"]["candidate_slug"] == (
+        "autoskill-message-received-repair"
+    )
+    assert score["status"] == "passed"
+    assert trace["deterministic"] is True
+    assert trace["llm_as_judge"] is False
 
 
 def test_proposal_gate_passes_with_intervention_replay_improvement() -> None:
