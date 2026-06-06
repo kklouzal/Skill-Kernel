@@ -16,6 +16,31 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory now exposes context token-ledger records through
+  Core-backed, content-safe admin read models. The context governance store can
+  list/detail `context_token_ledgers`, `/admin/api/v1/context/token-ledgers`
+  and `/admin/api/v1/context/token-ledgers/{ledger_id}` provide bounded
+  collection/detail views, and generic object microscopes resolve
+  `context_token_ledger` aliases. The read model exposes token counts,
+  visibility/outcome state, context artifact/skill/policy refs, marginal-value
+  metrics, metadata key names, and SHA-256 hashes for session/turn IDs while
+  suppressing raw session IDs, turn IDs, and metadata values. This advances
+  Core Section 11.12-11.14 and Observatory Sections 7.6-7.7 plus acceptance
+  criterion 21.20 by closing the context-value-per-token aggregate-to-evidence
+  path without adding UI mutation authority. Focused validation passed with
+  `uv run pytest sidecar/autoskill/tests/test_observatory_api.py -q -k
+  'context_compiler_read_models_are_store_backed_and_content_safe or
+  required_admin_route_matrix'` (`2 passed, 57 deselected`), targeted Ruff, and
+  `uv run python scripts/generate_observatory_openapi_client.py --check`.
+  Required pre-commit gates also passed with `uv run ruff check sidecar`, `uv
+  run pytest` (`400 passed`), `uv run python -m compileall -q sidecar`, `npm
+  run build --prefix sidecar/autoskill/observatory`, `git diff --check`,
+  `uv run python scripts/autoskill_observatory_acceptance.py --json`
+  (`ready=true`, `86` satisfied), and `uv run python
+  scripts/autoskill_acceptance.py --json` (`70` implemented, zero validation
+  errors). No compose/Postgres smoke was needed because this slice uses the
+  existing `context_token_ledgers` table and validates the shared store/API
+  shaping through the in-memory context governance store.
 - 2026-06-06: Observatory live outbox redaction metadata is now Core-owned
   rather than caller-controlled. The live payload sanitizer drops forged
   `redacted_payload_keys` and `redacted_payload_hashes` at append time, only

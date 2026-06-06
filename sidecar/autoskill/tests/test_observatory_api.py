@@ -1258,6 +1258,26 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
             shadowing_status="passed",
             metadata={"gate": "context-loadability", "raw_note": "do not render"},
         )
+        ledger = await context.record_token_ledger(
+            workspace_key="dev-01",
+            visibility_state="skill_visible",
+            token_count=14,
+            context_artifact_id=artifact.context_artifact_id,
+            skill_id=skill_id,
+            skill_version_id=skill_version_id,
+            session_id="session-with-private-hint",
+            turn_id="turn-with-private-hint",
+            outcome="used",
+            metadata={
+                "private_note": "do not render",
+                "marginal_value": {
+                    "utility_delta": 0.7,
+                    "task_success": True,
+                    "token_savings": 3,
+                    "context_value_per_token": 0.05,
+                },
+            },
+        )
         run = await context.record_compile_run(
             workspace_key="dev-01",
             compiler_version="context-compiler.v1",
@@ -1299,9 +1319,9 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
             status="passed",
             metadata={"trial": "passed", "note": "do not render"},
         )
-        return artifact, run, event, trial
+        return artifact, ledger, run, event, trial
 
-    artifact, run, event, trial = asyncio.run(seed())
+    artifact, ledger, run, event, trial = asyncio.run(seed())
     app = create_app(
         audit_store=MemoryAuditStore(),
         context_governance_store=context,
@@ -1323,6 +1343,18 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
             ("/admin/api/v1/artifacts/{artifact_id}", "GET")
         ].endpoint(
             artifact_id=str(artifact.context_artifact_id),
+            workspace_id="dev-01",
+        )
+        token_ledgers = await routes[
+            ("/admin/api/v1/context/token-ledgers", "GET")
+        ].endpoint(
+            workspace_id="dev-01",
+            limit=10,
+        )
+        token_ledger_detail = await routes[
+            ("/admin/api/v1/context/token-ledgers/{ledger_id}", "GET")
+        ].endpoint(
+            ledger_id=str(ledger.context_token_ledger_id),
             workspace_id="dev-01",
         )
         runs = await routes[("/admin/api/v1/context/compile-runs", "GET")].endpoint(
@@ -1361,6 +1393,13 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
             object_id=str(artifact.context_artifact_id),
             workspace_id="dev-01",
         )
+        token_ledger_microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="context_token_ledger",
+            object_id=str(ledger.context_token_ledger_id),
+            workspace_id="dev-01",
+        )
         compile_run_microscope = await routes[
             ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
         ].endpoint(
@@ -1372,6 +1411,8 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
             artifacts,
             artifact_detail,
             artifact_alias_detail,
+            token_ledgers,
+            token_ledger_detail,
             runs,
             run_detail,
             events,
@@ -1379,6 +1420,7 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
             trials,
             trial_detail,
             artifact_microscope,
+            token_ledger_microscope,
             compile_run_microscope,
         )
 
@@ -1386,6 +1428,8 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
         artifacts,
         artifact_detail,
         artifact_alias_detail,
+        token_ledgers,
+        token_ledger_detail,
         runs,
         run_detail,
         events,
@@ -1393,6 +1437,7 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
         trials,
         trial_detail,
         artifact_microscope,
+        token_ledger_microscope,
         compile_run_microscope,
     ) = asyncio.run(read())
 
@@ -1406,6 +1451,19 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
     assert artifact_alias_detail.object["object_id"] == str(artifact.context_artifact_id)
     assert artifact_alias_detail.object["content_policy"]["compiled_text_returned"] is False
     assert artifact_microscope.object["object_type"] == "context_artifact"
+
+    ledger_item = token_ledgers.collection["items"][0]
+    assert token_ledgers.collection["source"] == "context_governance_store.list_token_ledgers"
+    assert ledger_item["object_type"] == "context_token_ledger"
+    assert ledger_item["token_count"] == 14
+    assert ledger_item["session_id_hash"].startswith("sha256:")
+    assert ledger_item["turn_id_hash"].startswith("sha256:")
+    assert ledger_item["metadata_keys"] == ["marginal_value", "private_note"]
+    assert token_ledger_detail.object["content_policy"]["session_id_returned"] is False
+    assert token_ledger_detail.object["content_policy"]["turn_id_returned"] is False
+    assert token_ledger_detail.object["content_policy"]["metadata_values_returned"] is False
+    assert token_ledger_detail.object["marginal_value"]["context_value_per_token"] == 0.05
+    assert token_ledger_microscope.object["object_type"] == "context_token_ledger"
 
     run_item = runs.collection["items"][0]
     assert runs.collection["source"] == "context_governance_store.list_compile_runs"
@@ -1434,6 +1492,8 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
             artifacts.collection,
             artifact_detail.object,
             artifact_alias_detail.object,
+            token_ledgers.collection,
+            token_ledger_detail.object,
             runs.collection,
             run_detail.object,
             events.collection,
@@ -1441,11 +1501,14 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
             trials.collection,
             trial_detail.object,
             artifact_microscope.object,
+            token_ledger_microscope.object,
             compile_run_microscope.object,
         ],
         sort_keys=True,
     )
     assert "WHEN raw operator request appears" not in combined
+    assert "session-with-private-hint" not in combined
+    assert "turn-with-private-hint" not in combined
     assert "do not render" not in combined
 
 
@@ -1698,6 +1761,8 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/broker/replay-episodes/{episode_id}", "GET"),
         ("/admin/api/v1/context/artifacts", "GET"),
         ("/admin/api/v1/context/artifacts/{artifact_id}", "GET"),
+        ("/admin/api/v1/context/token-ledgers", "GET"),
+        ("/admin/api/v1/context/token-ledgers/{ledger_id}", "GET"),
         ("/admin/api/v1/context/compile-runs", "GET"),
         ("/admin/api/v1/context/compile-runs/{run_id}", "GET"),
         ("/admin/api/v1/context/budget-events", "GET"),

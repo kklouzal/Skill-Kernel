@@ -3,6 +3,27 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Observatory context token ledgers now have a
+sidecar-hosted, content-safe read model and object microscope path. The context
+governance store exposes bounded list/detail reads for existing
+`context_token_ledgers`, admin routes expose `/admin/api/v1/context/token-ledgers`
+and `/admin/api/v1/context/token-ledgers/{ledger_id}`, and generic object
+aliases resolve token-ledger rows with visibility state, token count, outcome,
+artifact/skill/policy refs, marginal-value metrics, metadata key names, and
+session/turn SHA-256 hashes while withholding raw session IDs, turn IDs, and
+metadata values. This advances Core Sections 11.12-11.14 plus Observatory
+Sections 7.6, 7.7, 12.1, 12.6, and acceptance criterion 21.20 by making
+context-value-per-token evidence inspectable without UI-local authority or raw
+runtime context exposure. Focused validation passed with the context compiler
+and route-matrix Observatory API regression (`2 passed, 57 deselected`),
+targeted Ruff, and the generated OpenAPI client freshness check. Required
+pre-commit gates also passed with full sidecar Ruff, full pytest (`400
+passed`), compileall, Observatory frontend build, diff-check, and the core and
+Observatory acceptance reports (`70` implemented, `86` satisfied, zero
+validation errors). No compose/Postgres smoke was needed because no schema
+changed and the API shaping is covered through the in-memory context governance
+store.
+
 2026-06-06 update: Observatory live outbox redaction metadata is now
 Core-owned. The sanitizer drops caller-supplied `redacted_payload_keys` and
 `redacted_payload_hashes` while appending events, preserves stored sanitizer

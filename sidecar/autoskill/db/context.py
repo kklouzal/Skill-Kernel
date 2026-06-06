@@ -375,6 +375,22 @@ class ContextGovernanceStore(Protocol):
     ) -> ContextArtifactRecord | None:
         """Return one context artifact gate record."""
 
+    async def list_token_ledgers(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[TokenLedgerRecord]:
+        """Return bounded context visibility ledger rows."""
+
+    async def get_token_ledger(
+        self,
+        *,
+        context_token_ledger_id: UUID,
+        workspace_key: str | None = None,
+    ) -> TokenLedgerRecord | None:
+        """Return one context visibility ledger row."""
+
     async def list_compile_runs(
         self,
         *,
@@ -572,6 +588,27 @@ class NullContextGovernanceStore:
             self.artifacts,
             "context_artifact_id",
             context_artifact_id,
+            workspace_key=workspace_key,
+        )
+
+    async def list_token_ledgers(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[TokenLedgerRecord]:
+        return _bounded_recent(self.token_ledgers, workspace_key=workspace_key, limit=limit)
+
+    async def get_token_ledger(
+        self,
+        *,
+        context_token_ledger_id: UUID,
+        workspace_key: str | None = None,
+    ) -> TokenLedgerRecord | None:
+        return _find_record(
+            self.token_ledgers,
+            "context_token_ledger_id",
+            context_token_ledger_id,
             workspace_key=workspace_key,
         )
 
@@ -950,6 +987,34 @@ class AsyncpgContextGovernanceStore(AsyncpgPoolOwner):
             workspace_key=workspace_key,
         )
         return ContextArtifactRecord.from_row(row) if row is not None else None
+
+    async def list_token_ledgers(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> list[TokenLedgerRecord]:
+        rows = await self._fetch_context_rows(
+            table="context_token_ledgers",
+            id_column="context_token_ledger_id",
+            workspace_key=workspace_key,
+            limit=limit,
+        )
+        return [TokenLedgerRecord.from_row(row) for row in rows]
+
+    async def get_token_ledger(
+        self,
+        *,
+        context_token_ledger_id: UUID,
+        workspace_key: str | None = None,
+    ) -> TokenLedgerRecord | None:
+        row = await self._fetch_context_row(
+            table="context_token_ledgers",
+            id_column="context_token_ledger_id",
+            record_id=context_token_ledger_id,
+            workspace_key=workspace_key,
+        )
+        return TokenLedgerRecord.from_row(row) if row is not None else None
 
     async def list_compile_runs(
         self,

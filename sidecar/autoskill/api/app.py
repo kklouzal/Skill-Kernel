@@ -6444,6 +6444,108 @@ def create_app(
             },
         }
 
+    def _context_token_ledger_admin_record(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        marginal = metadata.get("marginal_value") if isinstance(metadata.get("marginal_value"), dict) else {}
+        object_id = str(payload["context_token_ledger_id"])
+        session_id = payload.get("session_id")
+        turn_id = payload.get("turn_id")
+        return {
+            "schema_version": "skillkernel.observatory.context-token-ledger.v1",
+            "object_type": "context_token_ledger",
+            "object_id": object_id,
+            "context_token_ledger_id": object_id,
+            "workspace_id": payload.get("workspace_key") or payload.get("workspace_id"),
+            "context_artifact_id": payload.get("context_artifact_id"),
+            "skill_id": payload.get("skill_id"),
+            "skill_version_id": payload.get("skill_version_id"),
+            "broker_policy_version_id": payload.get("broker_policy_version_id"),
+            "visibility_state": payload["visibility_state"],
+            "token_count": payload["token_count"],
+            "outcome": payload.get("outcome"),
+            "session_id_hash": f"sha256:{sha256_text(str(session_id))}"
+            if session_id
+            else None,
+            "turn_id_hash": f"sha256:{sha256_text(str(turn_id))}"
+            if turn_id
+            else None,
+            "metadata_keys": sorted(str(key) for key in metadata),
+            "marginal_value": {
+                key: marginal.get(key)
+                for key in (
+                    "utility_delta",
+                    "task_success",
+                    "token_savings",
+                    "latency_delta_ms",
+                    "tool_call_delta",
+                    "marginal_value",
+                    "context_value_per_token",
+                )
+                if key in marginal
+            },
+            "created_at": payload["created_at"],
+            "title": f"Context token ledger {object_id}",
+            "summary": (
+                f"{payload['visibility_state']} consumed "
+                f"{payload['token_count']} context tokens"
+            ),
+            "timeline": [
+                {"at": payload["created_at"], "event": "context_token_ledger_recorded"}
+            ],
+            "provenance": {
+                "upstream": [
+                    ref
+                    for ref in (
+                        {
+                            "object_type": "context_artifact",
+                            "object_id": payload.get("context_artifact_id"),
+                            "relationship": "visible_artifact",
+                        },
+                        {
+                            "object_type": "skill",
+                            "object_id": payload.get("skill_id"),
+                            "relationship": "visible_skill",
+                        },
+                        {
+                            "object_type": "skill_version",
+                            "object_id": payload.get("skill_version_id"),
+                            "relationship": "visible_skill_version",
+                        },
+                        {
+                            "object_type": "broker_policy",
+                            "object_id": payload.get("broker_policy_version_id"),
+                            "relationship": "visibility_policy",
+                        },
+                    )
+                    if ref["object_id"]
+                ],
+                "downstream": [],
+            },
+            "effects": {
+                "visibility_state": payload["visibility_state"],
+                "outcome": payload.get("outcome"),
+                "token_count": payload["token_count"],
+                "raw_session_id_returned": False,
+                "raw_turn_id_returned": False,
+                "metadata_values_returned": False,
+            },
+            "diagnostics": {
+                "supporting_component": "context_compiler",
+                "metadata_keys": sorted(str(key) for key in metadata),
+                "has_marginal_value": bool(marginal),
+                "context_value_per_token": marginal.get("context_value_per_token"),
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "token_metrics_refs_and_hashes_only",
+                "session_id_returned": False,
+                "turn_id_returned": False,
+                "metadata_values_returned": False,
+            },
+        }
+
     def _context_compile_run_admin_record(record: Any) -> dict[str, Any]:
         payload = record.to_json()
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
@@ -10101,6 +10203,21 @@ def create_app(
                 return ObservatoryObjectResponse(
                     object=_context_artifact_admin_record(artifact)
                 )
+        if object_type in {
+            "context_token_ledger",
+            "context-token-ledger",
+            "token_ledger",
+            "token-ledger",
+        }:
+            context_token_ledger_id = _uuid_or_404(object_id, "context token ledger")
+            ledger = await context_governance.get_token_ledger(
+                workspace_key=workspace_id,
+                context_token_ledger_id=context_token_ledger_id,
+            )
+            if ledger is not None:
+                return ObservatoryObjectResponse(
+                    object=_context_token_ledger_admin_record(ledger)
+                )
         if object_type in {"context_compile_run", "context-compile-run"}:
             context_compile_run_id = _uuid_or_404(object_id, "context compile run")
             compile_run = await context_governance.get_compile_run(
@@ -11330,6 +11447,63 @@ def create_app(
             )
         return ObservatoryObjectResponse(
             object=_context_artifact_admin_record(artifact)
+        )
+
+    @app.get(
+        "/admin/api/v1/context/token-ledgers",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_context_token_ledgers(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        ledgers = await context_governance.list_token_ledgers(
+            workspace_key=workspace_id,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="context_token_ledger",
+            title="Context token ledgers",
+            items=[_context_token_ledger_admin_record(ledger) for ledger in ledgers],
+            limit=limit,
+            cursor=cursor,
+            source="context_governance_store.list_token_ledgers",
+            diagnostics={
+                "supporting_component": "context_compiler",
+                "session_ids_returned": False,
+                "turn_ids_returned": False,
+                "metadata_values_returned": False,
+                "workspace_id": workspace_id,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/context/token-ledgers/{ledger_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_context_token_ledger_detail(
+        ledger_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        context_token_ledger_id = _uuid_or_404(ledger_id, "context token ledger")
+        ledger = await context_governance.get_token_ledger(
+            context_token_ledger_id=context_token_ledger_id,
+            workspace_key=workspace_id,
+        )
+        if ledger is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="context token ledger not found",
+            )
+        return ObservatoryObjectResponse(
+            object=_context_token_ledger_admin_record(ledger)
         )
 
     @app.get(
