@@ -2455,7 +2455,11 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             target_kind="raw_vault_record",
             target_id="vault-record-1",
             attempted_autonomous_alternatives=[
-                {"action": "declassified_summary", "status": "insufficient"}
+                {
+                    "action": "declassified_summary",
+                    "status": "insufficient",
+                    "reason": "raw operator transcript contains api-key-secret",
+                }
             ],
             resolution_state="open",
             dominant_reason_code="raw_reveal_requires_admin",
@@ -2523,6 +2527,13 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             object_id=str(decision_id),
             workspace_id="dev-01",
         )
+        escalation_object_detail = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="administrative_escalation",
+            object_id=str(escalation_id),
+            workspace_id="dev-01",
+        )
         fidelity_detail = await routes[
             ("/admin/api/v1/evidence/fidelity/{fidelity_id}", "GET")
         ].endpoint(
@@ -2541,6 +2552,7 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             escalation_detail,
             object_detail,
             deadlock_object_detail,
+            escalation_object_detail,
             fidelity_detail,
         )
 
@@ -2557,6 +2569,7 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
         escalation_detail,
         object_detail,
         deadlock_object_detail,
+        escalation_object_detail,
         fidelity_detail,
     ) = asyncio.run(run())
 
@@ -2592,9 +2605,18 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
 
     escalation_item = escalations.collection["items"][0]
     assert escalation_item["hard_boundary_kind"] == "raw_reveal_requested"
-    assert escalation_detail.object["attempted_autonomous_alternatives"] == [
-        {"action": "declassified_summary", "status": "insufficient"}
-    ]
+    assert escalation_detail.object["attempted_autonomous_alternative_count"] == 1
+    assert escalation_detail.object["attempted_autonomous_alternatives"][0][
+        "action"
+    ] == "declassified_summary"
+    assert escalation_detail.object["attempted_autonomous_alternatives"][0][
+        "raw_payload_returned"
+    ] is False
+    assert escalation_detail.object["diagnostics"]["alternative_payload_hashes"][0]
+    assert escalation_object_detail.object["object_type"] == "administrative_escalation"
+    assert escalation_object_detail.object["content_policy"][
+        "raw_alternatives_returned"
+    ] is False
     assert fidelity_detail.object["object_type"] == "evidence_fidelity_status"
     combined = json.dumps(
         [
@@ -2603,10 +2625,13 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             adjudications.collection,
             decisions.collection,
             escalations.collection,
+            escalation_detail.object,
+            escalation_object_detail.object,
         ],
         sort_keys=True,
     )
     assert "raw operator transcript" not in combined
+    assert "api-key-secret" not in combined
     assert "verbatim_llm_verdict" not in combined
 
 

@@ -6273,6 +6273,106 @@ def create_app(
             },
         }
 
+    def _safe_escalation_alternatives(alternatives: list[dict[str, Any]]) -> dict[str, Any]:
+        items: list[dict[str, Any]] = []
+        payload_hashes: list[str] = []
+        key_names: set[str] = set()
+        for index, alternative in enumerate(alternatives):
+            payload_hash = "sha256:" + sha256_text(
+                json.dumps(alternative, sort_keys=True, default=str)
+            )
+            payload_hashes.append(payload_hash)
+            action = alternative.get("action")
+            status = alternative.get("status")
+            keys = sorted(str(key) for key in alternative)
+            key_names.update(keys)
+            item: dict[str, Any] = {
+                "index": index,
+                "key_names": keys,
+                "payload_sha256": payload_hash,
+                "raw_payload_returned": False,
+            }
+            if isinstance(action, str) and action:
+                item["action"] = action
+            if isinstance(status, str) and status:
+                item["status"] = status
+            items.append(item)
+        return {
+            "count": len(alternatives),
+            "items": items,
+            "key_names": sorted(key_names),
+            "payload_hashes": payload_hashes,
+            "raw_payloads_returned": False,
+        }
+
+    def _administrative_escalation_microscope(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        event_id = str(payload["event_id"])
+        alternatives = _safe_escalation_alternatives(
+            list(record.attempted_autonomous_alternatives)
+        )
+        target = payload["target"]
+        return {
+            "schema_version": "skillkernel.observatory.administrative-escalation.v1",
+            "object_type": "administrative_escalation",
+            "object_id": event_id,
+            "event_id": event_id,
+            "workspace_id": payload["workspace_id"],
+            "title": f"Administrative escalation {payload['hard_boundary_kind']}",
+            "summary": (
+                f"{payload['hard_boundary_kind']}; target={target['object_type']}; "
+                f"state={payload['resolution_state']}"
+            ),
+            "hard_boundary_kind": payload["hard_boundary_kind"],
+            "decision_family": payload["decision_family"],
+            "target": target,
+            "attempted_autonomous_alternatives": alternatives["items"],
+            "attempted_autonomous_alternative_count": alternatives["count"],
+            "resolution_state": payload["resolution_state"],
+            "dominant_reason_code": payload["dominant_reason_code"],
+            "opened_at": payload["opened_at"],
+            "resolved_at": payload["resolved_at"],
+            "timeline": [
+                {
+                    "at": payload["opened_at"],
+                    "event": "administrative_escalation_opened",
+                    "hard_boundary_kind": payload["hard_boundary_kind"],
+                    "resolution_state": payload["resolution_state"],
+                }
+            ],
+            "provenance": {
+                "upstream": [
+                    {
+                        "object_type": target["object_type"],
+                        "object_id": target["object_id"],
+                        "relationship": "escalation_target",
+                    }
+                ],
+                "downstream": [],
+            },
+            "effects": {
+                "autonomous_apply_allowed": False,
+                "requires_operator_resolution": payload["resolution_state"] == "open",
+                "alternative_count": alternatives["count"],
+                "raw_alternatives_returned": False,
+            },
+            "diagnostics": {
+                "supporting_component": "administrative_escalation",
+                "hard_boundary_only": True,
+                "alternative_key_names": alternatives["key_names"],
+                "alternative_payload_hashes": alternatives["payload_hashes"],
+                "safe_next_action": "resolve_or_collect_content_safe_evidence",
+                "raw_content_available": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "escalation-status-read-model",
+                "redaction_state": "metadata_refs_and_hashes",
+                "raw_alternatives_returned": False,
+            },
+            "audit": {"links": [], "chain_visible": True},
+        }
+
     def _context_artifact_admin_record(record: Any) -> dict[str, Any]:
         payload = record.to_json()
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
@@ -9696,7 +9796,7 @@ def create_app(
         return _observatory_collection(
             object_type="administrative_escalation",
             title="Administrative escalations",
-            items=[record.to_json() for record in records],
+            items=[_administrative_escalation_microscope(record) for record in records],
             limit=limit,
             cursor=cursor,
             source="observatory_admin_store.list_administrative_escalations",
@@ -9724,7 +9824,7 @@ def create_app(
                 status_code=http_status.HTTP_404_NOT_FOUND,
                 detail="administrative escalation not found",
             )
-        return ObservatoryObjectResponse(object=record.to_json())
+        return ObservatoryObjectResponse(object=_administrative_escalation_microscope(record))
 
     @app.get(
         "/admin/api/v1/objects/{object_type}/{object_id}",
@@ -9935,7 +10035,9 @@ def create_app(
                 event_id=escalation_id,
             )
             if escalation is not None:
-                return ObservatoryObjectResponse(object=escalation.to_json())
+                return ObservatoryObjectResponse(
+                    object=_administrative_escalation_microscope(escalation)
+                )
         if object_type in {"broker_replay_episode", "replay_episode"}:
             episode_id = _uuid_or_404(object_id, "broker replay episode")
             episode = await broker_policies.get_replay_episode(

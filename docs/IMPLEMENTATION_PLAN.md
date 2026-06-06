@@ -1,6 +1,24 @@
 # SkillKernel Implementation Plan
 
-This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
+This plan tracks the unified implementation specification and turns it into
+repo-level gates.
+
+2026-06-06 update: Observatory administrative escalations now have a
+content-safe object microscope over the Core admin read model. The
+administrative-escalation list, direct detail route, and generic
+`/admin/api/v1/objects/administrative_escalation/{event_id}` path now return
+hard-boundary category, decision family, stable target refs, timeline,
+provenance, operator-safe action/status summaries, alternative payload hashes,
+alternative key names, and explicit raw-denial metadata while suppressing
+arbitrary attempted-alternative reason text and payload content. This advances
+Observatory Sections 7.6, 7.7, 8.5.3, 8.21, 12.6, and 16.1 by closing the
+administrative-escalation aggregate-to-evidence path without adding mutation
+authority or browser-side security assumptions. Focused validation passed with
+the autonomy/evidence read-model regression (`1 passed, 57 deselected`) and
+targeted Ruff. Required pre-commit gates also passed with full sidecar Ruff,
+full pytest (`399 passed`), compileall, and diff-check. No compose/Postgres
+smoke was needed because the slice only reshapes an existing admin read model
+and validates it through the in-memory Observatory admin store.
 
 2026-06-06 update: Observatory audit records now have a content-safe object
 microscope over the Core audit store. `/admin/api/v1/audit` returns bounded

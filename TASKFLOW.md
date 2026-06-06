@@ -16,6 +16,27 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory administrative escalations now use a
+  content-safe Core-backed object microscope across list, direct detail, and
+  generic object routes. The previous direct `record.to_json()` path returned
+  attempted autonomous alternative payloads verbatim; the new microscope
+  exposes hard-boundary category, decision family, target refs, timeline,
+  provenance, operator-safe action/status summaries, alternative payload
+  hashes, key names, and raw-denial metadata while suppressing arbitrary
+  reason text and alternative payload content. This advances Observatory
+  Sections 7.6, 7.7, 8.5.3, 8.21, 12.6, and 16.1 by closing the
+  administrative-escalation aggregate-to-evidence path without adding mutation
+  authority or relying on the browser as the security boundary. Focused
+  validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py -q -k
+  autonomy_evidence_read_models_are_content_safe` (`1 passed, 57 deselected`)
+  and `uv run ruff check sidecar/autoskill/api/app.py
+  sidecar/autoskill/tests/test_observatory_api.py`. Required pre-commit gates
+  also passed with `uv run ruff check sidecar`, `uv run pytest` (`399
+  passed`), `uv run python -m compileall -q sidecar`, and `git diff --check`.
+  No compose/Postgres smoke was needed because the slice only reshapes an
+  existing admin read model and validates it through the in-memory
+  Observatory admin store.
 - 2026-06-06: CI for pushed packaging commit `528b990` failed in
   `ruff-check` before tests/builds because the new container healthcheck
   scripts used `urllib.request.urlopen`, which broad CI Ruff flags as S310.
