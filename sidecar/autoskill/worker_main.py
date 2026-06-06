@@ -22,6 +22,7 @@ from autoskill.db.historical import AsyncpgHistoricalImportStore
 from autoskill.db.jobs import AsyncpgJobStore
 from autoskill.db.memory import AsyncpgMemoryGovernanceStore
 from autoskill.db.observability import AsyncpgObservabilityStore
+from autoskill.db.profiles import AsyncpgProfileStore
 from autoskill.db.retrieval import AsyncpgRetrievalStore
 from autoskill.db.scheduler import AsyncpgSchedulerStore
 from autoskill.db.topology import AsyncpgTopologyStore
@@ -131,6 +132,10 @@ async def run_worker(args: argparse.Namespace) -> int:
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
     )
+    profiles = AsyncpgProfileStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -196,7 +201,10 @@ async def run_worker(args: argparse.Namespace) -> int:
                 activation_gate=activation_gate,
                 memory_governance=memory_governance,
                 observability=observability,
+                profiles=profiles,
                 embedder=build_text_embedder_from_settings(settings),
+                embedding_api_key=settings.embedding_api_key,
+                embedding_api_base_url=settings.embedding_api_base_url,
                 workspace_root=workspace_root,
                 archive_root=archive_root,
                 external_skill_roots=args.external_skill_root,
@@ -234,6 +242,7 @@ async def run_worker(args: argparse.Namespace) -> int:
         await attribution.close()
         await activation_gate.close()
         await memory_governance.close()
+        await profiles.close()
 
 
 def parse_args() -> argparse.Namespace:

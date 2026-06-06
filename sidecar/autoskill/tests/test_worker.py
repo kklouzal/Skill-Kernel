@@ -1,9 +1,11 @@
 import asyncio
+import inspect
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
+from autoskill import worker_main
 from autoskill.api.app import WorkerRunOnceRequest, create_app
 from autoskill.core.hashing import sha256_text
 from autoskill.db.activation import ActivationReadiness
@@ -46,6 +48,15 @@ from autoskill.tests.test_embedding_generation import (
 from autoskill.tests.test_external_skills import MemoryExternalSkillStore
 from autoskill.tests.test_governance import MemoryGovernanceStore
 from autoskill.tests.test_jobs_api import MemoryJobStore
+
+
+def test_worker_main_wires_profiles_for_active_embedding_jobs() -> None:
+    source = inspect.getsource(worker_main.run_worker)
+
+    assert "AsyncpgProfileStore" in source
+    assert "profiles=profiles" in source
+    assert "embedding_api_key=settings.embedding_api_key" in source
+    assert "embedding_api_base_url=settings.embedding_api_base_url" in source
 
 
 class MemoryEvidenceWorkerStore:
