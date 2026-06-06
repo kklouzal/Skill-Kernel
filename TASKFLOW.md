@@ -16,6 +16,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Reverse-project render-stability audit found Observatory list
+  key fallbacks that were not caught by the narrow static regex gate:
+  whole-object `JSON.stringify(...)` fallbacks for skill, topology-operation,
+  and action-audit rows, plus an index-suffixed trace object-ref key. These
+  did not use random, timestamp, polling, or snapshot sequence values, but the
+  unified spec's mounted-view identity contract prefers stable domain-derived
+  keys. Remediation added shared stable record-key helpers and switched these
+  rows to ID/idempotency/object-ref/relationship/created-at/domain-field keys.
+  Validation passed with `npm run build --prefix
+  sidecar/autoskill/observatory`, `uv run python
+  scripts/autoskill_conformance.py --json` (`ready=true`, 13/13 checks),
+  `uv run python scripts/autoskill_observatory_acceptance.py --json`
+  (`ready=true`, 86 satisfied), a focused `rg` key-pattern audit, and
+  `git diff --check`. Commit `87ac4ab`.
 - 2026-06-06: Parent verification of the Part II/III worker result found the
   specific autonomy/adjudication required-signal remediation was directionally
   correct but incomplete: zero-count read-model snapshots could still trip
