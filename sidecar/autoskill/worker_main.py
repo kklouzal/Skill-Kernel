@@ -9,6 +9,7 @@ from autoskill.core.config import Settings, get_settings
 from autoskill.db.activation import AsyncpgActivationGateStore
 from autoskill.db.attribution import AsyncpgAttributionStore
 from autoskill.db.audit import AsyncpgAuditStore
+from autoskill.db.autonomy import AsyncpgAutonomyControlStore
 from autoskill.db.candidates import AsyncpgCandidateStore
 from autoskill.db.context import AsyncpgContextGovernanceStore
 from autoskill.db.contracts import AsyncpgContractStore
@@ -20,6 +21,7 @@ from autoskill.db.external_skills import AsyncpgExternalSkillStore
 from autoskill.db.governance import AsyncpgGovernanceStore
 from autoskill.db.historical import AsyncpgHistoricalImportStore
 from autoskill.db.jobs import AsyncpgJobStore
+from autoskill.db.llm_invocations import AsyncpgLLMInvocationStore
 from autoskill.db.memory import AsyncpgMemoryGovernanceStore
 from autoskill.db.observability import AsyncpgObservabilityStore
 from autoskill.db.profiles import AsyncpgProfileStore
@@ -28,6 +30,7 @@ from autoskill.db.scheduler import AsyncpgSchedulerStore
 from autoskill.db.topology import AsyncpgTopologyStore
 from autoskill.db.usage import AsyncpgUsageStore
 from autoskill.db.utility import AsyncpgUtilityStore
+from autoskill.services.autonomy_orchestrator import ProposalGateAutonomyOrchestrator
 from autoskill.services.embedding_generation import (
     build_text_embedder_from_settings,
     embedding_provider_policy,
@@ -37,6 +40,7 @@ from autoskill.services.historical_discovery import (
     ensure_historical_discovery_schedule,
     resolve_historical_import_roots,
 )
+from autoskill.services.llm import LLMClient
 from autoskill.services.scheduler_defaults import ensure_core_schedules
 from autoskill.services.worker import (
     CANONICAL_WORKER_POOLS,
@@ -141,6 +145,24 @@ async def run_worker(args: argparse.Namespace) -> int:
         settings.database_url,
         statement_timeout_ms=settings.statement_timeout_ms,
     )
+    llm_invocations = AsyncpgLLMInvocationStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
+    autonomy_control = AsyncpgAutonomyControlStore(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+    )
+    proposal_gate_autonomy = ProposalGateAutonomyOrchestrator(
+        profiles=profiles,
+        llm=LLMClient(
+            profiles=profiles,
+            invocations=llm_invocations,
+            settings=settings,
+            observability=observability,
+        ),
+        autonomy=autonomy_control,
+    )
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -208,6 +230,7 @@ async def run_worker(args: argparse.Namespace) -> int:
                 usage=usage,
                 attribution=attribution,
                 activation_gate=activation_gate,
+                autonomy_orchestrator=proposal_gate_autonomy,
                 memory_governance=memory_governance,
                 observability=observability,
                 profiles=profiles,
@@ -253,6 +276,8 @@ async def run_worker(args: argparse.Namespace) -> int:
         await activation_gate.close()
         await memory_governance.close()
         await profiles.close()
+        await llm_invocations.close()
+        await autonomy_control.close()
 
 
 def parse_args() -> argparse.Namespace:

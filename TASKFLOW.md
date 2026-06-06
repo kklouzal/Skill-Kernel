@@ -16,6 +16,38 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Proposal-gate `needs_intervention` results now route through
+  the autonomous fallback/adjudication path required by the unified
+  specification instead of remaining a bare operator-intervention stall.
+  Deterministic proposal-gate evaluation still fails closed when contrastive
+  skill-visible/no-skill evidence is absent, but API and worker evaluation
+  runs now optionally invoke a qualified `qualified_autonomous`
+  `openai_compatible` text profile, require the model to choose one bounded
+  fallback action, deterministically admit only no-write fallback actions, and
+  persist linked `autonomous_adjudications`, `autonomy_decisions`,
+  `admin_semantic_adjudication_status`, and
+  `admin_autonomy_decision_status` rows. When no qualified autonomous text
+  profile is available or the LLM call fails, the fallback records a governed
+  `no_op_reschedule` decision with explicit reason codes rather than treating
+  the soft-threshold miss as administrative escalation. Evaluation result
+  payloads now carry the generated autonomy decision/adjudication IDs so
+  Observatory microscopes can connect stalled proposal gates to the autonomy
+  read models without exposing raw content or authorizing runtime file writes.
+  This advances Part I Sections 2.45-2.49, 5.1, 12.8, production acceptance
+  criteria 31.51, 31.53, 31.55, 31.57, 31.62, and Observatory criteria 21.23
+  / 24.auto.1 / 24.auto.6 by implementing the missing
+  soft-threshold-fallback execution path for proposal gates. Focused
+  validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_evaluator.py sidecar/autoskill/tests/test_worker.py
+  -q` (`56 passed`), targeted Ruff, and targeted compileall. Required gates
+  passed with `uv run ruff check sidecar scripts`, `uv run pytest` (`429
+  passed`), `uv run python -m compileall -q sidecar scripts`, `git diff
+  --check`, `uv run python scripts/autoskill_acceptance.py --json`
+  (`ready=true`, `70` implemented, `7` context criteria), `uv run python
+  scripts/autoskill_observatory_acceptance.py --json` (`ready=true`, `86`
+  satisfied), and `uv run python scripts/autoskill_conformance.py --json`
+  (`ready=true`, `23/23`). No runtime skill files were mutated and no
+  writer/apply or live deployment action was performed.
 - 2026-06-06: Deterministic writer rollback deletion now fails closed unless
   the target is exactly a SkillKernel-owned active skill root,
   `skills/autoskill/<safe-slug>`. `delete_active_skill_with_governance()`

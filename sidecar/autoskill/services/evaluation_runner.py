@@ -5,6 +5,7 @@ from uuid import UUID
 
 from autoskill.db.evaluations import EvaluationRunResult, EvaluationStore
 from autoskill.db.observability import NullObservabilityStore, ObservabilityStore
+from autoskill.services.autonomy_orchestrator import ProposalGateAutonomyOrchestrator
 
 
 async def run_pending_proposal_gates_with_trace(
@@ -17,6 +18,8 @@ async def run_pending_proposal_gates_with_trace(
     parent_span_id: UUID | None = None,
     source: str = "api",
     safe_attributes: dict[str, Any] | None = None,
+    autonomy_orchestrator: ProposalGateAutonomyOrchestrator | None = None,
+    job_id: UUID | None = None,
 ) -> EvaluationRunResult:
     """Run deterministic proposal gates inside a content-safe evaluator span."""
     observed = observability or NullObservabilityStore()
@@ -41,6 +44,12 @@ async def run_pending_proposal_gates_with_trace(
             span_id=span.span_id,
             parent_span_id=span.parent_span_id,
         )
+        if autonomy_orchestrator is not None and result.needs_intervention:
+            result = await autonomy_orchestrator.resolve_run(
+                result,
+                workspace_key=workspace_key,
+                job_id=job_id,
+            )
     except Exception as error:
         await observed.finish_span(
             span_id=span.span_id,

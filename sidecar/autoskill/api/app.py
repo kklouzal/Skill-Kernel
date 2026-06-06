@@ -31,6 +31,11 @@ from autoskill.db.attribution import (
     NullAttributionStore,
 )
 from autoskill.db.audit import AsyncpgAuditStore, AuditStore, NullAuditStore
+from autoskill.db.autonomy import (
+    AsyncpgAutonomyControlStore,
+    AutonomyControlStore,
+    NullAutonomyControlStore,
+)
 from autoskill.db.broker_policy import (
     AsyncpgBrokerPolicyStore,
     BrokerPolicyStore,
@@ -150,6 +155,7 @@ from autoskill.db.usage import (
     UsageTopologyRecommendation,
 )
 from autoskill.db.utility import AsyncpgUtilityStore, NullUtilityStore, UtilityStore
+from autoskill.services.autonomy_orchestrator import ProposalGateAutonomyOrchestrator
 from autoskill.services.broker import (
     BrokerCanaryFeedback,
     BrokerPolicy,
@@ -2008,6 +2014,16 @@ def _build_observability_store() -> ObservabilityStore:
             statement_timeout_ms=settings.statement_timeout_ms,
         )
     return NullObservabilityStore()
+
+
+def _build_autonomy_control_store() -> AutonomyControlStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgAutonomyControlStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullAutonomyControlStore()
 
 
 def _build_observatory_admin_store() -> ObservatoryAdminStore:
@@ -3940,6 +3956,7 @@ def create_app(
     governance_store: GovernanceStore | None = None,
     lifecycle_store: LifecycleStore | None = None,
     observability_store: ObservabilityStore | None = None,
+    autonomy_control_store: AutonomyControlStore | None = None,
     observatory_admin_store: ObservatoryAdminStore | None = None,
     diagnostic_store: DiagnosticMomentumStore | None = None,
     profile_store: ProfileStore | None = None,
@@ -3978,6 +3995,7 @@ def create_app(
     governance = governance_store or _build_governance_store()
     lifecycle = lifecycle_store or _build_lifecycle_store(governance)
     observability = observability_store or _build_observability_store()
+    autonomy_control = autonomy_control_store or _build_autonomy_control_store()
     observatory_admin = observatory_admin_store or _build_observatory_admin_store()
     diagnostics = diagnostic_store or _build_diagnostic_store()
     profiles = profile_store or _build_profile_store()
@@ -3989,6 +4007,11 @@ def create_app(
         invocations=llm_invocations,
         settings=get_settings(),
         observability=observability,
+    )
+    proposal_gate_autonomy = ProposalGateAutonomyOrchestrator(
+        profiles=profiles,
+        llm=text_llm,
+        autonomy=autonomy_control,
     )
     compatibility = compatibility_store or _build_compatibility_store()
     context_governance = context_governance_store or _build_context_governance_store()
@@ -14567,6 +14590,7 @@ def create_app(
             trace_id=request.trace_id,
             parent_span_id=request.span_id or request.parent_span_id,
             source="api",
+            autonomy_orchestrator=proposal_gate_autonomy,
         )
         return EvaluationRunResponse(**result.to_json())
 

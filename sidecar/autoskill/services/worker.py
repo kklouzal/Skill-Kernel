@@ -33,6 +33,7 @@ from autoskill.db.scheduler import SchedulerStore
 from autoskill.db.topology import TopologyStore
 from autoskill.db.usage import UsageStore
 from autoskill.db.utility import UtilityStore
+from autoskill.services.autonomy_orchestrator import ProposalGateAutonomyOrchestrator
 from autoskill.services.compiler import (
     CONTEXT_COMPILER_VERSION,
     compile_skill_with_context_governance,
@@ -198,6 +199,7 @@ class WorkerStores:
     attribution: AttributionStore | None = None
     activation_gate: ActivationGateStore | None = None
     activation_window: object | None = None
+    autonomy_orchestrator: ProposalGateAutonomyOrchestrator | None = None
     profiles: ProfileStore | None = None
     memory_governance: MemoryGovernanceStore | None = None
     embedder: TextEmbedder | None = None
@@ -1009,6 +1011,8 @@ async def _run_evaluation_proposal_gates(
         trace_id=job.trace_id,
         parent_span_id=job.span_id or job.parent_span_id,
         source="worker",
+        autonomy_orchestrator=stores.autonomy_orchestrator,
+        job_id=job.job_id,
         safe_attributes={
             "job_id": str(job.job_id),
             "job_kind": job.job_kind,

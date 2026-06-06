@@ -1,7 +1,11 @@
 import asyncio
+import json
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 from autoskill.api.app import EvaluationRunRequest, create_app
+from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.evaluations import (
     EvaluationRunItem,
     EvaluationRunResult,
@@ -9,6 +13,8 @@ from autoskill.db.evaluations import (
     _finish_evaluation,
 )
 from autoskill.db.observability import TraceSpanRecord
+from autoskill.db.profiles import ModelProfileRecord
+from autoskill.services.autonomy_orchestrator import ProposalGateAutonomyOrchestrator
 from autoskill.services.evaluator import (
     DeterministicProposalGateAdapter,
     EvaluatorAdapter,
@@ -324,6 +330,161 @@ def test_threshold_deadlock_detector_groups_repeated_soft_stalls() -> None:
     ]
 
 
+class MemoryProfileStore:
+    def __init__(self, profile: ModelProfileRecord | None = None) -> None:
+        self.profile = profile
+        self.list_calls: list[dict[str, object]] = []
+        self.get_calls: list[dict[str, object]] = []
+
+    async def get_model_profile(self, *, workspace_key: str, profile_key: str):
+        self.get_calls.append({"workspace_key": workspace_key, "profile_key": profile_key})
+        if self.profile and self.profile.profile_key == profile_key:
+            return self.profile
+        return None
+
+    async def list_model_profiles(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ):
+        self.list_calls.append(
+            {"workspace_key": workspace_key, "status": status, "limit": limit}
+        )
+        if self.profile is None:
+            return []
+        if status is not None and self.profile.status != status:
+            return []
+        return [self.profile]
+
+
+class MemoryLLM:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.calls: list[object] = []
+
+    async def complete(self, completion):
+        self.calls.append(completion)
+        return SimpleNamespace(
+            text=self.text,
+            invocation=SimpleNamespace(llm_invocation_id=uuid4()),
+        )
+
+
+def model_profile(*, status: str = "qualified_autonomous") -> ModelProfileRecord:
+    now = datetime.now(UTC)
+    return ModelProfileRecord(
+        profile_id=uuid4(),
+        workspace_id=uuid4(),
+        workspace_key="dev-01",
+        profile_key="semantic-main",
+        provider="test-provider",
+        model="test-model",
+        route_kind="openai_compatible",
+        endpoint_ref="http://127.0.0.1:9999/v1",
+        endpoint_kind="chat_completions",
+        timeout_seconds=30.0,
+        thinking_level="off",
+        thinking_fallback_policy="omit",
+        status=status,
+        qualification={"latest_qualification_verdict": status},
+        kind="model",
+        embedding_dim=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def needs_intervention_item() -> EvaluationRunItem:
+    payload = evaluate_proposal_gate(
+        skill_ir=skill_ir(),
+        scanner_status="passed",
+        probes=planned_probes(),
+    ).to_json()
+    return EvaluationRunItem(
+        evaluation_id=uuid4(),
+        skill_version_id=uuid4(),
+        executor_profile_id=None,
+        status="needs_intervention",
+        result={
+            **payload,
+            "workspace_key": "dev-01",
+            "skill_id": str(uuid4()),
+        },
+    )
+
+
+def test_proposal_gate_autonomy_orchestrator_runs_llm_fallback() -> None:
+    autonomy = NullAutonomyControlStore()
+    llm = MemoryLLM(
+        json.dumps(
+            {
+                "action": "stage_canary",
+                "confidence": 0.91,
+                "confidence_decomposition": {
+                    "model_confidence": 0.91,
+                    "evidence_coverage": 0.72,
+                    "source_fidelity": 0.8,
+                    "scanner_risk": 0.0,
+                },
+                "evidence_fidelity": "redacted_derivative",
+                "reason_codes": ["semantic-utility-likely"],
+                "uncertainty_notes": ["needs canary comparison"],
+            }
+        )
+    )
+    orchestrator = ProposalGateAutonomyOrchestrator(
+        profiles=MemoryProfileStore(model_profile()),
+        llm=llm,  # type: ignore[arg-type]
+        autonomy=autonomy,
+    )
+
+    async def run() -> EvaluationRunItem:
+        return await orchestrator.resolve_item(
+            needs_intervention_item(),
+            workspace_key="dev-01",
+        )
+
+    item = asyncio.run(run())
+
+    fallback = item.result["autonomy_fallback"]
+    assert item.status == "needs_intervention"
+    assert fallback["selected_action"] == "stage_canary"
+    assert fallback["runtime_writes_authorized"] is False
+    assert fallback["administrative_escalation_allowed"] is False
+    assert fallback["llm_invocation_id"] is not None
+    assert fallback["confidence_band"] == "high"
+    assert autonomy.records[0].action == "stage_canary"
+    assert llm.calls[0].purpose == "proposal_gate.needs_intervention_adjudication"
+
+
+def test_proposal_gate_autonomy_orchestrator_reschedules_without_profile() -> None:
+    autonomy = NullAutonomyControlStore()
+    llm = MemoryLLM("{}")
+    orchestrator = ProposalGateAutonomyOrchestrator(
+        profiles=MemoryProfileStore(),
+        llm=llm,  # type: ignore[arg-type]
+        autonomy=autonomy,
+    )
+
+    async def run() -> EvaluationRunItem:
+        return await orchestrator.resolve_item(
+            needs_intervention_item(),
+            workspace_key="dev-01",
+        )
+
+    item = asyncio.run(run())
+
+    fallback = item.result["autonomy_fallback"]
+    assert fallback["selected_action"] == "no_op_reschedule"
+    assert "qualified-autonomous-model-profile-unavailable" in fallback["reason_codes"]
+    assert fallback["model_profile_id"] is None
+    assert fallback["llm_invocation_id"] is None
+    assert llm.calls == []
+    assert autonomy.records[0].action == "no_op_reschedule"
+
+
 def test_proposal_gate_attaches_contrastive_replay_from_evidence() -> None:
     workspace_id = uuid4()
     no_skill_evidence_id = uuid4()
@@ -535,7 +696,12 @@ def test_evaluation_run_api_uses_configured_store() -> None:
 
     assert response.evaluated == 1
     assert response.needs_intervention == 1
-    assert response.evaluations[0]["result"] == {"workspace_key": "dev-01", "limit": 7}
+    assert response.evaluations[0]["result"]["workspace_key"] == "dev-01"
+    assert response.evaluations[0]["result"]["limit"] == 7
+    fallback = response.evaluations[0]["result"]["autonomy_fallback"]
+    assert fallback["selected_action"] == "no_op_reschedule"
+    assert "qualified-autonomous-model-profile-unavailable" in fallback["reason_codes"]
+    assert fallback["runtime_writes_authorized"] is False
     assert observability.started[0].trace_id == trace_id
     assert observability.started[0].parent_span_id == parent_span_id
     assert observability.started[0].operation_kind == "evaluator"

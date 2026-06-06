@@ -229,6 +229,8 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                     **_json_dict(row["result"]),
                     **gate.to_json(),
                     "executor": "deterministic-proposal-gate.v1",
+                    "workspace_key": row["workspace_key"],
+                    "skill_id": str(row["skill_id"]),
                     "evidence_ids": _probe_evidence_ids(probes),
                     "trace_id": str(trace_id) if trace_id else None,
                     "span_id": str(span_id) if span_id else None,
@@ -404,6 +406,8 @@ async def _claim_planned_evaluations(
           ev.skill_version_id,
           ev.executor_profile_id,
           ev.result,
+          w.external_key AS workspace_key,
+          s.skill_id,
           sv.skill_ir,
           sv.scanner_status
         FROM autoskill.evaluations ev
