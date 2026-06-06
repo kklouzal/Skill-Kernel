@@ -21,6 +21,8 @@ def test_landscape_and_readiness_report_maps_unified_specification() -> None:
     assert report["summary"]["readiness_checklist_items"] == 17
     assert all(row["urls"] for row in report["landscape_matrix"])
     assert all(row["evidence"] for row in report["landscape_matrix"])
+    assert all(item["status"] == "demonstrated" for item in report["readiness_checklist"])
+    assert all(item["evidence"] for item in report["readiness_checklist"])
     checklist_text = " ".join(item["item"] for item in report["readiness_checklist"])
     for operation in ("Create", "improve", "compose", "decompose"):
         assert operation in checklist_text

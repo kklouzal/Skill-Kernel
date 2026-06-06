@@ -2,11 +2,12 @@
 
 SkillKernel is the project home for **OpenClaw AutoSkill Manager**, internal codename `autoskill`.
 
-The closed-design handoff is the controlling source for architecture and implementation priorities:
+The controlling source for architecture and implementation priorities is the
+unified implementation specification:
 
-- `skillkernel-openclaw-autoskill-ultimate-v16-coherence-closed-implementation-handoff.md`
+- `unified-implementation-specification.md`
 
-The v1 implementation follows the handoff's fixed architecture:
+The v1 implementation follows the unified specification's fixed architecture:
 
 - one OpenClaw plugin for lightweight capture, redaction, spooling, forwarding, status/control, and optional cached runtime context hints;
 - one Python sidecar for durable scheduling, database work, retrieval, scanning, evaluation, deterministic writing, rollback, and governance;

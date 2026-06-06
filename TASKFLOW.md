@@ -2,13 +2,13 @@
 
 Managed durable work item: `skillkernel-autoskill-v1`
 
-Goal: implement SkillKernel / OpenClaw AutoSkill Manager from the v16 coherence-closed implementation handoff until production acceptance criteria are satisfied.
+Goal: implement SkillKernel / OpenClaw AutoSkill Manager against the unified implementation specification until production acceptance criteria are satisfied.
 
 Owner: Claudia front-stage; `codex-worker` may be used for bounded coding/debugging slices.
 
 Canonical path: `/Warehouse/SkillKernel`
 
-Guiding document: `skillkernel-openclaw-autoskill-ultimate-v16-coherence-closed-implementation-handoff.md`
+Guiding document: `unified-implementation-specification.md`
 
 ## Current Phase
 
@@ -16,6 +16,25 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Unified-spec conformance pass restarted from clean `main` with
+  `/Warehouse/SkillKernel/unified-implementation-specification.md` as the
+  controlling document. First inventory worker slice
+  `skillkernel_spec_inventory_1` failed before producing usable traceability
+  output, so parent verification continued locally. Initial executable
+  crosswalk baseline was green, but source-of-truth and traceability drift was
+  found: README/TASKFLOW still named the older v16 handoff as the guiding
+  source, and `scripts/autoskill_readiness.py` emitted the Part V
+  implementation readiness checklist as bare `required` rows with no evidence
+  while still reporting ready. Remediation retargeted README/TASKFLOW to the
+  unified spec, mapped all 17 readiness checklist items to concrete
+  implementation/test evidence, changed their report status to
+  `demonstrated`, and added regression coverage that fails if checklist rows
+  lack evidence. Focused validation passed with `uv run python
+  scripts/autoskill_readiness.py --json` (`ready=true`, 17 checklist items,
+  zero validation errors, zero empty evidence rows), `uv run pytest
+  sidecar/autoskill/tests/test_readiness_report.py -q` (`1 passed`), `uv run
+  ruff check scripts/autoskill_readiness.py
+  sidecar/autoskill/tests/test_readiness_report.py`, and `git diff --check`.
 - 2026-06-06: Observatory audit records now have a content-safe Core-backed
   object microscope. `/admin/api/v1/audit` no longer emits arbitrary audit
   `details` payloads directly, and generic

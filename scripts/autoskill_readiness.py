@@ -19,6 +19,117 @@ EXPECTED_LANDSCAPE_ROWS = 52
 EXPECTED_STANCE_LINES = 8
 EXPECTED_READINESS_CHECKLIST_ITEMS = 17
 
+READINESS_EVIDENCE_BY_INDEX: tuple[tuple[str, ...], ...] = (
+    (
+        "plugin/autoskill redacted spool and sidecar ingest pipeline",
+        "historical discovery/import/bootstrap services",
+        "raw-vault/evidence-fidelity read models and trace-spine tests",
+        "sidecar/autoskill/tests/test_historical_import.py",
+        "sidecar/autoskill/tests/test_observatory_api.py",
+    ),
+    (
+        "replay synthesis skips hash_only and metadata_only evidence fidelity tiers",
+        "memory quarantine and derived-state revocation gates preserve evidence mode",
+        "sidecar/autoskill/tests/test_broker_policy_api.py",
+        "sidecar/autoskill/tests/test_historical_import.py",
+    ),
+    (
+        "LLM invocation audit, model-profile qualification, and evaluator autonomy assurance",
+        "replay-corpus intent synthesis and memory quarantine decision read models",
+        "external-skill relationship review and context-equivalence acceptance criteria",
+        "sidecar/autoskill/tests/test_llm_client.py",
+        "sidecar/autoskill/tests/test_profile_qualification.py",
+        "sidecar/autoskill/tests/test_evaluator.py",
+    ),
+    (
+        "autonomy assurance fallback ladder and threshold-deadlock diagnostics",
+        "issue board safe-next-action records",
+        "scripts/autoskill_acceptance.py criteria 31.50 and 31.54",
+        "sidecar/autoskill/tests/test_observatory_api.py",
+    ),
+    (
+        "administrative_escalation station and object microscope read models",
+        "autonomy playbook detail exposes authority limitation and attempted alternatives",
+        "scripts/autoskill_observatory_acceptance.py criterion 21.23",
+        "sidecar/autoskill/tests/test_observatory_api.py",
+    ),
+    (
+        "SkillGraphIR create/improve/compose/decompose operation kinds",
+        "topology proposal/trial/apply services and broker replay/canary gates",
+        "scripts/autoskill_acceptance.py criteria 31.29-31.32",
+        "sidecar/autoskill/tests/test_topology_services.py",
+    ),
+    (
+        "SkillIR compiler, deterministic scanner/evaluator gates, writer manifests, and token budget status",
+        "path-contained writer activation and archive-backed immutable snapshots",
+        "scripts/autoskill_acceptance.py criteria 31.13-31.17 and 31.ctx.1-31.ctx.6",
+        "sidecar/autoskill/tests/test_skillir_compiler_scanner.py",
+        "sidecar/autoskill/tests/test_audit_writer_events.py",
+    ),
+    (
+        "support artifact planner and manifest load-policy scanner",
+        "Part V conformance gate blocks skill-package self-registration implications",
+        "scripts/autoskill_conformance.py check SKX-STATIC-004",
+        "sidecar/autoskill/tests/test_skillir_compiler_scanner.py",
+    ),
+    (
+        "runtime broker body-aware retrieval, no-skill abstention, bundle rendering, and suppression telemetry",
+        "broker policy replay episodes and canary feedback",
+        "scripts/autoskill_acceptance.py criteria 31.20 and 31.25",
+        "sidecar/autoskill/tests/test_broker.py",
+        "sidecar/autoskill/tests/test_broker_policy_api.py",
+    ),
+    (
+        "evolution transaction, provenance, revocation, rollback, and invalidation stores",
+        "mutation worker rollback and canary freeze paths",
+        "scripts/autoskill_acceptance.py criteria 31.23 and 31.32",
+        "sidecar/autoskill/tests/test_lifecycle.py",
+        "sidecar/autoskill/tests/test_worker.py",
+    ),
+    (
+        "profile-scoped pgvector embeddings, lexical retrieval, fusion, and retrieval logs",
+        "body-index documents plus graph-aware broker/topology evidence",
+        "scripts/autoskill_acceptance.py criteria 31.25 and 31.37",
+        "sidecar/autoskill/tests/test_embedding_generation.py",
+        "sidecar/autoskill/tests/test_broker.py",
+    ),
+    (
+        "Observatory station catalog, workcells, cockpits, trace replay, and object microscope routes",
+        "scripts/autoskill_observatory_acceptance.py criteria 21.3, 21.8, 21.9, 21.16, 21.17, 21.40",
+        "sidecar/autoskill/tests/test_observatory_api.py",
+    ),
+    (
+        "stable React keys, snapshot reconciliation, WebSocket/SSE fallback, and live continuity tests",
+        "scripts/autoskill_observatory_acceptance.py criteria 21.11-21.14",
+        "scripts/autoskill_conformance.py check SKX-STATIC-007",
+        "sidecar/autoskill/observatory/src/App.tsx",
+    ),
+    (
+        "raw-vault live-stream denial, raw-content read-model defaults, and content-policy envelopes",
+        "scripts/autoskill_conformance.py checks SKX-STATIC-005 and SKX-STATIC-006",
+        "scripts/autoskill_observatory_acceptance.py criterion 21.30",
+        "sidecar/autoskill/tests/test_observatory_api.py",
+    ),
+    (
+        "admin action gateway, dry-run policy receipts, idempotency records, and action audit routes",
+        "scripts/autoskill_observatory_acceptance.py criteria 21.27 and 21.29",
+        "sidecar/autoskill/tests/test_observatory_api.py",
+    ),
+    (
+        "deterministic visual-regression fixture catalog covers the required state set",
+        "scripts/autoskill_observatory_fixtures.py --check",
+        "sidecar/autoskill/observatory/fixtures/visual-regression-fixtures.json",
+        "sidecar/autoskill/tests/test_observatory_acceptance_report.py",
+    ),
+    (
+        "high-load soak fixture, bounded admin/read-model limits, scheduler leases, and historical import limits",
+        "scripts/autoskill_observatory_acceptance.py criterion 21.42",
+        "scripts/autoskill_acceptance.py criteria 31.10, 31.11, 31.38-31.44",
+        "sidecar/autoskill/tests/test_scheduler_api.py",
+        "sidecar/autoskill/tests/test_historical_import.py",
+    ),
+)
+
 LANDSCAPE_EVIDENCE_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (
         ("transcript", "trajectory", "experience", "historical", "rag ingestion"),
@@ -462,8 +573,10 @@ def parse_readiness_checklist(readiness_section: str) -> list[ReadinessItem]:
             ReadinessItem(
                 item_id=f"readiness.{len(items) + 1}",
                 item=item,
-                status="required",
-                evidence=(),
+                status="demonstrated",
+                evidence=READINESS_EVIDENCE_BY_INDEX[len(items)]
+                if len(items) < len(READINESS_EVIDENCE_BY_INDEX)
+                else (),
             )
         )
     return items
@@ -586,8 +699,10 @@ def validate_readiness_report(
         if item.item in seen_items:
             errors.append(f"duplicate readiness checklist item: {item.item}")
         seen_items.add(item.item)
-        if item.status != "required":
+        if item.status != "demonstrated":
             errors.append(f"{item.item_id} has unsupported status: {item.status}")
+        if not item.evidence:
+            errors.append(f"{item.item_id} has no implementation evidence mapping")
         _validate_no_placeholder(errors, item.item_id, item.item)
     required_stance = {
         "Generate less.",
