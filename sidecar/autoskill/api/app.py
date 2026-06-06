@@ -4116,6 +4116,7 @@ def create_app(
             not in {
                 "embedding_profile_configured",
                 "embedding_profile_degraded",
+                "embedding_dependent_jobs_paused",
                 "embedding_profile_degraded_reason",
             }
         }

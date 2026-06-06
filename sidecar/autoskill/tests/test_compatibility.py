@@ -139,6 +139,28 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
     get_settings.cache_clear()
 
 
+def test_ready_endpoint_ignores_non_paused_production_embedding_flag(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://autoskill:test@db/autoskill")
+    monkeypatch.setenv("AUTOSKILL_LLM_API_BASE_URL", "http://llm.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_BASE_URL", "http://embed.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
+    get_settings.cache_clear()
+    app = create_app()
+    route = next(route for route in app.routes if route.path == "/v1/health/ready")
+
+    ready = asyncio.run(route.endpoint())
+
+    assert ready.ready is True
+    assert ready.checks["embedding_profile_configured"] is True
+    assert ready.checks["embedding_profile_degraded"] is False
+    assert ready.checks["embedding_dependent_jobs_paused"] is False
+    assert ready.checks["embedding_profile_ready_or_explicitly_degraded"] is True
+
+    get_settings.cache_clear()
+
+
 def test_core_and_observatory_api_surfaces_are_split() -> None:
     core_app = create_app(api_surface="core")
     observatory_api = create_app(api_surface="observatory")
