@@ -179,6 +179,21 @@ test("capture reads OpenClaw runtime plugin config from hook context", async () 
   }
 });
 
+test("capture raw conversation policy can be enabled from environment", async () => {
+  const previous = process.env.AUTOSKILL_PLUGIN_CAPTURE_RAW_CONVERSATION;
+  process.env.AUTOSKILL_PLUGIN_CAPTURE_RAW_CONVERSATION = "true";
+  try {
+    const config = resolveConfig({ workspaceDir: await tempWorkspace() });
+    assert.equal(config.captureRawConversation, true);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.AUTOSKILL_PLUGIN_CAPTURE_RAW_CONVERSATION;
+    } else {
+      process.env.AUTOSKILL_PLUGIN_CAPTURE_RAW_CONVERSATION = previous;
+    }
+  }
+});
+
 test("capture can read ingest token from environment fallback", async () => {
   const originalFetch = globalThis.fetch;
   const previousToken = process.env.AUTOSKILL_PLUGIN_INGEST_TOKEN;

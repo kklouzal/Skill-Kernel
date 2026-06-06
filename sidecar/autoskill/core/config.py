@@ -159,6 +159,7 @@ class Settings(BaseSettings):
     require_normal_gates_for_activation: bool = True
     plugin_capture_tool_events: bool = True
     plugin_capture_messages: bool = True
+    plugin_capture_raw_conversation: bool = False
     plugin_local_spool_max_mb: int = 256
     plugin_sidecar_url: str = Field(
         default="http://127.0.0.1:8765",
@@ -253,7 +254,7 @@ def effective_skillkernel_config(settings: Settings | None = None) -> dict[str, 
             "require_normal_gates_for_activation": resolved.require_normal_gates_for_activation,
         },
         "plugin": {
-            "capture_raw_conversation": False,
+            "capture_raw_conversation": resolved.plugin_capture_raw_conversation,
             "capture_tool_events": resolved.plugin_capture_tool_events,
             "capture_messages": resolved.plugin_capture_messages,
             "local_spool_max_mb": resolved.plugin_local_spool_max_mb,

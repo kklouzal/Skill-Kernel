@@ -2,7 +2,7 @@ import asyncio
 from uuid import uuid4
 
 from autoskill.api.app import SkillProfileCompatibilityUpsertRequest, create_app
-from autoskill.core.config import get_settings
+from autoskill.core.config import effective_skillkernel_config, get_settings
 from autoskill.db.compatibility import NullCompatibilityStore
 
 
@@ -73,5 +73,17 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
     assert ready.ready is False
     assert ready.checks["database_configured"] is False
     assert ready.checks["read_model_contract_version"] == "skillkernel.readmodels.v1"
+
+    get_settings.cache_clear()
+
+
+def test_effective_config_reflects_raw_conversation_capture_policy(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
+    monkeypatch.setenv("AUTOSKILL_PLUGIN_CAPTURE_RAW_CONVERSATION", "true")
+    get_settings.cache_clear()
+
+    config = effective_skillkernel_config()
+
+    assert config["plugin"]["capture_raw_conversation"] is True
 
     get_settings.cache_clear()

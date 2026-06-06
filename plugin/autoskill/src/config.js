@@ -51,7 +51,11 @@ export function resolveConfig(ctx = {}) {
     spoolDir: cfg.spoolDir ?? path.join(workspaceDir, ".autoskill", "spool"),
     replayBatchSize: cfg.replayBatchSize ?? 25,
     maxSpoolBytes: cfg.maxSpoolBytes ?? 10 * 1024 * 1024,
-    captureRawConversation: cfg.captureRawConversation === true,
+    captureRawConversation:
+      cfg.captureRawConversation ??
+      envBool("AUTOSKILL_PLUGIN_CAPTURE_RAW_CONVERSATION") ??
+      envBool("AUTOSKILL_CAPTURE_RAW_CONVERSATION") ??
+      false,
     runtimeContextBroker: {
       enabled:
         cfg.runtimeContextBroker?.enabled ??
