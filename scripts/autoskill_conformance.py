@@ -98,6 +98,7 @@ def build_report(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
         _check_retrieval_attribution_audit_schema_contract(),
         _check_runtime_memory_control_schema_contract(),
         _check_topology_operation_schema_contract(),
+        _check_historical_ingestion_schema_contract(),
         _check_no_unstable_react_keys(),
         _check_migration_deduplicated_and_ordered(),
         _check_architecture_invariants(spec_path),
@@ -473,6 +474,40 @@ def _check_topology_operation_schema_contract() -> StaticCheck:
         (
             "migrations/0001_autoskill_schema.sql topology operation tables",
             "skill_graph_operations/planned_topology_trials sync triggers",
+        ),
+        details,
+    )
+
+
+def _check_historical_ingestion_schema_contract() -> StaticCheck:
+    migration = MIGRATION_PATH.read_text(encoding="utf-8")
+    details: list[str] = []
+    for required in (
+        "CREATE TABLE IF NOT EXISTS autoskill.historical_sources",
+        "CREATE TABLE IF NOT EXISTS autoskill.historical_source_items",
+        "CREATE TABLE IF NOT EXISTS autoskill.historical_chunks",
+        "CREATE TABLE IF NOT EXISTS autoskill.historical_import_checkpoints",
+        "CREATE TABLE IF NOT EXISTS autoskill.historical_import_findings",
+        "stable_historical_source_id",
+        "map_historical_source_type",
+        "historical_taint_jsonb_to_text_array",
+        "sync_historical_source_from_import_source",
+        "sync_historical_item_and_chunk_from_import_chunk",
+        "sync_historical_checkpoint_from_import_run",
+        "historical_import_sources_sync_historical_sources",
+        "historical_import_chunks_sync_historical_items",
+        "historical_import_runs_sync_checkpoints",
+        "historical_chunks_text_idx",
+        "historical_chunks_taint_idx",
+    ):
+        if required not in migration:
+            details.append(f"historical ingestion schema missing {required}")
+    return _result(
+        "SKX-STATIC-006I",
+        "canonical historical source, item, chunk, checkpoint, and finding tables mirror live import rows",
+        (
+            "migrations/0001_autoskill_schema.sql historical ingestion tables",
+            "historical_import_sources/chunks/runs sync triggers",
         ),
         details,
     )

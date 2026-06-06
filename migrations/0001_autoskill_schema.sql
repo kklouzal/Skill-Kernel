@@ -3737,6 +3737,892 @@ CREATE TABLE IF NOT EXISTS autoskill.historical_import_runs (
 CREATE INDEX IF NOT EXISTS idx_historical_import_runs_workspace_status
   ON autoskill.historical_import_runs(workspace_id, status, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS autoskill.historical_sources (
+  historical_source_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  agent_id text,
+  source_type text NOT NULL CHECK (
+    source_type IN (
+      'session_store',
+      'raw_transcript',
+      'sanitized_session_history',
+      'transcript_corpus_export',
+      'trajectory_sidecar',
+      'trajectory_export',
+      'compaction_summary',
+      'memory_file',
+      'workspace_context_file',
+      'background_task_record',
+      'task_flow_record',
+      'subagent_acp_session_record',
+      'lobster_workflow_artifact',
+      'plugin_session_extension',
+      'queued_turn_injection',
+      'active_memory_transcript',
+      'diagnostic_event_export',
+      'otel_export',
+      'openclaw_log_diagnostic',
+      'raw_stream_debug_log',
+      'channel_media_artifact',
+      'transcription_artifact',
+      'preprocessed_message_artifact',
+      'tool_mcp_capability_inventory',
+      'existing_skill',
+      'qmd_export',
+      'memory_capability_public_artifact',
+      'memory_wiki_export',
+      'honcho_export',
+      'allowlisted_project_doc'
+    )
+  ),
+  source_uri text NOT NULL,
+  source_owner text NOT NULL DEFAULT 'openclaw',
+  discovered_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  risk_class text NOT NULL DEFAULT 'sensitive',
+  permission_state text NOT NULL CHECK (permission_state IN ('unknown','allowed','denied','skipped')),
+  current_fingerprint text,
+  source_historical_import_source_id uuid
+    REFERENCES autoskill.historical_import_sources(historical_import_source_id),
+  first_seen_at timestamptz NOT NULL DEFAULT now(),
+  last_seen_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, source_type, source_uri)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.historical_source_items (
+  historical_source_item_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  historical_source_id uuid NOT NULL REFERENCES autoskill.historical_sources(historical_source_id),
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  agent_id text,
+  session_id text,
+  item_kind text NOT NULL,
+  item_key text NOT NULL,
+  source_timestamp timestamptz,
+  raw_hash text,
+  redacted_hash text,
+  parser_version text NOT NULL,
+  redaction_policy_version text NOT NULL,
+  import_state text NOT NULL CHECK (
+    import_state IN (
+      'discovered',
+      'permission_checked',
+      'fingerprinted',
+      'parsed',
+      'redacted',
+      'chunked',
+      'normalized',
+      'embedded',
+      'evidence_extracted',
+      'clustered',
+      'candidate_linked',
+      'imported',
+      'skipped_by_policy',
+      'missing',
+      'empty',
+      'unsupported_format',
+      'parse_failed',
+      'redaction_failed',
+      'oversize',
+      'secret_blocked',
+      'tainted_quarantine',
+      'duplicate',
+      'stale_superseded',
+      'revoked'
+    )
+  ),
+  trust text NOT NULL DEFAULT 'historical',
+  taint text[] NOT NULL DEFAULT '{historical}',
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  source_historical_import_chunk_id uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (historical_source_id, item_key, parser_version, redaction_policy_version)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.historical_chunks (
+  historical_chunk_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  historical_source_item_id uuid NOT NULL REFERENCES autoskill.historical_source_items(historical_source_item_id),
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  agent_id text,
+  session_id text,
+  chunk_kind text NOT NULL,
+  range_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  redacted_text text NOT NULL,
+  dense_retrieval_text text NOT NULL,
+  structured_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  redacted_hash text NOT NULL,
+  chunking_policy_version text NOT NULL,
+  trust text NOT NULL DEFAULT 'historical',
+  taint text[] NOT NULL DEFAULT '{historical}',
+  source_timestamp timestamptz,
+  source_historical_import_chunk_id uuid UNIQUE
+    REFERENCES autoskill.historical_import_chunks(historical_import_chunk_id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, historical_source_item_id, redacted_hash, chunking_policy_version)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.historical_import_checkpoints (
+  historical_import_checkpoint_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  historical_source_id uuid REFERENCES autoskill.historical_sources(historical_source_id),
+  checkpoint_key text NOT NULL,
+  checkpoint_value jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, checkpoint_key)
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.historical_import_findings (
+  historical_import_finding_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  historical_import_run_id uuid REFERENCES autoskill.historical_import_runs(historical_import_run_id),
+  historical_source_id uuid REFERENCES autoskill.historical_sources(historical_source_id),
+  historical_source_item_id uuid REFERENCES autoskill.historical_source_items(historical_source_item_id),
+  severity text NOT NULL CHECK (severity IN ('info','warning','error','critical')),
+  finding_type text NOT NULL,
+  message text NOT NULL,
+  details jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION autoskill.map_historical_source_type(source_kind text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT CASE source_kind
+    WHEN 'session_store' THEN 'session_store'
+    WHEN 'transcript' THEN 'raw_transcript'
+    WHEN 'transcript_corpus' THEN 'transcript_corpus_export'
+    WHEN 'trajectory' THEN 'trajectory_export'
+    WHEN 'compaction_summary' THEN 'compaction_summary'
+    WHEN 'workspace_memory' THEN 'memory_file'
+    WHEN 'workspace_context' THEN 'workspace_context_file'
+    WHEN 'task_record' THEN 'background_task_record'
+    WHEN 'taskflow_record' THEN 'task_flow_record'
+    WHEN 'plugin_hook_manifest' THEN 'plugin_session_extension'
+    WHEN 'plugin_manifest' THEN 'plugin_session_extension'
+    WHEN 'plugin_session_state' THEN 'plugin_session_extension'
+    WHEN 'plugin_source' THEN 'plugin_session_extension'
+    WHEN 'queued_injection' THEN 'queued_turn_injection'
+    WHEN 'active_memory' THEN 'active_memory_transcript'
+    WHEN 'diagnostics_export' THEN 'diagnostic_event_export'
+    WHEN 'media_artifact' THEN 'channel_media_artifact'
+    WHEN 'observability_export' THEN 'otel_export'
+    WHEN 'channel_media' THEN 'channel_media_artifact'
+    WHEN 'transcription' THEN 'transcription_artifact'
+    WHEN 'preprocessing_artifact' THEN 'preprocessed_message_artifact'
+    WHEN 'existing_skill' THEN 'existing_skill'
+    ELSE 'allowlisted_project_doc'
+  END;
+$$;
+
+CREATE OR REPLACE FUNCTION autoskill.stable_historical_source_id(
+  workspace_id uuid,
+  source_kind text,
+  source_key text
+)
+RETURNS uuid
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT autoskill.stable_uuid_from_text(
+    'historical_source:' ||
+    workspace_id::text || ':' ||
+    autoskill.map_historical_source_type(source_kind) || ':' ||
+    source_key
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION autoskill.historical_taint_jsonb_to_text_array(value jsonb)
+RETURNS text[]
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT CASE
+    WHEN jsonb_typeof(value) = 'array'
+    THEN ARRAY(
+      SELECT jsonb_array_elements_text(value)
+    )
+    WHEN jsonb_typeof(value) = 'object'
+      AND value ? 'taint'
+      AND jsonb_typeof(value->'taint') = 'array'
+    THEN ARRAY(
+      SELECT jsonb_array_elements_text(value->'taint')
+    )
+    ELSE ARRAY['historical']::text[]
+  END;
+$$;
+
+CREATE OR REPLACE FUNCTION autoskill.sync_historical_source_from_import_source()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO autoskill.historical_sources (
+    historical_source_id,
+    workspace_id,
+    agent_id,
+    source_type,
+    source_uri,
+    source_owner,
+    discovered_metadata,
+    risk_class,
+    permission_state,
+    current_fingerprint,
+    source_historical_import_source_id,
+    first_seen_at,
+    last_seen_at
+  )
+  VALUES (
+    autoskill.stable_historical_source_id(NEW.workspace_id, NEW.source_kind, NEW.source_key),
+    NEW.workspace_id,
+    NULLIF(NEW.metadata->>'agent_id', ''),
+    autoskill.map_historical_source_type(NEW.source_kind),
+    NEW.source_key,
+    COALESCE(NULLIF(NEW.metadata->>'source_owner', ''), 'openclaw'),
+    NEW.metadata || jsonb_build_object(
+      'source', 'historical_import_sources',
+      'legacy_source_kind', NEW.source_kind,
+      'trust_level', NEW.trust_level
+    ),
+    COALESCE(NULLIF(NEW.metadata->>'risk_class', ''), 'sensitive'),
+    CASE NEW.status
+      WHEN 'imported' THEN 'allowed'
+      WHEN 'revoked' THEN 'denied'
+      ELSE 'unknown'
+    END,
+    NEW.fingerprint,
+    NEW.historical_import_source_id,
+    NEW.created_at,
+    NEW.last_seen_at
+  )
+  ON CONFLICT (workspace_id, source_type, source_uri) DO UPDATE SET
+    workspace_id = EXCLUDED.workspace_id,
+    agent_id = EXCLUDED.agent_id,
+    source_type = EXCLUDED.source_type,
+    source_uri = EXCLUDED.source_uri,
+    source_owner = EXCLUDED.source_owner,
+    discovered_metadata = EXCLUDED.discovered_metadata,
+    risk_class = EXCLUDED.risk_class,
+    permission_state = EXCLUDED.permission_state,
+    current_fingerprint = EXCLUDED.current_fingerprint,
+    source_historical_import_source_id = EXCLUDED.source_historical_import_source_id,
+    last_seen_at = EXCLUDED.last_seen_at;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION autoskill.sync_historical_item_and_chunk_from_import_chunk()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  source_id uuid;
+  source_item_id uuid;
+  item_import_state text;
+  taint_values text[];
+BEGIN
+  SELECT autoskill.stable_historical_source_id(src.workspace_id, src.source_kind, src.source_key)
+  INTO source_id
+  FROM autoskill.historical_import_sources src
+  WHERE src.historical_import_source_id = NEW.historical_import_source_id;
+
+  IF source_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  source_item_id := autoskill.stable_uuid_from_text(
+    'historical_source_item:' ||
+    source_id::text || ':' ||
+    NEW.item_key || ':' ||
+    NEW.parser_version || ':' ||
+    NEW.redaction_policy_version
+  );
+  item_import_state := CASE NEW.status
+    WHEN 'revoked' THEN 'revoked'
+    ELSE 'chunked'
+  END;
+  taint_values := autoskill.historical_taint_jsonb_to_text_array(NEW.taint);
+
+  INSERT INTO autoskill.historical_source_items (
+    historical_source_item_id,
+    historical_source_id,
+    workspace_id,
+    agent_id,
+    session_id,
+    item_kind,
+    item_key,
+    raw_hash,
+    redacted_hash,
+    parser_version,
+    redaction_policy_version,
+    import_state,
+    trust,
+    taint,
+    metadata,
+    source_historical_import_chunk_id,
+    created_at,
+    updated_at
+  )
+  VALUES (
+    source_item_id,
+    source_id,
+    NEW.workspace_id,
+    NULLIF(NEW.metadata->>'agent_id', ''),
+    NULLIF(NEW.metadata->>'session_id', ''),
+    COALESCE(NULLIF(NEW.source_item_kind, ''), NULLIF(NEW.metadata #>> '{source_item,item_kind}', ''), 'record'),
+    NEW.item_key,
+    COALESCE(NULLIF(NEW.source_item_locator_hash, ''), NULLIF(NEW.metadata #>> '{source_item,raw_hash}', '')),
+    COALESCE(NULLIF(NEW.item_key_hash, ''), NEW.content_hash),
+    NEW.parser_version,
+    NEW.redaction_policy_version,
+    item_import_state,
+    'historical',
+    taint_values,
+    NEW.metadata || jsonb_build_object(
+      'source', 'historical_import_chunks',
+      'chunk_index', NEW.chunk_index,
+      'trust_level', NEW.trust_level
+    ),
+    NEW.historical_import_chunk_id,
+    NEW.created_at,
+    NEW.created_at
+  )
+  ON CONFLICT (historical_source_id, item_key, parser_version, redaction_policy_version) DO UPDATE SET
+    workspace_id = EXCLUDED.workspace_id,
+    agent_id = COALESCE(EXCLUDED.agent_id, autoskill.historical_source_items.agent_id),
+    session_id = COALESCE(EXCLUDED.session_id, autoskill.historical_source_items.session_id),
+    item_kind = EXCLUDED.item_kind,
+    raw_hash = COALESCE(EXCLUDED.raw_hash, autoskill.historical_source_items.raw_hash),
+    redacted_hash = EXCLUDED.redacted_hash,
+    import_state = EXCLUDED.import_state,
+    trust = EXCLUDED.trust,
+    taint = EXCLUDED.taint,
+    metadata = autoskill.historical_source_items.metadata || EXCLUDED.metadata,
+    source_historical_import_chunk_id = EXCLUDED.source_historical_import_chunk_id,
+    updated_at = EXCLUDED.updated_at;
+
+  INSERT INTO autoskill.historical_chunks (
+    historical_chunk_id,
+    historical_source_item_id,
+    workspace_id,
+    agent_id,
+    session_id,
+    chunk_kind,
+    range_metadata,
+    redacted_text,
+    dense_retrieval_text,
+    structured_metadata,
+    redacted_hash,
+    chunking_policy_version,
+    trust,
+    taint,
+    source_historical_import_chunk_id,
+    created_at
+  )
+  VALUES (
+    NEW.historical_import_chunk_id,
+    source_item_id,
+    NEW.workspace_id,
+    NULLIF(NEW.metadata->>'agent_id', ''),
+    NULLIF(NEW.metadata->>'session_id', ''),
+    NEW.chunk_kind,
+    jsonb_strip_nulls(jsonb_build_object(
+      'chunk_index', NEW.chunk_index,
+      'line_range_hash', NEW.line_range_hash,
+      'record_index', NEW.record_index,
+      'source_item_locator_hash', NEW.source_item_locator_hash
+    )),
+    NEW.redacted_text,
+    NEW.redacted_text,
+    NEW.metadata || jsonb_build_object(
+      'token_estimate', NEW.token_estimate,
+      'item_key_hash', NEW.item_key_hash,
+      'status', NEW.status
+    ),
+    NEW.content_hash,
+    COALESCE(NULLIF(NEW.metadata->>'chunking_policy_version', ''), 'historical-import-chunker.v1'),
+    'historical',
+    taint_values,
+    NEW.historical_import_chunk_id,
+    NEW.created_at
+  )
+  ON CONFLICT (source_historical_import_chunk_id) DO UPDATE SET
+    historical_source_item_id = EXCLUDED.historical_source_item_id,
+    workspace_id = EXCLUDED.workspace_id,
+    agent_id = EXCLUDED.agent_id,
+    session_id = EXCLUDED.session_id,
+    chunk_kind = EXCLUDED.chunk_kind,
+    range_metadata = EXCLUDED.range_metadata,
+    redacted_text = EXCLUDED.redacted_text,
+    dense_retrieval_text = EXCLUDED.dense_retrieval_text,
+    structured_metadata = EXCLUDED.structured_metadata,
+    redacted_hash = EXCLUDED.redacted_hash,
+    chunking_policy_version = EXCLUDED.chunking_policy_version,
+    trust = EXCLUDED.trust,
+    taint = EXCLUDED.taint,
+    created_at = EXCLUDED.created_at;
+
+  DELETE FROM autoskill.historical_import_findings
+  WHERE historical_import_finding_id = autoskill.stable_uuid_from_text(
+    'historical_import_finding:chunk:' || NEW.historical_import_chunk_id::text
+  );
+
+  IF NEW.status = 'revoked' OR NEW.metadata ? 'parser_error' OR NEW.metadata ? 'redaction_error' THEN
+    INSERT INTO autoskill.historical_import_findings (
+      historical_import_finding_id,
+      historical_source_id,
+      historical_source_item_id,
+      severity,
+      finding_type,
+      message,
+      details,
+      created_at
+    )
+    VALUES (
+      autoskill.stable_uuid_from_text('historical_import_finding:chunk:' || NEW.historical_import_chunk_id::text),
+      source_id,
+      source_item_id,
+      CASE WHEN NEW.status = 'revoked' THEN 'warning' ELSE 'error' END,
+      CASE
+        WHEN NEW.metadata ? 'parser_error' THEN 'parse_failed'
+        WHEN NEW.metadata ? 'redaction_error' THEN 'redaction_failed'
+        ELSE 'revoked'
+      END,
+      COALESCE(
+        NULLIF(NEW.metadata->>'parser_error', ''),
+        NULLIF(NEW.metadata->>'redaction_error', ''),
+        'historical import chunk revoked'
+      ),
+      jsonb_build_object(
+        'source', 'historical_import_chunks',
+        'historical_import_chunk_id', NEW.historical_import_chunk_id,
+        'metadata', NEW.metadata
+      ),
+      NEW.created_at
+    );
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION autoskill.sync_historical_checkpoint_from_import_run()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO autoskill.historical_import_checkpoints (
+    historical_import_checkpoint_id,
+    workspace_id,
+    checkpoint_key,
+    checkpoint_value,
+    updated_at
+  )
+  VALUES (
+    autoskill.stable_uuid_from_text('historical_import_checkpoint:run:' || NEW.historical_import_run_id::text),
+    NEW.workspace_id,
+    'historical_import_run:' || NEW.idempotency_key,
+    jsonb_build_object(
+      'source', 'historical_import_runs',
+      'historical_import_run_id', NEW.historical_import_run_id,
+      'run_kind', NEW.run_kind,
+      'status', NEW.status,
+      'checkpoint', NEW.checkpoint,
+      'stats', NEW.stats,
+      'started_at', NEW.started_at,
+      'completed_at', NEW.completed_at
+    ),
+    NEW.updated_at
+  )
+  ON CONFLICT (workspace_id, checkpoint_key) DO UPDATE SET
+    checkpoint_value = EXCLUDED.checkpoint_value,
+    updated_at = EXCLUDED.updated_at;
+
+  DELETE FROM autoskill.historical_import_findings
+  WHERE historical_import_finding_id = autoskill.stable_uuid_from_text(
+    'historical_import_finding:run:' || NEW.historical_import_run_id::text
+  );
+
+  IF NEW.status = 'failed' THEN
+    INSERT INTO autoskill.historical_import_findings (
+      historical_import_finding_id,
+      historical_import_run_id,
+      severity,
+      finding_type,
+      message,
+      details,
+      created_at
+    )
+    VALUES (
+      autoskill.stable_uuid_from_text('historical_import_finding:run:' || NEW.historical_import_run_id::text),
+      NEW.historical_import_run_id,
+      'error',
+      'run_failed',
+      COALESCE(NULLIF(NEW.stats->>'error', ''), 'historical import run failed'),
+      jsonb_build_object(
+        'source', 'historical_import_runs',
+        'run_kind', NEW.run_kind,
+        'checkpoint', NEW.checkpoint,
+        'stats', NEW.stats
+      ),
+      NEW.updated_at
+    );
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS historical_import_sources_sync_historical_sources
+  ON autoskill.historical_import_sources;
+CREATE TRIGGER historical_import_sources_sync_historical_sources
+AFTER INSERT OR UPDATE ON autoskill.historical_import_sources
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_historical_source_from_import_source();
+
+DROP TRIGGER IF EXISTS historical_import_chunks_sync_historical_items
+  ON autoskill.historical_import_chunks;
+CREATE TRIGGER historical_import_chunks_sync_historical_items
+AFTER INSERT OR UPDATE ON autoskill.historical_import_chunks
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_historical_item_and_chunk_from_import_chunk();
+
+DROP TRIGGER IF EXISTS historical_import_runs_sync_checkpoints
+  ON autoskill.historical_import_runs;
+CREATE TRIGGER historical_import_runs_sync_checkpoints
+AFTER INSERT OR UPDATE ON autoskill.historical_import_runs
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_historical_checkpoint_from_import_run();
+
+INSERT INTO autoskill.historical_sources (
+  historical_source_id,
+  workspace_id,
+  agent_id,
+  source_type,
+  source_uri,
+  source_owner,
+  discovered_metadata,
+  risk_class,
+  permission_state,
+  current_fingerprint,
+  source_historical_import_source_id,
+  first_seen_at,
+  last_seen_at
+)
+SELECT
+  autoskill.stable_historical_source_id(workspace_id, source_kind, source_key),
+  workspace_id,
+  NULLIF(metadata->>'agent_id', ''),
+  autoskill.map_historical_source_type(source_kind),
+  source_key,
+  COALESCE(NULLIF(metadata->>'source_owner', ''), 'openclaw'),
+  metadata || jsonb_build_object(
+    'source', 'historical_import_sources',
+    'legacy_source_kind', source_kind,
+    'trust_level', trust_level
+  ),
+  COALESCE(NULLIF(metadata->>'risk_class', ''), 'sensitive'),
+  CASE status WHEN 'imported' THEN 'allowed' WHEN 'revoked' THEN 'denied' ELSE 'unknown' END,
+  fingerprint,
+  historical_import_source_id,
+  created_at,
+  last_seen_at
+FROM autoskill.historical_import_sources
+ON CONFLICT (workspace_id, source_type, source_uri) DO UPDATE SET
+  workspace_id = EXCLUDED.workspace_id,
+  agent_id = EXCLUDED.agent_id,
+  source_type = EXCLUDED.source_type,
+  source_uri = EXCLUDED.source_uri,
+  source_owner = EXCLUDED.source_owner,
+  discovered_metadata = EXCLUDED.discovered_metadata,
+  risk_class = EXCLUDED.risk_class,
+  permission_state = EXCLUDED.permission_state,
+  current_fingerprint = EXCLUDED.current_fingerprint,
+  source_historical_import_source_id = EXCLUDED.source_historical_import_source_id,
+  last_seen_at = EXCLUDED.last_seen_at;
+
+INSERT INTO autoskill.historical_source_items (
+  historical_source_item_id,
+  historical_source_id,
+  workspace_id,
+  agent_id,
+  session_id,
+  item_kind,
+  item_key,
+  raw_hash,
+  redacted_hash,
+  parser_version,
+  redaction_policy_version,
+  import_state,
+  trust,
+  taint,
+  metadata,
+  source_historical_import_chunk_id,
+  created_at,
+  updated_at
+)
+SELECT DISTINCT ON (
+  historical_import_source_id,
+  item_key,
+  parser_version,
+  redaction_policy_version
+)
+  autoskill.stable_uuid_from_text(
+    'historical_source_item:' ||
+    canonical_historical_source_id::text || ':' ||
+    item_key || ':' ||
+    parser_version || ':' ||
+    redaction_policy_version
+  ),
+  canonical_historical_source_id,
+  workspace_id,
+  NULLIF(metadata->>'agent_id', ''),
+  NULLIF(metadata->>'session_id', ''),
+  COALESCE(NULLIF(source_item_kind, ''), NULLIF(metadata #>> '{source_item,item_kind}', ''), 'record'),
+  item_key,
+  COALESCE(NULLIF(source_item_locator_hash, ''), NULLIF(metadata #>> '{source_item,raw_hash}', '')),
+  COALESCE(NULLIF(item_key_hash, ''), content_hash),
+  parser_version,
+  redaction_policy_version,
+  CASE status WHEN 'revoked' THEN 'revoked' ELSE 'chunked' END,
+  'historical',
+  autoskill.historical_taint_jsonb_to_text_array(taint),
+  metadata || jsonb_build_object(
+    'source', 'historical_import_chunks',
+    'chunk_index', chunk_index,
+    'trust_level', trust_level
+  ),
+  historical_import_chunk_id,
+  created_at,
+  created_at
+FROM (
+  SELECT
+    hic.*,
+    autoskill.stable_historical_source_id(src.workspace_id, src.source_kind, src.source_key)
+      AS canonical_historical_source_id
+  FROM autoskill.historical_import_chunks hic
+  JOIN autoskill.historical_import_sources src
+    ON src.historical_import_source_id = hic.historical_import_source_id
+) historical_import_chunks
+ORDER BY historical_import_source_id, item_key, parser_version, redaction_policy_version, created_at
+ON CONFLICT (historical_source_id, item_key, parser_version, redaction_policy_version) DO UPDATE SET
+  workspace_id = EXCLUDED.workspace_id,
+  agent_id = COALESCE(EXCLUDED.agent_id, autoskill.historical_source_items.agent_id),
+  session_id = COALESCE(EXCLUDED.session_id, autoskill.historical_source_items.session_id),
+  item_kind = EXCLUDED.item_kind,
+  raw_hash = COALESCE(EXCLUDED.raw_hash, autoskill.historical_source_items.raw_hash),
+  redacted_hash = EXCLUDED.redacted_hash,
+  import_state = EXCLUDED.import_state,
+  trust = EXCLUDED.trust,
+  taint = EXCLUDED.taint,
+  metadata = autoskill.historical_source_items.metadata || EXCLUDED.metadata,
+  source_historical_import_chunk_id = EXCLUDED.source_historical_import_chunk_id,
+  updated_at = EXCLUDED.updated_at;
+
+INSERT INTO autoskill.historical_chunks (
+  historical_chunk_id,
+  historical_source_item_id,
+  workspace_id,
+  agent_id,
+  session_id,
+  chunk_kind,
+  range_metadata,
+  redacted_text,
+  dense_retrieval_text,
+  structured_metadata,
+  redacted_hash,
+  chunking_policy_version,
+  trust,
+  taint,
+  source_historical_import_chunk_id,
+  created_at
+)
+SELECT
+  historical_import_chunk_id,
+  autoskill.stable_uuid_from_text(
+    'historical_source_item:' ||
+    canonical_historical_source_id::text || ':' ||
+    item_key || ':' ||
+    parser_version || ':' ||
+    redaction_policy_version
+  ),
+  workspace_id,
+  NULLIF(metadata->>'agent_id', ''),
+  NULLIF(metadata->>'session_id', ''),
+  chunk_kind,
+  jsonb_strip_nulls(jsonb_build_object(
+    'chunk_index', chunk_index,
+    'line_range_hash', line_range_hash,
+    'record_index', record_index,
+    'source_item_locator_hash', source_item_locator_hash
+  )),
+  redacted_text,
+  redacted_text,
+  metadata || jsonb_build_object(
+    'token_estimate', token_estimate,
+    'item_key_hash', item_key_hash,
+    'status', status
+  ),
+  content_hash,
+  COALESCE(NULLIF(metadata->>'chunking_policy_version', ''), 'historical-import-chunker.v1'),
+  'historical',
+  autoskill.historical_taint_jsonb_to_text_array(taint),
+  historical_import_chunk_id,
+  created_at
+FROM (
+  SELECT
+    hic.*,
+    autoskill.stable_historical_source_id(src.workspace_id, src.source_kind, src.source_key)
+      AS canonical_historical_source_id
+  FROM autoskill.historical_import_chunks hic
+  JOIN autoskill.historical_import_sources src
+    ON src.historical_import_source_id = hic.historical_import_source_id
+) historical_import_chunks
+ON CONFLICT (source_historical_import_chunk_id) DO UPDATE SET
+  historical_source_item_id = EXCLUDED.historical_source_item_id,
+  workspace_id = EXCLUDED.workspace_id,
+  agent_id = EXCLUDED.agent_id,
+  session_id = EXCLUDED.session_id,
+  chunk_kind = EXCLUDED.chunk_kind,
+  range_metadata = EXCLUDED.range_metadata,
+  redacted_text = EXCLUDED.redacted_text,
+  dense_retrieval_text = EXCLUDED.dense_retrieval_text,
+  structured_metadata = EXCLUDED.structured_metadata,
+  redacted_hash = EXCLUDED.redacted_hash,
+  chunking_policy_version = EXCLUDED.chunking_policy_version,
+  trust = EXCLUDED.trust,
+  taint = EXCLUDED.taint,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO autoskill.historical_import_checkpoints (
+  historical_import_checkpoint_id,
+  workspace_id,
+  checkpoint_key,
+  checkpoint_value,
+  updated_at
+)
+SELECT
+  autoskill.stable_uuid_from_text('historical_import_checkpoint:run:' || historical_import_run_id::text),
+  workspace_id,
+  'historical_import_run:' || idempotency_key,
+  jsonb_build_object(
+    'source', 'historical_import_runs',
+    'historical_import_run_id', historical_import_run_id,
+    'run_kind', run_kind,
+    'status', status,
+    'checkpoint', checkpoint,
+    'stats', stats,
+    'started_at', started_at,
+    'completed_at', completed_at
+  ),
+  updated_at
+FROM autoskill.historical_import_runs
+ON CONFLICT (workspace_id, checkpoint_key) DO UPDATE SET
+  checkpoint_value = EXCLUDED.checkpoint_value,
+  updated_at = EXCLUDED.updated_at;
+
+INSERT INTO autoskill.historical_import_findings (
+  historical_import_finding_id,
+  historical_import_run_id,
+  severity,
+  finding_type,
+  message,
+  details,
+  created_at
+)
+SELECT
+  autoskill.stable_uuid_from_text('historical_import_finding:run:' || historical_import_run_id::text),
+  historical_import_run_id,
+  'error',
+  'run_failed',
+  COALESCE(NULLIF(stats->>'error', ''), 'historical import run failed'),
+  jsonb_build_object(
+    'source', 'historical_import_runs',
+    'run_kind', run_kind,
+    'checkpoint', checkpoint,
+    'stats', stats
+  ),
+  updated_at
+FROM autoskill.historical_import_runs
+WHERE status = 'failed'
+ON CONFLICT (historical_import_finding_id) DO UPDATE SET
+  historical_import_run_id = EXCLUDED.historical_import_run_id,
+  severity = EXCLUDED.severity,
+  finding_type = EXCLUDED.finding_type,
+  message = EXCLUDED.message,
+  details = EXCLUDED.details,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO autoskill.historical_import_findings (
+  historical_import_finding_id,
+  historical_source_id,
+  historical_source_item_id,
+  severity,
+  finding_type,
+  message,
+  details,
+  created_at
+)
+SELECT
+  autoskill.stable_uuid_from_text('historical_import_finding:chunk:' || historical_import_chunk_id::text),
+  canonical_historical_source_id,
+  autoskill.stable_uuid_from_text(
+    'historical_source_item:' ||
+    canonical_historical_source_id::text || ':' ||
+    item_key || ':' ||
+    parser_version || ':' ||
+    redaction_policy_version
+  ),
+  CASE WHEN status = 'revoked' THEN 'warning' ELSE 'error' END,
+  CASE
+    WHEN metadata ? 'parser_error' THEN 'parse_failed'
+    WHEN metadata ? 'redaction_error' THEN 'redaction_failed'
+    ELSE 'revoked'
+  END,
+  COALESCE(
+    NULLIF(metadata->>'parser_error', ''),
+    NULLIF(metadata->>'redaction_error', ''),
+    'historical import chunk revoked'
+  ),
+  jsonb_build_object(
+    'source', 'historical_import_chunks',
+    'historical_import_chunk_id', historical_import_chunk_id,
+    'metadata', metadata
+  ),
+  created_at
+FROM (
+  SELECT
+    hic.*,
+    autoskill.stable_historical_source_id(src.workspace_id, src.source_kind, src.source_key)
+      AS canonical_historical_source_id
+  FROM autoskill.historical_import_chunks hic
+  JOIN autoskill.historical_import_sources src
+    ON src.historical_import_source_id = hic.historical_import_source_id
+) historical_import_chunks
+WHERE status = 'revoked'
+   OR metadata ? 'parser_error'
+   OR metadata ? 'redaction_error'
+ON CONFLICT (historical_import_finding_id) DO UPDATE SET
+  historical_source_id = EXCLUDED.historical_source_id,
+  historical_source_item_id = EXCLUDED.historical_source_item_id,
+  severity = EXCLUDED.severity,
+  finding_type = EXCLUDED.finding_type,
+  message = EXCLUDED.message,
+  details = EXCLUDED.details,
+  created_at = EXCLUDED.created_at;
+
+CREATE INDEX IF NOT EXISTS historical_sources_workspace_type_idx
+  ON autoskill.historical_sources(workspace_id, source_type, last_seen_at DESC);
+
+CREATE INDEX IF NOT EXISTS historical_items_state_idx
+  ON autoskill.historical_source_items(workspace_id, import_state, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS historical_items_session_idx
+  ON autoskill.historical_source_items(workspace_id, agent_id, session_id, source_timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS historical_chunks_text_idx
+  ON autoskill.historical_chunks USING gin (to_tsvector('english', dense_retrieval_text));
+
+CREATE INDEX IF NOT EXISTS historical_chunks_taint_idx
+  ON autoskill.historical_chunks USING gin (taint);
+
 CREATE TABLE IF NOT EXISTS autoskill.memory_quarantine (
   quarantine_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
