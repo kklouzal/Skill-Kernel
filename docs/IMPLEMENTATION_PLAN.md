@@ -10,9 +10,9 @@ metadata, taint/source metadata, and deterministic blockers when support or
 topology prerequisites are insufficient. The readout explicitly marks
 historical evidence as non-activating and forbids runtime file writes, advancing
 Core historical ingestion, topology operations, evidence maturity, and safety
-ordering without adding autonomous apply authority. Focused validation passed
-with historical bootstrap coverage (`7 passed`), targeted ruff, and diff-check
-gates.
+ordering without adding autonomous apply authority. Validation passed with
+focused historical bootstrap coverage (`7 passed`) plus full sidecar
+ruff/pytest (`395 passed`)/compileall and diff-check gates.
 
 2026-06-06 update: Observatory component metrics now have a generic object
 microscope alias. `/admin/api/v1/objects/component_metrics/{component}` and
@@ -22,7 +22,8 @@ bounded records, component diagnostics, provenance, and raw-content denial
 without direct SQL/log inspection or UI-local authority. This advances the
 Observatory aggregate-to-evidence drill-down contract for station cockpits and
 object microscopes. Validation passed with focused generic-object coverage
-(`1 passed, 56 deselected`), targeted ruff, and diff-check gates.
+(`1 passed`) plus full sidecar ruff/pytest (`395 passed`)/compileall and
+diff-check gates.
 
 2026-06-06 update: Observatory opportunity mining now has a sidecar-hosted,
 content-safe admin read model. `/admin/api/v1/opportunities` derives bounded
