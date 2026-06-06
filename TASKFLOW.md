@@ -41,7 +41,9 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   implemented criteria and zero validation errors, `uv run python
   scripts/autoskill_observatory_acceptance.py --json` returned `ready=true`
   with 86 satisfied items and zero validation errors, and `uv run python
-  scripts/generate_observatory_openapi_client.py --check` passed.
+  scripts/generate_observatory_openapi_client.py --check` passed. Full
+  sidecar regression suite passed with `uv run pytest
+  sidecar/autoskill/tests -q` (`397 passed`).
 - 2026-06-06: Core historical bootstrap consolidation now surfaces
   historical-only topology recommendations as propose-only, non-activating
   control-plane evidence. Historical evidence payloads can contribute guarded
