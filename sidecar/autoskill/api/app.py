@@ -6391,6 +6391,103 @@ def create_app(
             "audit": {"links": [], "chain_visible": True},
         }
 
+    def _safe_canary_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+        safe_values: dict[str, Any] = {}
+        for key, value in metrics.items():
+            key_text = str(key)
+            if (
+                isinstance(value, bool)
+                or (
+                    isinstance(value, int | float)
+                    and not isinstance(value, bool)
+                )
+            ):
+                safe_values[key_text] = value
+            elif value is None:
+                safe_values[key_text] = None
+        return {
+            "metric_keys": sorted(str(key) for key in metrics),
+            "numeric_or_boolean_values": safe_values,
+            "metrics_sha256": (
+                "sha256:"
+                + sha256_text(json.dumps(metrics, sort_keys=True, default=str))
+            ),
+            "raw_metrics_returned": False,
+        }
+
+    def _canary_result_admin_record(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        canary_result_id = str(payload["canary_result_id"])
+        metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+        upstream = [{"object_type": "skill", "object_id": str(payload["skill_id"])}]
+        if payload.get("skill_version_id"):
+            upstream.append(
+                {
+                    "object_type": "skill_version",
+                    "object_id": str(payload["skill_version_id"]),
+                }
+            )
+        if payload.get("evolution_transaction_id"):
+            upstream.append(
+                {
+                    "object_type": "evolution_transaction",
+                    "object_id": str(payload["evolution_transaction_id"]),
+                }
+            )
+        reason = payload.get("reason")
+        return {
+            "schema_version": "skillkernel.observatory.canary-result.v1",
+            "object_type": "canary_result",
+            "object_id": canary_result_id,
+            "canary_result_id": canary_result_id,
+            "workspace_id": payload.get("workspace_id"),
+            "workspace_key": payload.get("workspace_key"),
+            "title": f"Canary result {canary_result_id}",
+            "summary": (
+                f"{payload['status']} canary for skill {payload['skill_id']}; "
+                f"critical={payload['critical']}"
+            ),
+            "status": payload["status"],
+            "critical": payload["critical"],
+            "skill_id": payload["skill_id"],
+            "skill_version_id": payload.get("skill_version_id"),
+            "evolution_transaction_id": payload.get("evolution_transaction_id"),
+            "reason_present": reason is not None,
+            "reason_sha256": ("sha256:" + sha256_text(str(reason))) if reason else None,
+            "metrics": _safe_canary_metrics(metrics),
+            "observed_at": payload["observed_at"],
+            "details_url": f"/admin/canary/results/{canary_result_id}",
+            "timeline": [
+                {
+                    "at": payload["observed_at"],
+                    "event": "canary_observed",
+                    "status": payload["status"],
+                    "critical": payload["critical"],
+                }
+            ],
+            "provenance": {"upstream": upstream, "downstream": []},
+            "effects": {
+                "skill_lifecycle_checked": True,
+                "freezes_skill": bool(payload["critical"]),
+                "can_queue_rollback_revocation": bool(payload["critical"]),
+                "raw_metrics_returned": False,
+                "raw_reason_returned": False,
+            },
+            "diagnostics": {
+                "supporting_component": "canary_rollback_freeze",
+                "metric_keys": sorted(str(key) for key in metrics),
+                "reason_present": reason is not None,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "metadata_and_hashes",
+                "raw_metrics_returned": False,
+                "raw_reason_returned": False,
+            },
+            "audit": {"links": [], "chain_visible": True},
+        }
+
     def _comparison_microscope(record: Any) -> dict[str, Any]:
         payload = record.to_json()
         return {
@@ -9457,6 +9554,16 @@ def create_app(
                 return ObservatoryObjectResponse(
                     object=_control_flow_event_admin_record(event)
                 )
+        if object_type in {"canary_result", "canary-result", "canary"}:
+            canary_result_id = _uuid_or_404(object_id, "canary result")
+            canary = await lifecycle.get_canary_result(
+                workspace_key=workspace_id,
+                canary_result_id=canary_result_id,
+            )
+            if canary is not None:
+                return ObservatoryObjectResponse(
+                    object=_canary_result_admin_record(canary)
+                )
         if object_type in {
             "evolution_transaction",
             "evolution-transaction",
@@ -9687,6 +9794,68 @@ def create_app(
                 detail="control-flow event not found",
             )
         return ObservatoryObjectResponse(object=_control_flow_event_admin_record(event))
+
+    @app.get(
+        "/admin/api/v1/canary/results",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_canary_results(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        skill_id: UUID | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        records = await lifecycle.list_canary_results(
+            workspace_key=workspace_id,
+            skill_id=skill_id,
+            status=status,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="canary_result",
+            title="Canary results",
+            items=[_canary_result_admin_record(record) for record in records],
+            limit=limit,
+            cursor=cursor,
+            source="lifecycle_store.list_canary_results",
+            diagnostics={
+                "supporting_component": "canary_rollback_freeze",
+                "filter": {
+                    "workspace_id": workspace_id,
+                    "skill_id": str(skill_id) if skill_id else None,
+                    "status": status,
+                },
+                "raw_metrics_returned": False,
+                "raw_reason_returned": False,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/canary/results/{canary_result_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_canary_result_detail(
+        canary_result_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_canary_result_id = _uuid_or_404(canary_result_id, "canary result")
+        canary = await lifecycle.get_canary_result(
+            workspace_key=workspace_id,
+            canary_result_id=parsed_canary_result_id,
+        )
+        if canary is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="canary result not found",
+            )
+        return ObservatoryObjectResponse(object=_canary_result_admin_record(canary))
 
     @app.get("/admin/api/v1/traces", response_model=ObservatoryCollectionResponse)
     async def observatory_traces(

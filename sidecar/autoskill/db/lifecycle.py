@@ -154,6 +154,24 @@ class LifecycleStore(Protocol):
     ) -> CanaryRecordResult:
         """Record a canary observation and freeze on critical failure."""
 
+    async def get_canary_result(
+        self,
+        *,
+        workspace_key: str | None = None,
+        canary_result_id: UUID,
+    ) -> CanaryResultRecord | None:
+        """Fetch one canary result for content-safe operator drill-down."""
+
+    async def list_canary_results(
+        self,
+        *,
+        workspace_key: str | None = None,
+        skill_id: UUID | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[CanaryResultRecord]:
+        """List recent canary results for Observatory lifecycle diagnostics."""
+
 
 class NullLifecycleStore:
     async def freeze_skill(
@@ -225,6 +243,24 @@ class NullLifecycleStore:
                 freeze_reason=reason,
             )
         return CanaryRecordResult(canary=canary, skill=skill)
+
+    async def get_canary_result(
+        self,
+        *,
+        workspace_key: str | None = None,
+        canary_result_id: UUID,
+    ) -> CanaryResultRecord | None:
+        return None
+
+    async def list_canary_results(
+        self,
+        *,
+        workspace_key: str | None = None,
+        skill_id: UUID | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[CanaryResultRecord]:
+        return []
 
 
 class AsyncpgLifecycleStore(AsyncpgPoolOwner):
@@ -398,6 +434,56 @@ class AsyncpgLifecycleStore(AsyncpgPoolOwner):
                     },
                 )
         return CanaryRecordResult(canary=canary, skill=skill, revocation=revocation)
+
+    async def get_canary_result(
+        self,
+        *,
+        workspace_key: str | None = None,
+        canary_result_id: UUID,
+    ) -> CanaryResultRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT cr.*, w.external_key AS workspace_key
+                FROM autoskill.canary_results cr
+                LEFT JOIN autoskill.workspaces w ON w.workspace_id = cr.workspace_id
+                WHERE cr.canary_result_id = $1
+                  AND ($2::text IS NULL OR w.external_key = $2)
+                """,
+                canary_result_id,
+                workspace_key,
+            )
+        return CanaryResultRecord.from_row(row) if row else None
+
+    async def list_canary_results(
+        self,
+        *,
+        workspace_key: str | None = None,
+        skill_id: UUID | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[CanaryResultRecord]:
+        bounded_limit = max(1, min(limit, 500))
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT cr.*, w.external_key AS workspace_key
+                FROM autoskill.canary_results cr
+                LEFT JOIN autoskill.workspaces w ON w.workspace_id = cr.workspace_id
+                WHERE ($1::text IS NULL OR w.external_key = $1)
+                  AND ($2::uuid IS NULL OR cr.skill_id = $2)
+                  AND ($3::text IS NULL OR cr.status = $3)
+                ORDER BY cr.observed_at DESC, cr.canary_result_id DESC
+                LIMIT $4
+                """,
+                workspace_key,
+                skill_id,
+                status,
+                bounded_limit,
+            )
+        return [CanaryResultRecord.from_row(row) for row in rows]
 
 
 async def _set_skill_lifecycle(

@@ -2,6 +2,27 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-06 update: Observatory canary results now have content-safe lifecycle
+read models and drill-down routes. `AsyncpgLifecycleStore` can list and detail
+read canary results with workspace filtering, and
+`/admin/api/v1/canary/results`,
+`/admin/api/v1/canary/results/{canary_result_id}`, plus generic
+`canary_result`/`canary` object-microscope aliases expose status, criticality,
+skill, skill-version, evolution-transaction refs, metric keys with
+numeric/boolean values, and reason/metrics hashes while suppressing raw reason
+text and arbitrary metric strings. This advances core Sections 1, 1.2, 23, 25,
+and 28.2 plus Observatory Sections 1.5, 7.6, 8.5.4, 8.16, 12.6, 13.1, 16.1,
+21.16, 21.22, 21.23, and 21.40 by closing the canary/freeze
+aggregate-to-evidence path without adding UI-local mutation authority.
+Validation passed with focused canary/route coverage, refreshed/generated
+OpenAPI client checks, full sidecar ruff/pytest/compileall gates, Observatory
+frontend build, compose config, diff-check, core and Observatory acceptance
+reports (`70` implemented, `86` satisfied, `0` validation errors), and an
+isolated compose/Postgres smoke that migrated a fresh database, seeded a
+FK-backed skill row, recorded/listed/detail-read a canary result through
+`AsyncpgLifecycleStore`, verified workspace isolation, and removed the
+temporary compose project/volume.
+
 2026-06-05 update: Observatory skill, skill-version, and candidate records now
 have generic object-microscope drill-downs backed by the existing skill and
 candidate read stores. Shared content-safe payload builders align the dedicated

@@ -16,6 +16,30 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory canary results now have a content-safe lifecycle
+  drill-down instead of remaining visible only as aggregate counters or skill
+  lifecycle side effects. The lifecycle store exposes bounded asyncpg
+  `list_canary_results` and `get_canary_result` reads with workspace filtering;
+  `/admin/api/v1/canary/results`,
+  `/admin/api/v1/canary/results/{canary_result_id}`, and generic
+  `canary_result`/`canary` object aliases return status, criticality, skill,
+  skill-version, evolution-transaction refs, metric keys plus numeric/boolean
+  values, and reason/metrics hashes while withholding arbitrary metric strings
+  and raw reason text. This advances core handoff Sections 1, 1.2, 23, 25,
+  and 28.2 plus Observatory Sections 1.5, 7.6, 8.5.4, 8.16, 12.6, 13.1,
+  16.1, 21.16, 21.22, 21.23, and 21.40 by closing the canary/freeze
+  aggregate-to-evidence path without adding UI-local mutation authority.
+  Validation passed with focused canary/route coverage (`2 passed`), generated
+  Observatory OpenAPI client refresh and `--check`, `uv run ruff check sidecar`,
+  `uv run pytest` (`386 passed`), `uv run python -m compileall -q sidecar`,
+  `npm run build --prefix sidecar/autoskill/observatory`, `docker compose
+  config --quiet`, `git diff --check`, and core and Observatory acceptance
+  reports (`70` implemented, `86` satisfied, `0` validation errors). A real
+  isolated compose/Postgres smoke on port `59631` migrated a fresh database,
+  seeded the FK-backed skill row, recorded one canary result through
+  `AsyncpgLifecycleStore`, listed and detail-read it with workspace filtering,
+  verified cross-workspace isolation, and removed the temporary compose
+  project/volume.
 - 2026-06-05: Observatory skill, skill-version, and candidate drill-downs now
   resolve through the generic object microscope instead of depending only on
   dedicated list/detail routes or falling through to the snapshot placeholder.

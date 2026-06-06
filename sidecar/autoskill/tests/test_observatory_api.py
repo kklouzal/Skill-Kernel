@@ -35,6 +35,7 @@ from autoskill.db.governance import (
     RevocationRequestRecord,
 )
 from autoskill.db.jobs import JobQueueSummary, JobRecord, NullJobStore
+from autoskill.db.lifecycle import CanaryResultRecord, NullLifecycleStore
 from autoskill.db.llm_invocations import NullLLMInvocationStore
 from autoskill.db.memory import NullMemoryGovernanceStore
 from autoskill.db.observability import (
@@ -131,6 +132,41 @@ class MemoryObservatorySkillStore:
             for record in self.records
             if (workspace_key is None or record.workspace_key == workspace_key)
             and (lifecycle_state is None or record.lifecycle_state == lifecycle_state)
+        ]
+        return records[:limit]
+
+
+class MemoryObservatoryLifecycleStore(NullLifecycleStore):
+    def __init__(self, canaries: list[CanaryResultRecord]) -> None:
+        self.canaries = canaries
+
+    async def get_canary_result(
+        self,
+        *,
+        workspace_key: str | None = None,
+        canary_result_id,
+    ) -> CanaryResultRecord | None:
+        for canary in self.canaries:
+            if canary.canary_result_id == canary_result_id and (
+                workspace_key is None or canary.workspace_key == workspace_key
+            ):
+                return canary
+        return None
+
+    async def list_canary_results(
+        self,
+        *,
+        workspace_key: str | None = None,
+        skill_id=None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[CanaryResultRecord]:
+        records = [
+            canary
+            for canary in self.canaries
+            if (workspace_key is None or canary.workspace_key == workspace_key)
+            and (skill_id is None or canary.skill_id == skill_id)
+            and (status is None or canary.status == status)
         ]
         return records[:limit]
 
@@ -1277,6 +1313,81 @@ def test_observatory_context_compiler_read_models_are_store_backed_and_content_s
     assert "do not render" not in combined
 
 
+def test_observatory_canary_result_microscope_is_content_safe() -> None:
+    canary = CanaryResultRecord(
+        canary_result_id=uuid4(),
+        workspace_id=None,
+        workspace_key="dev-01",
+        skill_id=uuid4(),
+        skill_version_id=uuid4(),
+        evolution_transaction_id=uuid4(),
+        status="critical",
+        critical=True,
+        reason="raw rollback reason mentions private context",
+        metrics={
+            "failure_count": 3,
+            "latency_ms": 42.5,
+            "critical": True,
+            "note": "do not expose metric text",
+        },
+        observed_at=datetime.now(UTC),
+    )
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        lifecycle_store=MemoryObservatoryLifecycleStore([canary]),
+    )
+    routes = _routes(app)
+
+    async def read():
+        canaries = await routes[("/admin/api/v1/canary/results", "GET")].endpoint(
+            workspace_id="dev-01",
+        )
+        detail = await routes[
+            ("/admin/api/v1/canary/results/{canary_result_id}", "GET")
+        ].endpoint(
+            canary_result_id=str(canary.canary_result_id),
+            workspace_id="dev-01",
+        )
+        microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="canary_result",
+            object_id=str(canary.canary_result_id),
+            workspace_id="dev-01",
+        )
+        hidden = await routes[("/admin/api/v1/canary/results", "GET")].endpoint(
+            workspace_id="other-workspace",
+        )
+        return canaries, detail, microscope, hidden
+
+    canaries, detail, microscope, hidden = asyncio.run(read())
+
+    item = canaries.collection["items"][0]
+    assert canaries.collection["source"] == "lifecycle_store.list_canary_results"
+    assert canaries.collection["object_type"] == "canary_result"
+    assert item["status"] == "critical"
+    assert item["critical"] is True
+    assert item["metrics"]["numeric_or_boolean_values"] == {
+        "critical": True,
+        "failure_count": 3,
+        "latency_ms": 42.5,
+    }
+    assert item["metrics"]["raw_metrics_returned"] is False
+    assert item["reason_present"] is True
+    assert item["reason_sha256"].startswith("sha256:")
+    assert detail.object["content_policy"]["raw_reason_returned"] is False
+    assert detail.object["effects"]["freezes_skill"] is True
+    assert microscope.object["object_type"] == "canary_result"
+    assert microscope.object["provenance"]["upstream"][0]["object_type"] == "skill"
+    assert hidden.collection["items"] == []
+    combined = json.dumps(
+        [canaries.collection, detail.object, microscope.object],
+        sort_keys=True,
+    )
+    assert "raw rollback reason" not in combined
+    assert "do not expose metric text" not in combined
+
+
 def test_observatory_admin_routes_include_browser_security_headers() -> None:
     app = create_app(audit_store=MemoryAuditStore())
 
@@ -1355,6 +1466,8 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/memory/quarantine/{quarantine_id}", "GET"),
         ("/admin/api/v1/control-flow/events", "GET"),
         ("/admin/api/v1/control-flow/events/{control_flow_event_id}", "GET"),
+        ("/admin/api/v1/canary/results", "GET"),
+        ("/admin/api/v1/canary/results/{canary_result_id}", "GET"),
         ("/admin/api/v1/traces", "GET"),
         ("/admin/api/v1/traces/{trace_id}", "GET"),
         ("/admin/api/v1/jobs", "GET"),
