@@ -18,7 +18,7 @@ def load_openapi_schema() -> dict[str, Any]:
     sys.path.insert(0, str(SIDECAR))
     from autoskill.api.app import create_app
 
-    return create_app().openapi()
+    return create_app(api_surface="observatory").openapi()
 
 
 def build_client_source(schema: dict[str, Any]) -> str:

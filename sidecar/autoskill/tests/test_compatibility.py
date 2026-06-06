@@ -4,6 +4,38 @@ from uuid import uuid4
 from autoskill.api.app import SkillProfileCompatibilityUpsertRequest, create_app
 from autoskill.core.config import effective_skillkernel_config, get_settings
 from autoskill.db.compatibility import NullCompatibilityStore
+from autoskill.observatory_main import create_observatory_app
+
+
+async def _asgi_get_status(app, path: str) -> int:
+    messages = [{"type": "http.request", "body": b"", "more_body": False}]
+    sent: list[dict[str, object]] = []
+
+    async def receive():
+        return messages.pop(0)
+
+    async def send(message):
+        sent.append(message)
+
+    await app(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": b"",
+            "headers": [],
+            "client": ("testclient", 0),
+            "server": ("testserver", 80),
+        },
+        receive,
+        send,
+    )
+    start = next(message for message in sent if message["type"] == "http.response.start")
+    return int(start["status"])
 
 
 def test_compatibility_api_records_executor_profile_status() -> None:
@@ -105,6 +137,39 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
     assert ready.checks["read_model_contract_version"] == "skillkernel.readmodels.v1"
 
     get_settings.cache_clear()
+
+
+def test_core_and_observatory_api_surfaces_are_split() -> None:
+    core_app = create_app(api_surface="core")
+    observatory_api = create_app(api_surface="observatory")
+
+    core_paths = {route.path for route in core_app.routes}
+    observatory_paths = {route.path for route in observatory_api.routes}
+
+    assert "/v1/health" in core_paths
+    assert not any(path.startswith("/admin") for path in core_paths)
+    assert "/admin/api/v1/summary" in observatory_paths
+    assert "/admin/live" in observatory_paths
+    assert not any(path.startswith("/v1") for path in observatory_paths)
+
+
+def test_observatory_app_serves_static_shell_from_observatory_surface(tmp_path) -> None:
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<!doctype html><div id=\"root\"></div>", encoding="utf-8")
+
+    app = create_observatory_app(static_root=tmp_path)
+    paths = {route.path for route in app.routes}
+
+    assert "/healthz" in paths
+    assert "/admin" in paths
+    assert "/admin/{_spa_path:path}" in paths
+    assert "/admin/api/v1/summary" in paths
+    assert "/v1/health" not in paths
+
+    assert asyncio.run(_asgi_get_status(app, "/healthz")) == 200
+    assert asyncio.run(_asgi_get_status(app, "/admin/")) == 200
+    assert asyncio.run(_asgi_get_status(app, "/v1/health")) == 404
+    assert asyncio.run(_asgi_get_status(app, "/admin/api/unknown")) == 404
 
 
 def test_effective_config_reflects_raw_conversation_capture_policy(monkeypatch) -> None:

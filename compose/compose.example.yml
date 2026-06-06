@@ -62,15 +62,20 @@ services:
       - env.observatory.example
       - env.postgres.example
     environment:
-      SKILLKERNEL_CORE_UPSTREAM: http://core:8765
+      SKILLKERNEL_DATABASE_URL_FILE: /run/secrets/database_url
+      SKILLKERNEL_ADMIN_TOKEN_FILE: /run/secrets/admin_token
       SKILLKERNEL_OBSERVATORY_PORT: 8757
+      SKILLKERNEL_OBSERVATORY_STATIC_ROOT: /app/observatory
     networks:
       - skillkernel-data
       - skillkernel-control
     ports:
       - "127.0.0.1:8757:8757"
+    secrets:
+      - database_url
+      - admin_token
     healthcheck:
-      test: ["CMD", "python3", "/app/healthcheck.py", "observatory"]
+      test: ["CMD", "python", "/app/healthcheck.py", "observatory"]
       interval: 10s
       timeout: 5s
       retries: 12

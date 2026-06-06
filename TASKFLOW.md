@@ -16,6 +16,23 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: The reference split-container boundary now keeps Core to its
+  internal `/v1` API surface and hosts the Observatory web shell plus
+  `/admin/api`, `/admin/live`, and `/admin/live-sse` from the Observatory
+  container itself. `autoskill.main` starts a Core-only FastAPI surface,
+  `autoskill.observatory_main` starts an Observatory-only surface with static
+  SPA serving, the Observatory image is now a non-root FastAPI/uvicorn image
+  instead of an nginx reverse proxy, and reference compose passes database/admin
+  secrets directly to Observatory without a Core upstream dependency. Focused
+  regressions assert the route split and SPA fallback behavior, including API
+  404s that do not fall through to `index.html`. Validation passed with
+  targeted Ruff and focused pytest, `scripts/autoskill_conformance.py --json`
+  (`ready=true`, `14/14` checks), generated Observatory OpenAPI client check,
+  reference compose config, `scripts/autoskill_observatory_acceptance.py
+  --json` (`ready=true`, `86` satisfied), `git diff --check`, Observatory
+  Docker image build, and a container smoke proving `/healthz` and `/admin/`
+  return `200`, `/v1/health` and unknown `/admin/api/...` return `404`, and
+  authenticated `/admin/api/v1/health/ready` returns `200`.
 - 2026-06-06: Observatory model invocation audit rows now have direct,
   sidecar-hosted, content-safe admin read models in addition to the generic
   object microscope path. `LLMInvocationStore` can list recent invocation

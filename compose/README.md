@@ -25,9 +25,10 @@ docker compose -f compose.example.yml config --quiet
 
 Core expands the reference `*_FILE` variables at container start, so the
 database URL and plugin/control/admin credentials remain mounted secrets rather
-than inline environment values. The Observatory web container has no
-`depends_on` edge to Core or Postgres; it can serve the UI shell and show
-upstream/database degraded states through the proxied admin surfaces.
+than inline environment values. The Observatory web/API container receives only
+the database URL and admin token secrets, has no `depends_on` edge to Core or
+Postgres, and can serve the UI shell plus read-only/degraded API diagnostics
+when Core is unreachable.
 
 The root `docker-compose.yml` remains the Dev-01 oriented deployment file. This
 reference directory is the portable topology and packaging contract surface.

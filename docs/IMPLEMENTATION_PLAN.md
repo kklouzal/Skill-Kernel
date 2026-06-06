@@ -706,7 +706,7 @@ retries without exposing confirmation text or raw content. This tightens the
 Observatory administrative action gateway for Sections 4.3, 8.22, 16.3, and
 16.4 while preserving sidecar-hosted policy/audit authority.
 
-2026-06-05 update: Observatory split-container serving is now first-class in the implementation ledger and runtime contract. The FastAPI core serves admin APIs, live streams, readiness, and content-safe config only; the separate Observatory nginx container owns the compiled React app, `/admin` browser entrypoint, and `/admin/api`, `/admin/live`, `/admin/live-sse` reverse proxies. The legacy core static mount and `sidecar` local-development static-serving mode were removed so development and production both validate UI changes through the same rebuild/redeploy path.
+2026-06-05 update: Observatory split-container serving is now first-class in the implementation ledger and runtime contract. The Core FastAPI container owns internal `/v1` APIs only in the reference deployment; the separate Observatory FastAPI container owns the compiled React app, `/admin` browser entrypoint, `/admin/api`, `/admin/live`, and `/admin/live-sse` surfaces. The legacy core static mount and `sidecar` local-development static-serving mode were removed so development and production both validate UI changes through the same rebuild/redeploy path.
 
 2026-06-04 update: the authoritative main and Observatory specs were refreshed. Acceptance crosswalks were expanded to the current main criteria (`31.1`-`31.63` plus context criteria) and Observatory criteria/checklist (`21.1`-`21.42`, `24.auto.1`-`24.auto.6`, `24.1`-`24.38`). The newly exposed replay-corpus gap is closed by `/v1/broker/replay-episodes/synthesize`: it records pre-adjudicated redacted telemetry, can synthesize a redacted intent through the configured text LLM from content-safe retrieval context, repairs stale telemetry-derived episode expectations from source retrieval logs, stores deterministic validation/provenance, and returns explicit hash-only/metadata-only/no-safe-context skip reasons instead of treating degraded evidence as full-autonomy replay support. Live Dev-01 validation synthesized/repaired telemetry-derived episodes and replayed the stored corpus at 19/19 matches.
 
@@ -1397,9 +1397,9 @@ Deliverables:
 
 - split-container web-admin shell; implemented as a React/Vite Observatory under
   `sidecar/autoskill/observatory`, built into the `Dockerfile.observatory`
-  nginx image and served from `/admin`, with `/admin/api`, `/admin/live`, and
-  `/admin/live-sse` proxied to core sidecar admin routes rather than a second
-  control plane;
+  FastAPI image and served from `/admin`, with `/admin/api`, `/admin/live`, and
+  `/admin/live-sse` owned by the Observatory container and Core kept to internal
+  `/v1` routes in the reference deployment;
 - role-aware admin configuration and content-safe API envelopes; implemented for
   `/admin/api/v1/config`, `/summary`, `/pipeline`, `/subsystems`, `/components`,
   `/issues`, `/search`, `/objects`, `/health/live`, and `/health/ready`.

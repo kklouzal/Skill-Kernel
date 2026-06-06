@@ -339,8 +339,12 @@ def _check_container_packaging_assets() -> StaticCheck:
     compose = _read_files(ROOT / "docker-compose.yml", ROOT / "compose" / "compose.example.yml")
     if "USER skillkernel" not in core_dockerfiles:
         details.append("core Dockerfiles do not switch to non-root skillkernel user")
-    if "USER nginx" not in observatory_dockerfiles:
-        details.append("Observatory Dockerfiles do not switch to non-root nginx user")
+    if "USER skillkernel" not in observatory_dockerfiles:
+        details.append("Observatory Dockerfiles do not switch to non-root skillkernel user")
+    if "autoskill.observatory_main:app" not in observatory_dockerfiles:
+        details.append("Observatory Dockerfiles do not start the Observatory API app")
+    if "default.conf.template" in observatory_dockerfiles or "nginx" in observatory_dockerfiles:
+        details.append("Observatory Dockerfiles still reference nginx proxy packaging")
     if "HEALTHCHECK" not in core_dockerfiles or "HEALTHCHECK" not in observatory_dockerfiles:
         details.append("Dockerfiles do not declare health checks")
     if "containers/core/Dockerfile" not in compose:
@@ -359,6 +363,12 @@ def _check_container_packaging_assets() -> StaticCheck:
     observatory_section = _read_between(reference_compose, "  observatory:", "\nnetworks:")
     if "depends_on:" in observatory_section:
         details.append("reference Observatory service has a startup dependency despite independence contract")
+    if "SKILLKERNEL_CORE_UPSTREAM" in observatory_section:
+        details.append("reference Observatory service still proxies admin API to Core")
+    if "SKILLKERNEL_DATABASE_URL_FILE" not in observatory_section:
+        details.append("reference Observatory service does not mount database URL secret")
+    if "SKILLKERNEL_ADMIN_TOKEN_FILE" not in observatory_section:
+        details.append("reference Observatory service does not mount admin token secret")
     core_entrypoint = (ROOT / "containers" / "core" / "entrypoint.sh").read_text(encoding="utf-8")
     for expected in (
         'load_secret_file "SKILLKERNEL_DATABASE_URL"',

@@ -3860,6 +3860,7 @@ def create_app(
     writer_workspace_root: Path | None = None,
     external_skill_roots: list[Path] | None = None,
     historical_import_roots: list[Path] | None = None,
+    api_surface: str = "all",
 ) -> FastAPI:
     store = event_store or _build_event_store()
     jobs = job_store or _build_job_store()
@@ -15132,6 +15133,8 @@ def create_app(
             chain_valid=await audit.verify_chain(workspace_key=workspace_id, limit=bounded_limit),
         )
 
+    _apply_api_surface(app, api_surface)
+
     # Some existing unit tests inspect app.routes directly and assume every
     # route-like object has .methods. Starlette WebSocket and Mount routes do
     # not need it at runtime, but setting it keeps those tests focused on the
@@ -15141,3 +15144,19 @@ def create_app(
             route.methods = {"WEBSOCKET"} if route.path == "/admin/live" else {"GET"}
 
     return app
+
+
+def _apply_api_surface(app: FastAPI, api_surface: str) -> None:
+    if api_surface not in {"all", "core", "observatory"}:
+        raise ValueError("api_surface must be one of: all, core, observatory")
+    if api_surface == "all":
+        return
+    retained_routes = []
+    for route in app.router.routes:
+        path = str(getattr(route, "path", ""))
+        if api_surface == "core" and path.startswith("/admin"):
+            continue
+        if api_surface == "observatory" and path.startswith("/v1"):
+            continue
+        retained_routes.append(route)
+    app.router.routes = retained_routes

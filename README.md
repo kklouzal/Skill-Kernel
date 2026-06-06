@@ -88,8 +88,8 @@ images plus a stock pgvector Postgres container:
 - `Dockerfile.core` builds the Python SkillKernel core image. It contains the
   sidecar API, migrations, scripts, and worker entrypoints.
 - `Dockerfile.observatory` builds the Observatory web image. It contains the
-  compiled React UI and an nginx reverse proxy for `/admin/api`, `/admin/live`,
-  and `/admin/live-sse` back to the core container.
+  compiled React UI plus the Observatory-owned FastAPI `/admin/api`,
+  `/admin/live`, and `/admin/live-sse` surfaces.
 - `postgres` uses `pgvector/pgvector:pg17`. Postgres stores vectors; it does
   not generate embeddings.
 
@@ -117,16 +117,18 @@ By default, the core API is published on `127.0.0.1:8765` and Observatory is
 published on `127.0.0.1:8757/admin/`. Set `SKILLKERNEL_CORE_BIND` or
 `SKILLKERNEL_OBSERVATORY_BIND` to expose them on another interface.
 
-The core image never mounts Observatory static files. Development and
-production both use the same contract: rebuild/redeploy the split containers so
-the nginx Observatory image serves the compiled React app while core serves the
-API, live streams, and readiness routes.
+The core image never mounts Observatory static files and does not expose the
+Observatory `/admin` API in the reference container. Development and production
+both use the same contract: rebuild/redeploy the split containers so the
+Observatory image serves the compiled React app, Observatory API, live streams,
+and UI readiness routes while Core keeps the internal `/v1` API.
 
 The portable reference topology in `compose/` uses Docker secrets for the
 database URL and plugin/control/admin tokens. The Core entrypoint expands the
 corresponding `*_FILE` variables before starting the API or worker process, and
-the Observatory image has no startup dependency on Core or Postgres so it can
-serve the UI shell during degraded dependency states.
+the Observatory image receives only the database URL and admin token secrets.
+It has no startup dependency on Core or Postgres so it can serve the UI shell
+during degraded dependency states.
 
 Validate the OpenClaw plugin skeleton:
 

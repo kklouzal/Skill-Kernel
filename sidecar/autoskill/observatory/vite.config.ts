@@ -25,9 +25,9 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/admin/api": "http://127.0.0.1:8765",
+      "/admin/api": "http://127.0.0.1:8757",
       "/admin/live": {
-        target: "ws://127.0.0.1:8765",
+        target: "ws://127.0.0.1:8757",
         ws: true
       }
     }
