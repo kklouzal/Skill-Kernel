@@ -30,7 +30,13 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   returned `ready=true` with 52 landscape rows, 17 readiness checklist items,
   and zero validation errors. `uv run python scripts/autoskill_traceability.py
   --json` returned `ready=true` with 100 anchors, 25 traceability rows, and
-  zero validation errors.
+  zero validation errors. Broader local deterministic gates also passed: `uv
+  run ruff check sidecar scripts`, `uv run python -m compileall -q sidecar`,
+  and `uv run pytest sidecar/autoskill/tests/test_conformance_report.py
+  sidecar/autoskill/tests/test_readiness_report.py
+  sidecar/autoskill/tests/test_historical_bootstrap.py
+  sidecar/autoskill/tests/test_observatory_acceptance_report.py -q` (`18
+  passed`).
 - 2026-06-06: Core historical bootstrap consolidation now surfaces
   historical-only topology recommendations as propose-only, non-activating
   control-plane evidence. Historical evidence payloads can contribute guarded
