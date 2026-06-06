@@ -16,6 +16,23 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Raw event capture now carries the event identity and
+  evidence-fidelity fields required by the unified evidence contract. The
+  plugin emits SHA-256-prefixed payload hashes, deterministic
+  `source_event_key` values, agent IDs, fidelity tiers, raw-vault pointers, and
+  a content-safe runtime hook registration snapshot on startup; Core validates
+  the fidelity tier, persists the new raw-event columns idempotently, and
+  exposes the fields through the content-safe captured-event read model. The
+  migration adds idempotent raw-event columns, a fidelity check, and a
+  workspace/source/source-event-key uniqueness guard without enabling raw-vault
+  storage, plugin installation, live runtime skill writes, or autonomous apply.
+  This advances Plugin Sections 7.2-7.4, Core Sections 12.1-12.1.2, and the
+  raw-events DDL contract in Section 31. Focused validation passed with
+  event-store/ingest regressions (`5 passed`), targeted Ruff, plugin `npm
+  test` (`28 passed`), `uv run python scripts/autoskill_conformance.py --json`
+  (`ready=true`, `14/14` checks), `uv run python scripts/autoskill_acceptance.py
+  --json` (`ready=true`, `70` implemented), and `uv run python -m compileall -q
+  sidecar`.
 - 2026-06-06: The reference split-container boundary now keeps Core to its
   internal `/v1` API surface and hosts the Observatory web shell plus
   `/admin/api`, `/admin/live`, and `/admin/live-sse` from the Observatory
@@ -48,13 +65,17 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   explicit degraded/test mode, production embedding jobs require a configured
   production-ready `openai_compatible` profile, degraded embedding state is
   surfaced in capabilities/readiness/effective config/Observatory health, and
-  hash profiles only run when the dedicated test/dev allowance is set. This
-  advances Core Sections 3.2-3.3, 10.4-10.5, 28.1-28.2, and 31.48 plus
+  hash profiles only run when the dedicated test/dev allowance is set. A
+  deployment smoke caught and the run fixed a readiness predicate regression
+  where the non-paused production embedding flag incorrectly made
+  `/v1/health/ready` report `ready=false` even when embeddings were
+  production-ready. This advances Core Sections 3.2-3.3, 10.4-10.5, 28.1-28.2,
+  and 31.48 plus
   Observatory Sections 8.18, 12.1, 12.6, 13.1, 16.1, and acceptance criteria
   21.16 and 21.26. Focused validation passed with the LLM invocation route
   regression plus embedding fail-closed/profile/worker regressions (`13`
   focused tests) and targeted Ruff. Required gates also passed with `uv run
-  ruff check sidecar`, `uv run pytest` (`411 passed`), `uv run python -m
+  ruff check sidecar`, `uv run pytest` (`415 passed`), `uv run python -m
   compileall -q sidecar`, `git diff --check`, `npm run build --prefix
   sidecar/autoskill/observatory`, `uv run python
   scripts/generate_observatory_openapi_client.py --check`, `uv run python

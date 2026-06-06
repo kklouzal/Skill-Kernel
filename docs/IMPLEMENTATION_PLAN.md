@@ -3,6 +3,21 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Raw event capture now carries the spec-aligned event
+identity and evidence-fidelity envelope needed for governed autonomy. The
+plugin emits SHA-256-prefixed payload hashes, deterministic `source_event_key`
+values, agent IDs, evidence-fidelity tiers, raw-vault pointers, and a
+content-safe runtime hook registration snapshot on startup; Core validates the
+fidelity tier, persists the new raw-event columns idempotently, and exposes the
+fields through the content-safe captured-event read model. The migration adds
+idempotent raw-event columns, a fidelity check, and a workspace/source/source
+event key uniqueness guard without enabling raw-vault storage or live runtime
+skill apply. This advances Core Sections 12.1-12.1.2 plus the raw-events DDL
+contract in Section 31 and Plugin Sections 7.2-7.4. Focused validation passed
+with event-store/ingest regressions (`5 passed`), targeted Ruff, plugin `npm
+test` (`28 passed`), conformance (`ready=true`, `14/14`), acceptance
+(`ready=true`, `70` implemented), and sidecar compileall.
+
 2026-06-06 update: Observatory model invocation audit records now have direct
 sidecar-hosted, content-safe collection/detail read models in addition to the
 generic object microscope. `LLMInvocationStore` lists recent invocation rows
@@ -18,12 +33,15 @@ worktree: hash embeddings are explicit degraded/test mode, production
 embedding jobs require a configured production-ready profile, degraded
 embedding state is surfaced through readiness/capabilities/effective
 config/Observatory health, and hash profiles run only under the explicit
-test/dev allowance. This advances Core Sections 3.2-3.3, 10.4-10.5,
+test/dev allowance. A deployment smoke caught and the run fixed a readiness
+predicate regression where the non-paused production embedding flag incorrectly
+made `/v1/health/ready` report `ready=false` even when embeddings were
+production-ready. This advances Core Sections 3.2-3.3, 10.4-10.5,
 28.1-28.2, and 31.48 plus Observatory Sections 8.18, 12.1, 12.6, 13.1, 16.1,
 and acceptance criteria 21.16 and 21.26. Focused validation passed with the
 LLM invocation route regression plus embedding fail-closed/profile/worker
 regressions (`13` focused tests) and targeted Ruff. Required gates also passed
-with full sidecar Ruff, full pytest (`411 passed`), compileall, diff-check,
+with full sidecar Ruff, full pytest (`415 passed`), compileall, diff-check,
 Observatory frontend build, generated OpenAPI client freshness check, core
 acceptance (`70` implemented), Observatory acceptance (`86` satisfied), and
 conformance (`14/14`). No compose/Postgres smoke was needed because no schema
