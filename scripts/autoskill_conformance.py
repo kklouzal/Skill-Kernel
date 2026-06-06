@@ -94,6 +94,7 @@ def build_report(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
         _check_raw_vault_schema_contract(),
         _check_autonomy_control_schema_contract(),
         _check_canonical_evidence_schema_contract(),
+        _check_skillir_package_schema_contract(),
         _check_no_unstable_react_keys(),
         _check_migration_deduplicated_and_ordered(),
         _check_architecture_invariants(spec_path),
@@ -344,6 +345,34 @@ def _check_canonical_evidence_schema_contract() -> StaticCheck:
         (
             "migrations/0001_autoskill_schema.sql autoskill.evidence",
             "evidence_items sync trigger",
+        ),
+        details,
+    )
+
+
+def _check_skillir_package_schema_contract() -> StaticCheck:
+    migration = MIGRATION_PATH.read_text(encoding="utf-8")
+    details: list[str] = []
+    for required in (
+        "CREATE TABLE IF NOT EXISTS autoskill.skill_files",
+        "CREATE TABLE IF NOT EXISTS autoskill.skill_ir_revisions",
+        "CREATE TABLE IF NOT EXISTS autoskill.skill_components",
+        "sync_skill_file_from_compiled",
+        "sync_skill_file_from_support_artifact",
+        "sync_skill_ir_revision_from_version",
+        "sync_skill_component_from_version",
+        "digest(NEW.skill_ir::text, 'sha256')",
+        "component_type text NOT NULL",
+        "file_role text NOT NULL",
+    ):
+        if required not in migration:
+            details.append(f"SkillIR/package bridge missing {required}")
+    return _result(
+        "SKX-STATIC-006E",
+        "canonical SkillIR revision, skill file, and skill component tables mirror live compiler outputs",
+        (
+            "migrations/0001_autoskill_schema.sql skill_ir_revisions",
+            "compiled_files/support_artifacts/skill_versions sync triggers",
         ),
         details,
     )

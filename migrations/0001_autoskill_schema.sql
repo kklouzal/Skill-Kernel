@@ -762,6 +762,360 @@ CREATE TABLE IF NOT EXISTS autoskill.support_artifacts (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.skill_files (
+  skill_file_id uuid PRIMARY KEY,
+  skill_version_id uuid NOT NULL REFERENCES autoskill.skill_versions(skill_version_id),
+  relative_path text NOT NULL,
+  file_role text NOT NULL,
+  content_hash text NOT NULL,
+  byte_size integer NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (skill_version_id, relative_path)
+);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_skill_file_from_compiled()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO autoskill.skill_files (
+    skill_file_id,
+    skill_version_id,
+    relative_path,
+    file_role,
+    content_hash,
+    byte_size,
+    created_at
+  )
+  VALUES (
+    NEW.compiled_file_id,
+    NEW.skill_version_id,
+    NEW.path,
+    'compiled_runtime',
+    NEW.sha256,
+    NEW.bytes,
+    NEW.created_at
+  )
+  ON CONFLICT (skill_version_id, relative_path)
+  DO UPDATE SET
+    file_role = EXCLUDED.file_role,
+    content_hash = EXCLUDED.content_hash,
+    byte_size = EXCLUDED.byte_size;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS compiled_files_sync_skill_files ON autoskill.compiled_files;
+CREATE TRIGGER compiled_files_sync_skill_files
+AFTER INSERT OR UPDATE ON autoskill.compiled_files
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_skill_file_from_compiled();
+
+CREATE OR REPLACE FUNCTION autoskill.sync_skill_file_from_support_artifact()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO autoskill.skill_files (
+    skill_file_id,
+    skill_version_id,
+    relative_path,
+    file_role,
+    content_hash,
+    byte_size,
+    created_at
+  )
+  VALUES (
+    NEW.support_artifact_id,
+    NEW.skill_version_id,
+    NEW.path,
+    NEW.kind,
+    NEW.sha256,
+    CASE
+      WHEN (NEW.manifest ->> 'byte_size') ~ '^[0-9]+$'
+      THEN (NEW.manifest ->> 'byte_size')::integer
+      ELSE 0
+    END,
+    NEW.created_at
+  )
+  ON CONFLICT (skill_version_id, relative_path)
+  DO UPDATE SET
+    file_role = EXCLUDED.file_role,
+    content_hash = EXCLUDED.content_hash,
+    byte_size = EXCLUDED.byte_size;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS support_artifacts_sync_skill_files ON autoskill.support_artifacts;
+CREATE TRIGGER support_artifacts_sync_skill_files
+AFTER INSERT OR UPDATE ON autoskill.support_artifacts
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_skill_file_from_support_artifact();
+
+INSERT INTO autoskill.skill_files (
+  skill_file_id,
+  skill_version_id,
+  relative_path,
+  file_role,
+  content_hash,
+  byte_size,
+  created_at
+)
+SELECT
+  compiled_file_id,
+  skill_version_id,
+  path,
+  'compiled_runtime',
+  sha256,
+  bytes,
+  created_at
+FROM autoskill.compiled_files
+ON CONFLICT (skill_version_id, relative_path) DO NOTHING;
+
+INSERT INTO autoskill.skill_files (
+  skill_file_id,
+  skill_version_id,
+  relative_path,
+  file_role,
+  content_hash,
+  byte_size,
+  created_at
+)
+SELECT
+  support_artifact_id,
+  skill_version_id,
+  path,
+  kind,
+  sha256,
+  CASE
+    WHEN (manifest ->> 'byte_size') ~ '^[0-9]+$'
+    THEN (manifest ->> 'byte_size')::integer
+    ELSE 0
+  END,
+  created_at
+FROM autoskill.support_artifacts
+ON CONFLICT (skill_version_id, relative_path) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS autoskill.skill_ir_revisions (
+  skill_ir_revision_id uuid PRIMARY KEY,
+  skill_id uuid NOT NULL REFERENCES autoskill.skills(skill_id),
+  skill_version_id uuid REFERENCES autoskill.skill_versions(skill_version_id),
+  ir_schema_version text NOT NULL DEFAULT 'skillir.v1',
+  ir_hash text NOT NULL,
+  ir jsonb NOT NULL,
+  change_kind text NOT NULL CHECK (change_kind IN (
+    'create',
+    'improve',
+    'compose',
+    'decompose',
+    'compile',
+    'repair',
+    'merge',
+    'split',
+    'archive',
+    'promote',
+    'rollback',
+    'drift_repair'
+  )),
+  source_evidence_ids uuid[] NOT NULL DEFAULT '{}',
+  source_memory_ids uuid[] NOT NULL DEFAULT '{}',
+  llm_plan_hash text,
+  compiler_version text NOT NULL DEFAULT 'skillkernel-compiler.v1',
+  created_by_job_id uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (skill_id, ir_hash)
+);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_skill_ir_revision_from_version()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  computed_ir_hash text;
+BEGIN
+  computed_ir_hash := 'sha256:' || encode(digest(NEW.skill_ir::text, 'sha256'), 'hex');
+  INSERT INTO autoskill.skill_ir_revisions (
+    skill_ir_revision_id,
+    skill_id,
+    skill_version_id,
+    ir_schema_version,
+    ir_hash,
+    ir,
+    change_kind,
+    compiler_version,
+    created_at
+  )
+  VALUES (
+    NEW.skill_version_id,
+    NEW.skill_id,
+    NEW.skill_version_id,
+    NEW.skill_ir_schema_version,
+    computed_ir_hash,
+    NEW.skill_ir,
+    CASE
+      WHEN NEW.version <= 1 THEN 'create'
+      ELSE 'improve'
+    END,
+    NEW.compiler_version,
+    NEW.created_at
+  )
+  ON CONFLICT (skill_id, ir_hash)
+  DO UPDATE SET
+    skill_version_id = EXCLUDED.skill_version_id,
+    ir_schema_version = EXCLUDED.ir_schema_version,
+    ir = EXCLUDED.ir,
+    compiler_version = EXCLUDED.compiler_version;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS skill_versions_sync_skill_ir_revisions ON autoskill.skill_versions;
+CREATE TRIGGER skill_versions_sync_skill_ir_revisions
+AFTER INSERT OR UPDATE ON autoskill.skill_versions
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_skill_ir_revision_from_version();
+
+INSERT INTO autoskill.skill_ir_revisions (
+  skill_ir_revision_id,
+  skill_id,
+  skill_version_id,
+  ir_schema_version,
+  ir_hash,
+  ir,
+  change_kind,
+  compiler_version,
+  created_at
+)
+SELECT
+  skill_version_id,
+  skill_id,
+  skill_version_id,
+  skill_ir_schema_version,
+  'sha256:' || encode(digest(skill_ir::text, 'sha256'), 'hex'),
+  skill_ir,
+  CASE
+    WHEN version <= 1 THEN 'create'
+    ELSE 'improve'
+  END,
+  compiler_version,
+  created_at
+FROM autoskill.skill_versions
+ON CONFLICT (skill_id, ir_hash) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS autoskill.skill_components (
+  component_id uuid PRIMARY KEY,
+  skill_id uuid NOT NULL REFERENCES autoskill.skills(skill_id),
+  skill_version_id uuid REFERENCES autoskill.skill_versions(skill_version_id),
+  component_type text NOT NULL CHECK (component_type IN (
+    'planning',
+    'functional',
+    'atomic',
+    'precondition',
+    'validator',
+    'failure_mode',
+    'disambiguator',
+    'contract',
+    'template',
+    'tool_template',
+    'runtime_guard',
+    'negative_example',
+    'quality_gate'
+  )),
+  title text NOT NULL,
+  content text NOT NULL,
+  applicability jsonb NOT NULL DEFAULT '{}'::jsonb,
+  provenance jsonb NOT NULL DEFAULT '{}'::jsonb,
+  confidence numeric NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (skill_version_id, component_type, title)
+);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_skill_component_from_version()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  component_kind text;
+  component_title text;
+  component_content text;
+BEGIN
+  component_kind := COALESCE(NULLIF(NEW.skill_ir ->> 'granularity', ''), 'functional');
+  IF component_kind NOT IN ('planning','functional','atomic') THEN
+    component_kind := 'functional';
+  END IF;
+  component_title := COALESCE(NULLIF(NEW.skill_ir ->> 'name', ''), 'SkillIR component');
+  component_content := COALESCE(
+    NULLIF(NEW.skill_ir ->> 'description', ''),
+    NULLIF(NEW.skill_ir ->> 'summary', ''),
+    component_title
+  );
+  INSERT INTO autoskill.skill_components (
+    component_id,
+    skill_id,
+    skill_version_id,
+    component_type,
+    title,
+    content,
+    applicability,
+    provenance,
+    confidence,
+    created_at
+  )
+  VALUES (
+    gen_random_uuid(),
+    NEW.skill_id,
+    NEW.skill_version_id,
+    component_kind,
+    component_title,
+    component_content,
+    jsonb_build_object('source', 'skill_ir', 'granularity', component_kind),
+    jsonb_build_object('skill_version_id', NEW.skill_version_id),
+    1,
+    NEW.created_at
+  )
+  ON CONFLICT (skill_version_id, component_type, title)
+  DO UPDATE SET
+    content = EXCLUDED.content,
+    applicability = EXCLUDED.applicability,
+    provenance = EXCLUDED.provenance,
+    confidence = EXCLUDED.confidence;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS skill_versions_sync_skill_components ON autoskill.skill_versions;
+CREATE TRIGGER skill_versions_sync_skill_components
+AFTER INSERT OR UPDATE ON autoskill.skill_versions
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_skill_component_from_version();
+
+INSERT INTO autoskill.skill_components (
+  component_id,
+  skill_id,
+  skill_version_id,
+  component_type,
+  title,
+  content,
+  applicability,
+  provenance,
+  confidence,
+  created_at
+)
+SELECT
+  gen_random_uuid(),
+  skill_id,
+  skill_version_id,
+  CASE
+    WHEN COALESCE(NULLIF(skill_ir ->> 'granularity', ''), 'functional') IN ('planning','functional','atomic')
+    THEN COALESCE(NULLIF(skill_ir ->> 'granularity', ''), 'functional')
+    ELSE 'functional'
+  END,
+  COALESCE(NULLIF(skill_ir ->> 'name', ''), 'SkillIR component'),
+  COALESCE(NULLIF(skill_ir ->> 'description', ''), NULLIF(skill_ir ->> 'summary', ''), COALESCE(NULLIF(skill_ir ->> 'name', ''), 'SkillIR component')),
+  jsonb_build_object('source', 'skill_ir', 'granularity', COALESCE(NULLIF(skill_ir ->> 'granularity', ''), 'functional')),
+  jsonb_build_object('skill_version_id', skill_version_id),
+  1,
+  created_at
+FROM autoskill.skill_versions
+ON CONFLICT (skill_version_id, component_type, title) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS autoskill.skill_edges (
   edge_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
