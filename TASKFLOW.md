@@ -16,6 +16,34 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Core historical bootstrap consolidation now surfaces
+  historical-only topology recommendations as propose-only, non-activating
+  control-plane evidence. Historical evidence payloads can contribute guarded
+  `improve`, `compose`, and `decompose` recommendations with support,
+  success/failure, sequence, context-pressure, token-waste, taint, and source
+  metadata, while weak support or missing topology prerequisites produce
+  blockers and all results explicitly forbid runtime file writes. This advances
+  the unified specification's Core topology, historical ingestion,
+  evidence-maturity, and safety-ordering requirements without adding autonomous
+  apply authority. Committed as `46c645a`. Focused validation passed with `uv
+  run pytest sidecar/autoskill/tests/test_historical_bootstrap.py -q` (`7
+  passed`), `uv run ruff check
+  sidecar/autoskill/services/historical_bootstrap.py
+  sidecar/autoskill/tests/test_historical_bootstrap.py`, and `git diff
+  --check`.
+- 2026-06-06: Observatory component metrics now resolve through the generic
+  object microscope path. `/admin/api/v1/objects/component_metrics/{component}`
+  and station-metrics aliases reuse the same bounded sidecar read model as
+  `/admin/api/v1/components/{component}/metrics`, returning signal contracts,
+  bounded records, component diagnostics, provenance, and explicit raw-content
+  denial without direct SQL/log inspection or UI-local authority. This advances
+  Observatory Sections 7.6, 7.7, 8.x station cockpit drill-down, 12.6, 13.1,
+  and 16.1 by closing another aggregate-to-evidence path through the Core-owned
+  read-model surface. Committed as `8f8a9ac`. Focused validation passed with
+  `uv run pytest sidecar/autoskill/tests/test_observatory_api.py -q -k
+  component_metrics_generic_object` (`1 passed, 56 deselected`), `uv run ruff
+  check sidecar/autoskill/api/app.py
+  sidecar/autoskill/tests/test_observatory_api.py`, and `git diff --check`.
 - 2026-06-06: Schwi requested a new exhaustive check/remediate/commit pass
   against the full `unified-implementation-specification.md` after the
   cron/spec update aligned report tooling to the unified document. This pass
