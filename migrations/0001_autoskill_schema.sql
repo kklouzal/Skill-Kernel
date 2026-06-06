@@ -515,6 +515,134 @@ CREATE TABLE IF NOT EXISTS autoskill.evidence_items (
 CREATE UNIQUE INDEX IF NOT EXISTS evidence_items_workspace_hash_idx
   ON autoskill.evidence_items(workspace_id, evidence_hash);
 
+CREATE TABLE IF NOT EXISTS autoskill.evidence (
+  evidence_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_id uuid,
+  source_event_ids uuid[] NOT NULL DEFAULT '{}',
+  evidence_type text NOT NULL,
+  trust text NOT NULL,
+  taint text[] NOT NULL DEFAULT '{}',
+  summary text NOT NULL,
+  details jsonb NOT NULL DEFAULT '{}'::jsonb,
+  confidence numeric NOT NULL DEFAULT 1 CHECK (confidence >= 0 AND confidence <= 1),
+  utility_hint numeric,
+  evidence_hash text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, evidence_hash)
+);
+
+CREATE INDEX IF NOT EXISTS evidence_workspace_type_created_idx
+  ON autoskill.evidence(workspace_id, evidence_type, created_at DESC);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_evidence_from_items()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO autoskill.evidence (
+    evidence_id,
+    workspace_id,
+    skill_id,
+    source_event_ids,
+    evidence_type,
+    trust,
+    taint,
+    summary,
+    details,
+    confidence,
+    utility_hint,
+    evidence_hash,
+    created_at
+  )
+  VALUES (
+    NEW.evidence_id,
+    NEW.workspace_id,
+    NULL,
+    CASE
+      WHEN NEW.source_event_id IS NULL THEN '{}'::uuid[]
+      ELSE ARRAY[NEW.source_event_id]
+    END,
+    NEW.kind,
+    NEW.trust,
+    NEW.taint,
+    NEW.summary,
+    NEW.payload,
+    CASE
+      WHEN (NEW.payload ->> 'confidence') ~ '^(0(\.[0-9]+)?|1(\.0+)?)$'
+      THEN (NEW.payload ->> 'confidence')::numeric
+      ELSE 1
+    END,
+    CASE
+      WHEN (NEW.payload ->> 'utility_hint') ~ '^-?[0-9]+(\.[0-9]+)?$'
+      THEN (NEW.payload ->> 'utility_hint')::numeric
+      ELSE NULL
+    END,
+    NEW.evidence_hash,
+    NEW.created_at
+  )
+  ON CONFLICT (workspace_id, evidence_hash)
+  DO UPDATE SET
+    source_event_ids = EXCLUDED.source_event_ids,
+    evidence_type = EXCLUDED.evidence_type,
+    trust = EXCLUDED.trust,
+    taint = EXCLUDED.taint,
+    summary = EXCLUDED.summary,
+    details = EXCLUDED.details,
+    confidence = EXCLUDED.confidence,
+    utility_hint = EXCLUDED.utility_hint;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS evidence_items_sync_evidence ON autoskill.evidence_items;
+CREATE TRIGGER evidence_items_sync_evidence
+AFTER INSERT OR UPDATE ON autoskill.evidence_items
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_evidence_from_items();
+
+INSERT INTO autoskill.evidence (
+  evidence_id,
+  workspace_id,
+  skill_id,
+  source_event_ids,
+  evidence_type,
+  trust,
+  taint,
+  summary,
+  details,
+  confidence,
+  utility_hint,
+  evidence_hash,
+  created_at
+)
+SELECT
+  evidence_id,
+  workspace_id,
+  NULL,
+  CASE
+    WHEN source_event_id IS NULL THEN '{}'::uuid[]
+    ELSE ARRAY[source_event_id]
+  END,
+  kind,
+  trust,
+  taint,
+  summary,
+  payload,
+  CASE
+    WHEN (payload ->> 'confidence') ~ '^(0(\.[0-9]+)?|1(\.0+)?)$'
+    THEN (payload ->> 'confidence')::numeric
+    ELSE 1
+  END,
+  CASE
+    WHEN (payload ->> 'utility_hint') ~ '^-?[0-9]+(\.[0-9]+)?$'
+    THEN (payload ->> 'utility_hint')::numeric
+    ELSE NULL
+  END,
+  evidence_hash,
+  created_at
+FROM autoskill.evidence_items
+ON CONFLICT (workspace_id, evidence_hash) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS autoskill.skills (
   skill_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),

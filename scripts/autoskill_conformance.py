@@ -93,6 +93,7 @@ def build_report(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
         _check_no_raw_private_read_model_defaults(),
         _check_raw_vault_schema_contract(),
         _check_autonomy_control_schema_contract(),
+        _check_canonical_evidence_schema_contract(),
         _check_no_unstable_react_keys(),
         _check_migration_deduplicated_and_ordered(),
         _check_architecture_invariants(spec_path),
@@ -318,6 +319,31 @@ def _check_autonomy_control_schema_contract() -> StaticCheck:
         (
             "migrations/0001_autoskill_schema.sql autonomy control-plane tables",
             "Part I section 9.3 semantic autonomy schema",
+        ),
+        details,
+    )
+
+
+def _check_canonical_evidence_schema_contract() -> StaticCheck:
+    migration = MIGRATION_PATH.read_text(encoding="utf-8")
+    details: list[str] = []
+    for required in (
+        "CREATE TABLE IF NOT EXISTS autoskill.evidence",
+        "source_event_ids uuid[] NOT NULL",
+        "evidence_type text NOT NULL",
+        "confidence numeric NOT NULL",
+        "CREATE OR REPLACE FUNCTION autoskill.sync_evidence_from_items()",
+        "CREATE TRIGGER evidence_items_sync_evidence",
+        "FROM autoskill.evidence_items",
+    ):
+        if required not in migration:
+            details.append(f"canonical evidence bridge missing {required}")
+    return _result(
+        "SKX-STATIC-006D",
+        "canonical evidence table mirrors the existing evidence_items write path",
+        (
+            "migrations/0001_autoskill_schema.sql autoskill.evidence",
+            "evidence_items sync trigger",
         ),
         details,
     )
