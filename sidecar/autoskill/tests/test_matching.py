@@ -22,6 +22,7 @@ class MemorySkillMatchRetrievalStore:
         session_id: str | None = None,
         turn_id: str | None = None,
         limit: int = 10,
+        record_decision: bool = True,
     ) -> RetrievalResult:
         self.queries.append(query)
         return RetrievalResult(
@@ -56,6 +57,7 @@ class QuerySensitiveSkillMatchRetrievalStore:
         session_id: str | None = None,
         turn_id: str | None = None,
         limit: int = 10,
+        record_decision: bool = True,
     ) -> RetrievalResult:
         self.queries.append(query)
         candidates = self.candidates_by_query.get(query, [])

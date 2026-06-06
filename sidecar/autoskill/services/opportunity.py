@@ -63,6 +63,7 @@ async def mine_opportunities(
     workspace_key: str,
     limit: int = 100,
     min_support: int = 2,
+    record_retrieval: bool = True,
 ) -> OpportunityMineResult:
     evidence = await evidence_store.list_evidence(workspace_key=workspace_key, limit=limit)
     grouped: dict[str, list[EvidenceRecord]] = defaultdict(list)
@@ -83,6 +84,7 @@ async def mine_opportunities(
                 candidate_slug=slug,
                 candidate_description=description,
                 limit=10,
+                record_retrieval=record_retrieval,
             ),
         )
         candidates.append(

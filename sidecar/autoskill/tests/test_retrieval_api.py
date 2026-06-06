@@ -24,6 +24,7 @@ class MemoryRetrievalStore:
         session_id: str | None = None,
         turn_id: str | None = None,
         limit: int = 10,
+        record_decision: bool = True,
     ) -> RetrievalResult:
         self.queries.append(
             {

@@ -36,6 +36,7 @@ class SkillMatchRequest:
     candidate_description: str
     candidate_runtime_text: str = ""
     limit: int = 10
+    record_retrieval: bool = True
 
 
 @dataclass(frozen=True)
@@ -173,6 +174,7 @@ async def match_existing_skills(
             workspace_key=request.workspace_key,
             query=query,
             limit=bounded_limit,
+            record_decision=request.record_retrieval,
         )
         query_results.append((query, result))
     if not query_results:

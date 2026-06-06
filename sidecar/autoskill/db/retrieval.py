@@ -124,8 +124,9 @@ class RetrievalStore(Protocol):
         session_id: str | None = None,
         turn_id: str | None = None,
         limit: int = 10,
+        record_decision: bool = True,
     ) -> RetrievalResult:
-        """Run deterministic lexical retrieval and log the decision."""
+        """Run deterministic lexical retrieval and optionally log the decision."""
 
     async def semantic_query(
         self,
@@ -220,6 +221,7 @@ class NullRetrievalStore:
         session_id: str | None = None,
         turn_id: str | None = None,
         limit: int = 10,
+        record_decision: bool = True,
     ) -> RetrievalResult:
         return RetrievalResult(retrieval_log_id=None, decision="no_candidates", candidates=[])
 
@@ -319,13 +321,24 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
         session_id: str | None = None,
         turn_id: str | None = None,
         limit: int = 10,
+        record_decision: bool = True,
     ) -> RetrievalResult:
         if not query.strip():
             return RetrievalResult(retrieval_log_id=None, decision="empty_query", candidates=[])
 
         pool = await self._get_pool()
         async with pool.acquire() as conn, conn.transaction():
-            workspace_id = await ensure_workspace(conn, workspace_key)
+            workspace_id = (
+                await ensure_workspace(conn, workspace_key)
+                if record_decision
+                else await _get_workspace_id(conn, workspace_key)
+            )
+            if workspace_id is None:
+                return RetrievalResult(
+                    retrieval_log_id=None,
+                    decision="no_candidates",
+                    candidates=[],
+                )
             rows = await conn.fetch(
                 """
                 WITH q AS (
@@ -421,17 +434,21 @@ class AsyncpgRetrievalStore(AsyncpgPoolOwner):
             )
             candidates = [RetrievalCandidate.from_row(row) for row in rows]
             decision = "candidates_found" if candidates else "no_candidates"
-            log_id = await _insert_retrieval_log(
-                conn,
-                workspace_id=workspace_id,
-                trace_id=trace_id or uuid4(),
-                span_id=span_id or uuid4(),
-                parent_span_id=parent_span_id,
-                session_id=session_id,
-                turn_id=turn_id,
-                query=query,
-                decision=decision,
-                candidates=candidates,
+            log_id = (
+                await _insert_retrieval_log(
+                    conn,
+                    workspace_id=workspace_id,
+                    trace_id=trace_id or uuid4(),
+                    span_id=span_id or uuid4(),
+                    parent_span_id=parent_span_id,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    query=query,
+                    decision=decision,
+                    candidates=candidates,
+                )
+                if record_decision
+                else None
             )
 
         return RetrievalResult(
@@ -1040,6 +1057,20 @@ async def _insert_retrieval_log(
         ),
     )
     return row["retrieval_log_id"]
+
+
+async def _get_workspace_id(
+    conn: asyncpg.Connection,
+    workspace_key: str,
+) -> UUID | None:
+    return await conn.fetchval(
+        """
+        SELECT workspace_id
+        FROM autoskill.workspaces
+        WHERE external_key = $1
+        """,
+        workspace_key,
+    )
 
 
 def _row_get(row: asyncpg.Record | dict[str, Any], key: str) -> Any:

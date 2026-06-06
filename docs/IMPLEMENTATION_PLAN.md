@@ -2,6 +2,26 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-06 update: Observatory opportunity mining now has a sidecar-hosted,
+content-safe admin read model. `/admin/api/v1/opportunities` derives bounded
+opportunity candidates through the existing deterministic miner, and generic
+`opportunity`/`candidate_opportunity` object aliases expose support counts,
+recommendation, evidence refs, duplicate-search decisions and match counts,
+candidate slug, and description hashes while suppressing raw evidence, raw match
+summaries, and the derived candidate description; the admin path does not create
+candidate records, activation side effects, or retrieval-log rows. This advances core Sections
+13.2-13.8 and 18.1-18.5 plus Observatory Sections 7.6, 7.7, 8.8, 12.1, 12.6,
+13.1, and 16.1 by closing the opportunity-mining aggregate-to-evidence path
+without adding UI-local candidate creation, activation, or autonomous apply
+authority. Validation passed with focused opportunity/admin route coverage,
+generated OpenAPI client refresh and `--check`, full sidecar ruff/pytest
+(`391 passed`)/compileall gates, Observatory frontend build, compose config,
+diff-check, and an isolated compose/Postgres smoke that migrated a fresh
+database, verified non-recording lexical opportunity lookup creates no workspace
+or retrieval-log rows for a missing workspace, verified normal recorded lexical
+retrieval still creates one workspace and one retrieval-log row, and removed the
+temporary compose project/volume.
+
 2026-06-06 update: Observatory model/embedding profile qualification runs now
 have content-safe object microscopes. `ProfileQualificationStore` can fetch
 individual text-model and embedding qualification runs by workspace/run ID, and

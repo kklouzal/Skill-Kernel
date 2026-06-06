@@ -1538,6 +1538,7 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/health/live", "GET"),
         ("/admin/api/v1/health/ready", "GET"),
         ("/admin/api/v1/search", "GET"),
+        ("/admin/api/v1/opportunities", "GET"),
         ("/admin/api/v1/evidence/fidelity", "GET"),
         ("/admin/api/v1/evidence/fidelity/{fidelity_id}", "GET"),
         ("/admin/api/v1/raw-vault/summary", "GET"),

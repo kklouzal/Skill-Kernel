@@ -6326,6 +6326,110 @@ def create_app(
             "audit": {"links": [], "chain_visible": False},
         }
 
+    def _opportunity_admin_record(record: dict[str, Any]) -> dict[str, Any]:
+        candidate_slug = str(record["candidate_slug"])
+        opportunity_id = str(record["key"])
+        evidence_ids = [str(evidence_id) for evidence_id in record.get("evidence_ids", [])]
+        match = record.get("match") if isinstance(record.get("match"), dict) else {}
+        active_matches = (
+            match.get("active_matches") if isinstance(match.get("active_matches"), list) else []
+        )
+        archived_matches = (
+            match.get("archived_matches")
+            if isinstance(match.get("archived_matches"), list)
+            else []
+        )
+        external_matches = (
+            match.get("external_matches")
+            if isinstance(match.get("external_matches"), list)
+            else []
+        )
+        retrieval_log_id = match.get("retrieval_log_id")
+        upstream = [
+            {"object_type": "evidence", "object_id": evidence_id}
+            for evidence_id in evidence_ids
+        ]
+        if retrieval_log_id:
+            upstream.append(
+                {
+                    "object_type": "broker_decision",
+                    "object_id": str(retrieval_log_id),
+                    "relationship": "duplicate_search",
+                }
+            )
+        downstream: list[dict[str, str]] = []
+        for candidate_match in active_matches + archived_matches:
+            if isinstance(candidate_match, dict) and candidate_match.get("skill_id"):
+                downstream.append(
+                    {
+                        "object_type": "skill",
+                        "object_id": str(candidate_match["skill_id"]),
+                        "relationship": str(candidate_match.get("lifecycle_state", "match")),
+                    }
+                )
+        for external_match in external_matches:
+            if isinstance(external_match, dict) and external_match.get(
+                "external_skill_id"
+            ):
+                downstream.append(
+                    {
+                        "object_type": "external_skill",
+                        "object_id": str(external_match["external_skill_id"]),
+                        "relationship": "collision_review",
+                    }
+                )
+        description = str(record.get("candidate_description") or "")
+        return {
+            "schema_version": "skillkernel.observatory.opportunity.v1",
+            "object_type": "opportunity",
+            "object_id": opportunity_id,
+            "opportunity_key": opportunity_id,
+            "candidate_slug": candidate_slug,
+            "title": candidate_slug,
+            "summary": (
+                f"{record['recommendation']} opportunity with "
+                f"{record['support_count']} supporting evidence records"
+            ),
+            "support_count": int(record.get("support_count") or 0),
+            "recommendation": record["recommendation"],
+            "deduplication": {
+                "decision": match.get("decision"),
+                "retrieval_log_id": str(retrieval_log_id) if retrieval_log_id else None,
+                "active_match_count": len(active_matches),
+                "archived_match_count": len(archived_matches),
+                "external_match_count": len(external_matches),
+                "retrieval_decision_recorded": retrieval_log_id is not None,
+            },
+            "evidence_refs": upstream[:100],
+            "description_sha256": "sha256:" + sha256_text(description),
+            "description_returned": False,
+            "details_url": f"/admin/opportunities/{opportunity_id}",
+            "timeline": [],
+            "provenance": {"upstream": upstream[:100], "downstream": downstream[:100]},
+            "effects": {
+                "candidate_created": False,
+                "activation_allowed": False,
+                "retrieval_log_created": retrieval_log_id is not None,
+                "runtime_content_returned": False,
+                "candidate_description_returned": False,
+            },
+            "diagnostics": {
+                "supporting_component": "opportunity_mining",
+                "evidence_count": len(evidence_ids),
+                "match_decision": match.get("decision"),
+                "retrieval_decision_recorded": retrieval_log_id is not None,
+                "raw_evidence_returned": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "metadata_refs_and_hashes",
+                "candidate_description_returned": False,
+                "match_summaries_returned": False,
+            },
+            "audit": {"links": [], "chain_visible": False},
+        }
+
     def _memory_quarantine_admin_record(record: Any) -> dict[str, Any]:
         payload = record.to_json()
         proposed_memory = payload.get("proposed_memory")
@@ -9059,6 +9163,47 @@ def create_app(
         payload = search_observatory(snapshot, query, limit=limit)
         return ObservatorySearchResponse(**payload)
 
+    @app.get("/admin/api/v1/opportunities", response_model=ObservatoryCollectionResponse)
+    async def observatory_opportunities(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        min_support: int = 2,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        effective_workspace_id = workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID
+        bounded_min_support = max(2, min(min_support, 25))
+        result = await mine_opportunities(
+            evidence,
+            retrieval,
+            workspace_key=effective_workspace_id,
+            limit=500,
+            min_support=bounded_min_support,
+            record_retrieval=False,
+        )
+        return _observatory_collection(
+            object_type="opportunity",
+            title="Opportunity mining candidates",
+            items=[
+                _opportunity_admin_record(candidate.to_json())
+                for candidate in result.candidates
+            ],
+            limit=limit,
+            cursor=cursor,
+            source="opportunity_miner.mine_opportunities",
+            diagnostics={
+                "supporting_component": "opportunity_mining",
+                "workspace_id": effective_workspace_id,
+                "scanned": result.scanned,
+                "min_support": bounded_min_support,
+                "candidate_mutation_allowed": False,
+                "retrieval_decision_recorded": False,
+                "raw_evidence_returned": False,
+            },
+        )
+
     @app.get("/admin/api/v1/evidence/fidelity", response_model=ObservatoryCollectionResponse)
     async def observatory_evidence_fidelity(
         authorization: Annotated[str | None, Header()] = None,
@@ -9359,6 +9504,26 @@ def create_app(
             event = await store.get_event(event_id=event_id, workspace_key=workspace_id)
             if event is not None:
                 return ObservatoryObjectResponse(object=_event_microscope(event))
+        if object_type in {"opportunity", "candidate_opportunity"}:
+            effective_workspace_id = workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID
+            opportunities = await mine_opportunities(
+                evidence,
+                retrieval,
+                workspace_key=effective_workspace_id,
+                limit=500,
+                min_support=2,
+                record_retrieval=False,
+            )
+            for opportunity in opportunities.candidates:
+                payload = opportunity.to_json()
+                if object_id in {
+                    str(payload["key"]),
+                    str(payload["candidate_slug"]),
+                    sha256_text(str(payload["key"])),
+                }:
+                    return ObservatoryObjectResponse(
+                        object=_opportunity_admin_record(payload)
+                    )
         if object_type in {"baseline_comparison", "comparison"}:
             comparison_id = _uuid_or_404(object_id, "baseline comparison")
             comparison = await observatory_admin.get_comparison(

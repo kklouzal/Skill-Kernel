@@ -40,10 +40,11 @@ class MemoryOpportunityRetrievalStore:
         session_id: str | None = None,
         turn_id: str | None = None,
         limit: int = 10,
+        record_decision: bool = True,
     ) -> RetrievalResult:
         self.queries.append(query)
         return RetrievalResult(
-            retrieval_log_id=uuid4(),
+            retrieval_log_id=uuid4() if record_decision else None,
             decision="candidates_found" if self.candidates else "no_candidates",
             candidates=self.candidates,
         )
@@ -202,3 +203,56 @@ def test_opportunity_mine_api_uses_stores() -> None:
 
     assert response.scanned == 2
     assert response.candidates[0]["recommendation"] == "propose_candidate"
+
+
+def test_observatory_opportunities_are_content_safe_and_object_addressable() -> None:
+    evidence = MemoryOpportunityEvidenceStore(
+        [
+            evidence_record("message_received", "repair pdf table extraction"),
+            evidence_record("message_received", "repair pdf table extraction"),
+        ]
+    )
+    retrieval = MemoryOpportunityRetrievalStore([])
+    app = create_app(evidence_store=evidence, retrieval_store=retrieval)
+    opportunities_route = next(
+        route for route in app.routes if route.path == "/admin/api/v1/opportunities"
+    )
+    object_route = next(
+        route
+        for route in app.routes
+        if route.path == "/admin/api/v1/objects/{object_type}/{object_id}"
+    )
+
+    async def run():
+        opportunities = await opportunities_route.endpoint(
+            workspace_id="dev-01",
+            min_support=2,
+            limit=10,
+        )
+        item = opportunities.collection["items"][0]
+        detail = await object_route.endpoint(
+            object_type="opportunity",
+            object_id=item["object_id"],
+            workspace_id="dev-01",
+        )
+        return opportunities, detail
+
+    opportunities, detail = asyncio.run(run())
+
+    item = opportunities.collection["items"][0]
+    assert opportunities.collection["source"] == "opportunity_miner.mine_opportunities"
+    assert opportunities.collection["diagnostics"]["candidate_mutation_allowed"] is False
+    assert opportunities.collection["diagnostics"]["retrieval_decision_recorded"] is False
+    assert item["object_type"] == "opportunity"
+    assert item["recommendation"] == "propose_candidate"
+    assert item["support_count"] == 2
+    assert item["description_returned"] is False
+    assert item["content_policy"]["candidate_description_returned"] is False
+    assert item["effects"]["candidate_created"] is False
+    assert item["effects"]["activation_allowed"] is False
+    assert {ref["object_type"] for ref in item["provenance"]["upstream"]} == {"evidence"}
+    assert item["deduplication"]["retrieval_decision_recorded"] is False
+    assert item["effects"]["retrieval_log_created"] is False
+    assert "repair pdf table extraction" not in str(item)
+    assert detail.object["object_id"] == item["object_id"]
+    assert detail.object["description_sha256"] == item["description_sha256"]

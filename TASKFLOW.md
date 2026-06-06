@@ -16,6 +16,30 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory opportunity mining now has a sidecar-hosted,
+  content-safe admin read model instead of being visible only through the
+  control-plane `/v1/opportunities/mine` action. `/admin/api/v1/opportunities`
+  derives bounded opportunity candidates through the existing deterministic
+  miner, and generic `opportunity`/`candidate_opportunity` object aliases return
+  support counts, recommendation, evidence refs, duplicate-search decisions and
+  match counts, candidate slug, and description hashes while withholding raw
+  evidence, raw match summaries, and the derived candidate description; the
+  admin path does not create candidate records, activation side effects, or
+  retrieval-log rows. This
+  advances core handoff Sections 13.2-13.8 and 18.1-18.5 plus Observatory
+  Sections 7.6, 7.7, 8.8, 12.1, 12.6, 13.1, and 16.1 by closing the
+  opportunity aggregate-to-evidence path without adding UI-local candidate
+  creation, activation, or autonomous apply authority. Validation passed with
+  focused opportunity/admin route coverage (`5 passed`, `1 passed`), generated
+  Observatory OpenAPI client refresh and `--check`, `uv run ruff check
+  sidecar`, `uv run pytest` (`391 passed`), `uv run python -m compileall -q
+  sidecar`, `npm run build --prefix sidecar/autoskill/observatory`, `docker
+  compose config --quiet`, `git diff --check`, and an isolated compose/Postgres
+  smoke on port `59662` that migrated a fresh database, verified non-recording
+  lexical opportunity lookup creates no workspace or retrieval-log rows for a
+  missing workspace, verified normal recorded lexical retrieval still creates
+  one workspace and one retrieval-log row, and removed the temporary compose
+  project/volume.
 - 2026-06-06: Observatory profile qualification runs now have content-safe
   object microscopes instead of being visible only as profile-embedded
   checklist summaries. `ProfileQualificationStore` exposes workspace-filtered
