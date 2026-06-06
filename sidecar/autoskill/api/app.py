@@ -6222,8 +6222,280 @@ def create_app(
             or record.soft_threshold_state == "threshold_deadlock_candidate"
         )
 
+    def _evidence_fidelity_microscope(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        object_id = str(payload["object_id"])
+        support_state = str(payload["autonomy_support_state"])
+        evidence_fidelity = str(payload["evidence_fidelity"])
+        semantic_fidelity = evidence_fidelity in {
+            "raw_vault_linked",
+            "declassified_summary",
+            "redacted_derivative",
+        }
+        autonomy_supported = support_state != "evidence_insufficient_for_autonomy"
+        return {
+            **payload,
+            "schema_version": "skillkernel.observatory.evidence-fidelity.v1",
+            "object_type": "evidence_fidelity_status",
+            "object_id": object_id,
+            "title": (
+                f"{payload['decision_family']} evidence fidelity "
+                f"({payload['evidence_fidelity']})"
+            ),
+            "summary": (
+                f"{payload['item_count']} {payload['source_kind']} items; "
+                f"support={support_state}"
+            ),
+            "timeline": [
+                {
+                    "at": payload["updated_at"],
+                    "event": "evidence_fidelity_status_updated",
+                    "autonomy_support_state": support_state,
+                    "dominant_reason_code": payload.get("dominant_reason_code"),
+                }
+            ],
+            "read_model": {
+                "source": "observatory_admin_store.evidence_fidelity_status",
+                "data_quality": "aggregate-status-only",
+                "raw_content_available": False,
+                "semantic_evidence_returned": False,
+            },
+            "diagnostics": {
+                "decision_family": payload["decision_family"],
+                "source_kind": payload["source_kind"],
+                "evidence_fidelity": payload["evidence_fidelity"],
+                "item_count": payload["item_count"],
+                "autonomy_support_state": support_state,
+                "dominant_reason_code": payload.get("dominant_reason_code"),
+                "semantic_autonomy_blocked": support_state
+                == "evidence_insufficient_for_autonomy",
+                "safe_next_views": [
+                    "raw_vault_summary",
+                    "semantic_adjudications",
+                    "autonomy_decisions",
+                ],
+            },
+            "provenance": {
+                "upstream": [
+                    {
+                        "object_type": "evidence_source_kind",
+                        "object_id": payload["source_kind"],
+                        "relationship": "aggregated_source_kind",
+                    }
+                ],
+                "downstream": [
+                    {
+                        "object_type": "semantic_adjudication",
+                        "object_id": payload["decision_family"],
+                        "relationship": "decision_family_support",
+                    },
+                    {
+                        "object_type": "autonomy_decision",
+                        "object_id": payload["decision_family"],
+                        "relationship": "decision_family_support",
+                    },
+                ],
+            },
+            "effects": {
+                "supports_full_autonomy": autonomy_supported
+                and evidence_fidelity in {"raw_vault_linked", "declassified_summary"},
+                "supports_degraded_autonomy": autonomy_supported and semantic_fidelity,
+                "hash_only_semantic_authority": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "read-model-summary-only",
+                "redaction_state": "aggregate_status",
+                "raw_evidence_returned": False,
+                "semantic_derivatives_returned": False,
+            },
+        }
+
+    def _semantic_adjudication_microscope(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        object_id = str(payload["adjudication_run_id"])
+        upstream: list[dict[str, Any]] = []
+        if payload.get("model_profile_id"):
+            upstream.append(
+                {
+                    "object_type": "model_profile",
+                    "object_id": payload["model_profile_id"],
+                    "relationship": "qualified_text_profile",
+                }
+            )
+        return {
+            **payload,
+            "schema_version": "skillkernel.observatory.semantic-adjudication.v1",
+            "object_type": "semantic_adjudication",
+            "object_id": object_id,
+            "title": f"Semantic adjudication {payload['decision_family']}",
+            "summary": (
+                f"{payload['schema_status']}; confidence={payload['confidence_band']}; "
+                f"verifier={payload['verifier_state']}"
+            ),
+            "timeline": [
+                {
+                    "at": payload["started_at"],
+                    "event": "semantic_adjudication_started",
+                    "decision_family": payload["decision_family"],
+                },
+                {
+                    "at": payload["completed_at"],
+                    "event": "semantic_adjudication_completed",
+                    "schema_status": payload["schema_status"],
+                    "confidence_band": payload["confidence_band"],
+                },
+            ]
+            if payload.get("completed_at")
+            else [
+                {
+                    "at": payload["started_at"],
+                    "event": "semantic_adjudication_started",
+                    "decision_family": payload["decision_family"],
+                }
+            ],
+            "read_model": {
+                "source": "observatory_admin_store.semantic_adjudications",
+                "data_quality": "status-only",
+                "verdict_payload_returned": False,
+                "raw_context_returned": False,
+            },
+            "diagnostics": {
+                "decision_family": payload["decision_family"],
+                "schema_status": payload["schema_status"],
+                "confidence_band": payload["confidence_band"],
+                "evidence_fidelity": payload["evidence_fidelity"],
+                "verifier_state": payload["verifier_state"],
+                "raw_vault_exposure_class": payload["raw_vault_exposure_class"],
+                "dominant_reason_code": payload.get("dominant_reason_code"),
+                "deterministic_admissibility": "admissible"
+                if payload["schema_status"] == "valid"
+                else "schema_blocked",
+                "safe_next_actions": [
+                    "inspect_evidence_fidelity",
+                    "inspect_autonomy_decision",
+                    "rerun_adjudication_if_policy_allows",
+                ],
+            },
+            "provenance": {
+                "upstream": upstream,
+                "downstream": [
+                    {
+                        "object_type": "autonomy_decision",
+                        "object_id": payload["decision_family"],
+                        "relationship": "adjudication_family_input",
+                    }
+                ],
+            },
+            "effects": {
+                "llm_semantic_authority": True,
+                "deterministic_execution_authority": False,
+                "raw_vault_exposed_to_admin_api": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "adjudication-status-only",
+                "redaction_state": "verdict_content_omitted",
+                "verdict_payload_returned": False,
+                "raw_context_returned": False,
+            },
+        }
+
+    def _autonomy_decision_microscope(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        target = payload["target"]
+        hard_state = str(payload["hard_invariant_state"])
+        soft_state = str(payload["soft_threshold_state"])
+        threshold_deadlock = _is_threshold_deadlock_decision(record)
+        return {
+            **payload,
+            "schema_version": "skillkernel.observatory.autonomy-decision.v1",
+            "object_type": "autonomy_decision",
+            "object_id": str(payload["decision_id"]),
+            "title": f"Autonomy decision {payload['decision_family']}",
+            "summary": (
+                f"{payload['selected_action']}; hard={hard_state}; "
+                f"soft={soft_state}; confidence={payload['confidence_band']}"
+            ),
+            "timeline": [
+                {
+                    "at": payload["created_at"],
+                    "event": "autonomy_decision_created",
+                    "selected_action": payload["selected_action"],
+                },
+                {
+                    "at": payload["updated_at"],
+                    "event": "autonomy_decision_status_updated",
+                    "hard_invariant_state": hard_state,
+                    "soft_threshold_state": soft_state,
+                },
+            ],
+            "read_model": {
+                "source": "observatory_admin_store.autonomy_decisions",
+                "data_quality": "status-only",
+                "raw_semantic_verdict_returned": False,
+                "policy_payload_returned": False,
+            },
+            "diagnostics": {
+                "decision_family": payload["decision_family"],
+                "action_risk_tier": payload["action_risk_tier"],
+                "hard_invariant_state": hard_state,
+                "soft_threshold_state": soft_state,
+                "selected_action": payload["selected_action"],
+                "confidence_band": payload["confidence_band"],
+                "evidence_fidelity": payload["evidence_fidelity"],
+                "autonomy_support_state": payload["autonomy_support_state"],
+                "dominant_reason_code": payload.get("dominant_reason_code"),
+                "threshold_deadlock_candidate": threshold_deadlock,
+                "hard_invariant_failed": hard_state not in {"passed", "ok"},
+                "administrative_escalation_required": payload["selected_action"]
+                == "escalate_admin",
+                "safe_next_actions": [
+                    "inspect_target",
+                    "inspect_evidence_fidelity",
+                    "inspect_semantic_adjudication",
+                ],
+            },
+            "provenance": {
+                "upstream": [
+                    {
+                        "object_type": target["object_type"],
+                        "object_id": target["object_id"],
+                        "relationship": "decision_target",
+                    },
+                    {
+                        "object_type": "evidence_fidelity_status",
+                        "object_id": payload["decision_family"],
+                        "relationship": "decision_family_evidence",
+                    },
+                ],
+                "downstream": [
+                    {
+                        "object_type": "threshold_deadlock",
+                        "object_id": str(payload["decision_id"]),
+                        "relationship": "derived_deadlock_finding",
+                    }
+                ]
+                if threshold_deadlock
+                else [],
+            },
+            "effects": {
+                "selected_action": payload["selected_action"],
+                "mutates_runtime": False,
+                "requires_guarded_action_route": True,
+                "hard_invariants_can_be_relaxed": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "decision-status-read-model",
+                "redaction_state": "status_only",
+                "raw_semantic_verdict_returned": False,
+                "policy_payload_returned": False,
+            },
+        }
+
     def _threshold_deadlock_payload(record: Any) -> dict[str, Any]:
-        decision = record.to_json()
+        decision = _autonomy_decision_microscope(record)
         return {
             "schema_version": "skillkernel.observatory.threshold-deadlock.v1",
             "object_type": "threshold_deadlock",
@@ -9811,7 +10083,7 @@ def create_app(
         return _observatory_collection(
             object_type="evidence_fidelity_status",
             title="Evidence fidelity status",
-            items=[record.to_json() for record in records],
+            items=[_evidence_fidelity_microscope(record) for record in records],
             limit=limit,
             cursor=cursor,
             source="observatory_admin_store.list_evidence_fidelity_status",
@@ -9839,7 +10111,7 @@ def create_app(
                 status_code=http_status.HTTP_404_NOT_FOUND,
                 detail="evidence fidelity status not found",
             )
-        return ObservatoryObjectResponse(object=record.to_json())
+        return ObservatoryObjectResponse(object=_evidence_fidelity_microscope(record))
 
     @app.get(
         "/admin/api/v1/raw-vault/summary",
@@ -9860,7 +10132,7 @@ def create_app(
         return _observatory_collection(
             object_type="raw_vault_fidelity_summary",
             title="Raw-vault policy and evidence-fidelity summary",
-            items=[record.to_json() for record in records],
+            items=[_evidence_fidelity_microscope(record) for record in records],
             limit=limit,
             cursor=cursor,
             source="observatory_admin_store.list_evidence_fidelity_status",
@@ -9889,7 +10161,7 @@ def create_app(
         return _observatory_collection(
             object_type="semantic_adjudication",
             title="Semantic adjudications",
-            items=[record.to_json() for record in records],
+            items=[_semantic_adjudication_microscope(record) for record in records],
             limit=limit,
             cursor=cursor,
             source="observatory_admin_store.list_semantic_adjudications",
@@ -9919,7 +10191,7 @@ def create_app(
                 status_code=http_status.HTTP_404_NOT_FOUND,
                 detail="semantic adjudication not found",
             )
-        return ObservatoryObjectResponse(object=record.to_json())
+        return ObservatoryObjectResponse(object=_semantic_adjudication_microscope(record))
 
     @app.get(
         "/admin/api/v1/autonomy/decisions",
@@ -9942,7 +10214,7 @@ def create_app(
         return _observatory_collection(
             object_type="autonomy_decision",
             title="Autonomy decisions",
-            items=[record.to_json() for record in records],
+            items=[_autonomy_decision_microscope(record) for record in records],
             limit=limit,
             cursor=cursor,
             source="observatory_admin_store.list_autonomy_decisions",
@@ -9970,7 +10242,7 @@ def create_app(
                 status_code=http_status.HTTP_404_NOT_FOUND,
                 detail="autonomy decision not found",
             )
-        return ObservatoryObjectResponse(object=record.to_json())
+        return ObservatoryObjectResponse(object=_autonomy_decision_microscope(record))
 
     @app.get(
         "/admin/api/v1/autonomy/threshold-deadlocks",
@@ -10311,14 +10583,18 @@ def create_app(
                 object_id=object_id
             )
             if fidelity is not None:
-                return ObservatoryObjectResponse(object=fidelity.to_json())
+                return ObservatoryObjectResponse(
+                    object=_evidence_fidelity_microscope(fidelity)
+                )
         if object_type in {"autonomy_decision", "autonomy-decision"}:
             decision_id = _uuid_or_404(object_id, "autonomy decision")
             decision = await observatory_admin.get_autonomy_decision(
                 decision_id=decision_id
             )
             if decision is not None:
-                return ObservatoryObjectResponse(object=decision.to_json())
+                return ObservatoryObjectResponse(
+                    object=_autonomy_decision_microscope(decision)
+                )
         if object_type in {"threshold_deadlock", "threshold-deadlock"}:
             decision_id = _uuid_or_404(object_id, "threshold deadlock")
             decision = await observatory_admin.get_autonomy_decision(
@@ -10350,7 +10626,9 @@ def create_app(
                 adjudication_run_id=adjudication_id,
             )
             if adjudication is not None:
-                return ObservatoryObjectResponse(object=adjudication.to_json())
+                return ObservatoryObjectResponse(
+                    object=_semantic_adjudication_microscope(adjudication)
+                )
         if object_type in {"administrative_escalation", "escalation"}:
             escalation_id = _uuid_or_404(object_id, "administrative escalation")
             escalation = await observatory_admin.get_administrative_escalation(

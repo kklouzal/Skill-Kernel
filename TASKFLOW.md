@@ -16,6 +16,34 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory semantic-autonomy evidence surfaces now use
+  content-safe object microscopes instead of raw status-row JSON for
+  evidence-fidelity, semantic-adjudication, and autonomy-decision records.
+  Direct list/detail routes and generic object aliases expose microscope
+  panels with read-model metadata, timelines, provenance/effects, deterministic
+  admissibility and deadlock diagnostics, semantic-fidelity support flags, and
+  explicit raw-verdict/policy/context denial metadata while preserving existing
+  stable IDs and status fields. This advances Core Sections 5.12-5.14 and
+  12.1-12.8 plus Observatory Sections 7.6, 7.7, 12.6, 16.1, and acceptance
+  criterion 21.16 by making semantic decision-family evidence explainable
+  without returning raw evidence, LLM verdict payloads, policy payloads, or raw
+  context through the admin API. Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py -q -k
+  'autonomy_evidence_read_models_are_content_safe or
+  required_admin_route_matrix'` (`2 passed, 58 deselected`) and `uv run ruff
+  check sidecar/autoskill/api/app.py
+  sidecar/autoskill/tests/test_observatory_api.py`. No compose/Postgres smoke
+  was needed because this slice only reshapes existing read-model records and
+  validates them through the in-memory Observatory admin store. Required
+  pre-commit gates also passed with `uv run ruff check sidecar`, `uv run
+  pytest` (`401 passed`), `uv run python -m compileall -q sidecar`, `npm run
+  build --prefix sidecar/autoskill/observatory`, `uv run python
+  scripts/generate_observatory_openapi_client.py --check`, `git diff
+  --check`, `uv run python scripts/autoskill_acceptance.py --json`
+  (`ready=true`, `70` implemented), `uv run python
+  scripts/autoskill_observatory_acceptance.py --json` (`ready=true`, `86`
+  satisfied), and `uv run python scripts/autoskill_conformance.py --json`
+  (`ready=true`, `14/14` checks).
 - 2026-06-06: Observatory autonomy threshold policies now have a
   sidecar-hosted, content-safe read model and object microscope path over the
   existing broker policy version store. `BrokerPolicyStore` can list persisted

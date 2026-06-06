@@ -2645,6 +2645,20 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             object_id=str(decision_id),
             workspace_id="dev-01",
         )
+        adjudication_object_detail = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="semantic_adjudication",
+            object_id=str(adjudication_id),
+            workspace_id="dev-01",
+        )
+        fidelity_object_detail = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="evidence_fidelity_status",
+            object_id="dev-01:historical_chunk:intent_reconstruction:metadata_only",
+            workspace_id="dev-01",
+        )
         deadlock_object_detail = await routes[
             ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
         ].endpoint(
@@ -2676,6 +2690,8 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             escalations,
             escalation_detail,
             object_detail,
+            adjudication_object_detail,
+            fidelity_object_detail,
             deadlock_object_detail,
             escalation_object_detail,
             fidelity_detail,
@@ -2693,6 +2709,8 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
         escalations,
         escalation_detail,
         object_detail,
+        adjudication_object_detail,
+        fidelity_object_detail,
         deadlock_object_detail,
         escalation_object_detail,
         fidelity_detail,
@@ -2705,18 +2723,39 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
     assert evidence_item["autonomy_support_state"] == (
         "evidence_insufficient_for_autonomy"
     )
+    assert evidence_item["diagnostics"]["semantic_autonomy_blocked"] is True
+    assert evidence_item["read_model"]["data_quality"] == "aggregate-status-only"
+    assert evidence_item["effects"]["hash_only_semantic_authority"] is False
     assert evidence_item["content_policy"]["raw_available"] is False
+    assert evidence_item["content_policy"]["raw_evidence_returned"] is False
     assert raw_vault.collection["diagnostics"]["raw_vault_records_returned"] is False
 
     adjudication_item = adjudications.collection["items"][0]
     assert adjudications.collection["diagnostics"]["verdict_payload_returned"] is False
     assert adjudication_item["object_id"] == str(adjudication_id)
+    assert adjudication_item["read_model"]["verdict_payload_returned"] is False
+    assert adjudication_item["diagnostics"]["deterministic_admissibility"] == (
+        "admissible"
+    )
+    assert adjudication_item["effects"]["deterministic_execution_authority"] is False
     assert adjudication_detail.object["raw_vault_exposure_class"] == "not_exposed"
+    assert adjudication_detail.object["content_policy"]["verdict_payload_returned"] is False
+    assert adjudication_object_detail.object["object_type"] == "semantic_adjudication"
 
     decision_item = decisions.collection["items"][0]
     assert decision_item["selected_action"] == "run_more_probes"
+    assert decision_item["diagnostics"]["threshold_deadlock_candidate"] is True
+    assert decision_item["effects"]["hard_invariants_can_be_relaxed"] is False
     assert decision_detail.object["hard_invariant_state"] == "passed"
+    assert decision_detail.object["content_policy"][
+        "raw_semantic_verdict_returned"
+    ] is False
     assert object_detail.object["object_type"] == "autonomy_decision"
+    assert object_detail.object["provenance"]["upstream"][0] == {
+        "object_type": "candidate",
+        "object_id": "candidate-1",
+        "relationship": "decision_target",
+    }
     assert deadlocks.collection["items"][0]["object_type"] == "threshold_deadlock"
     assert deadlocks.collection["items"][0]["object_id"] == str(decision_id)
     assert deadlock_detail.object["autonomy_decision"]["object_type"] == (
@@ -2743,6 +2782,12 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
         "raw_alternatives_returned"
     ] is False
     assert fidelity_detail.object["object_type"] == "evidence_fidelity_status"
+    assert fidelity_detail.object["diagnostics"]["safe_next_views"] == [
+        "raw_vault_summary",
+        "semantic_adjudications",
+        "autonomy_decisions",
+    ]
+    assert fidelity_object_detail.object["object_type"] == "evidence_fidelity_status"
     combined = json.dumps(
         [
             evidence.collection,
@@ -2750,6 +2795,11 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             adjudications.collection,
             decisions.collection,
             escalations.collection,
+            adjudication_detail.object,
+            decision_detail.object,
+            object_detail.object,
+            adjudication_object_detail.object,
+            fidelity_object_detail.object,
             escalation_detail.object,
             escalation_object_detail.object,
         ],

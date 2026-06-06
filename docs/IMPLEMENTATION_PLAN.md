@@ -3,6 +3,26 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Observatory semantic-autonomy evidence read models now use
+content-safe microscopes across direct and generic API paths. Evidence-fidelity
+status, semantic-adjudication status, and autonomy-decision status records
+preserve their stable IDs and top-level state fields, but now also expose
+read-model metadata, timeline, provenance/effects, deterministic admissibility
+diagnostics, threshold-deadlock indicators, semantic-fidelity support flags,
+and explicit raw-verdict/policy/context denial metadata. This advances Core
+Sections 5.12-5.14 and 12.1-12.8 plus Observatory Sections 7.6, 7.7, 12.6, and
+16.1 by closing semantic-decision aggregate-to-evidence paths without adding
+UI-local authority or returning raw evidence, LLM verdict payloads, policy
+payloads, or raw context. Focused validation passed with the autonomy/evidence
+read-model and route-matrix Observatory API regressions (`2 passed, 58
+deselected`) plus targeted Ruff. No compose/Postgres smoke was needed because
+the slice only reshapes existing read-model records covered by the in-memory
+Observatory admin store. Required pre-commit gates also passed with full
+sidecar Ruff, full pytest (`401 passed`), compileall, Observatory frontend
+build, generated OpenAPI client freshness check, diff-check, and the core,
+Observatory, and conformance reports (`70` implemented, `86` satisfied,
+`14/14` checks, zero validation errors).
+
 2026-06-06 update: Observatory autonomy threshold policies now have a
 sidecar-hosted, content-safe read model and object microscope path. The broker
 policy store exposes bounded policy-version listing, admin routes expose
