@@ -634,7 +634,7 @@ class WorkerTestStores:
         )
 
 
-def test_worker_run_once_dispatches_maintenance_job() -> None:
+def test_worker_run_once_dispatches_ingest_job() -> None:
     stores = WorkerTestStores(
         jobs=MemoryJobStore(),
         scheduler=MemorySchedulerWorkerStore(),
@@ -652,7 +652,7 @@ def test_worker_run_once_dispatches_maintenance_job() -> None:
         return await run_worker_once(
             stores.as_worker_stores(),
             worker_id="worker-1",
-            pool="maintenance",
+            pool="ingest",
         )
 
     result = asyncio.run(run())
@@ -747,7 +747,7 @@ def test_worker_run_once_records_trace_span_for_job_execution() -> None:
                 observability=observability,
             ),
             worker_id="worker-1",
-            pool="maintenance",
+            pool="ingest",
         )
         return enqueued.job, result
 
@@ -793,7 +793,7 @@ def test_worker_run_once_records_error_trace_span() -> None:
                 observability=observability,
             ),
             worker_id="worker-1",
-            pool="mutation",
+            pool="filesystem",
         )
 
     result = asyncio.run(run())
@@ -803,6 +803,36 @@ def test_worker_run_once_records_error_trace_span() -> None:
     assert observability.started[1].operation_name == "writer.apply"
     assert observability.finished[0]["status"] == "error"
     assert "writer roots are required" in observability.finished[0]["safe_attributes"]["error"]
+
+
+def test_legacy_mutation_pool_aliases_to_filesystem_jobs() -> None:
+    jobs = MemoryJobStore()
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="writer.apply",
+            idempotency_key="writer-apply:legacy-mutation-alias",
+            max_attempts=1,
+        )
+        result = await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=MemoryPendingEmbeddingStore(),
+                governance=MemoryGovernanceStore(),
+            ),
+            worker_id="legacy-worker",
+            pool="mutation",
+        )
+        return result
+
+    result = asyncio.run(run())
+
+    assert result.claimed is True
+    assert result.status == "failed"
+    assert jobs.heartbeat_events[0].pool == "filesystem"
 
 
 def test_worker_run_once_renews_lease_while_handler_runs() -> None:
@@ -822,7 +852,7 @@ def test_worker_run_once_renews_lease_while_handler_runs() -> None:
         return await run_worker_once(
             stores.as_worker_stores(),
             worker_id="worker-1",
-            pool="maintenance",
+            pool="ingest",
             lease_seconds=1,
         )
 
@@ -851,7 +881,7 @@ def test_worker_run_once_records_content_safe_job_progress() -> None:
         return await run_worker_once(
             stores.as_worker_stores(),
             worker_id="worker-1",
-            pool="maintenance",
+            pool="ingest",
             lease_seconds=1,
         )
 
@@ -900,7 +930,7 @@ def test_worker_progress_for_semantic_jobs_exposes_safe_phase_plan() -> None:
         return await run_worker_once(
             stores.as_worker_stores(),
             worker_id="worker-1",
-            pool="maintenance",
+            pool="evaluation",
             lease_seconds=1,
         )
 
@@ -946,7 +976,7 @@ def test_worker_pool_does_not_claim_other_pool_jobs() -> None:
         return await run_worker_once(
             stores.as_worker_stores(),
             worker_id="worker-1",
-            pool="maintenance",
+            pool="embedding",
         )
 
     result = asyncio.run(run())
@@ -973,7 +1003,7 @@ def test_worker_embedding_generate_pauses_without_active_embedding_profile() -> 
         return await run_worker_once(
             stores.as_worker_stores(),
             worker_id="worker-1",
-            pool="maintenance",
+            pool="embedding",
         )
 
     result = asyncio.run(run())
@@ -1032,7 +1062,7 @@ def test_worker_embedding_generate_uses_qualified_embedding_profile(monkeypatch)
         return await run_worker_once(
             stores.as_worker_stores(),
             worker_id="worker-1",
-            pool="maintenance",
+            pool="embedding",
         )
 
     result = asyncio.run(run())
@@ -1081,7 +1111,7 @@ def test_worker_embedding_generate_prefers_active_embedding_profile(monkeypatch)
         return await run_worker_once(
             stores.as_worker_stores(),
             worker_id="worker-1",
-            pool="maintenance",
+            pool="embedding",
         )
 
     result = asyncio.run(run())
@@ -1136,7 +1166,7 @@ def test_worker_embedding_generate_caps_catchup_batch_at_one_thousand(monkeypatc
         return await run_worker_once(
             stores.as_worker_stores(),
             worker_id="worker-1",
-            pool="maintenance",
+            pool="embedding",
         )
 
     result = asyncio.run(run())
@@ -1164,7 +1194,9 @@ def test_worker_run_once_api_uses_configured_stores() -> None:
             job_kind="evidence.derive",
             idempotency_key="derive:api",
         )
-        return await route.endpoint(request=WorkerRunOnceRequest(worker_id="worker-api"))
+        return await route.endpoint(
+            request=WorkerRunOnceRequest(worker_id="worker-api", pool="ingest")
+        )
 
     response = asyncio.run(run())
 
@@ -1196,7 +1228,7 @@ def test_worker_loop_runs_bounded_concurrent_iterations() -> None:
             stores.as_worker_stores(),
             WorkerLoopConfig(
                 worker_id="loop-worker",
-                pool="maintenance",
+                pool="ingest",
                 concurrency=2,
                 idle_sleep_seconds=0,
                 max_iterations=2,
@@ -1289,8 +1321,8 @@ def test_worker_health_reports_pool_concurrency_and_job_counts() -> None:
             idempotency_key="tick:health",
         )
         await jobs.record_worker_heartbeat(
-            worker_id="maintenance-1",
-            pool="maintenance",
+            worker_id="ingest-1",
+            pool="ingest",
             concurrency=2,
             status="running",
             summary={"claimed": 3},
@@ -1299,25 +1331,25 @@ def test_worker_health_reports_pool_concurrency_and_job_counts() -> None:
             jobs,
             concurrency_by_pool={
                 "scheduler": 1,
-                "maintenance": 4,
-                "mutation": 1,
+                "ingest": 4,
+                "filesystem": 1,
             },
         )
 
     health = asyncio.run(run()).to_json()
 
-    maintenance = next(pool for pool in health["pools"] if pool["pool"] == "maintenance")
-    assert maintenance["concurrency"] == 4
-    assert "evidence.derive" in maintenance["job_kinds"]
+    ingest = next(pool for pool in health["pools"] if pool["pool"] == "ingest")
+    assert ingest["concurrency"] == 4
+    assert "evidence.derive" in ingest["job_kinds"]
     assert health["jobs_by_status"] == {"queued": 2}
     assert health["jobs_by_kind"]["evidence.derive"] == {"queued": 1}
-    assert health["jobs_by_pool"]["maintenance"] == {"queued": 1}
+    assert health["jobs_by_pool"]["ingest"] == {"queued": 1}
     assert health["jobs_by_pool"]["scheduler"] == {"queued": 1}
-    assert health["workers"][0]["worker_id"] == "maintenance-1"
+    assert health["workers"][0]["worker_id"] == "ingest-1"
     assert health["workers"][0]["summary"] == {"claimed": 3}
 
 
-def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
+def test_filesystem_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
     jobs = MemoryJobStore()
     governance = MemoryGovernanceStore()
     retrieval = MemoryInvalidationStore()
@@ -1389,8 +1421,8 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
                 workspace_root=workspace_root,
                 archive_root=archive_root,
             ),
-            worker_id="mutation-worker",
-            pool="mutation",
+            worker_id="filesystem-worker",
+            pool="filesystem",
         )
         return result, revocation
 
@@ -1447,7 +1479,7 @@ def test_mutation_worker_rolls_back_queued_revocation_request(tmp_path) -> None:
     ]
 
 
-def test_mutation_worker_deletes_initial_create_on_rollback(tmp_path) -> None:
+def test_filesystem_worker_deletes_initial_create_on_rollback(tmp_path) -> None:
     jobs = MemoryJobStore()
     governance = MemoryGovernanceStore()
     retrieval = MemoryInvalidationStore()
@@ -1510,8 +1542,8 @@ def test_mutation_worker_deletes_initial_create_on_rollback(tmp_path) -> None:
                 workspace_root=workspace_root,
                 archive_root=archive_root,
             ),
-            worker_id="mutation-worker",
-            pool="mutation",
+            worker_id="filesystem-worker",
+            pool="filesystem",
         )
         return result, revocation
 
@@ -1540,7 +1572,7 @@ def test_mutation_worker_deletes_initial_create_on_rollback(tmp_path) -> None:
     }
 
 
-def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path) -> None:
+def test_filesystem_worker_invalidates_retrieval_logs_and_context_records(tmp_path) -> None:
     jobs = MemoryJobStore()
     governance = MemoryGovernanceStore()
     retrieval = MemoryRetrievalInvalidationStore()
@@ -1622,8 +1654,8 @@ def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path
                 workspace_root=workspace_root,
                 archive_root=archive_root,
             ),
-            worker_id="mutation-worker",
-            pool="mutation",
+            worker_id="filesystem-worker",
+            pool="filesystem",
         )
 
     result = asyncio.run(run())
@@ -1648,7 +1680,7 @@ def test_mutation_worker_invalidates_retrieval_logs_and_context_records(tmp_path
     assert attribution.calls[0]["workspace_key"] == "dev-01"
 
 
-def test_mutation_worker_applies_topology_downstream_actions() -> None:
+def test_filesystem_worker_applies_topology_downstream_actions() -> None:
     jobs = MemoryJobStore()
     topology = NullTopologyStore()
     governance = MemoryGovernanceStore()
@@ -1730,8 +1762,8 @@ def test_mutation_worker_applies_topology_downstream_actions() -> None:
                 governance=governance,
                 observability=observability,
             ),
-            worker_id="mutation-worker",
-            pool="mutation",
+            worker_id="filesystem-worker",
+            pool="filesystem",
         )
         return result, operation.skill_graph_operation_id
 
@@ -1812,7 +1844,7 @@ def test_mutation_worker_applies_topology_downstream_actions() -> None:
     ]
 
 
-def test_mutation_worker_scores_topology_broker_trials() -> None:
+def test_analysis_worker_scores_topology_broker_trials() -> None:
     jobs = MemoryJobStore()
     topology = NullTopologyStore()
 
@@ -1862,8 +1894,8 @@ def test_mutation_worker_scores_topology_broker_trials() -> None:
                 embeddings=MemoryInvalidationStore(),
                 topology=topology,
             ),
-            worker_id="mutation-worker",
-            pool="mutation",
+            worker_id="analysis-worker",
+            pool="analysis",
         )
         return result
 
@@ -1879,7 +1911,7 @@ def test_mutation_worker_scores_topology_broker_trials() -> None:
     } == {"passed"}
 
 
-def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) -> None:
+def test_filesystem_worker_applies_staged_manifest_when_policy_approved(tmp_path) -> None:
     jobs = MemoryJobStore()
     governance = MemoryGovernanceStore()
     activation_gate = MemoryActivationGateStore()
@@ -1942,8 +1974,8 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
                 workspace_root=workspace_root,
                 archive_root=archive_root,
             ),
-            worker_id="mutation-worker",
-            pool="mutation",
+            worker_id="filesystem-worker",
+            pool="filesystem",
         )
 
     result = asyncio.run(run())
@@ -1996,7 +2028,7 @@ def test_mutation_worker_applies_staged_manifest_when_policy_approved(tmp_path) 
     ]
 
 
-def test_mutation_worker_apply_defers_when_activation_window_unavailable(tmp_path) -> None:
+def test_filesystem_worker_apply_defers_when_activation_window_unavailable(tmp_path) -> None:
     jobs = MemoryJobStore()
     governance = MemoryGovernanceStore()
     activation_window = MemoryActivationWindowStore(
@@ -2049,8 +2081,8 @@ def test_mutation_worker_apply_defers_when_activation_window_unavailable(tmp_pat
                 workspace_root=workspace_root,
                 archive_root=archive_root,
             ),
-            worker_id="mutation-worker",
-            pool="mutation",
+            worker_id="filesystem-worker",
+            pool="filesystem",
         )
 
     result = asyncio.run(run())
@@ -2082,7 +2114,7 @@ def test_mutation_worker_apply_defers_when_activation_window_unavailable(tmp_pat
     }
 
 
-def test_mutation_worker_apply_fails_closed_when_activation_gate_blocks(tmp_path) -> None:
+def test_filesystem_worker_apply_fails_closed_when_activation_gate_blocks(tmp_path) -> None:
     jobs = MemoryJobStore()
     governance = MemoryGovernanceStore()
     activation_gate = MemoryActivationGateStore(
@@ -2130,8 +2162,8 @@ def test_mutation_worker_apply_fails_closed_when_activation_gate_blocks(tmp_path
                 workspace_root=workspace_root,
                 archive_root=archive_root,
             ),
-            worker_id="mutation-worker",
-            pool="mutation",
+            worker_id="filesystem-worker",
+            pool="filesystem",
         )
 
     result = asyncio.run(run())
@@ -2142,7 +2174,7 @@ def test_mutation_worker_apply_fails_closed_when_activation_gate_blocks(tmp_path
     assert not (workspace_root / "skills" / "autoskill" / "blocked-skill").exists()
 
 
-def test_mutation_worker_apply_fails_closed_without_context_compile_proof(tmp_path) -> None:
+def test_filesystem_worker_apply_fails_closed_without_context_compile_proof(tmp_path) -> None:
     jobs = MemoryJobStore()
     governance = MemoryGovernanceStore()
     activation_gate = MemoryActivationGateStore()
@@ -2187,8 +2219,8 @@ def test_mutation_worker_apply_fails_closed_without_context_compile_proof(tmp_pa
                 workspace_root=workspace_root,
                 archive_root=archive_root,
             ),
-            worker_id="mutation-worker",
-            pool="mutation",
+            worker_id="filesystem-worker",
+            pool="filesystem",
         )
 
     result = asyncio.run(run())
@@ -2198,7 +2230,7 @@ def test_mutation_worker_apply_fails_closed_without_context_compile_proof(tmp_pa
     assert not (workspace_root / "skills" / "autoskill" / "missing-context-proof").exists()
 
 
-def test_mutation_worker_apply_fails_closed_without_policy_approval(tmp_path) -> None:
+def test_filesystem_worker_apply_fails_closed_without_policy_approval(tmp_path) -> None:
     jobs = MemoryJobStore()
 
     async def run():
@@ -2219,8 +2251,8 @@ def test_mutation_worker_apply_fails_closed_without_policy_approval(tmp_path) ->
                 workspace_root=tmp_path / "workspace",
                 archive_root=tmp_path / "workspace" / ".autoskill" / "archive",
             ),
-            worker_id="mutation-worker",
-            pool="mutation",
+            worker_id="filesystem-worker",
+            pool="filesystem",
         )
 
     result = asyncio.run(run())
@@ -2255,7 +2287,7 @@ def test_worker_run_once_dispatches_evaluation_job() -> None:
         return await run_worker_once(
             stores.as_worker_stores(),
             worker_id="worker-1",
-            pool="maintenance",
+            pool="evaluation",
         )
 
     result = asyncio.run(run())
@@ -2309,7 +2341,7 @@ def test_worker_run_once_dispatches_external_skill_scan(tmp_path) -> None:
                 external_skill_roots=[root],
             ),
             worker_id="worker-1",
-            pool="maintenance",
+            pool="retrieval",
         )
 
     result = asyncio.run(run())
@@ -2321,7 +2353,7 @@ def test_worker_run_once_dispatches_external_skill_scan(tmp_path) -> None:
     assert str(root) not in str(external_skills.records[0].to_json())
 
 
-def test_mutation_worker_materializes_operator_approved_external_import() -> None:
+def test_filesystem_worker_materializes_operator_approved_external_import() -> None:
     jobs = MemoryJobStore()
     external_skills = MemoryExternalSkillStore()
 
@@ -2366,8 +2398,8 @@ def test_mutation_worker_materializes_operator_approved_external_import() -> Non
                 external_skills=external_skills,
                 embeddings=MemoryPendingEmbeddingStore(),
             ),
-            worker_id="mutation-worker",
-            pool="mutation",
+            worker_id="filesystem-worker",
+            pool="filesystem",
         )
         return result
 
@@ -2380,7 +2412,7 @@ def test_mutation_worker_materializes_operator_approved_external_import() -> Non
 
 
 def test_worker_health_api_uses_configured_pool_concurrency(monkeypatch) -> None:
-    monkeypatch.setenv("AUTOSKILL_WORKER_MAINTENANCE_CONCURRENCY", "5")
+    monkeypatch.setenv("AUTOSKILL_WORKER_ANALYSIS_CONCURRENCY", "5")
     from autoskill.core.config import get_settings
 
     get_settings.cache_clear()
@@ -2402,10 +2434,11 @@ def test_worker_health_api_uses_configured_pool_concurrency(monkeypatch) -> None
         return await route.endpoint()
 
     response = asyncio.run(run())
-    maintenance = next(pool for pool in response.pools if pool["pool"] == "maintenance")
+    analysis = next(pool for pool in response.pools if pool["pool"] == "analysis")
 
-    assert maintenance["concurrency"] == 5
-    assert response.jobs_by_pool["maintenance"] == {"queued": 2}
+    assert analysis["concurrency"] == 5
+    assert response.jobs_by_pool["analysis"] == {"queued": 1}
+    assert response.jobs_by_pool["evaluation"] == {"queued": 1}
     get_settings.cache_clear()
 
 
@@ -2443,8 +2476,8 @@ def test_worker_dispatches_utility_and_curation_jobs() -> None:
             utility=utility,
             contracts=contracts,
         )
-        first = await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
-        second = await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
+        first = await run_worker_once(stores, worker_id="worker-1", pool="analysis")
+        second = await run_worker_once(stores, worker_id="worker-1", pool="analysis")
         return first, second
 
     first, second = asyncio.run(run())
@@ -2488,7 +2521,7 @@ def test_worker_dispatches_usage_aggregation_job() -> None:
             embeddings=MemoryPendingEmbeddingStore(),
             usage=usage,
         )
-        return await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
+        return await run_worker_once(stores, worker_id="worker-1", pool="analysis")
 
     result = asyncio.run(run())
 
@@ -2548,8 +2581,8 @@ def test_worker_dispatches_contract_and_drift_jobs() -> None:
             contracts=contracts,
             diagnostics=diagnostics,
         )
-        first = await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
-        second = await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
+        first = await run_worker_once(stores, worker_id="worker-1", pool="scanner")
+        second = await run_worker_once(stores, worker_id="worker-1", pool="scanner")
         return first, second
 
     first, second = asyncio.run(run())
@@ -2618,7 +2651,7 @@ def test_repair_execute_queues_evaluator_when_curation_source_lacks_staged_manif
             utility=utility,
             governance=governance,
         )
-        return await run_worker_once(stores, worker_id="worker-1", pool="mutation")
+        return await run_worker_once(stores, worker_id="worker-1", pool="llm_generation")
 
     result = asyncio.run(run())
 
@@ -2689,7 +2722,7 @@ def test_repair_execute_consumes_ready_drift_diagnostic_momentum() -> None:
             diagnostics=diagnostics,
             governance=governance,
         )
-        return await run_worker_once(stores, worker_id="worker-1", pool="mutation")
+        return await run_worker_once(stores, worker_id="worker-1", pool="llm_generation")
 
     result = asyncio.run(run())
 
@@ -2794,8 +2827,8 @@ def test_repair_execute_materializes_policy_approved_repair_candidate(tmp_path) 
                 context_governance=NullContextGovernanceStore(),
                 workspace_root=tmp_path,
             ),
-            worker_id="mutation-worker",
-            pool="mutation",
+            worker_id="llm-generation-worker",
+            pool="llm_generation",
         )
 
     result = asyncio.run(run())
@@ -2892,8 +2925,8 @@ def test_repair_execute_blocks_unapproved_memory_influenced_mutation(tmp_path) -
                 memory_governance=memory,
                 workspace_root=tmp_path,
             ),
-            worker_id="mutation-worker",
-            pool="mutation",
+            worker_id="llm-generation-worker",
+            pool="llm_generation",
         )
 
     result = asyncio.run(run())
@@ -2950,7 +2983,7 @@ def test_repair_execute_queues_writer_apply_only_for_policy_approved_manifest() 
             contracts=contracts,
             governance=governance,
         )
-        return await run_worker_once(stores, worker_id="worker-1", pool="mutation")
+        return await run_worker_once(stores, worker_id="worker-1", pool="llm_generation")
 
     result = asyncio.run(run())
 

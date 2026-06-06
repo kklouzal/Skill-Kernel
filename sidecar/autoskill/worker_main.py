@@ -39,9 +39,11 @@ from autoskill.services.historical_discovery import (
 )
 from autoskill.services.scheduler_defaults import ensure_core_schedules
 from autoskill.services.worker import (
+    CANONICAL_WORKER_POOLS,
     WorkerLoopConfig,
     WorkerPool,
     WorkerStores,
+    normalize_worker_pool,
     run_worker_loop,
 )
 
@@ -259,7 +261,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workspace-id", default="default")
     parser.add_argument(
         "--pool",
-        choices=["scheduler", "maintenance", "mutation"],
+        choices=[*CANONICAL_WORKER_POOLS, "mutation"],
         default="maintenance",
     )
     parser.add_argument("--concurrency", type=int, default=None)
@@ -303,10 +305,30 @@ def parse_args() -> argparse.Namespace:
 
 
 def _configured_concurrency(settings: Settings, pool: WorkerPool) -> int:
+    requested_pool = pool
+    pool = normalize_worker_pool(pool)
     if pool == "scheduler":
         return settings.worker_scheduler_concurrency
-    if pool == "mutation":
-        return settings.worker_mutation_concurrency
+    if pool == "ingest":
+        return settings.worker_ingest_concurrency
+    if pool == "backfill":
+        return settings.worker_backfill_concurrency
+    if pool == "embedding":
+        return settings.worker_embedding_concurrency
+    if pool == "retrieval":
+        return settings.worker_retrieval_concurrency
+    if pool == "analysis":
+        return settings.worker_analysis_concurrency
+    if pool == "llm_generation":
+        return settings.worker_llm_generation_concurrency
+    if pool == "scanner":
+        return settings.worker_scanner_concurrency
+    if pool == "evaluation":
+        return settings.worker_evaluation_concurrency
+    if pool == "filesystem":
+        if requested_pool == "mutation":
+            return settings.worker_mutation_concurrency
+        return settings.worker_filesystem_concurrency
     return settings.worker_maintenance_concurrency
 
 
@@ -317,7 +339,7 @@ def _writer_worker_roots(settings: Settings, workspace_root: Path) -> tuple[Path
     ).resolve()
     expected_active_root = (root / "skills" / "autoskill").resolve()
     if active_root != expected_active_root:
-        raise SystemExit("mutation worker requires AUTOSKILL_ACTIVE_ROOT=skills/autoskill")
+        raise SystemExit("filesystem worker requires AUTOSKILL_ACTIVE_ROOT=skills/autoskill")
     archive_root = (
         settings.archive_root
         if settings.archive_root.is_absolute()
@@ -326,7 +348,7 @@ def _writer_worker_roots(settings: Settings, workspace_root: Path) -> tuple[Path
     try:
         archive_root.relative_to(root)
     except ValueError as error:
-        raise SystemExit("mutation worker archive root must stay under workspace root") from error
+        raise SystemExit("filesystem worker archive root must stay under workspace root") from error
     return root, archive_root
 
 

@@ -536,7 +536,7 @@ BEFORE_CODING_CHECKLIST: tuple[HandoffChecklistEntry, ...] = (
         (
             "scripts/autoskill_backup.py and scripts/autoskill_restore.py",
             "revocation traversal preview/request APIs",
-            "mutation-worker invalidation covers derived state families",
+            "filesystem-worker invalidation covers derived state families",
         ),
     ),
     HandoffChecklistEntry(
@@ -629,7 +629,7 @@ DURING_IMPLEMENTATION_CHECKLIST: tuple[HandoffChecklistEntry, ...] = (
         "Build scheduler before analysis jobs.",
         (
             "sidecar-owned scheduler store and scheduler_defaults",
-            "worker_main scheduler/maintenance/mutation pools",
+            "worker_main resource-class worker pools",
             "sidecar/autoskill/tests/test_scheduler_defaults.py and test_scheduler_api.py",
         ),
     ),
@@ -650,7 +650,7 @@ DURING_IMPLEMENTATION_CHECKLIST: tuple[HandoffChecklistEntry, ...] = (
         (
             "writer archive and rollback primitives",
             "critical canary freeze queues rollback revocations",
-            "mutation worker executes rollback requests",
+            "filesystem worker executes rollback requests",
         ),
     ),
     HandoffChecklistEntry(
@@ -782,7 +782,7 @@ SHIP_GATE = HandoffChecklistEntry(
     "Do not ship autonomous apply until scanner, evaluator, deterministic writer, rollback, evolution transactions, provenance/revocation traversal, action attribution, and audit are all operational.",
     (
         "scanner/evaluator/writer/rollback/governance/attribution/audit surfaces are implemented and tested",
-        "mutation-worker apply fails closed unless explicitly policy-approved",
+        "filesystem-worker apply fails closed unless explicitly policy-approved",
         "scripts/autoskill_acceptance.py and this handoff report provide executable operator crosswalks",
     ),
 )

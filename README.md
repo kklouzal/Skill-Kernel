@@ -27,7 +27,7 @@ Implemented now:
 - optional bearer-token auth for event ingest;
 - optional bearer-token auth for control/job APIs;
 - Postgres-backed job enqueue, idempotency, claim, completion, expired-lease recovery, heartbeat, and lease-renewal primitives;
-- sidecar-owned scheduler tick primitive and durable worker pools for scheduler, maintenance, and mutation jobs;
+- sidecar-owned scheduler tick primitive and durable worker pools split by scheduler, ingest, backfill, embedding, retrieval, analysis, LLM generation, scanner, evaluation, filesystem, and maintenance resource classes;
 - deterministic evidence derivation from redacted raw events with provenance edges and recurring-evidence clusters;
 - retrieval schema support for body index documents, pgvector embeddings, lexical indexes, vector fusion, retrieval logs, and broker telemetry;
 - profile-owned embedding storage and search with variable-dimension support;
@@ -35,7 +35,7 @@ Implemented now:
 - deterministic first-pass scanner classifications for hidden content,
   secret-like material, dynamic fetch-exec, policy override, credential
   exfiltration, destructive host commands, and sensitive file harvesting;
-- staged writer apply/rollback, provenance traversal, revocation invalidation, canary freeze, and mutation-worker rollback paths;
+- staged writer apply/rollback, provenance traversal, revocation invalidation, canary freeze, and filesystem-worker rollback paths;
 - topology proposal, trial, apply, downstream action, and invalidation primitives;
 - topology-specific broker replay/canary trial scoring for compose/decompose apply gates;
 - read-only proposal review/status surface for candidate revisions, topology

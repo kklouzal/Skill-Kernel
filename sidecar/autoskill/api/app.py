@@ -208,9 +208,11 @@ from autoskill.services.topology import (
     propose_improvement,
 )
 from autoskill.services.worker import (
+    CANONICAL_WORKER_POOLS,
     WorkerRunResult,
     WorkerStores,
     build_worker_health,
+    normalize_worker_pool,
     run_worker_once,
 )
 from autoskill.services.writer import (
@@ -2385,6 +2387,22 @@ def _readiness_check(
         warnings.append(name)
 
 
+def _worker_concurrency_by_pool(settings: object) -> dict[str, int]:
+    return {
+        "scheduler": settings.worker_scheduler_concurrency,
+        "ingest": settings.worker_ingest_concurrency,
+        "backfill": settings.worker_backfill_concurrency,
+        "embedding": settings.worker_embedding_concurrency,
+        "retrieval": settings.worker_retrieval_concurrency,
+        "analysis": settings.worker_analysis_concurrency,
+        "llm_generation": settings.worker_llm_generation_concurrency,
+        "scanner": settings.worker_scanner_concurrency,
+        "evaluation": settings.worker_evaluation_concurrency,
+        "filesystem": settings.worker_filesystem_concurrency,
+        "maintenance": settings.worker_maintenance_concurrency,
+    }
+
+
 def _broker_replay_corpus_detail(
     episodes: list[Any],
     *,
@@ -2643,16 +2661,8 @@ async def _deployment_readiness_report(
         blockers,
         warnings,
         "worker_concurrency_configured",
-        passed=(
-            settings.worker_scheduler_concurrency > 0
-            and settings.worker_maintenance_concurrency > 0
-            and settings.worker_mutation_concurrency > 0
-        ),
-        detail={
-            "scheduler": settings.worker_scheduler_concurrency,
-            "maintenance": settings.worker_maintenance_concurrency,
-            "mutation": settings.worker_mutation_concurrency,
-        },
+        passed=all(value > 0 for value in _worker_concurrency_by_pool(settings).values()),
+        detail=_worker_concurrency_by_pool(settings),
     )
 
     return DeploymentReadinessResponse(
@@ -4137,11 +4147,7 @@ def create_app(
         job_summary = await jobs.summary(workspace_key=effective_workspace_id)
         worker_health = await build_worker_health(
             jobs,
-            concurrency_by_pool={
-                "scheduler": settings.worker_scheduler_concurrency,
-                "maintenance": settings.worker_maintenance_concurrency,
-                "mutation": settings.worker_mutation_concurrency,
-            },
+            concurrency_by_pool=_worker_concurrency_by_pool(settings),
             workspace_key=effective_workspace_id,
         )
         return StatusResponse(
@@ -5303,11 +5309,13 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
     ) -> WorkerRunOnceResponse:
         _require_control_auth(authorization)
-        if request.pool not in {"scheduler", "maintenance", "mutation"}:
+        try:
+            pool = normalize_worker_pool(request.pool)
+        except ValueError as error:
             raise HTTPException(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
-                detail="pool must be scheduler, maintenance, or mutation",
-            )
+                detail=f"pool must be one of: {', '.join(CANONICAL_WORKER_POOLS)}",
+            ) from error
         result: WorkerRunResult = await run_worker_once(
             _worker_stores(
                 jobs=jobs,
@@ -5337,7 +5345,7 @@ def create_app(
                 historical_import_roots=historical_import_roots,
             ),
             worker_id=request.worker_id,
-            pool=request.pool,
+            pool=pool,
             lease_seconds=max(1, min(request.lease_seconds, 3600)),
         )
         return WorkerRunOnceResponse(**result.to_json())
@@ -5350,11 +5358,7 @@ def create_app(
         settings = get_settings()
         summary = await build_worker_health(
             jobs,
-            concurrency_by_pool={
-                "scheduler": settings.worker_scheduler_concurrency,
-                "maintenance": settings.worker_maintenance_concurrency,
-                "mutation": settings.worker_mutation_concurrency,
-            },
+            concurrency_by_pool=_worker_concurrency_by_pool(settings),
         )
         return WorkerHealthResponse(**summary.to_json())
 
@@ -5454,11 +5458,7 @@ def create_app(
         job_summary = await jobs.summary(workspace_key=effective_workspace_id)
         worker_health = await build_worker_health(
             jobs,
-            concurrency_by_pool={
-                "scheduler": settings.worker_scheduler_concurrency,
-                "maintenance": settings.worker_maintenance_concurrency,
-                "mutation": settings.worker_mutation_concurrency,
-            },
+            concurrency_by_pool=_worker_concurrency_by_pool(settings),
             workspace_key=effective_workspace_id,
         )
         status_payload = {

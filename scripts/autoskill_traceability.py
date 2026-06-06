@@ -36,7 +36,7 @@ TRACEABILITY_EVIDENCE_BY_FINDING: dict[str, tuple[str, ...]] = {
     ),
     "OpenClaw hooks are in-process and timeout-sensitive.": (
         "plugin/autoskill/src/index.js keeps capture/context hooks thin",
-        "sidecar owns scheduler, LLM analysis, evaluation, mutation, and rollback",
+        "sidecar owns scheduler, analysis, evaluation, filesystem, and rollback pools",
         "plugin/autoskill/test/hook-smoke.test.js",
     ),
     "OpenClaw Cron is user/Gateway-facing automation.": (

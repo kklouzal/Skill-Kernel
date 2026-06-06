@@ -42,6 +42,22 @@ x-skillkernel-env: &skillkernel-env
   OPENCLAW_HOME: ${OPENCLAW_HOME:-/openclaw}
   OPENCLAW_STATE_DIR: ${OPENCLAW_STATE_DIR:-/openclaw}
 
+x-skillkernel-worker-common: &skillkernel-worker-common
+  build: *skillkernel-core-build
+  environment: *skillkernel-env
+  networks: *skillkernel-runtime-networks
+  healthcheck:
+    disable: true
+  working_dir: /workspace
+  volumes:
+    - ${SKILLKERNEL_WORKSPACE_ROOT:-./.skillkernel/workspace}:/workspace
+    - ${OPENCLAW_HOST_DIR:-./.skillkernel/openclaw}:/openclaw:ro
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
 services:
   postgres:
     image: pgvector/pgvector:pg17
@@ -100,20 +116,15 @@ services:
       context: .
       dockerfile: containers/observatory/Dockerfile
     environment:
+      AUTOSKILL_DATABASE_URL: postgresql://autoskill:${AUTOSKILL_POSTGRES_PASSWORD:-autoskill-dev}@postgres:5432/autoskill
+      AUTOSKILL_WEB_ADMIN_TOKEN: ${AUTOSKILL_WEB_ADMIN_TOKEN:-}
       SKILLKERNEL_OBSERVATORY_PORT: ${SKILLKERNEL_OBSERVATORY_CONTAINER_PORT:-8757}
-      SKILLKERNEL_CORE_UPSTREAM: ${SKILLKERNEL_CORE_UPSTREAM:-http://core:8765}
+      SKILLKERNEL_OBSERVATORY_STATIC_ROOT: /app/observatory
     ports:
       - "${SKILLKERNEL_OBSERVATORY_BIND:-127.0.0.1}:${SKILLKERNEL_OBSERVATORY_PORT:-8757}:${SKILLKERNEL_OBSERVATORY_CONTAINER_PORT:-8757}"
-    depends_on:
-      core:
-        condition: service_started
 
   worker-scheduler:
-    build: *skillkernel-core-build
-    environment: *skillkernel-env
-    networks: *skillkernel-runtime-networks
-    healthcheck:
-      disable: true
+    <<: *skillkernel-worker-common
     command:
       - python
       - -m
@@ -128,22 +139,150 @@ services:
       - /workspace
       - --external-skill-root
       - /workspace/skills
-    working_dir: /workspace
-    volumes:
-      - ${SKILLKERNEL_WORKSPACE_ROOT:-./.skillkernel/workspace}:/workspace
-      - ${OPENCLAW_HOST_DIR:-./.skillkernel/openclaw}:/openclaw:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
+
+  worker-ingest:
+    <<: *skillkernel-worker-common
+    command:
+      - python
+      - -m
+      - autoskill.worker_main
+      - --pool
+      - ingest
+      - --worker-id
+      - autoskill-ingest-1
+      - --workspace-id
+      - ${AUTOSKILL_WORKSPACE_ID:-dev-01}
+      - --workspace-root
+      - /workspace
+      - --external-skill-root
+      - /workspace/skills
+
+  worker-backfill:
+    <<: *skillkernel-worker-common
+    command:
+      - python
+      - -m
+      - autoskill.worker_main
+      - --pool
+      - backfill
+      - --worker-id
+      - autoskill-backfill-1
+      - --workspace-id
+      - ${AUTOSKILL_WORKSPACE_ID:-dev-01}
+      - --workspace-root
+      - /workspace
+      - --external-skill-root
+      - /workspace/skills
+
+  worker-embedding:
+    <<: *skillkernel-worker-common
+    command:
+      - python
+      - -m
+      - autoskill.worker_main
+      - --pool
+      - embedding
+      - --worker-id
+      - autoskill-embedding-1
+      - --workspace-id
+      - ${AUTOSKILL_WORKSPACE_ID:-dev-01}
+      - --workspace-root
+      - /workspace
+
+  worker-retrieval:
+    <<: *skillkernel-worker-common
+    command:
+      - python
+      - -m
+      - autoskill.worker_main
+      - --pool
+      - retrieval
+      - --worker-id
+      - autoskill-retrieval-1
+      - --workspace-id
+      - ${AUTOSKILL_WORKSPACE_ID:-dev-01}
+      - --workspace-root
+      - /workspace
+      - --external-skill-root
+      - /workspace/skills
+
+  worker-analysis:
+    <<: *skillkernel-worker-common
+    command:
+      - python
+      - -m
+      - autoskill.worker_main
+      - --pool
+      - analysis
+      - --worker-id
+      - autoskill-analysis-1
+      - --workspace-id
+      - ${AUTOSKILL_WORKSPACE_ID:-dev-01}
+      - --workspace-root
+      - /workspace
+
+  worker-llm-generation:
+    <<: *skillkernel-worker-common
+    command:
+      - python
+      - -m
+      - autoskill.worker_main
+      - --pool
+      - llm_generation
+      - --worker-id
+      - autoskill-llm-generation-1
+      - --workspace-id
+      - ${AUTOSKILL_WORKSPACE_ID:-dev-01}
+      - --workspace-root
+      - /workspace
+
+  worker-scanner:
+    <<: *skillkernel-worker-common
+    command:
+      - python
+      - -m
+      - autoskill.worker_main
+      - --pool
+      - scanner
+      - --worker-id
+      - autoskill-scanner-1
+      - --workspace-id
+      - ${AUTOSKILL_WORKSPACE_ID:-dev-01}
+      - --workspace-root
+      - /workspace
+
+  worker-evaluation:
+    <<: *skillkernel-worker-common
+    command:
+      - python
+      - -m
+      - autoskill.worker_main
+      - --pool
+      - evaluation
+      - --worker-id
+      - autoskill-evaluation-1
+      - --workspace-id
+      - ${AUTOSKILL_WORKSPACE_ID:-dev-01}
+      - --workspace-root
+      - /workspace
+
+  worker-filesystem:
+    <<: *skillkernel-worker-common
+    command:
+      - python
+      - -m
+      - autoskill.worker_main
+      - --pool
+      - filesystem
+      - --worker-id
+      - autoskill-filesystem-1
+      - --workspace-id
+      - ${AUTOSKILL_WORKSPACE_ID:-dev-01}
+      - --workspace-root
+      - /workspace
 
   worker-maintenance:
-    build: *skillkernel-core-build
-    environment: *skillkernel-env
-    networks: *skillkernel-runtime-networks
-    healthcheck:
-      disable: true
+    <<: *skillkernel-worker-common
     command:
       - python
       - -m
@@ -156,44 +295,6 @@ services:
       - ${AUTOSKILL_WORKSPACE_ID:-dev-01}
       - --workspace-root
       - /workspace
-      - --external-skill-root
-      - /workspace/skills
-    working_dir: /workspace
-    volumes:
-      - ${SKILLKERNEL_WORKSPACE_ROOT:-./.skillkernel/workspace}:/workspace
-      - ${OPENCLAW_HOST_DIR:-./.skillkernel/openclaw}:/openclaw:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-
-  worker-mutation:
-    build: *skillkernel-core-build
-    environment: *skillkernel-env
-    networks: *skillkernel-runtime-networks
-    healthcheck:
-      disable: true
-    command:
-      - python
-      - -m
-      - autoskill.worker_main
-      - --pool
-      - mutation
-      - --worker-id
-      - autoskill-mutation-1
-      - --workspace-id
-      - ${AUTOSKILL_WORKSPACE_ID:-dev-01}
-      - --workspace-root
-      - /workspace
-    working_dir: /workspace
-    volumes:
-      - ${SKILLKERNEL_WORKSPACE_ROOT:-./.skillkernel/workspace}:/workspace
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
 
 volumes:
   autoskill-postgres:

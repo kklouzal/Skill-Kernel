@@ -304,7 +304,7 @@ def test_worker_dispatches_historical_bootstrap_consolidation_job() -> None:
             embeddings=MemoryPendingEmbeddingStore(),
             retrieval=MemoryHistoricalBootstrapRetrievalStore([]),
         )
-        return await run_worker_once(stores, worker_id="worker-1", pool="maintenance")
+        return await run_worker_once(stores, worker_id="worker-1", pool="backfill")
 
     result = asyncio.run(run())
 

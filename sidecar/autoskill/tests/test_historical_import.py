@@ -641,8 +641,8 @@ def test_historical_revocation_invalidation_worker_completes_operator_revoke() -
                 embeddings=None,
                 governance=governance,
             ),
-            worker_id="mutation-test",
-            pool="mutation",
+            worker_id="filesystem-test",
+            pool="filesystem",
         )
         return revocation, result
 
@@ -965,7 +965,7 @@ def test_historical_discovery_worker_job_records_inventory(tmp_path) -> None:
                 historical_import_roots=[root],
             ),
             worker_id="worker-1",
-            pool="maintenance",
+            pool="backfill",
         )
 
     result = asyncio.run(run())
@@ -1358,7 +1358,7 @@ def test_historical_import_parse_worker_job(tmp_path) -> None:
                 historical_import_roots=[root],
             ),
             worker_id="worker-1",
-            pool="maintenance",
+            pool="backfill",
         )
 
     result = asyncio.run(run())

@@ -2640,8 +2640,8 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   promotion.
 - Repair execution remains guarded and fail-closed: explicit staged manifests still pass through activation-gated `writer.apply`, and policy-approved repair materialization can generate staged manifests from bounded repair proposals only when a skill-version anchor exists and deterministic context-governance proof with routing-equivalence and regression evidence can be recorded for the staged runtime artifact.
 - External-skill awareness now includes read-only root scanning plus inventory/retrieval/matching, scan scheduling defaults, embedding generation for external descriptions, richer collision risk scoring, explicit operator review-action recording, and operator-approved stage-only import materialization.
-- v16 trace/profile/context APIs and schema exist; event/job/retrieval/evaluator/context-broker paths now propagate trace or context artifacts, LLM calls now have content-safe invocation audit rows, direct writer apply/rollback APIs record content-safe writer spans, mutation-worker writer apply, revocation rollback, and topology downstream apply record content-safe child spans, embedding generation records content-safe `embedding_call` spans, and worker heartbeat summaries expose content-safe claimed/renewed/succeeded/failed job progress. Longer semantic jobs may still add specialized counters as their multi-phase internals mature.
-- SkillGraphIR now has planner/API/store persistence with transactions, planned trials, first-class create/improve/compose/decompose proposal operations, revocation invalidation for operation/trial state, deterministic apply state transitions after passed trials, broker replay/canary scoring gates for compose/decompose routing, stored downstream action plans, and mutation-worker lifecycle/graph/runtime invalidation execution after accepted topology operations with transaction items/provenance edges tied to the originating evolution transaction.
+- v16 trace/profile/context APIs and schema exist; event/job/retrieval/evaluator/context-broker paths now propagate trace or context artifacts, LLM calls now have content-safe invocation audit rows, direct writer apply/rollback APIs record content-safe writer spans, filesystem-worker writer apply, revocation rollback, and topology downstream apply record content-safe child spans, embedding generation records content-safe `embedding_call` spans, and worker heartbeat summaries expose content-safe claimed/renewed/succeeded/failed job progress. Longer semantic jobs may still add specialized counters as their multi-phase internals mature.
+- SkillGraphIR now has planner/API/store persistence with transactions, planned trials, first-class create/improve/compose/decompose proposal operations, revocation invalidation for operation/trial state, deterministic apply state transitions after passed trials, broker replay/canary scoring gates for compose/decompose routing, stored downstream action plans, and filesystem-worker lifecycle/graph/runtime invalidation execution after accepted topology operations with transaction items/provenance edges tied to the originating evolution transaction.
 - Operator visibility for SkillGraphIR topology now includes separate
   create/improve/compose/decompose metrics through `/v1/topology/metrics`;
   richer UI dashboards can build on this read-only sidecar surface.
@@ -2650,8 +2650,8 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   policy or invalid audit-chain verification and warns on missing replay
   evidence.
 - Candidate evaluator execution is deterministic and conservative; no-skill-control probes can now pass/fail with recorded or induced redacted intervention replay from explicit replay, attribution, canary, or broker outcome evidence.
-- Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints; mutation-worker apply exists but fails closed unless the queued job is explicitly policy-approved.
-- Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Mutation-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, invalidates body-index/embedding/context/retrieval/topology/evaluator/attribution/governance objects from traversal summaries, and freeze/critical-canary paths evict affected broker cache entries.
+- Candidate proposal persistence is transaction-anchored, and staged writer apply/rollback plus canary freeze now have sidecar control endpoints; filesystem-worker apply exists but fails closed unless the queued job is explicitly policy-approved.
+- Revocation traversal now previews impacted derived artifacts, staged writer artifacts have provenance edges, and critical canary failures can freeze skills plus queue rollback revocation requests. Filesystem-worker rollback execution is implemented for archive-backed rollbacks and initial-create active-path deletion, invalidates body-index/embedding/context/retrieval/topology/evaluator/attribution/governance objects from traversal summaries, and freeze/critical-canary paths evict affected broker cache entries.
 - Utility rollups are deterministic v1 scoring, not full intervention scoring yet; curation now handles archived promotion, explicit duplicate merge/archive, low-utility archive, active-bank budget overflow, context-value/token-waste features, evaluator blocking, duplicate merge probe planning, and planned split/improvement/disambiguation actions with structured repair proposals. Conservative repair execution now claims planned repairs, records governance/provenance, queues evaluator or policy-approved writer work, and can generate guarded staged repair manifests from policy-approved bounded proposals.
 - Context-value/token ledgers feed utility rollups, repair planning, and
   usage/topology consumers for improve, decompose, tighten-description, and
@@ -2667,3 +2667,26 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Diagnostic momentum now feeds conservative repair execution as an additional
   fail-closed source; it still queues normal drift/evaluator gates unless a
   policy-approved staged manifest with scanner/evaluator/context proof exists.
+
+## Section 8 Worker Pool Taxonomy Remediation - 2026-06-06T18:15:46Z
+
+- Spec item: Core worker pools must be separated by risk/resource class:
+  `ingest`, `backfill`, `embedding`, `retrieval`, `analysis`,
+  `llm_generation`, `scanner`, `evaluation`, `filesystem`, and
+  `maintenance`, with scheduler tick handling kept separate and write/rollback
+  work isolated from semantic analysis/backfill paths.
+- Status: remediated. Runtime job definitions now route by canonical pool,
+  `/v1/status` and `/v1/workers/health` expose canonical pool concurrency and
+  job counts, `autoskill.worker_main --pool` accepts canonical pool names, and
+  the legacy `mutation` pool is only an explicit compatibility alias for the
+  filesystem pool.
+- Files changed: `sidecar/autoskill/services/worker.py`,
+  `sidecar/autoskill/worker_main.py`, `sidecar/autoskill/core/config.py`,
+  `sidecar/autoskill/api/app.py`, root `docker-compose.yml`, worker/backfill
+  tests, and operator report/docs labels.
+- Validation: `uv run ruff check ...` passed; focused worker/backfill/report
+  pytest passed (`68 passed`); full `uv run pytest -q` passed (`416 passed`);
+  `uv run python -m compileall -q sidecar scripts` passed; acceptance,
+  readiness, and conformance scripts reported `ready=true`; root `docker
+  compose -f docker-compose.yml config --quiet` passed; `git diff --check`
+  passed.

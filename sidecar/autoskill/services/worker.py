@@ -57,7 +57,42 @@ from autoskill.services.writer import (
     stage_compiled_skill,
 )
 
-WorkerPool = Literal["scheduler", "maintenance", "mutation"]
+WorkerPool = Literal[
+    "scheduler",
+    "ingest",
+    "backfill",
+    "embedding",
+    "retrieval",
+    "analysis",
+    "llm_generation",
+    "scanner",
+    "evaluation",
+    "filesystem",
+    "maintenance",
+    "mutation",
+]
+
+CANONICAL_WORKER_POOLS: tuple[WorkerPool, ...] = (
+    "scheduler",
+    "ingest",
+    "backfill",
+    "embedding",
+    "retrieval",
+    "analysis",
+    "llm_generation",
+    "scanner",
+    "evaluation",
+    "filesystem",
+    "maintenance",
+)
+LEGACY_WORKER_POOL_ALIASES: dict[str, WorkerPool] = {"mutation": "filesystem"}
+
+
+def normalize_worker_pool(pool: str) -> WorkerPool:
+    normalized = LEGACY_WORKER_POOL_ALIASES.get(pool, pool)
+    if normalized not in CANONICAL_WORKER_POOLS:
+        raise ValueError(f"unsupported worker pool: {pool}")
+    return normalized  # type: ignore[return-value]
 
 
 @dataclass(frozen=True)
@@ -199,6 +234,7 @@ async def run_worker_once(
     pool: WorkerPool = "maintenance",
     lease_seconds: int = 300,
 ) -> WorkerRunResult:
+    pool = normalize_worker_pool(pool)
     allowed_kinds = _job_kinds_for_pool(pool)
     job = await stores.jobs.claim_next_job(
         worker_id=worker_id,
@@ -322,6 +358,7 @@ async def run_worker_loop(
     *,
     stop_event: asyncio.Event | None = None,
 ) -> WorkerLoopSummary:
+    pool = normalize_worker_pool(config.pool)
     concurrency = max(1, min(config.concurrency, 32))
     iterations = 0
     claimed = 0
@@ -340,7 +377,7 @@ async def run_worker_loop(
             break
         await stores.jobs.record_worker_heartbeat(
             worker_id=config.worker_id,
-            pool=config.pool,
+            pool=pool,
             concurrency=concurrency,
             status="running",
             summary=_worker_loop_summary(
@@ -358,7 +395,7 @@ async def run_worker_loop(
             ),
         )
         iterations += 1
-        if config.pool == "scheduler":
+        if pool == "scheduler":
             tick = await stores.scheduler.run_due_schedules(limit=max(25, concurrency * 25))
             scheduler_ticks += 1
             if tick.lock_acquired:
@@ -373,7 +410,7 @@ async def run_worker_loop(
                 run_worker_once(
                     stores,
                     worker_id=f"{config.worker_id}-{index + 1}",
-                    pool=config.pool,
+                    pool=pool,
                     lease_seconds=config.lease_seconds,
                 )
                 for index in range(concurrency)
@@ -394,7 +431,7 @@ async def run_worker_loop(
 
     await stores.jobs.record_worker_heartbeat(
         worker_id=config.worker_id,
-        pool=config.pool,
+        pool=pool,
         concurrency=concurrency,
         status="stopped" if stop_event and stop_event.is_set() else "idle",
         summary=_worker_loop_summary(
@@ -497,7 +534,7 @@ async def _run_with_lease_renewal(
 async def build_worker_health(
     jobs: JobStore,
     *,
-    concurrency_by_pool: dict[WorkerPool, int],
+    concurrency_by_pool: dict[str, int],
     workspace_key: str | None = None,
 ) -> WorkerHealthSummary:
     summary = await jobs.summary(workspace_key=workspace_key)
@@ -508,7 +545,7 @@ async def build_worker_health(
             concurrency=max(1, concurrency_by_pool.get(pool, 1)),
             job_kinds=_job_kinds_for_pool(pool),
         )
-        for pool in ("scheduler", "maintenance", "mutation")
+        for pool in CANONICAL_WORKER_POOLS
     ]
     jobs_by_pool: dict[str, dict[str, int]] = {pool.pool: {} for pool in pools}
     kind_to_pool = {
@@ -1332,7 +1369,7 @@ async def _execute_repair_source(
                 "proposal": source.proposal,
             }
         ),
-        actor="autoskill-mutation-worker",
+        actor="autoskill-llm-generation-worker",
         cause={
             "source": "repair.execute",
             "job_id": str(job.job_id),
@@ -2629,7 +2666,7 @@ async def _execute_rollback_revocation(
     )
     operation = rollback_action.get("operation")
     if operation not in {"restore_archive_manifest", "delete_active_path"}:
-        raise ValueError("rollback action is not supported by the mutation worker")
+        raise ValueError("rollback action is not supported by the filesystem worker")
     archive_manifest_relative_path = (
         str(rollback_action["archive_manifest_relative_path"])
         if operation == "restore_archive_manifest"
@@ -2649,7 +2686,7 @@ async def _execute_rollback_revocation(
                 "operation": operation,
             }
         ),
-        actor="autoskill-mutation-worker",
+        actor="autoskill-filesystem-worker",
         cause={
             "source": "revocation_request",
             "revocation_request_id": str(request.revocation_request_id),
@@ -2872,7 +2909,8 @@ def _revocation_impacted_objects(request: RevocationRequestRecord) -> list[dict[
     return valid
 
 
-def _job_kinds_for_pool(pool: WorkerPool) -> list[str]:
+def _job_kinds_for_pool(pool: WorkerPool | str) -> list[str]:
+    pool = normalize_worker_pool(pool)
     return [
         definition.kind
         for definition in JOB_DEFINITIONS.values()
@@ -3088,101 +3126,101 @@ def _proposal_evidence_ids(proposals: object) -> list[UUID]:
 
 JOB_DEFINITIONS: dict[str, JobDefinition] = {
     "scheduler.tick": JobDefinition("scheduler.tick", "scheduler", _run_scheduler_tick),
-    "evidence.derive": JobDefinition("evidence.derive", "maintenance", _run_evidence_derive),
+    "evidence.derive": JobDefinition("evidence.derive", "ingest", _run_evidence_derive),
     "audit.verify": JobDefinition("audit.verify", "maintenance", _run_audit_verify),
     "embeddings.generate": JobDefinition(
         "embeddings.generate",
-        "maintenance",
+        "embedding",
         _run_embedding_generate,
     ),
     "opportunities.mine": JobDefinition(
         "opportunities.mine",
-        "maintenance",
+        "analysis",
         _run_opportunity_mine,
     ),
     "evaluations.run": JobDefinition(
         "evaluations.run",
-        "maintenance",
+        "evaluation",
         _run_evaluation_proposal_gates,
     ),
     "utility.rollup": JobDefinition(
         "utility.rollup",
-        "maintenance",
+        "analysis",
         _run_utility_rollup,
     ),
     "curation.run": JobDefinition(
         "curation.run",
-        "maintenance",
+        "analysis",
         _run_curation,
     ),
     "usage.aggregate": JobDefinition(
         "usage.aggregate",
-        "maintenance",
+        "analysis",
         _run_usage_aggregate,
     ),
     "contracts.extract": JobDefinition(
         "contracts.extract",
-        "maintenance",
+        "scanner",
         _run_contract_extraction,
     ),
     "drift.check": JobDefinition(
         "drift.check",
-        "maintenance",
+        "scanner",
         _run_drift_checks,
     ),
     "repair.execute": JobDefinition(
         "repair.execute",
-        "mutation",
+        "llm_generation",
         _run_repair_execute,
     ),
     "external_skills.scan": JobDefinition(
         "external_skills.scan",
-        "maintenance",
+        "retrieval",
         _run_external_skill_scan,
     ),
     "external_skills.materialize_import": JobDefinition(
         "external_skills.materialize_import",
-        "mutation",
+        "filesystem",
         _run_external_skill_materialize_import,
     ),
     "historical_import.discover": JobDefinition(
         "historical_import.discover",
-        "maintenance",
+        "backfill",
         _run_historical_import_discover,
     ),
     "historical_import.parse": JobDefinition(
         "historical_import.parse",
-        "maintenance",
+        "backfill",
         _run_historical_import_parse,
     ),
     "historical_bootstrap.consolidate": JobDefinition(
         "historical_bootstrap.consolidate",
-        "maintenance",
+        "backfill",
         _run_historical_bootstrap_consolidate,
     ),
     "topology.apply_downstream": JobDefinition(
         "topology.apply_downstream",
-        "mutation",
+        "filesystem",
         _run_topology_apply_downstream,
     ),
     "topology.score_broker_trials": JobDefinition(
         "topology.score_broker_trials",
-        "mutation",
+        "analysis",
         _run_topology_score_broker_trials,
     ),
     "revocations.rollback": JobDefinition(
         "revocations.rollback",
-        "mutation",
+        "filesystem",
         _run_revocations_rollback,
     ),
     "revocations.invalidate": JobDefinition(
         "revocations.invalidate",
-        "mutation",
+        "filesystem",
         _run_revocations_invalidate,
     ),
     "writer.apply": JobDefinition(
         "writer.apply",
-        "mutation",
+        "filesystem",
         _run_writer_apply,
     ),
 }

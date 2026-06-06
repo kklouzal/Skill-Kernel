@@ -114,11 +114,11 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
     ),
     AcceptanceCriterion(
         "31.11",
-        "Job leases prevent duplicate mutation.",
+        "Job leases prevent duplicate guarded writes.",
         (
             "job lease claim/renew/complete primitives",
             "worker pool and lease renewal tests",
-            "mutation worker uses leased jobs",
+            "filesystem worker uses leased jobs",
         ),
     ),
     AcceptanceCriterion(
@@ -141,7 +141,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
     ),
     AcceptanceCriterion(
         "31.14",
-        "Every mutation has manifest, hashes, scanner result, evaluator result, and rollback pointer.",
+        "Every guarded write has manifest, hashes, scanner result, evaluator result, and rollback pointer.",
         (
             "writer manifests include gate statuses and rollback archive pointers",
             "activation-gate store checks scanner/evaluator/proposal gates",
@@ -225,7 +225,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         "Rollback works under canary failure.",
         (
             "critical canary freezes skills and queues rollback revocations",
-            "mutation worker executes rollback revocation",
+            "filesystem worker executes rollback revocation",
             "sidecar/autoskill/tests/test_lifecycle.py",
         ),
     ),
@@ -405,7 +405,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         "Historical source revocation traverses derived chunks, embeddings, evidence, memories, candidates, probes, broker caches, and compiled artifacts.",
         (
             "historical source revoke endpoint queues revocation traversal",
-            "mutation worker invalidation covers derived state families",
+            "filesystem worker invalidation covers derived state families",
             "sidecar/autoskill/tests/test_historical_import.py",
         ),
     ),

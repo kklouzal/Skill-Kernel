@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     embedding_timeout_seconds: float = 30.0
     embedding_batch_size: int = 128
     worker_scheduler_concurrency: int = 1
+    worker_ingest_concurrency: int = 2
+    worker_backfill_concurrency: int = 1
+    worker_embedding_concurrency: int = 1
+    worker_retrieval_concurrency: int = 1
+    worker_analysis_concurrency: int = 2
+    worker_llm_generation_concurrency: int = 1
+    worker_scanner_concurrency: int = 1
+    worker_evaluation_concurrency: int = 1
+    worker_filesystem_concurrency: int = 1
     worker_maintenance_concurrency: int = 2
     worker_mutation_concurrency: int = 1
     scheduler_tick_seconds: int = 30
@@ -416,7 +425,19 @@ def effective_skillkernel_config(settings: Settings | None = None) -> dict[str, 
             "max_llm_jobs_concurrent": resolved.max_llm_jobs_concurrent,
             "worker_concurrency": {
                 "scheduler": resolved.worker_scheduler_concurrency,
+                "ingest": resolved.worker_ingest_concurrency,
+                "backfill": resolved.worker_backfill_concurrency,
+                "embedding": resolved.worker_embedding_concurrency,
+                "retrieval": resolved.worker_retrieval_concurrency,
+                "analysis": resolved.worker_analysis_concurrency,
+                "llm_generation": resolved.worker_llm_generation_concurrency,
+                "scanner": resolved.worker_scanner_concurrency,
+                "evaluation": resolved.worker_evaluation_concurrency,
+                "filesystem": resolved.worker_filesystem_concurrency,
                 "maintenance": resolved.worker_maintenance_concurrency,
+            },
+            "worker_pool_aliases": {"mutation": "filesystem"},
+            "legacy_worker_concurrency": {
                 "mutation": resolved.worker_mutation_concurrency,
             },
         },

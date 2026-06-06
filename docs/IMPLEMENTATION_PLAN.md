@@ -808,7 +808,7 @@ Deliverables:
 - sidecar-owned schedules;
 - jobs, attempts, leases, idempotency keys;
 - job trace context; implemented with enqueue-supplied or generated `trace_id`/`span_id`, non-null persisted job trace/span roots, scheduled-job trace generation, and trace-preserving job JSON responses.
-- worker pools; implemented as explicit scheduler/maintenance/mutation run-once dispatch, bounded loop entrypoints, configured per-pool loop concurrency, persistent worker heartbeats, content-safe single-job progress phases, and worker health summaries.
+- worker pools; implemented as explicit scheduler, ingest, backfill, embedding, retrieval, analysis, LLM-generation, scanner, evaluation, filesystem, and maintenance run-once dispatch, bounded loop entrypoints, configured per-pool loop concurrency, persistent worker heartbeats, content-safe single-job progress phases, and worker health summaries.
 
 Acceptance:
 
@@ -1067,7 +1067,7 @@ Deliverables:
 - staged writer; implemented for scanner-gated compiled `SKILL.md` staging under a bounded staging root without active-root mutation;
 - manifests and hashes; implemented for writer manifests with staged file hash verification;
 - atomic apply; implemented as a deterministic same-root active skill directory replacement from verified writer manifests;
-- activation gate; implemented for queued mutation-worker apply and direct writer apply when requested, requiring the staged manifest skill version to have passed scanner/evaluator/proposal-gate checks and requiring any supplied executor profile to be compatible before active-root exposure;
+- activation gate; implemented for queued filesystem-worker apply and direct writer apply when requested, requiring the staged manifest skill version to have passed scanner/evaluator/proposal-gate checks and requiring any supplied executor profile to be compatible before active-root exposure;
 - archive snapshots; implemented as manifest-and-hash verified snapshots of previous active `skills/autoskill/<slug>` directories;
 - rollback; implemented as deterministic active-root restore from verified archive snapshots;
 - transaction-aware writer service wrappers; implemented for apply/rollback transaction status updates, active compiled-file and archive-snapshot transaction items, rollback metadata, and fail-closed filesystem recovery when governance recording fails after apply;
@@ -1080,10 +1080,10 @@ Deliverables:
   outcomes with utility delta, task success, token savings, latency/tool-call deltas, derived
   marginal value, and context-value-per-token, and by stamping linked context artifacts with the
   latest marginal outcome plus semantic density score.
-- mutation-worker rollback revocation execution; implemented for queued rollback revocation
+- filesystem-worker rollback revocation execution; implemented for queued rollback revocation
   requests whose originating transaction recorded an archive-backed compiled-file rollback
   action or an initial-create active-path deletion rollback action.
-- rollback revocation trace spans; implemented as content-safe mutation-worker `rollback`
+- rollback revocation trace spans; implemented as content-safe filesystem-worker `rollback`
   operation spans that close with bounded counts and job/revocation-request refs, while
   DB-backed observability tolerates missing caller parent spans instead of failing rollback
   workers.
@@ -1091,8 +1091,8 @@ Deliverables:
   matching body-index documents and embeddings, marking retrieval/context/topology/evaluator
   derived state revoked or rolled back, revoking matching attribution records, marking
   impacted active skills `revoked`, revoking connected skill graph edges, and revoking
-  matching evidence-maturity rows during mutation-worker rollback completion.
-- topology downstream apply trace spans; implemented as content-safe mutation-worker
+  matching evidence-maturity rows during filesystem-worker rollback completion.
+- topology downstream apply trace spans; implemented as content-safe filesystem-worker
   `topology.apply_downstream` operation spans that preserve the queued job trace/span
   root and close with bounded lifecycle, graph-edge, governance, provenance, and
   runtime-invalidation counts plus job/operation object refs.
@@ -1115,12 +1115,12 @@ Acceptance:
 - runtime context hint cache can be invalidated by workspace/skill ID through a control endpoint, and freeze/critical-canary paths evict affected skill hints immediately;
 - writer apply/rollback transaction items are discoverable by provenance traversal from their evolution transaction root; implemented and validated with focused writer/governance tests plus compose/Postgres smoke coverage;
 - canary critical failures record canary evidence, mark the skill `frozen`, store the freeze reason, record a transaction item, and queue a rollback revocation request when the canary is transaction-scoped; implemented and validated with focused tests plus compose/Postgres smoke coverage;
-- mutation-pool `revocations.rollback` jobs claim queued rollback revocation requests, start an idempotent `rollback_skill` transaction, restore the recorded archive manifest through the transaction-aware writer rollback path, complete the revocation request with rollback artifact evidence, and persist a content-safe `rollback` trace span for the worker operation; implemented and validated with focused worker tests plus compose/Postgres smoke coverage;
-- mutation-pool `topology.apply_downstream` jobs persist content-safe `topology`
+- filesystem-pool `revocations.rollback` jobs claim queued rollback revocation requests, start an idempotent `rollback_skill` transaction, restore the recorded archive manifest through the transaction-aware writer rollback path, complete the revocation request with rollback artifact evidence, and persist a content-safe `rollback` trace span for the worker operation; implemented and validated with focused worker tests plus compose/Postgres smoke coverage;
+- filesystem-pool `topology.apply_downstream` jobs persist content-safe `topology`
   child spans for lifecycle/graph materialization, preserving trace roots and
   recording only bounded counts and object refs; implemented and validated with
   focused worker tests plus full sidecar validation.
-- accepted SkillGraphIR topology operations record deterministic downstream orchestration actions in `trial_summary.downstream_orchestration`, and mutation-pool `topology.apply_downstream` jobs can consume applied operations to materialize graph edges, activate successor/composed skills, archive superseded/decomposed subjects, record applied action results, and invalidate runtime-derived retrieval/context/embedding records where stores expose invalidation hooks;
+- accepted SkillGraphIR topology operations record deterministic downstream orchestration actions in `trial_summary.downstream_orchestration`, and filesystem-pool `topology.apply_downstream` jobs can consume applied operations to materialize graph edges, activate successor/composed skills, archive superseded/decomposed subjects, record applied action results, and invalidate runtime-derived retrieval/context/embedding records where stores expose invalidation hooks;
 - valid skill appears under active root;
 - invalid paths are rejected;
 - rollback restores the previous effective state;
@@ -1134,16 +1134,16 @@ Acceptance:
   artifacts for each declared support file, stamps load policy/retrieval
   boundary/capability/hash metadata, and includes support hashes in compile
   manifests without injecting support-file contents into broker/runtime context;
-- canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed mutation-worker rollback execution, initial-create active-path deletion rollback, body-index/embedding/retrieval/context/topology/evaluator/attribution/governance invalidation, active broker-cache invalidation, and fail-closed policy-approved mutation-worker writer apply orchestration are implemented.
+- canary critical failures trigger rollback/freeze; freeze, rollback revocation queueing, archive-backed filesystem-worker rollback execution, initial-create active-path deletion rollback, body-index/embedding/retrieval/context/topology/evaluator/attribution/governance invalidation, active broker-cache invalidation, and fail-closed policy-approved filesystem-worker writer apply orchestration are implemented.
 - long-running job leases renew while handlers are still running; implemented in the job store, worker execution wrapper, and control API with focused tests.
-- mutation-worker `writer.apply` and `revocations.rollback` handlers record content-safe child trace spans under their claimed job spans, including bounded success/error metadata and object refs without compiled skill text.
+- filesystem-worker `writer.apply` and `revocations.rollback` handlers record content-safe child trace spans under their claimed job spans, including bounded success/error metadata and object refs without compiled skill text.
 
 ## Phase 8 - Autonomous Improvement and Curation
 
 Deliverables:
 
-- `autonomous_guarded` apply; implemented as fail-closed mutation-worker `writer.apply` orchestration that only applies a staged manifest when the queued job carries explicit `policy_approved=true`;
-- repair-proposal execution; implemented as mutation-worker `repair.execute` orchestration that claims planned curation repair proposals and open drift repair candidates, records governance transactions/items/provenance, queues explicit policy-approved staged manifests to `writer.apply`, can generate guarded staged repair manifests from policy-approved bounded proposals with skill-version anchors, and otherwise fail-closes to evaluator or drift recheck jobs with source execution metadata;
+- `autonomous_guarded` apply; implemented as fail-closed filesystem-worker `writer.apply` orchestration that only applies a staged manifest when the queued job carries explicit `policy_approved=true`;
+- repair-proposal execution; implemented as llm-generation-worker `repair.execute` orchestration that claims planned curation repair proposals and open drift repair candidates, records governance transactions/items/provenance, queues explicit policy-approved staged manifests to `writer.apply`, can generate guarded staged repair manifests from policy-approved bounded proposals with skill-version anchors, and otherwise fail-closes to evaluator or drift recheck jobs with source execution metadata;
 - repair materialization context proof; implemented so generated repair
   manifests receive deterministic context artifact, compile-run, budget, and
   semantic-compression proof plus activation-grade routing/regression probe
@@ -1260,18 +1260,18 @@ Deliverables:
 - contract extraction; implemented for SkillIR `environment_contracts` into DB-backed environment contract rows;
 - drift checks; implemented as a deterministic first pass for static path-existence, bare-command availability, and required-env probes with drift event creation;
 - package/schema/service/API drift checks; implemented as deterministic Python package, JSON schema, bounded TCP reachability, and bounded HTTP status probes without arbitrary shell execution or request bodies;
-- diagnostic momentum accumulation; implemented so maintenance-worker
+- diagnostic momentum accumulation; implemented so scanner-worker
   `drift.check` jobs record one content-safe diagnostic signal per drift event
   into the existing momentum store, scoped to skill/version when available and
   keyed by hashed contract/probe identifiers;
-- diagnostic momentum consumption; implemented so mutation-worker
+- diagnostic momentum consumption; implemented so llm-generation-worker
   `repair.execute` jobs can claim ready-for-probe/ready-for-patch momentum
   records as fail-closed repair sources, record governance/provenance metadata,
   and queue drift rechecks or evaluator gates unless a future policy-approved
   staged manifest exists;
 - localized repair;
 - skill graph maintenance; implemented for accepted topology operations with
-  mutation-worker downstream materialization that records transaction items,
+  filesystem-worker downstream materialization that records transaction items,
   provenance edges, active transaction status, lifecycle updates, graph-edge
   materialization counts, and runtime invalidation evidence after deterministic
   trial gates pass;
@@ -1832,3 +1832,14 @@ Acceptance:
   are generated by `scripts/autoskill_observatory_fixtures.py`; the catalog
   covers required visual states plus a high-load soak profile and is checked by
   focused tests and npm `fixtures:check`.
+- validation evidence for the Section 8 worker-pool taxonomy passed on the
+  final tree: job definitions are split across scheduler, ingest, backfill,
+  embedding, retrieval, analysis, LLM generation, scanner, evaluation,
+  filesystem, and maintenance pools; `/v1/status` and `/v1/workers/health`
+  report canonical pool health/concurrency; root compose launches the separate
+  resource-class workers; and legacy `mutation` is retained only as an
+  explicit compatibility alias for filesystem work. Focused validation passed
+  with worker/backfill/report tests (`68 passed`); full `uv run pytest -q`
+  passed (`416 passed`); `uv run ruff check ...`, `uv run python -m compileall
+  -q sidecar scripts`, `docker compose -f docker-compose.yml config --quiet`,
+  acceptance/readiness/conformance scripts, and `git diff --check` passed.

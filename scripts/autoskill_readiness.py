@@ -81,7 +81,7 @@ READINESS_EVIDENCE_BY_INDEX: tuple[tuple[str, ...], ...] = (
     ),
     (
         "evolution transaction, provenance, revocation, rollback, and invalidation stores",
-        "mutation worker rollback and canary freeze paths",
+        "filesystem worker rollback and canary freeze paths",
         "scripts/autoskill_acceptance.py criteria 31.23 and 31.32",
         "sidecar/autoskill/tests/test_lifecycle.py",
         "sidecar/autoskill/tests/test_worker.py",
@@ -233,7 +233,7 @@ LANDSCAPE_EVIDENCE_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = 
         ("curation", "delayed-feedback", "long-horizon"),
         (
             "utility rollups preserve delayed outcome and context-value features",
-            "curation actions remain evidence-gated before mutation",
+            "curation actions remain evidence-gated before guarded writes",
         ),
     ),
     (
@@ -482,7 +482,7 @@ ORDER_EVIDENCE_BY_STEP: dict[str, tuple[str, ...]] = {
         "sidecar/autoskill/tests/test_topology_services.py",
     ),
     "autonomous apply": (
-        "mutation worker apply remains policy-approved and activation-gated",
+        "filesystem worker apply remains policy-approved and activation-gated",
         "scripts/autoskill_handoff.py ship gate",
     ),
     "marginal-value curation": (
