@@ -168,6 +168,90 @@ def test_historical_bootstrap_suppresses_candidate_when_active_match_exists() ->
     assert result.opportunities.candidates[0].recommendation == "reuse_active"
 
 
+def test_historical_bootstrap_reports_propose_only_topology_operations() -> None:
+    first_skill_id = uuid4()
+    second_skill_id = uuid4()
+    evidence = MemoryHistoricalBootstrapEvidenceStore(
+        [
+            _historical_topology_evidence(
+                "compose",
+                skill_ids=[first_skill_id, second_skill_id],
+                support_count=4,
+                success_count=3,
+                sequence_count=2,
+            ),
+            _historical_topology_evidence(
+                "improve",
+                skill_ids=[first_skill_id],
+                support_count=3,
+                failure_count=2,
+            ),
+            _historical_topology_evidence(
+                "decompose",
+                skill_ids=[second_skill_id],
+                support_count=3,
+                context_signal_count=2,
+                token_waste=1200,
+            ),
+        ]
+    )
+
+    result = asyncio.run(
+        consolidate_historical_bootstrap(
+            evidence,
+            MemoryHistoricalBootstrapRetrievalStore([]),
+            workspace_key="dev-01",
+            min_support=2,
+        )
+    )
+
+    payload = result.to_json()["topology"]
+    operations = {
+        item["recommended_operation"]: item for item in payload["recommendations"]
+    }
+    assert payload["accepted"] == 3
+    assert payload["blocked"] == 0
+    assert set(operations) == {"compose", "improve", "decompose"}
+    assert operations["compose"]["mode"] == "propose_only"
+    assert operations["decompose"]["runtime_file_writes"] == "forbidden"
+    assert operations["improve"]["historical_evidence_only"] is True
+    assert operations["compose"]["skill_ids"] == [
+        str(first_skill_id),
+        str(second_skill_id),
+    ]
+
+
+def test_historical_bootstrap_blocks_weak_topology_signal() -> None:
+    evidence = MemoryHistoricalBootstrapEvidenceStore(
+        [
+            _historical_topology_evidence(
+                "compose",
+                skill_ids=[uuid4()],
+                support_count=1,
+                success_count=0,
+                sequence_count=0,
+            )
+        ]
+    )
+
+    result = asyncio.run(
+        consolidate_historical_bootstrap(
+            evidence,
+            MemoryHistoricalBootstrapRetrievalStore([]),
+            workspace_key="dev-01",
+            min_support=2,
+        )
+    )
+
+    topology = result.to_json()["topology"]
+    recommendation = topology["recommendations"][0]
+    assert topology["accepted"] == 0
+    assert topology["blocked"] == 1
+    assert recommendation["accepted"] is False
+    assert "historical topology support below threshold" in recommendation["blockers"]
+    assert "compose recommendation requires at least two skills" in recommendation["blockers"]
+
+
 def test_historical_bootstrap_api_route_returns_propose_only_payload() -> None:
     evidence = MemoryHistoricalBootstrapEvidenceStore(
         [
@@ -268,6 +352,46 @@ def _historical_evidence(source_kind: str, content: str) -> EvidenceRecord:
                 "source": source_kind,
             },
             "redacted_payload": {"content": content},
+        },
+        created_at=datetime.now(UTC),
+    )
+
+
+def _historical_topology_evidence(
+    operation: str,
+    *,
+    skill_ids: list[object],
+    support_count: int,
+    success_count: int = 0,
+    failure_count: int = 0,
+    sequence_count: int = 0,
+    context_signal_count: int = 0,
+    token_waste: int = 0,
+) -> EvidenceRecord:
+    return EvidenceRecord(
+        evidence_id=uuid4(),
+        workspace_id=uuid4(),
+        workspace_key="dev-01",
+        source_event_id=None,
+        evidence_hash=str(uuid4()),
+        kind="recurring_evidence_cluster",
+        maturity="observed",
+        trust="historical_import",
+        taint=["historical", "historical_bootstrap", "metadata_only"],
+        summary=f"Historical topology {operation} signal.",
+        payload={
+            "signature": f"historical:{operation}",
+            "support_count": support_count,
+            "topology_recommendation": {
+                "recommended_operation": operation,
+                "skill_ids": [str(skill_id) for skill_id in skill_ids],
+                "support_count": support_count,
+                "success_count": success_count,
+                "failure_count": failure_count,
+                "sequence_count": sequence_count,
+                "context_signal_count": context_signal_count,
+                "token_waste": token_waste,
+            },
         },
         created_at=datetime.now(UTC),
     )
