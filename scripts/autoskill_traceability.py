@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SPEC_PATH = ROOT / "Implementation-Handoff-Specification.md"
-SECTION_START = "## 34. References and research traceability"
-SECTION_END = "\n## 35."
+DEFAULT_SPEC_PATH = ROOT / "unified-implementation-specification.md"
+SECTION_START = "### 34. References and research traceability"
+SECTION_END = "\n### 35."
 
 EXPECTED_ANCHOR_COUNTS = {
     "34.1": 44,
@@ -24,7 +24,7 @@ EXPECTED_ANCHOR_COUNTS = {
 EXPECTED_MATRIX_ROWS = 25
 EXPECTED_ANCHORS_WITH_URLS = 88
 
-SECTION_RE = re.compile(r"^### (?P<section_id>34\.\d+) (?P<title>.+)$")
+SECTION_RE = re.compile(r"^#### (?P<section_id>34\.\d+) (?P<title>.+)$")
 ANCHOR_RE = re.compile(r"^- \*\*(?P<title>.+?)\*\*: (?P<body>.+)$")
 URL_RE = re.compile(r"https?://[^\s,)]+")
 
@@ -109,7 +109,7 @@ TRACEABILITY_EVIDENCE_BY_FINDING: dict[str, tuple[str, ...]] = {
         "workspace guidance is scanned and never compiled directly into general skills",
         "memory quarantine and provenance gates",
     ),
-    "OpenClaw runtime security benefits from plugin-side observation plus sidecar policy.": (
+    "OpenClaw runtime security benefits from plugin-side observation plus Core policy.": (
         "thin plugin hooks observe runtime boundaries without slow work",
         "sidecar owns scanner/evaluator/attribution/audit decisions",
         "runtime action-attribution check recording",
@@ -134,7 +134,7 @@ TRACEABILITY_EVIDENCE_BY_FINDING: dict[str, tuple[str, ...]] = {
         "deterministic scanner/evaluator/writer/scheduler gates own decisions",
         "LLM invocation audit rows are content-safe",
     ),
-    "Context-loaded skill docs are AI-facing, not human-facing.": (
+    "Context-loaded skill docs are AI-facing, not operator-facing.": (
         "compiled runtime SKILL.md uses compact AI-facing fixed sections",
         "full rationale/history stays in SkillIR/Postgres",
         "no-human-prose and context artifact gates",
@@ -373,7 +373,7 @@ def parse_args() -> argparse.Namespace:
         "--spec",
         type=Path,
         default=DEFAULT_SPEC_PATH,
-        help="Path to the implementation handoff specification.",
+        help="Path to the unified implementation specification.",
     )
     return parser.parse_args()
 

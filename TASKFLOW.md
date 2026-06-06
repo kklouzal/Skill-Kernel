@@ -974,7 +974,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `llama-cpp-embeddings-nomic` remained qualified while generating one
   embedding.
 - Historical import/bootstrap substrate is implemented for the requested
-  `Implementation-Handoff-Specification.md` Phase 5 gap: the schema now has
+  `unified-implementation-specification.md` Phase 5 gap: the schema now has
   first-class `historical_import_sources` and `historical_import_chunks` rows
   with source kind, source key, fingerprint, parser version, redaction policy,
   trust/taint, status, content hash, token estimate, and idempotent uniqueness;
@@ -1455,7 +1455,7 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   run ruff check sidecar`, `uv run pytest -q` with 303 tests, `uv run python -m
   compileall -q sidecar`, and `git diff --check`.
 - Observatory implementation slice landed from
-  `observatory-implementation-specification.md`: web-admin config,
+  `unified-implementation-specification.md`: web-admin config,
   role-aware admin auth, `/admin/api/v1/*` summary/pipeline/subsystem/component
   issue/search/object/replay/action endpoints, `/admin/live` WebSocket,
   `/admin/live-sse`, web-container static serving, station/subsystem/read-model

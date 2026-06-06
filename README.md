@@ -178,7 +178,7 @@ Emit the Section 34 research traceability crosswalk:
 python scripts/autoskill_traceability.py --json
 ```
 
-Emit the Section 35/36 landscape and readiness crosswalk:
+Emit the unified landscape and readiness checklist crosswalk:
 
 ```bash
 python scripts/autoskill_readiness.py --json

@@ -9,15 +9,15 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SPEC_PATH = ROOT / "Implementation-Handoff-Specification.md"
-SECTION_35 = "## 35. Comprehensive landscape assimilation matrix"
-SECTION_36 = "## 36. Implementation readiness and execution order"
+DEFAULT_SPEC_PATH = ROOT / "unified-implementation-specification.md"
+SECTION_35 = "### 35. Comprehensive landscape assimilation matrix"
+SECTION_35_END = "\n# Part II"
+SECTION_READINESS = "## 8. Implementation readiness checklist"
+SECTION_READINESS_END = "\n## 9. Implementation integrity rule"
 
 EXPECTED_LANDSCAPE_ROWS = 52
 EXPECTED_STANCE_LINES = 8
-EXPECTED_ARCHITECTURE_ITEMS = 30
-EXPECTED_PRODUCT_OPERATIONS = 4
-EXPECTED_IMPLEMENTATION_ORDER_STEPS = 31
+EXPECTED_READINESS_CHECKLIST_ITEMS = 17
 
 LANDSCAPE_EVIDENCE_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (
@@ -233,11 +233,11 @@ ARCHITECTURE_EVIDENCE_BY_ITEM: dict[str, tuple[str, ...]] = {
     ),
     "no direct dollar-cost tracker/analyzer": (
         "v1 records model/embedding invocations as content-safe telemetry, not dollar-cost optimization",
-        "Section 36 readiness report preserves the explicit exclusion",
+        "unified readiness report preserves the explicit exclusion",
     ),
     "no per-operation model-routing matrix in v1": (
         "operator-configurable profiles are explicit; no per-operation routing matrix is implemented",
-        "Section 36 readiness report preserves the explicit exclusion",
+        "unified readiness report preserves the explicit exclusion",
     ),
     "no per-skill databases": (
         "README Non-Negotiables",
@@ -425,45 +425,48 @@ class ReadinessItem:
 
 def build_report(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
     spec = spec_path.read_text(encoding="utf-8")
-    section_35 = _read_between(spec, SECTION_35, SECTION_36)
-    section_36 = spec.split(SECTION_36, 1)[1]
+    section_35 = _read_between(spec, SECTION_35, SECTION_35_END)
+    readiness_section = _read_between(spec, SECTION_READINESS, SECTION_READINESS_END)
     landscape_rows = parse_landscape_rows(section_35)
     stance = parse_stance(section_35)
-    architecture, product_operations, implementation_order = parse_section_36(section_36)
+    readiness_checklist = parse_readiness_checklist(readiness_section)
     validation_errors = validate_readiness_report(
         landscape_rows,
         stance,
-        architecture,
-        product_operations,
-        implementation_order,
-        section_36,
+        readiness_checklist,
     )
     return {
-        "schema": "autoskill.landscape-readiness-report.v1",
+        "schema": "autoskill.landscape-readiness-report.v2",
         "ready": not validation_errors,
         "source": str(spec_path),
         "summary": {
             "landscape_rows": len(landscape_rows),
             "stance_lines": len(stance),
-            "architecture_items": len(architecture),
-            "product_operations": len(product_operations),
-            "implementation_order_steps": len(implementation_order),
+            "readiness_checklist_items": len(readiness_checklist),
             "validation_errors": validation_errors,
         },
         "landscape_matrix": [row.to_json() for row in landscape_rows],
         "adopted_stance": stance,
-        "architecture": [item.to_json() for item in architecture],
-        "product_operations": [item.to_json() for item in product_operations],
-        "implementation_order": [item.to_json() for item in implementation_order],
-        "sequencing_gates": {
-            "do_not_build_autonomous_skill_writing_first": (
-                "do not build autonomous skill writing first" in section_36.lower()
-            ),
-            "future_design_changes_require_concrete_failure_mode": (
-                "concrete uncovered failure mode" in section_36.lower()
-            ),
-        },
+        "readiness_checklist": [item.to_json() for item in readiness_checklist],
     }
+
+
+def parse_readiness_checklist(readiness_section: str) -> list[ReadinessItem]:
+    items: list[ReadinessItem] = []
+    for line in readiness_section.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("- [ ] "):
+            continue
+        item = stripped.removeprefix("- [ ] ").strip()
+        items.append(
+            ReadinessItem(
+                item_id=f"readiness.{len(items) + 1}",
+                item=item,
+                status="required",
+                evidence=(),
+            )
+        )
+    return items
 
 
 def parse_landscape_rows(section_35: str) -> list[LandscapeRow]:
@@ -554,10 +557,7 @@ def parse_section_36(
 def validate_readiness_report(
     landscape_rows: list[LandscapeRow],
     stance: list[str],
-    architecture: list[ReadinessItem],
-    product_operations: list[ReadinessItem],
-    implementation_order: list[ReadinessItem],
-    section_36: str,
+    readiness_checklist: list[ReadinessItem],
 ) -> list[str]:
     errors: list[str] = []
     if len(landscape_rows) != EXPECTED_LANDSCAPE_ROWS:
@@ -566,23 +566,11 @@ def validate_readiness_report(
         )
     if len(stance) != EXPECTED_STANCE_LINES:
         errors.append(f"stance line count changed: expected {EXPECTED_STANCE_LINES}, got {len(stance)}")
-    if len(architecture) != EXPECTED_ARCHITECTURE_ITEMS:
+    if len(readiness_checklist) != EXPECTED_READINESS_CHECKLIST_ITEMS:
         errors.append(
-            f"architecture item count changed: expected {EXPECTED_ARCHITECTURE_ITEMS}, got {len(architecture)}"
+            "readiness checklist item count changed: "
+            f"expected {EXPECTED_READINESS_CHECKLIST_ITEMS}, got {len(readiness_checklist)}"
         )
-    if len(product_operations) != EXPECTED_PRODUCT_OPERATIONS:
-        errors.append(
-            f"product operation count changed: expected {EXPECTED_PRODUCT_OPERATIONS}, got {len(product_operations)}"
-        )
-    if len(implementation_order) != EXPECTED_IMPLEMENTATION_ORDER_STEPS:
-        errors.append(
-            "implementation order step count changed: "
-            f"expected {EXPECTED_IMPLEMENTATION_ORDER_STEPS}, got {len(implementation_order)}"
-        )
-    if "do not build autonomous skill writing first" not in section_36.lower():
-        errors.append("missing autonomous-writing sequencing gate")
-    if "concrete uncovered failure mode" not in section_36.lower():
-        errors.append("missing future-design-change failure-mode gate")
     for row in landscape_rows:
         if not row.source or not row.useful_finding or not row.adoption or not row.not_adopted:
             errors.append(f"{row.row_id} has empty landscape column")
@@ -593,23 +581,14 @@ def validate_readiness_report(
         _validate_no_placeholder(errors, row.row_id, row.source)
         _validate_no_placeholder(errors, row.row_id, row.adoption)
         _validate_no_placeholder(errors, row.row_id, row.not_adopted)
-    for collection_name, collection in (
-        ("architecture", architecture),
-        ("product operation", product_operations),
-        ("implementation order", implementation_order),
-    ):
-        seen_items: set[str] = set()
-        for item in collection:
-            if item.item in seen_items:
-                errors.append(f"duplicate {collection_name} item: {item.item}")
-            seen_items.add(item.item)
-            if not item.evidence:
-                errors.append(f"{item.item_id} has no evidence mapping: {item.item}")
-            if item.status not in {"implemented", "excluded"}:
-                errors.append(f"{item.item_id} has unsupported status: {item.status}")
-            _validate_no_placeholder(errors, item.item_id, item.item)
-            for evidence in item.evidence:
-                _validate_no_placeholder(errors, item.item_id, evidence)
+    seen_items: set[str] = set()
+    for item in readiness_checklist:
+        if item.item in seen_items:
+            errors.append(f"duplicate readiness checklist item: {item.item}")
+        seen_items.add(item.item)
+        if item.status != "required":
+            errors.append(f"{item.item_id} has unsupported status: {item.status}")
+        _validate_no_placeholder(errors, item.item_id, item.item)
     required_stance = {
         "Generate less.",
         "Validate more.",
@@ -622,10 +601,10 @@ def validate_readiness_report(
     }
     if set(stance) != required_stance:
         errors.append("adopted stance changed")
-    required_operations = {"create", "improve", "compose", "decompose"}
-    found_operations = {item.item.split(":", 1)[0].strip() for item in product_operations}
-    if found_operations != required_operations:
-        errors.append(f"product operations changed: {sorted(found_operations)}")
+    checklist_text = " ".join(item.item for item in readiness_checklist).lower()
+    for operation in ("create", "improve", "compose", "decompose"):
+        if operation not in checklist_text:
+            errors.append(f"readiness checklist no longer mentions {operation}")
     return errors
 
 
@@ -635,33 +614,30 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         f"Ready: {str(report['ready']).lower()}",
         f"Landscape rows: {report['summary']['landscape_rows']}",
-        f"Architecture items: {report['summary']['architecture_items']}",
-        f"Implementation order steps: {report['summary']['implementation_order_steps']}",
+        f"Readiness checklist items: {report['summary']['readiness_checklist_items']}",
         "",
         "## Adopted Stance",
     ]
     for line in report["adopted_stance"]:
         lines.append(f"- {line}")
     lines.append("")
-    lines.append("## Implementation Order")
-    for item in report["implementation_order"]:
+    lines.append("## Implementation Readiness Checklist")
+    for item in report["readiness_checklist"]:
         lines.append(f"- {item['item_id']} {item['status']}: {item['item']}")
-        for evidence in item["evidence"]:
-            lines.append(f"  - Evidence: {evidence}")
     lines.append("")
     return "\n".join(lines)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Emit the SkillKernel Section 35/36 landscape and readiness crosswalk.",
+        description="Emit the SkillKernel unified landscape and readiness checklist crosswalk.",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of Markdown.")
     parser.add_argument(
         "--spec",
         type=Path,
         default=DEFAULT_SPEC_PATH,
-        help="Path to the implementation handoff specification.",
+        help="Path to the unified implementation specification.",
     )
     return parser.parse_args()
 
