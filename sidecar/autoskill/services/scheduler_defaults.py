@@ -34,9 +34,9 @@ CORE_DEFAULT_SCHEDULES = (
     DefaultSchedule(
         name="embeddings.generate",
         job_kind="embeddings.generate",
-        interval_seconds=5 * 60,
+        interval_seconds=60,
         misfire_policy="coalesce",
-        payload={"limit": 500},
+        payload={"limit": 1000},
     ),
     DefaultSchedule(
         name="opportunities.mine",

@@ -14,6 +14,7 @@ from autoskill.db.contracts import (
     DriftRepairEventRecord,
 )
 from autoskill.db.diagnostics import DiagnosticMomentumRecord
+from autoskill.db.embeddings import EmbeddingSourceText
 from autoskill.db.evaluations import EvaluationRunResult
 from autoskill.db.evidence import EvidenceDeriveResult
 from autoskill.db.external_skills import ExternalSkillInput
@@ -970,6 +971,58 @@ def test_worker_embedding_generate_prefers_active_embedding_profile() -> None:
     assert result.output["embedding_model"] == "active-queued-profile"
     assert result.output["embedding_profile_id"] == str(profile_id)
     assert profiles.active_calls == [{"workspace_key": "dev-01"}]
+
+
+def test_worker_embedding_generate_caps_catchup_batch_at_one_thousand() -> None:
+    embeddings = MemoryPendingEmbeddingStore(expected_embedding_dim=8)
+    embeddings.sources = [
+        EmbeddingSourceText(
+            object_type="evidence_item",
+            object_id=uuid4(),
+            workspace_key="dev-01",
+            skill_id=None,
+            text=f"Observed redacted workflow evidence {index}.",
+            text_hash=f"source-hash-{index}",
+        )
+        for index in range(1100)
+    ]
+    stores = WorkerTestStores(
+        jobs=MemoryJobStore(),
+        scheduler=MemorySchedulerWorkerStore(),
+        evidence=MemoryEvidenceWorkerStore(),
+        embeddings=embeddings,
+        profiles=MemoryEmbeddingProfileStore(
+            active_profile=SimpleNamespace(
+                profile_id=uuid4(),
+                status="active",
+                qualification={"verdict": "qualified"},
+                embedding_dim=8,
+                route_kind="hash",
+                model="active-queued-profile",
+                timeout_seconds=30.0,
+            )
+        ),
+    )
+
+    async def run():
+        await stores.jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="embeddings.generate",
+            idempotency_key="embed:catchup-limit",
+            payload={"workspace_id": "dev-01", "limit": 5000},
+        )
+        return await run_worker_once(
+            stores.as_worker_stores(),
+            worker_id="worker-1",
+            pool="maintenance",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["scanned"] == 1000
+    assert result.output["generated"] == 1000
+    assert len(embeddings.upserts) == 1000
 
 
 def test_worker_run_once_api_uses_configured_stores() -> None:

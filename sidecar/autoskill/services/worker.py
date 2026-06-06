@@ -716,7 +716,7 @@ async def _run_audit_verify(stores: WorkerStores, job: JobRecord) -> dict[str, A
 
 
 async def _run_embedding_generate(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
-    limit = _payload_int(job.payload, "limit", default=100, minimum=1, maximum=500)
+    limit = _payload_int(job.payload, "limit", default=100, minimum=1, maximum=1000)
     workspace = _payload_workspace(job)
     profile_key = _payload_str(job.payload, "embedding_profile_key")
     embedder = stores.embedder

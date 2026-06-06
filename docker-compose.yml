@@ -2,6 +2,11 @@ x-skillkernel-core-build: &skillkernel-core-build
   context: .
   dockerfile: Dockerfile.core
 
+x-skillkernel-runtime-networks: &skillkernel-runtime-networks
+  - default
+  - dev01-postgres
+  - honcho_default
+
 x-skillkernel-env: &skillkernel-env
   AUTOSKILL_DATABASE_URL: postgresql://autoskill:${AUTOSKILL_POSTGRES_PASSWORD:-autoskill-dev}@postgres:5432/autoskill
   PYTHONPATH: /app/sidecar
@@ -19,7 +24,7 @@ x-skillkernel-env: &skillkernel-env
   AUTOSKILL_EMBEDDING_PROVIDER: ${AUTOSKILL_EMBEDDING_PROVIDER:-openai_compatible}
   AUTOSKILL_EMBEDDING_MODEL: ${AUTOSKILL_EMBEDDING_MODEL:-Qwen3-Embedding-4B-Q8_0.gguf}
   AUTOSKILL_EMBEDDING_DIM: ${AUTOSKILL_EMBEDDING_DIM:-1536}
-  AUTOSKILL_EMBEDDING_API_BASE_URL: ${AUTOSKILL_EMBEDDING_API_BASE_URL:-http://host.docker.internal:18081/v1}
+  AUTOSKILL_EMBEDDING_API_BASE_URL: ${AUTOSKILL_EMBEDDING_API_BASE_URL:-http://llama-cpp-embeddings:8080/v1}
   AUTOSKILL_EMBEDDING_API_KEY: ${AUTOSKILL_EMBEDDING_API_KEY:-autoskill-local}
   AUTOSKILL_EMBEDDING_TIMEOUT_SECONDS: ${AUTOSKILL_EMBEDDING_TIMEOUT_SECONDS:-30}
   AUTOSKILL_ACTIVE_ROOT: ${AUTOSKILL_ACTIVE_ROOT:-skills/autoskill}
@@ -58,6 +63,7 @@ services:
     build: *skillkernel-core-build
     environment: *skillkernel-env
     command: ["python", "scripts/migrate.py"]
+    networks: *skillkernel-runtime-networks
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -67,6 +73,7 @@ services:
   core:
     build: *skillkernel-core-build
     environment: *skillkernel-env
+    networks: *skillkernel-runtime-networks
     command:
       - uvicorn
       - autoskill.main:app
@@ -104,6 +111,7 @@ services:
   worker-scheduler:
     build: *skillkernel-core-build
     environment: *skillkernel-env
+    networks: *skillkernel-runtime-networks
     command:
       - python
       - -m
@@ -131,6 +139,7 @@ services:
   worker-maintenance:
     build: *skillkernel-core-build
     environment: *skillkernel-env
+    networks: *skillkernel-runtime-networks
     command:
       - python
       - -m
@@ -158,6 +167,7 @@ services:
   worker-mutation:
     build: *skillkernel-core-build
     environment: *skillkernel-env
+    networks: *skillkernel-runtime-networks
     command:
       - python
       - -m
@@ -181,3 +191,9 @@ services:
 
 volumes:
   autoskill-postgres:
+
+networks:
+  dev01-postgres:
+    external: true
+  honcho_default:
+    external: true

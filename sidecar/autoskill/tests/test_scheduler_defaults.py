@@ -82,8 +82,9 @@ def test_core_schedule_defaults_register_handler_backed_jobs() -> None:
     }
     assert upserts_by_name["embeddings.generate"]["payload"] == {
         "workspace_id": "dev-01",
-        "limit": 500,
+        "limit": 1000,
     }
+    assert upserts_by_name["embeddings.generate"]["interval_seconds"] == 60
     assert upserts_by_name["audit.verify"]["interval_seconds"] == 24 * 60 * 60
     assert upserts_by_name["audit.verify"]["payload"] == {
         "workspace_id": "dev-01",
