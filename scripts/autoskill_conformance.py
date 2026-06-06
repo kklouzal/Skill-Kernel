@@ -92,6 +92,7 @@ def build_report(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
         _check_no_raw_vault_streaming(),
         _check_no_raw_private_read_model_defaults(),
         _check_raw_vault_schema_contract(),
+        _check_autonomy_control_schema_contract(),
         _check_no_unstable_react_keys(),
         _check_migration_deduplicated_and_ordered(),
         _check_architecture_invariants(spec_path),
@@ -275,6 +276,48 @@ def _check_raw_vault_schema_contract() -> StaticCheck:
             "migrations/0001_autoskill_schema.sql raw-vault tables",
             "sidecar/autoskill/api/app.py raw-vault capability and ingest route",
             "plugin/autoskill/src event envelope/client",
+        ),
+        details,
+    )
+
+
+def _check_autonomy_control_schema_contract() -> StaticCheck:
+    migration = MIGRATION_PATH.read_text(encoding="utf-8")
+    required_tables = (
+        "autonomous_adjudications",
+        "autonomy_policy_versions",
+        "autonomy_calibration_observations",
+        "autonomy_reliability_metrics",
+        "autonomy_policy_trials",
+        "autonomy_decisions",
+        "administrative_escalation_events",
+        "threshold_deadlock_findings",
+        "intent_interpretations",
+    )
+    details = [
+        f"migration missing autoskill.{table}"
+        for table in required_tables
+        if f"CREATE TABLE IF NOT EXISTS autoskill.{table}" not in migration
+    ]
+    required_contract_terms = (
+        "input_raw_evidence_ids",
+        "deterministic_checks",
+        "confidence_decomposition",
+        "decision_band",
+        "attempted_autonomous_alternatives",
+        "recommended_action",
+        "redacted_user_intent",
+        "calibration_support",
+    )
+    for term in required_contract_terms:
+        if term not in migration:
+            details.append(f"autonomy control-plane contract missing {term}")
+    return _result(
+        "SKX-STATIC-006C",
+        "autonomy adjudication, calibration, decision, escalation, deadlock, and intent tables are present",
+        (
+            "migrations/0001_autoskill_schema.sql autonomy control-plane tables",
+            "Part I section 9.3 semantic autonomy schema",
         ),
         details,
     )

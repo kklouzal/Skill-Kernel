@@ -131,6 +131,280 @@ CREATE TABLE IF NOT EXISTS autoskill.declassification_reports (
 CREATE INDEX IF NOT EXISTS declassification_reports_workspace_created_idx
   ON autoskill.declassification_reports(workspace_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS autoskill.autonomous_adjudications (
+  adjudication_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  job_id uuid,
+  adjudication_kind text NOT NULL CHECK (adjudication_kind IN (
+    'intent_reconstruction',
+    'replay_episode_promotion',
+    'memory_declassification',
+    'external_skill_relationship',
+    'topology_operation_choice',
+    'policy_safe_action',
+    'skill_plan_semantic_adjudication',
+    'context_equivalence',
+    'quarantine_release',
+    'freeze_repair_triage'
+  )),
+  input_event_ids uuid[] NOT NULL DEFAULT '{}',
+  input_evidence_ids uuid[] NOT NULL DEFAULT '{}',
+  input_raw_evidence_ids uuid[] NOT NULL DEFAULT '{}',
+  model_profile_id uuid,
+  llm_verdict jsonb NOT NULL,
+  confidence numeric NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+  deterministic_checks jsonb NOT NULL DEFAULT '{}'::jsonb,
+  decision text NOT NULL CHECK (decision IN (
+    'auto_accept',
+    'auto_reject',
+    'collect_more_evidence',
+    'run_more_probes',
+    'run_re_adjudication',
+    'run_verifier_adjudication',
+    'stage_ephemeral_candidate',
+    'stage_canary',
+    'reduce_scope',
+    'quarantine',
+    'freeze',
+    'rollback',
+    'escalate_admin',
+    'no_op_reschedule'
+  )),
+  escalation_reason text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS autonomous_adjudications_workspace_kind_idx
+  ON autoskill.autonomous_adjudications(workspace_id, adjudication_kind, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.autonomy_policy_versions (
+  autonomy_policy_version_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  policy_kind text NOT NULL CHECK (policy_kind IN (
+    'decision_orchestrator',
+    'candidate_thresholds',
+    'acceptance_bands',
+    'broker_policy',
+    'curation_policy',
+    'canary_policy'
+  )),
+  version_name text NOT NULL,
+  policy jsonb NOT NULL,
+  status text NOT NULL CHECK (status IN ('draft','active','retired','quarantined')),
+  activated_at timestamptz,
+  retired_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, policy_kind, version_name)
+);
+
+CREATE INDEX IF NOT EXISTS autonomy_policy_versions_workspace_kind_idx
+  ON autoskill.autonomy_policy_versions(workspace_id, policy_kind, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.autonomy_calibration_observations (
+  calibration_observation_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  calibration_family text NOT NULL,
+  autonomy_policy_version_id uuid REFERENCES autoskill.autonomy_policy_versions(autonomy_policy_version_id),
+  model_profile_id uuid,
+  adjudication_id uuid REFERENCES autoskill.autonomous_adjudications(adjudication_id),
+  autonomy_decision_id uuid,
+  action_risk_tier text NOT NULL CHECK (action_risk_tier IN (
+    'T0_observe',
+    'T1_internal_record',
+    'T2_trial_artifact',
+    'T3_owned_runtime_change',
+    'T4_external_or_irreversible'
+  )),
+  predicted_confidence numeric NOT NULL CHECK (predicted_confidence >= 0 AND predicted_confidence <= 1),
+  confidence_components jsonb NOT NULL DEFAULT '{}'::jsonb,
+  selected_action text NOT NULL,
+  outcome_status text NOT NULL CHECK (outcome_status IN (
+    'pending',
+    'success',
+    'failure',
+    'mixed',
+    'unknown',
+    'revoked'
+  )),
+  outcome_observed_at timestamptz,
+  outcome jsonb NOT NULL DEFAULT '{}'::jsonb,
+  false_accept boolean,
+  false_reject boolean,
+  unnecessary_abstention boolean,
+  harm_finding boolean,
+  utility_score numeric,
+  context_token_delta integer,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS autonomy_calibration_workspace_family_idx
+  ON autoskill.autonomy_calibration_observations(workspace_id, calibration_family, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.autonomy_reliability_metrics (
+  reliability_metric_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  calibration_family text NOT NULL,
+  autonomy_policy_version_id uuid REFERENCES autoskill.autonomy_policy_versions(autonomy_policy_version_id),
+  executor_profile_id uuid,
+  evidence_fidelity text,
+  action_risk_tier text,
+  window_start timestamptz NOT NULL,
+  window_end timestamptz NOT NULL,
+  sample_count integer NOT NULL DEFAULT 0,
+  coverage_rate numeric,
+  false_accept_rate numeric,
+  false_reject_rate numeric,
+  abstention_rate numeric,
+  unnecessary_abstention_rate numeric,
+  calibration_error numeric,
+  brier_like_score numeric,
+  canary_failure_rate numeric,
+  rollback_rate numeric,
+  harm_finding_rate numeric,
+  utility_per_context_token numeric,
+  reliability_bins jsonb NOT NULL DEFAULT '[]'::jsonb,
+  calibration_support text NOT NULL CHECK (
+    calibration_support IN ('none','empirical_low_support','empirical_supported','conformal_supported','stale')
+  ),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS autonomy_reliability_workspace_family_idx
+  ON autoskill.autonomy_reliability_metrics(workspace_id, calibration_family, window_end DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.autonomy_policy_trials (
+  autonomy_policy_trial_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  policy_kind text NOT NULL,
+  candidate_policy jsonb NOT NULL,
+  baseline_policy_version_id uuid REFERENCES autoskill.autonomy_policy_versions(autonomy_policy_version_id),
+  status text NOT NULL CHECK (
+    status IN ('draft','replay_backtest','shadow_mode','canary_policy','accepted','rejected','rolled_back')
+  ),
+  replay_result jsonb NOT NULL DEFAULT '{}'::jsonb,
+  shadow_result jsonb NOT NULL DEFAULT '{}'::jsonb,
+  canary_result jsonb NOT NULL DEFAULT '{}'::jsonb,
+  hard_invariant_impact jsonb NOT NULL DEFAULT '{}'::jsonb,
+  expected_unblocked_decisions integer NOT NULL DEFAULT 0,
+  expected_risk_delta jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  activated_at timestamptz,
+  retired_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS autonomy_policy_trials_workspace_kind_idx
+  ON autoskill.autonomy_policy_trials(workspace_id, policy_kind, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.autonomy_decisions (
+  autonomy_decision_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  job_id uuid,
+  candidate_id uuid,
+  skill_id uuid,
+  operation_kind text NOT NULL,
+  autonomy_policy_version_id uuid REFERENCES autoskill.autonomy_policy_versions(autonomy_policy_version_id),
+  llm_adjudication_ids uuid[] NOT NULL DEFAULT '{}',
+  hard_invariants jsonb NOT NULL DEFAULT '{}'::jsonb,
+  soft_thresholds jsonb NOT NULL DEFAULT '{}'::jsonb,
+  confidence_decomposition jsonb NOT NULL DEFAULT '{}'::jsonb,
+  decision_band text NOT NULL CHECK (
+    decision_band IN ('clear_accept','clear_reject','improve_evidence','narrow_scope','canary_only','quarantine','admin_required')
+  ),
+  action text NOT NULL CHECK (action IN (
+    'auto_accept',
+    'auto_reject',
+    'collect_more_evidence',
+    'run_more_probes',
+    'run_re_adjudication',
+    'stage_ephemeral_candidate',
+    'stage_canary',
+    'reduce_scope',
+    'quarantine',
+    'freeze',
+    'rollback',
+    'escalate_admin',
+    'no_op_reschedule'
+  )),
+  reason_codes text[] NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS autonomy_decisions_workspace_operation_idx
+  ON autoskill.autonomy_decisions(workspace_id, operation_kind, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.administrative_escalation_events (
+  escalation_event_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  autonomy_decision_id uuid REFERENCES autoskill.autonomy_decisions(autonomy_decision_id),
+  adjudication_id uuid REFERENCES autoskill.autonomous_adjudications(adjudication_id),
+  escalation_kind text NOT NULL CHECK (escalation_kind IN (
+    'policy_forbids_needed_raw_access',
+    'raw_reveal_requested',
+    'external_owned_root_mutation_requested',
+    'irreversible_infrastructure_change_requested',
+    'required_infrastructure_unavailable',
+    'repeated_contradictory_adjudications_after_fallback',
+    'predelegated_authority_absent_for_T4_action'
+  )),
+  evidence_packet_id uuid,
+  decision_family text,
+  source_fidelity text,
+  hard_invariants jsonb NOT NULL DEFAULT '{}'::jsonb,
+  attempted_autonomous_alternatives text[] NOT NULL DEFAULT '{}',
+  recommended_admin_action text,
+  status text NOT NULL CHECK (status IN ('open','resolved','withdrawn','superseded','expired')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  resolved_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS administrative_escalation_workspace_status_idx
+  ON autoskill.administrative_escalation_events(workspace_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.threshold_deadlock_findings (
+  threshold_deadlock_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  policy_kind text NOT NULL,
+  stalled_candidate_ids uuid[] NOT NULL DEFAULT '{}',
+  stall_reason_codes text[] NOT NULL DEFAULT '{}',
+  hard_invariants_passed boolean NOT NULL,
+  llm_high_utility_count integer NOT NULL DEFAULT 0,
+  recommended_action text NOT NULL CHECK (recommended_action IN (
+    'collect_more_evidence',
+    'generate_more_probes',
+    'relax_soft_threshold',
+    'narrow_scope',
+    'increase_canary_budget',
+    'reject_cohort',
+    'no_action'
+  )),
+  status text NOT NULL CHECK (status IN ('open','trialing_policy','resolved','rejected','quarantined')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  resolved_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS threshold_deadlock_workspace_status_idx
+  ON autoskill.threshold_deadlock_findings(workspace_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.intent_interpretations (
+  intent_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  session_id text,
+  turn_id text,
+  source_event_ids uuid[] NOT NULL DEFAULT '{}',
+  raw_evidence_record_ids uuid[] NOT NULL DEFAULT '{}',
+  declassification_report_id uuid REFERENCES autoskill.declassification_reports(declassification_report_id),
+  redacted_user_intent text NOT NULL,
+  intent_fingerprint text NOT NULL,
+  expected_skill_decision jsonb NOT NULL DEFAULT '{}'::jsonb,
+  confidence numeric NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+  taint text[] NOT NULL DEFAULT '{}',
+  status text NOT NULL CHECK (status IN ('candidate','accepted','rejected','quarantined','revoked')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS intent_interpretations_workspace_status_idx
+  ON autoskill.intent_interpretations(workspace_id, status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS autoskill.raw_events (
   event_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
