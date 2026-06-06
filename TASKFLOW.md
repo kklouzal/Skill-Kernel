@@ -16,6 +16,16 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: CI for pushed packaging commit `528b990` failed in
+  `ruff-check` before tests/builds because the new container healthcheck
+  scripts used `urllib.request.urlopen`, which broad CI Ruff flags as S310.
+  Remediation replaced `urlopen` with explicit `http.client` connections after
+  parsing and limiting URLs to `http`/`https`, preserving bounded localhost
+  healthcheck behavior without allowing arbitrary URL opener schemes. Focused
+  validation passed with the same broad command used by CI, `uv run ruff check
+  --output-format=github .`, plus `python -m py_compile
+  containers/core/healthcheck.py containers/observatory/healthcheck.py` and
+  `git diff --check`.
 - 2026-06-06: Container packaging pass found split-container asset drift
   against the unified spec. The repo had root-level Dockerfiles and active
   Dev-01 compose wiring, but lacked the required `containers/core`,
