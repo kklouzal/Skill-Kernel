@@ -16,6 +16,27 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory acceptance traceability now uses the current
+  Section 21/24 wording for the stale UI acceptance rows found during the
+  report-drift pass. `scripts/autoskill_observatory_acceptance.py` now states
+  the configurable `/admin` Observatory container contract, full visual graph
+  polish requirements, WebGL/reduced-motion informational fallback, workcell
+  diagnostic contents, non-remount refresh constraints, trace-or-evolution
+  replay, support-file skill detail visibility, complete topology relationship
+  visibility, degraded evidence-mode semantics, Observatory-container admin
+  API wording, and raw-content access safeguards. The Observatory acceptance
+  report test now locks the `21.1` through `21.42`, `24.auto.1` through
+  `24.auto.6`, and `24.1` through `24.38` sequences with spot checks for the
+  rows that had drifted. This advances Part II Sections 21 and 24 plus the
+  final verification requirement that UI acceptance tooling assert
+  specification behavior rather than stale summary text. Focused validation
+  passed with `uv run pytest
+  sidecar/autoskill/tests/test_observatory_acceptance_report.py -q` (`10
+  passed`), `uv run python scripts/autoskill_observatory_acceptance.py --json`
+  (`ready=true`, `86/86` satisfied), and targeted Ruff. Required gates passed
+  with `uv run ruff check sidecar scripts`, `uv run pytest` (`425 passed`),
+  `uv run python -m compileall -q sidecar scripts`, and `uv run python
+  scripts/autoskill_conformance.py --json` (`ready=true`, `23/23`).
 - 2026-06-06: Section 32/33 handoff traceability now matches the current
   unified specification after the autonomy/threshold requirements expanded.
   `scripts/autoskill_handoff.py` now records all `35` Section 32 risk-register

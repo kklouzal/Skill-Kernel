@@ -56,6 +56,31 @@ def test_observatory_acceptance_report_maps_ui_spec_and_checklist() -> None:
     assert all(item["evidence"] for item in report["developer_checklist"])
 
 
+def test_observatory_acceptance_ids_match_current_spec_sequence() -> None:
+    report = observatory_acceptance.build_report()
+
+    acceptance = {item["item_id"]: item for item in report["acceptance_criteria"]}
+    checklist = {item["item_id"]: item for item in report["developer_checklist"]}
+
+    assert list(acceptance) == [f"21.{index}" for index in range(1, 43)]
+    assert list(checklist) == [
+        *(f"24.auto.{index}" for index in range(1, 7)),
+        *(f"24.{index}" for index in range(1, 39)),
+    ]
+    assert acceptance["21.1"]["text"] == (
+        "The Observatory container serves the web UI and API from a configurable "
+        "/admin base path."
+    )
+    assert "trace or evolution transaction" in acceptance["21.17"]["text"]
+    assert "support files" in acceptance["21.18"]["text"]
+    assert "external-skill relationships" in acceptance["21.19"]["text"]
+    assert "hash-only or metadata-only telemetry" in acceptance["21.24"]["text"]
+    assert checklist["24.1"]["text"] == (
+        "Add admin API module to the Observatory container."
+    )
+    assert checklist["24.35"]["text"].startswith("Add raw-content access")
+
+
 def test_observatory_catalog_seed_migration_matches_runtime_catalog() -> None:
     migration = (REPO_ROOT / "migrations" / "0001_autoskill_schema.sql").read_text(
         encoding="utf-8"
