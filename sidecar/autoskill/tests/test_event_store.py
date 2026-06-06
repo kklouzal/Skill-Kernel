@@ -30,10 +30,13 @@ def event() -> EventEnvelope:
         workspace_id="dev-01",
         trace_id=uuid4(),
         span_id=uuid4(),
+        agent_id="agent-1",
         session_id="session-1",
         turn_id="turn-1",
         event_type="tool_call_end",
+        source_event_key="runtime-source-key-1",
         trust=TrustClass.TOOL_OUTPUT,
+        evidence_fidelity="metadata_only",
         payload={"token": "secret", "safe": "ok"},
     ).redacted()
 
@@ -51,8 +54,12 @@ async def test_event_store_ingest_is_idempotent() -> None:
     assert len(store.events) == 1
     assert store.events[0].payload["token"] == "[REDACTED]"
     assert store.events[0].payload_hash
+    assert store.events[0].payload_hash.startswith("sha256:")
     assert store.events[0].trace_id
     assert store.events[0].span_id
+    assert store.events[0].agent_id == "agent-1"
+    assert store.events[0].source_event_key == "runtime-source-key-1"
+    assert store.events[0].evidence_fidelity == "metadata_only"
 
 
 @pytest.mark.asyncio
@@ -73,8 +80,11 @@ async def test_insert_event_binds_all_raw_event_columns() -> None:
     inserted = await _insert_event(conn, uuid4(), first)  # type: ignore[arg-type]
 
     assert inserted is True
-    assert "$17" in conn.query
-    assert len(conn.args) == 17
-    assert conn.args[12] == str(first.redaction_state)
-    assert conn.args[13] == first.payload_hash
-    assert isinstance(conn.args[14], str)
+    assert "$21" in conn.query
+    assert len(conn.args) == 21
+    assert conn.args[5] == first.agent_id
+    assert conn.args[11] == first.source_event_key
+    assert conn.args[14] == str(first.redaction_state)
+    assert conn.args[15] == first.evidence_fidelity
+    assert conn.args[17] == first.payload_hash
+    assert isinstance(conn.args[18], str)

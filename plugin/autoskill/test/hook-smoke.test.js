@@ -9,6 +9,7 @@ import {
   captureEvent,
   clearCompatibilityHandshakeCache,
   evaluateToolBoundary,
+  getRuntimeRegistrationSnapshot,
 } from "../src/index.js";
 import { resolveConfig } from "../src/config.js";
 
@@ -180,6 +181,11 @@ test("capture hook handlers import and forward redacted envelopes", async () => 
       assert.equal(call.body.events[0].workspace_id, "workspace-1");
       assert.equal(call.body.events[0].trace_id, "00000000-0000-4000-8000-000000000001");
       assert.equal(call.body.events[0].span_id, "00000000-0000-4000-8000-000000000002");
+      assert.equal(call.body.events[0].agent_id, "agent-1");
+      assert.match(call.body.events[0].source_event_key, /^[a-f0-9-]+|gateway-startup$/);
+      assert.match(call.body.events[0].payload_hash, /^sha256:[0-9a-f]{64}$/);
+      assert.equal(call.body.events[0].raw_evidence_record_id, null);
+      assert.ok(["metadata_only", "redacted_derivative"].includes(call.body.events[0].evidence_fidelity));
       assert.equal(call.body.events[0].payload.token, "[REDACTED]");
     }
   } finally {
@@ -873,6 +879,32 @@ test("plugin runtime registers typed OpenClaw hooks", async () => {
     ),
     undefined,
   );
+  const registration = getRuntimeRegistrationSnapshot();
+  assert.deepEqual(
+    registration.typed_hooks.active,
+    registrations.map((entry) => entry.hookName).sort(),
+  );
+  assert.equal(registration.permissions.prompt_injection, true);
+  assert.equal(registration.internal_hook_bundles.includes("llm-input"), true);
+});
+
+test("plugin runtime records unsupported hook registration failures", async () => {
+  const { default: plugin } = await import("../src/index.js");
+  const api = {
+    on(hookName) {
+      if (hookName === "llm_input") {
+        throw new Error("unsupported hook");
+      }
+    },
+  };
+
+  plugin.register(api);
+
+  const registration = getRuntimeRegistrationSnapshot();
+  assert.equal(registration.typed_hooks.active.includes("llm_input"), false);
+  assert.deepEqual(registration.typed_hooks.failed, [
+    { hook: "llm_input", reason: "unsupported hook" },
+  ]);
 });
 
 test("every hook directory declares OpenClaw event metadata", async () => {

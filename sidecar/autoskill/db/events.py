@@ -22,14 +22,18 @@ class EventRecord:
     trace_id: UUID | None
     span_id: UUID | None
     parent_span_id: UUID | None
+    agent_id: str | None
     session_id: str | None
     turn_id: str | None
     event_type: str
     occurred_at: datetime
     source: str
+    source_event_key: str | None
     trust: str
     taint: list[str]
     redaction_state: str
+    evidence_fidelity: str
+    raw_evidence_record_id: UUID | None
     payload_hash: str
     payload: dict[str, Any]
     plugin_version: str | None
@@ -45,14 +49,18 @@ class EventRecord:
             trace_id=_row_get(row, "trace_id"),
             span_id=_row_get(row, "span_id"),
             parent_span_id=_row_get(row, "parent_span_id"),
+            agent_id=_row_get(row, "agent_id"),
             session_id=_row_get(row, "session_id"),
             turn_id=_row_get(row, "turn_id"),
             event_type=row["event_type"],
             occurred_at=row["occurred_at"],
             source=row["source"],
+            source_event_key=_row_get(row, "source_event_key"),
             trust=row["trust"],
             taint=list(row["taint"]),
             redaction_state=row["redaction_state"],
+            evidence_fidelity=_row_get(row, "evidence_fidelity") or "redacted_derivative",
+            raw_evidence_record_id=_row_get(row, "raw_evidence_record_id"),
             payload_hash=row["payload_hash"],
             payload=_json_dict(row["payload"]),
             plugin_version=_row_get(row, "plugin_version"),
@@ -71,14 +79,20 @@ class EventRecord:
             "trace_id": str(self.trace_id) if self.trace_id else None,
             "span_id": str(self.span_id) if self.span_id else None,
             "parent_span_id": str(self.parent_span_id) if self.parent_span_id else None,
+            "agent_id": self.agent_id,
             "session_id": self.session_id,
             "turn_id": self.turn_id,
             "event_type": self.event_type,
             "occurred_at": self.occurred_at.isoformat(),
             "source": self.source,
+            "source_event_key": self.source_event_key,
             "trust": self.trust,
             "taint": self.taint,
             "redaction_state": self.redaction_state,
+            "evidence_fidelity": self.evidence_fidelity,
+            "raw_evidence_record_id": (
+                str(self.raw_evidence_record_id) if self.raw_evidence_record_id else None
+            ),
             "payload_hash": self.payload_hash,
             "payload_keys": payload_keys,
             "plugin_version": self.plugin_version,
@@ -264,14 +278,18 @@ async def _insert_event(conn: asyncpg.Connection, workspace_id: UUID, event: Eve
           trace_id,
           span_id,
           parent_span_id,
+          agent_id,
           session_id,
           turn_id,
           event_type,
           occurred_at,
           source,
+          source_event_key,
           trust,
           taint,
           redaction_state,
+          evidence_fidelity,
+          raw_evidence_record_id,
           payload_hash,
           payload,
           plugin_version,
@@ -279,9 +297,9 @@ async def _insert_event(conn: asyncpg.Connection, workspace_id: UUID, event: Eve
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-          $11, $12, $13, $14, $15::jsonb, $16, $17
+          $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb, $20, $21
         )
-        ON CONFLICT (event_id) DO NOTHING
+        ON CONFLICT DO NOTHING
         RETURNING event_id
         """,
         event.event_id,
@@ -289,14 +307,18 @@ async def _insert_event(conn: asyncpg.Connection, workspace_id: UUID, event: Eve
         event.trace_id,
         event.span_id,
         event.parent_span_id,
+        event.agent_id,
         event.session_id,
         event.turn_id,
         event.event_type,
         event.occurred_at,
         event.source,
+        event.source_event_key,
         str(event.trust),
         event.taint,
         str(event.redaction_state),
+        event.evidence_fidelity,
+        event.raw_evidence_record_id,
         event.payload_hash,
         json.dumps(event.payload, sort_keys=True, separators=(",", ":")),
         event.plugin_version,
@@ -313,14 +335,18 @@ def _record_from_envelope(event: EventEnvelope) -> EventRecord:
         trace_id=event.trace_id,
         span_id=event.span_id,
         parent_span_id=event.parent_span_id,
+        agent_id=event.agent_id,
         session_id=event.session_id,
         turn_id=event.turn_id,
         event_type=event.event_type,
         occurred_at=event.occurred_at,
         source=event.source,
+        source_event_key=event.source_event_key,
         trust=str(event.trust),
         taint=list(event.taint),
         redaction_state=str(event.redaction_state),
+        evidence_fidelity=event.evidence_fidelity,
+        raw_evidence_record_id=event.raw_evidence_record_id,
         payload_hash=event.payload_hash or "",
         payload=event.payload,
         plugin_version=event.plugin_version,

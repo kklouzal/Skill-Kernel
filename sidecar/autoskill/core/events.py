@@ -9,6 +9,14 @@ from autoskill.core.hashing import sha256_json
 from autoskill.core.redaction import redact_payload
 from pydantic import BaseModel, Field, field_validator
 
+EVIDENCE_FIDELITY_TIERS = {
+    "raw_vault_linked",
+    "declassified_summary",
+    "redacted_derivative",
+    "metadata_only",
+    "hash_only",
+}
+
 
 class EventEnvelope(BaseModel):
     event_id: UUID = Field(default_factory=uuid4)
@@ -23,9 +31,12 @@ class EventEnvelope(BaseModel):
     event_type: str
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     source: str = "openclaw-plugin"
+    source_event_key: str | None = None
     trust: TrustClass
     taint: list[str] = Field(default_factory=list)
     redaction_state: RedactionState = RedactionState.REDACTED
+    evidence_fidelity: str = "redacted_derivative"
+    raw_evidence_record_id: UUID | None = None
     payload_hash: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     plugin_version: str | None = None
@@ -38,12 +49,20 @@ class EventEnvelope(BaseModel):
             raise ValueError("event_type must be non-empty")
         return value
 
+    @field_validator("evidence_fidelity")
+    @classmethod
+    def evidence_fidelity_must_be_known(cls, value: str) -> str:
+        if value not in EVIDENCE_FIDELITY_TIERS:
+            allowed = ", ".join(sorted(EVIDENCE_FIDELITY_TIERS))
+            raise ValueError(f"evidence_fidelity must be one of: {allowed}")
+        return value
+
     def redacted(self) -> EventEnvelope:
         payload = redact_payload(self.payload)
         return self.model_copy(
             update={
                 "payload": payload,
-                "payload_hash": sha256_json(payload),
+                "payload_hash": f"sha256:{sha256_json(payload)}",
                 "redaction_state": RedactionState.REDACTED,
             }
         )

@@ -18,14 +18,24 @@ CREATE TABLE IF NOT EXISTS autoskill.raw_events (
   trace_id uuid,
   span_id uuid,
   parent_span_id uuid,
+  agent_id text,
   session_id text,
   turn_id text,
   event_type text NOT NULL,
   occurred_at timestamptz NOT NULL,
   source text NOT NULL,
+  source_event_key text,
   trust text NOT NULL,
   taint text[] NOT NULL DEFAULT '{}',
   redaction_state text NOT NULL,
+  evidence_fidelity text NOT NULL DEFAULT 'redacted_derivative' CHECK (evidence_fidelity IN (
+    'raw_vault_linked',
+    'declassified_summary',
+    'redacted_derivative',
+    'metadata_only',
+    'hash_only'
+  )),
+  raw_evidence_record_id uuid,
   payload_hash text NOT NULL,
   payload jsonb NOT NULL,
   plugin_version text,
@@ -41,6 +51,42 @@ ALTER TABLE autoskill.raw_events
 
 ALTER TABLE autoskill.raw_events
   ADD COLUMN IF NOT EXISTS parent_span_id uuid;
+
+ALTER TABLE autoskill.raw_events
+  ADD COLUMN IF NOT EXISTS agent_id text;
+
+ALTER TABLE autoskill.raw_events
+  ADD COLUMN IF NOT EXISTS source_event_key text;
+
+ALTER TABLE autoskill.raw_events
+  ADD COLUMN IF NOT EXISTS evidence_fidelity text NOT NULL DEFAULT 'redacted_derivative';
+
+ALTER TABLE autoskill.raw_events
+  ADD COLUMN IF NOT EXISTS raw_evidence_record_id uuid;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'raw_events_evidence_fidelity_check'
+      AND connamespace = 'autoskill'::regnamespace
+  ) THEN
+    ALTER TABLE autoskill.raw_events
+      ADD CONSTRAINT raw_events_evidence_fidelity_check
+      CHECK (evidence_fidelity IN (
+        'raw_vault_linked',
+        'declassified_summary',
+        'redacted_derivative',
+        'metadata_only',
+        'hash_only'
+      ));
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS raw_events_workspace_source_event_key_idx
+  ON autoskill.raw_events(workspace_id, source, source_event_key)
+  WHERE source_event_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS autoskill.evidence_items (
   evidence_id uuid PRIMARY KEY,

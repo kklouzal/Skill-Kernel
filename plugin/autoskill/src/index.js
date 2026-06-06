@@ -12,6 +12,7 @@ import { appendSpool, getSpoolStats, replaySpool } from "./spool/index.js";
 
 let replayInFlight = false;
 const compatibilityCache = new Map();
+let runtimeRegistration = emptyRuntimeRegistration();
 
 const CAPTURE_HOOKS = [
   ["after_tool_call", "tool_call_end", "tool_output", ["tool"]],
@@ -30,15 +31,17 @@ export const id = "autoskill";
 export const name = "AutoSkill Manager";
 
 export function register(api) {
+  runtimeRegistration = emptyRuntimeRegistration();
   for (const [hookName, eventType, trust, taint] of CAPTURE_HOOKS) {
     if (hookName === "before_tool_call") {
-      api.on(hookName, (event, ctx) => beforeToolCall(event, ctx), {
+      registerHook(api, hookName, (event, ctx) => beforeToolCall(event, ctx), {
         name: `autoskill-${eventType}`,
       });
       continue;
     }
     if (hookName === "tool_result_persist") {
-      api.on(
+      registerHook(
+        api,
         hookName,
         (event, ctx) => {
           void captureEvent({ eventType, payload: event, trust, taint, hookContext: ctx });
@@ -48,13 +51,15 @@ export function register(api) {
       );
       continue;
     }
-    api.on(
+    registerHook(
+      api,
       hookName,
       (event, ctx) => captureEvent({ eventType, payload: event, trust, taint, hookContext: ctx }),
       { name: `autoskill-${eventType}` },
     );
   }
-  api.on(
+  registerHook(
+    api,
     "before_prompt_build",
     (event, ctx) => maybeContextHint({ prompt: event?.prompt, hookContext: ctx }),
     { name: "autoskill-context-hint" },
@@ -72,11 +77,18 @@ export async function captureEvent({ eventType, payload, trust, taint, hookConte
   if (!config.enabled) {
     return { captured: false, reason: "disabled" };
   }
+  const eventPayload =
+    eventType === "gateway_startup"
+      ? {
+          ...(payload ?? {}),
+          autoskill_plugin_runtime_registration: getRuntimeRegistrationSnapshot(),
+        }
+      : payload;
   const rawCompatibility = await rawCaptureCompatibility(config);
   if (rawCompatibility?.compatible === false) {
     const envelope = buildEventEnvelope({
       eventType,
-      payload,
+      payload: eventPayload,
       trust,
       taint,
       ctx: hookContext,
@@ -99,7 +111,14 @@ export async function captureEvent({ eventType, payload, trust, taint, hookConte
       error: rawCompatibility.reason,
     };
   }
-  const envelope = buildEventEnvelope({ eventType, payload, trust, taint, ctx: hookContext, config });
+  const envelope = buildEventEnvelope({
+    eventType,
+    payload: eventPayload,
+    trust,
+    taint,
+    ctx: hookContext,
+    config,
+  });
   try {
     await forwardEvent(config.sidecarUrl, envelope, {
       timeoutMs: 500,
@@ -108,7 +127,7 @@ export async function captureEvent({ eventType, payload, trust, taint, hookConte
   } catch (error) {
     const { envelope: spooledEnvelope, options, degraded } = rawAwareSpoolEnvelope({
       eventType,
-      payload,
+      payload: eventPayload,
       trust,
       taint,
       hookContext,
@@ -144,6 +163,60 @@ export async function captureEvent({ eventType, payload, trust, taint, hookConte
 
 export function clearCompatibilityHandshakeCache() {
   compatibilityCache.clear();
+}
+
+export function getRuntimeRegistrationSnapshot() {
+  return {
+    typed_hooks: {
+      attempted: [...runtimeRegistration.typed_hooks.attempted].sort(),
+      active: [...runtimeRegistration.typed_hooks.active].sort(),
+      failed: runtimeRegistration.typed_hooks.failed
+        .map((failure) => ({ ...failure }))
+        .sort((left, right) => left.hook.localeCompare(right.hook)),
+    },
+    agent_event_subscriptions: [],
+    runtime_event_subscriptions: [],
+    session_update_notices: [],
+    internal_hook_bundles: [
+      "after-tool-call",
+      "before-prompt-build",
+      "before-tool-call",
+      "gateway-startup",
+      "llm-input",
+      "llm-output",
+      "message-received",
+      "message-sent",
+      "model-call-ended",
+      "model-call-started",
+    ],
+    permissions: {
+      conversation_access: null,
+      prompt_injection: runtimeRegistration.typed_hooks.active.has("before_prompt_build"),
+    },
+  };
+}
+
+function registerHook(api, hookName, handler, options) {
+  runtimeRegistration.typed_hooks.attempted.add(hookName);
+  try {
+    api.on(hookName, handler, options);
+    runtimeRegistration.typed_hooks.active.add(hookName);
+  } catch (error) {
+    runtimeRegistration.typed_hooks.failed.push({
+      hook: hookName,
+      reason: String(error?.message ?? error),
+    });
+  }
+}
+
+function emptyRuntimeRegistration() {
+  return {
+    typed_hooks: {
+      attempted: new Set(),
+      active: new Set(),
+      failed: [],
+    },
+  };
 }
 
 async function rawCaptureCompatibility(config) {
