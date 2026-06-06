@@ -104,3 +104,20 @@ def test_replay_corpus_candidate_json_is_content_safe() -> None:
     assert candidate["query_hash_recorded"] is False
     assert "redacted_user_intent" not in candidate
     assert "prompt" not in candidate
+
+
+def test_admin_token_script_reads_dotenv_and_masks_value(tmp_path: Path) -> None:
+    admin_token = _load_script("autoskill_admin_token")
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "\n".join(
+            [
+                "AUTOSKILL_CONTROL_TOKEN=control-token",
+                "AUTOSKILL_WEB_ADMIN_TOKEN='admin-token-value'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert admin_token._token_from_dotenv(dotenv) == "admin-token-value"
+    assert admin_token.mask_token("1234567890abcdef") == "123456...abcdef (16 chars)"

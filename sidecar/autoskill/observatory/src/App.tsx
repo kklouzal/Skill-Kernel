@@ -70,7 +70,7 @@ type FrontendDiagnostics = {
   selected_view: View;
 };
 
-const storedToken = sessionStorage.getItem("skillkernel.admin.token") ?? "";
+const storedToken = (sessionStorage.getItem("skillkernel.admin.token") ?? "").trim();
 const initialParams = new URLSearchParams(window.location.search);
 const initialView = ((): View => {
   const value = initialParams.get("view");
@@ -290,13 +290,14 @@ function App() {
   }, [summary.data?.snapshot]);
 
   function updateToken(token: string) {
+    const normalizedToken = token.trim();
     lastSeq.current = undefined;
     liveSnapshotSignature.current = undefined;
     setLiveSnapshot(null);
     queryClient.removeQueries({ queryKey: ["summary"] });
     queryClient.removeQueries({ queryKey: ["object"] });
     queryClient.removeQueries({ queryKey: ["search"] });
-    setSession((current) => ({ ...current, token }));
+    setSession((current) => ({ ...current, token: normalizedToken }));
   }
 
   function commitTokenDraft() {
