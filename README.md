@@ -184,6 +184,12 @@ Emit the unified landscape and readiness checklist crosswalk:
 python scripts/autoskill_readiness.py --json
 ```
 
+Run the Part V static implementation conformance gate:
+
+```bash
+python scripts/autoskill_conformance.py --json
+```
+
 List content-safe broker replay candidates from retrieval telemetry:
 
 ```bash
