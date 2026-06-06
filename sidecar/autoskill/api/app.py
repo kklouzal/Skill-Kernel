@@ -2227,7 +2227,10 @@ def _dominant_role(roles: set[str]) -> str:
 
 
 def _admin_static_available() -> bool:
-    return True
+    static_root = os.environ.get("SKILLKERNEL_OBSERVATORY_STATIC_ROOT")
+    if not static_root:
+        return True
+    return (Path(static_root) / "index.html").is_file()
 
 
 def _admin_base_path() -> str:

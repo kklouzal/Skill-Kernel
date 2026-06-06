@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -1761,6 +1762,32 @@ def test_observatory_static_serving_is_external_container_contract(
         )
     finally:
         get_settings.cache_clear()
+
+
+def test_observatory_readiness_reports_missing_declared_static_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    missing_static_root = tmp_path / "observatory-dist"
+    missing_static_root.mkdir()
+    monkeypatch.setenv("SKILLKERNEL_OBSERVATORY_STATIC_ROOT", str(missing_static_root))
+
+    app = create_app(audit_store=MemoryAuditStore())
+    routes = _routes(app)
+
+    async def run():
+        config = await routes[("/admin/api/v1/config", "GET")].endpoint()
+        ready = await routes[("/admin/api/v1/health/ready", "GET")].endpoint()
+        return config, ready
+
+    config, ready = asyncio.run(run())
+
+    assert config.config["static_available"] is False
+    assert "frontend_serving" in ready.object["data_quality"]["missing_signals"]
+    assert any(
+        "frontend-serving-unavailable" in issue["reason_codes"]
+        for issue in ready.object["issues"]
+    )
 
 
 def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() -> None:

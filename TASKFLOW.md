@@ -16,6 +16,25 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Part III split-container deployment readiness now fails closed
+  when the Observatory container declares a static bundle root but the compiled
+  frontend entrypoint is absent. `_admin_static_available()` checks
+  `SKILLKERNEL_OBSERVATORY_STATIC_ROOT/index.html` before reporting
+  `static_available=true`, and the Observatory health/readiness read model now
+  surfaces the existing `frontend_serving` missing signal plus
+  `frontend-serving-unavailable` issue reason instead of masking a broken
+  bundle. This advances the Part III independently deployable Observatory
+  container contract and the operator-readiness requirement without changing
+  Core authority, scheduler, worker, migration, or mutation behavior. Focused
+  validation passed with `docker compose -f compose/compose.example.yml config
+  --quiet`, `uv run python scripts/autoskill_conformance.py` (`23/23`
+  checks), `uv run pytest sidecar/autoskill/tests/test_observatory_api.py -q`
+  (`65 passed`), targeted Ruff, and targeted compileall. Plain global `pytest`
+  remains invalid in the host environment because repo dependencies are managed
+  through `uv`. The Dev-01 root `docker-compose.yml` stays treated as a
+  deployment-specific surface; any further Core/Observatory env split there
+  should be handled as a separate bounded slice from the portable
+  `compose/compose.example.yml` contract.
 - 2026-06-06: Observatory acceptance traceability now uses the current
   Section 21/24 wording for the stale UI acceptance rows found during the
   report-drift pass. `scripts/autoskill_observatory_acceptance.py` now states
