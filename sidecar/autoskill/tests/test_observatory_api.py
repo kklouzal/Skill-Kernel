@@ -4043,6 +4043,109 @@ def test_observatory_comparisons_and_diagnostic_bundles_are_persisted() -> None:
     assert bundle.object["live_event"]["redaction_level"] == "default"
 
 
+def test_observatory_comparison_and_bundle_read_models_redact_persisted_payloads() -> None:
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        observatory_admin_store=observatory_admin,
+    )
+    routes = _routes(app)
+
+    async def run():
+        comparison = await observatory_admin.create_comparison(
+            workspace_key="dev-01",
+            actor_id="operator@example.invalid",
+            comparison_kind="snapshot",
+            left_selector={
+                "kind": "snapshot",
+                "snapshot_seq": 7,
+                "raw_prompt": "left raw prompt must not render",
+            },
+            right_selector={
+                "kind": "trace",
+                "object_id": "trace-1",
+                "private_context": {"ticket": "ACME-raw-right"},
+            },
+            result_summary={
+                "summary": "raw comparison summary must not render",
+                "global_health": "degraded",
+                "issue_count": 1,
+                "mutates_policy": True,
+                "differences": [{"raw_diff": "private diff text"}],
+            },
+        )
+        bundle = await observatory_admin.create_diagnostic_bundle(
+            workspace_key="dev-01",
+            actor_id="operator@example.invalid",
+            scope={
+                "workspace_id": "dev-01",
+                "window_minutes": 10,
+                "raw_scope": "raw scope must not render",
+            },
+            redaction_level="default",
+            manifest={
+                "schema_version": "skillkernel.observatory.diagnostic-bundle.manifest.v1",
+                "global_health": "degraded",
+                "component_count": len(STATIONS),
+                "raw_manifest": {"prompt": "raw manifest must not render"},
+            },
+            storage_uri="file:///private/operator/raw-diagnostic-bundle.json",
+        )
+        comparisons = await routes[("/admin/api/v1/comparisons", "GET")].endpoint(
+            workspace_id="dev-01",
+            limit=10,
+        )
+        comparison_object = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="baseline_comparison",
+            object_id=str(comparison.comparison_id),
+            workspace_id="dev-01",
+        )
+        bundle_detail = await routes[
+            ("/admin/api/v1/diagnostics/bundles/{bundle_id}", "GET")
+        ].endpoint(bundle_id=str(bundle.bundle_id), workspace_id="dev-01")
+        bundle_object = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="diagnostic_bundle",
+            object_id=str(bundle.bundle_id),
+            workspace_id="dev-01",
+        )
+        return comparisons, comparison_object, bundle_detail, bundle_object
+
+    comparisons, comparison_object, bundle_detail, bundle_object = asyncio.run(run())
+
+    comparison_item = comparisons.collection["items"][0]
+    assert comparison_item["left"]["scalar_values"]["snapshot_seq"] == 7
+    assert comparison_item["left"]["raw_selector_returned"] is False
+    assert comparison_item["left"]["value_hashes"]["raw_prompt"]
+    assert comparison_item["right"]["value_hashes"]["private_context"]
+    assert comparison_item["result_summary"]["summary_sha256"]
+    assert comparison_item["result_summary"]["differences"]["raw_items_returned"] is False
+    assert comparison_item["mutates_policy"] is False
+    assert comparison_object.object["effects"]["mutates_policy"] is False
+    assert comparison_object.object["content_policy"]["raw_result_summary_returned"] is False
+
+    assert bundle_detail.object["manifest"]["component_count"] == len(STATIONS)
+    assert bundle_detail.object["manifest"]["value_hashes"]["raw_manifest"]
+    assert bundle_detail.object["scope"]["value_hashes"]["raw_scope"]
+    assert bundle_detail.object["storage"]["raw_uri_returned"] is False
+    assert bundle_object.object["effects"]["storage"]["raw_uri_returned"] is False
+    rendered = json.dumps(
+        [comparisons.collection, comparison_object.object, bundle_detail.object, bundle_object.object],
+        sort_keys=True,
+    )
+    assert "left raw prompt must not render" not in rendered
+    assert "ACME-raw-right" not in rendered
+    assert "raw comparison summary must not render" not in rendered
+    assert "private diff text" not in rendered
+    assert "raw scope must not render" not in rendered
+    assert "raw manifest must not render" not in rendered
+    assert "file:///private/operator/raw-diagnostic-bundle.json" not in rendered
+    assert "operator@example.invalid" not in rendered
+
+
 def test_observatory_zero_count_read_models_are_not_missing_required_signals() -> None:
     settings = get_settings().model_copy(
         update={

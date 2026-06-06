@@ -7471,10 +7471,153 @@ def create_app(
             "audit": {"links": [], "chain_visible": True},
         }
 
+    def _safe_observatory_mapping(
+        value: Any,
+        *,
+        allowed_scalar_keys: set[str],
+        allowed_string_keys: set[str],
+    ) -> dict[str, Any]:
+        mapping = value if isinstance(value, dict) else {}
+        scalar_values: dict[str, bool | int | float | None] = {}
+        string_values: dict[str, str] = {}
+        value_hashes: dict[str, str] = {}
+        nested_keys: list[str] = []
+        for key, item in sorted(mapping.items(), key=lambda entry: str(entry[0])):
+            key_name = str(key)
+            if key_name in allowed_scalar_keys and (
+                isinstance(item, bool | int | float) or item is None
+            ):
+                scalar_values[key_name] = item
+                continue
+            if key_name in allowed_string_keys and isinstance(item, str):
+                string_values[key_name] = item[:160]
+                if len(item) > 160:
+                    value_hashes[key_name] = "sha256:" + sha256_text(item)
+                continue
+            if isinstance(item, dict | list | tuple | set):
+                nested_keys.append(key_name)
+            value_hashes[key_name] = "sha256:" + sha256_text(
+                json.dumps(item, sort_keys=True, default=str)
+            )
+        return {
+            "key_names": sorted(str(key) for key in mapping),
+            "scalar_values": scalar_values,
+            "string_values": string_values,
+            "value_hashes": value_hashes,
+            "nested_keys": nested_keys,
+            "raw_values_returned": False,
+        }
+
+    def _safe_observatory_sequence(value: Any, *, limit: int = 25) -> dict[str, Any]:
+        sequence = list(value) if isinstance(value, list | tuple) else []
+        visible = sequence[: max(1, min(limit, 100))]
+        return {
+            "count": len(sequence),
+            "item_hashes": [
+                "sha256:"
+                + sha256_text(json.dumps(item, sort_keys=True, default=str))
+                for item in visible
+            ],
+            "truncated": len(sequence) > len(visible),
+            "raw_items_returned": False,
+        }
+
+    def _safe_comparison_selector(value: Any) -> dict[str, Any]:
+        safe = _safe_observatory_mapping(
+            value,
+            allowed_scalar_keys={"snapshot_seq"},
+            allowed_string_keys={
+                "captured_at",
+                "component_id",
+                "kind",
+                "object_id",
+                "object_type",
+                "station_id",
+                "trace_id",
+            },
+        )
+        safe["raw_selector_returned"] = False
+        return safe
+
+    def _safe_comparison_result_summary(value: Any) -> dict[str, Any]:
+        mapping = value if isinstance(value, dict) else {}
+        safe = _safe_observatory_mapping(
+            mapping,
+            allowed_scalar_keys={
+                "component_count",
+                "issue_count",
+                "subsystem_count",
+            },
+            allowed_string_keys={"global_health"},
+        )
+        differences = _safe_observatory_sequence(mapping.get("differences"))
+        summary = mapping.get("summary")
+        safe.update(
+            {
+                "summary_present": isinstance(summary, str) and bool(summary),
+                "summary_sha256": (
+                    "sha256:" + sha256_text(summary) if isinstance(summary, str) else None
+                ),
+                "differences": differences,
+                "raw_summary_returned": False,
+            }
+        )
+        return safe
+
+    def _safe_diagnostic_manifest(value: Any) -> dict[str, Any]:
+        mapping = value if isinstance(value, dict) else {}
+        safe = _safe_observatory_mapping(
+            mapping,
+            allowed_scalar_keys={
+                "component_count",
+                "issue_count",
+                "subsystem_count",
+            },
+            allowed_string_keys={"global_health", "schema_version"},
+        )
+        for key in ("component_count", "issue_count", "subsystem_count"):
+            if key in safe["scalar_values"]:
+                safe[key] = safe["scalar_values"][key]
+        for key in ("global_health", "schema_version"):
+            if key in safe["string_values"]:
+                safe[key] = safe["string_values"][key]
+        safe["raw_manifest_returned"] = False
+        return safe
+
+    def _storage_uri_reference(value: Any) -> dict[str, Any]:
+        uri = str(value) if value is not None else ""
+        scheme = uri.split("://", 1)[0] if "://" in uri else None
+        return {
+            "scheme": scheme,
+            "uri_sha256": "sha256:" + sha256_text(uri) if uri else None,
+            "raw_uri_returned": False,
+        }
+
     def _comparison_microscope(record: Any) -> dict[str, Any]:
         payload = record.to_json()
+        left = _safe_comparison_selector(payload.get("left"))
+        right = _safe_comparison_selector(payload.get("right"))
+        result_summary = _safe_comparison_result_summary(
+            payload.get("result_summary")
+        )
+        differences = result_summary["differences"]
         return {
-            **payload,
+            "schema_version": "skillkernel.observatory.comparison.v1",
+            "object_type": "baseline_comparison",
+            "object_id": str(payload["object_id"]),
+            "comparison_id": str(payload["comparison_id"]),
+            "workspace_id": payload.get("workspace_id"),
+            "workspace_key": payload.get("workspace_key"),
+            "comparison_kind": payload["comparison_kind"],
+            "left": left,
+            "right": right,
+            "result_summary": result_summary,
+            "differences": differences,
+            "mutates_policy": False,
+            "created_at": payload["created_at"],
+            "title": payload["title"],
+            "summary": "Persisted content-safe Observatory baseline comparison.",
+            "details_url": payload["details_url"],
             "timeline": [
                 {
                     "at": payload["created_at"],
@@ -7483,24 +7626,70 @@ def create_app(
                 }
             ],
             "provenance": {
-                "upstream": [payload["left"], payload["right"]],
+                "upstream": [
+                    {
+                        "object_type": "comparison_selector",
+                        "object_id": f"{payload['comparison_id']}:left",
+                        "key_names": left["key_names"],
+                    },
+                    {
+                        "object_type": "comparison_selector",
+                        "object_id": f"{payload['comparison_id']}:right",
+                        "key_names": right["key_names"],
+                    },
+                ],
                 "downstream": [],
             },
             "effects": {
-                "differences": payload["differences"],
+                "difference_count": differences["count"],
+                "difference_hashes": differences["item_hashes"],
                 "mutates_policy": False,
             },
             "diagnostics": {
-                "actor_id": payload["actor_id"],
-                "result_summary": payload["result_summary"],
+                "actor_id_sha256": "sha256:" + sha256_text(str(payload["actor_id"])),
+                "result_summary_keys": result_summary["key_names"],
+                "selector_keys": {
+                    "left": left["key_names"],
+                    "right": right["key_names"],
+                },
+                "raw_selectors_returned": False,
+                "raw_result_summary_returned": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "comparison-read-model-redacted",
+                "redaction_state": "metadata_refs_and_hashes",
+                "raw_selectors_returned": False,
+                "raw_result_summary_returned": False,
+                "raw_differences_returned": False,
             },
             "audit": {"links": [], "chain_visible": True},
         }
 
     def _diagnostic_bundle_microscope(record: Any) -> dict[str, Any]:
         payload = record.to_json()
+        scope = _safe_observatory_mapping(
+            payload.get("scope"),
+            allowed_scalar_keys={"snapshot_seq", "window_minutes"},
+            allowed_string_keys={"workspace_id"},
+        )
+        manifest = _safe_diagnostic_manifest(payload.get("manifest"))
+        storage = _storage_uri_reference(payload.get("storage_uri"))
         return {
-            **payload,
+            "schema_version": "skillkernel.observatory.diagnostic-bundle.v1",
+            "object_type": "diagnostic_bundle",
+            "object_id": str(payload["object_id"]),
+            "bundle_id": str(payload["bundle_id"]),
+            "workspace_id": payload.get("workspace_id"),
+            "workspace_key": payload.get("workspace_key"),
+            "redaction_level": payload["redaction_level"],
+            "scope": scope,
+            "manifest": manifest,
+            "storage": storage,
+            "created_at": payload["created_at"],
+            "expires_at": payload["expires_at"],
+            "title": payload["title"],
+            "summary": payload["summary"],
             "timeline": [
                 {
                     "at": payload["created_at"],
@@ -7509,21 +7698,41 @@ def create_app(
                 }
             ],
             "provenance": {
-                "upstream": [payload["scope"]],
+                "upstream": [
+                    {
+                        "object_type": "diagnostic_bundle_scope",
+                        "object_id": str(payload["bundle_id"]),
+                        "key_names": scope["key_names"],
+                    }
+                ],
                 "downstream": [
                     {
                         "object_type": "storage_uri",
-                        "object_id": payload["storage_uri"],
+                        "object_id": storage["uri_sha256"],
                     }
                 ],
             },
             "effects": {
-                "manifest": payload["manifest"],
-                "storage_uri": payload["storage_uri"],
+                "manifest": manifest,
+                "storage": storage,
             },
             "diagnostics": {
-                "actor_id": payload["actor_id"],
+                "actor_id_sha256": "sha256:" + sha256_text(str(payload["actor_id"])),
                 "expires_at": payload["expires_at"],
+                "scope_keys": scope["key_names"],
+                "manifest_keys": manifest["key_names"],
+                "raw_scope_returned": False,
+                "raw_manifest_returned": False,
+                "raw_storage_uri_returned": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "diagnostic-bundle-read-model-redacted",
+                "redaction_level": payload["redaction_level"],
+                "redaction_state": "metadata_refs_and_hashes",
+                "raw_scope_returned": False,
+                "raw_manifest_returned": False,
+                "raw_storage_uri_returned": False,
             },
             "audit": {"links": [], "chain_visible": True},
         }
@@ -12811,7 +13020,7 @@ def create_app(
         return _observatory_collection(
             object_type="baseline_comparison",
             title="Saved baseline comparisons",
-            items=[comparison.to_json() for comparison in comparisons],
+            items=[_comparison_microscope(comparison) for comparison in comparisons],
             limit=limit,
             cursor=cursor,
             source="observatory_admin_store.list_comparisons",
@@ -12867,9 +13076,7 @@ def create_app(
                 "mutates_policy": False,
             },
         )
-        return ObservatoryObjectResponse(
-            object=comparison.to_json()
-        )
+        return ObservatoryObjectResponse(object=_comparison_microscope(comparison))
 
     @app.post("/admin/api/v1/diagnostics/bundles", response_model=ObservatoryObjectResponse)
     async def observatory_create_diagnostic_bundle(
@@ -12928,12 +13135,10 @@ def create_app(
                 "redaction_level": bundle.redaction_level,
             },
         )
-        payload = bundle.to_json()
-        payload["audit"] = audit_record.model_dump(mode="json")
+        payload = _diagnostic_bundle_microscope(bundle)
+        payload["audit"] = _audit_record_microscope(audit_record)
         payload["live_event"] = live_event.to_json()
-        return ObservatoryObjectResponse(
-            object=payload
-        )
+        return ObservatoryObjectResponse(object=payload)
 
     @app.get(
         "/admin/api/v1/diagnostics/bundles/{bundle_id}",
@@ -12962,9 +13167,7 @@ def create_app(
                 status_code=http_status.HTTP_404_NOT_FOUND,
                 detail="diagnostic bundle not found",
             )
-        return ObservatoryObjectResponse(
-            object=bundle.to_json()
-        )
+        return ObservatoryObjectResponse(object=_diagnostic_bundle_microscope(bundle))
 
     @app.get("/admin/api/v1/replay/traces/{trace_id}", response_model=ObservatoryObjectResponse)
     async def observatory_trace_replay(

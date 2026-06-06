@@ -3,6 +3,23 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Observatory baseline comparison and diagnostic bundle
+records now use content-safe read-model projections across collection,
+create/detail, and generic object microscope paths. Persisted comparison
+selectors, comparison summaries, difference lists, diagnostic bundle scopes,
+manifests, storage URIs, actor IDs, audit details, and live-event references
+are exposed as bounded scalar allowlists, key names, counts, and SHA-256 hashes
+instead of raw caller-shaped dictionaries. This advances Observatory Sections
+7.6, 7.7, 12.6, 13.1, 16.1, and acceptance criteria 21.35-21.36 by closing a
+reverse-project read-model seam without adding UI-local mutation authority or
+changing the underlying stores. Focused validation passed with the comparison,
+diagnostic-bundle, and route-matrix Observatory API regressions (`3 passed, 59
+deselected`) plus targeted Ruff. Required gates also passed with full sidecar
+Ruff, full pytest (`403 passed`), compileall, diff-check, core acceptance
+(`70` implemented), Observatory acceptance (`86` satisfied), and conformance
+(`14/14`). No compose/Postgres smoke was needed because the change is a
+deterministic API projection over existing Observatory admin store rows.
+
 2026-06-06 update: Observatory diagnostic momentum records now have
 sidecar-hosted, content-safe read-model routes and generic object microscope
 coverage. The new `/admin/api/v1/diagnostics/momentum` collection/detail
