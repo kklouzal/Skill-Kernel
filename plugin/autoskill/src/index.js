@@ -88,7 +88,7 @@ export async function captureEvent({ eventType, payload, trust, taint, hookConte
         reason: rawCompatibility.reason,
       },
     };
-    await appendSpool(config.spoolDir, envelope, { maxBytes: config.maxSpoolBytes });
+    await appendSpool(config.spoolDir, envelope, normalSpoolOptions(config));
     return {
       captured: true,
       forwarded: false,
@@ -106,11 +106,21 @@ export async function captureEvent({ eventType, payload, trust, taint, hookConte
       authToken: config.ingestToken,
     });
   } catch (error) {
-    await appendSpool(config.spoolDir, envelope, { maxBytes: config.maxSpoolBytes });
+    const { envelope: spooledEnvelope, options, degraded } = rawAwareSpoolEnvelope({
+      eventType,
+      payload,
+      trust,
+      taint,
+      hookContext,
+      config,
+      envelope,
+    });
+    await appendSpool(config.spoolDir, spooledEnvelope, options);
     return {
       captured: true,
       forwarded: false,
       spooled: true,
+      degraded,
       eventId: envelope.event_id,
       error: String(error?.message ?? error),
     };
@@ -271,6 +281,7 @@ async function replayCapturedSpool(config) {
     return await replaySpool(config.spoolDir, {
       batchSize: config.replayBatchSize,
       maxBytes: config.maxSpoolBytes,
+      rawContentEncryptionKey: config.rawSpoolEncryptionKey,
       send: (events) =>
         forwardEvents(config.sidecarUrl, events, {
           timeoutMs: 1000,
@@ -280,6 +291,44 @@ async function replayCapturedSpool(config) {
   } finally {
     replayInFlight = false;
   }
+}
+
+function normalSpoolOptions(config) {
+  return { maxBytes: config.maxSpoolBytes };
+}
+
+function rawSpoolOptions(config) {
+  return {
+    maxBytes: config.maxSpoolBytes,
+    rawContent: true,
+    rawContentEncryptionKey: config.rawSpoolEncryptionKey,
+    rawContentKeyId: config.rawSpoolKeyId,
+    rawContentRetentionMs: config.rawSpoolRetentionMs,
+  };
+}
+
+function rawAwareSpoolEnvelope({ eventType, payload, trust, taint, hookContext, config, envelope }) {
+  if (!config.captureRawConversation) {
+    return { envelope, options: normalSpoolOptions(config), degraded: undefined };
+  }
+  if (config.rawSpoolEncryptionKey) {
+    return { envelope, options: rawSpoolOptions(config), degraded: undefined };
+  }
+  const redactedEnvelope = buildEventEnvelope({
+    eventType,
+    payload,
+    trust,
+    taint,
+    ctx: hookContext,
+    config: { ...config, captureRawConversation: false },
+  });
+  redactedEnvelope.payload = {
+    ...redactedEnvelope.payload,
+    autoskill_raw_capture_degraded: {
+      reason: "raw_spool_encryption_key_missing",
+    },
+  };
+  return { envelope: redactedEnvelope, options: normalSpoolOptions(config), degraded: true };
 }
 
 export async function maybeContextHint({ prompt, hookContext }) {

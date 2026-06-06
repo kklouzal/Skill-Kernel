@@ -103,4 +103,10 @@ outside OpenClaw's runtime skill loader.
 Hook capture treats current-event forwarding and old-spool replay as separate
 failure domains. The current event is spooled only when its own ingest forwarding
 fails. Replay of older spool records is best-effort after a successful current
-forward and must not re-spool or report the current event as failed.
+forward and must not re-spool or report the current event as failed. New spool
+records are wrapped with stable idempotency keys and checksums. Legacy plain
+event JSONL lines remain replayable. Tampered or expired wrapped records are
+tombstoned and not replayed. If raw conversation capture is enabled and a
+compatible Core becomes unreachable after the raw-capture handshake, retry
+records are encrypted at rest with short-retention metadata when a raw-spool key
+is configured; otherwise the plugin stores only a redacted degraded record.

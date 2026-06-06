@@ -743,8 +743,11 @@ Acceptance:
   capture opt-in still runs secret/email redaction and the sidecar applies its
   own storage-time redaction;
 - spool replay is idempotent; implemented as accepted-or-duplicate deletion from
-  bounded JSONL spool, with replay failure isolated from the already-forwarded
-  current event;
+  bounded self-validating JSONL spool records, with replay failure isolated from
+  the already-forwarded current event;
+- normal spool records carry checksum/idempotency metadata, raw retry records are
+  encrypted with short-retention metadata when raw capture is configured, and
+  tampered/expired wrapped records are tombstoned;
 - concurrent capture appends all failed events to the bounded spool;
 - actual hook handlers import and forward redacted envelopes in the local smoke fixture.
 

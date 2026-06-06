@@ -18,6 +18,17 @@
       "replayBatchSize": { "type": "integer", "minimum": 1, "maximum": 500 },
       "maxSpoolBytes": { "type": "integer", "minimum": 1024 },
       "captureRawConversation": { "type": "boolean" },
+      "rawSpoolEncryptionKey": { "type": "string" },
+      "rawSpoolKeyId": { "type": "string" },
+      "rawSpoolRetentionMs": { "type": "integer", "minimum": 1000 },
+      "compatibilityHandshake": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "timeoutMs": { "type": "integer", "minimum": 25, "maximum": 5000 },
+          "cacheTtlMs": { "type": "integer", "minimum": 0 }
+        }
+      },
       "runtimeContextBroker": {
         "type": "object",
         "additionalProperties": false,

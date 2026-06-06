@@ -51,6 +51,21 @@ export function resolveConfig(ctx = {}) {
     spoolDir: cfg.spoolDir ?? path.join(workspaceDir, ".autoskill", "spool"),
     replayBatchSize: cfg.replayBatchSize ?? 25,
     maxSpoolBytes: cfg.maxSpoolBytes ?? 10 * 1024 * 1024,
+    rawSpoolEncryptionKey:
+      cfg.rawSpoolEncryptionKey ??
+      process.env.AUTOSKILL_PLUGIN_RAW_SPOOL_KEY ??
+      process.env.AUTOSKILL_RAW_SPOOL_KEY ??
+      null,
+    rawSpoolKeyId:
+      cfg.rawSpoolKeyId ??
+      process.env.AUTOSKILL_PLUGIN_RAW_SPOOL_KEY_ID ??
+      process.env.AUTOSKILL_RAW_SPOOL_KEY_ID ??
+      "plugin-local-raw-spool-v1",
+    rawSpoolRetentionMs:
+      cfg.rawSpoolRetentionMs ??
+      envInt("AUTOSKILL_PLUGIN_RAW_SPOOL_RETENTION_MS") ??
+      envInt("AUTOSKILL_RAW_SPOOL_RETENTION_MS") ??
+      24 * 60 * 60 * 1000,
     captureRawConversation:
       cfg.captureRawConversation ??
       envBool("AUTOSKILL_PLUGIN_CAPTURE_RAW_CONVERSATION") ??

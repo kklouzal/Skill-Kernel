@@ -148,6 +148,14 @@ function compatibleCoreResponse(url) {
   return null;
 }
 
+function spoolEventFromLine(line) {
+  const record = JSON.parse(line);
+  if (record.schema_version === "autoskill.plugin-spool-record.v1") {
+    return record.event;
+  }
+  return record;
+}
+
 test("capture hook handlers import and forward redacted envelopes", async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];
@@ -290,7 +298,7 @@ test("raw capture degrades to redacted spool when core handshake is incompatible
       path.join(workspaceDir, ".autoskill", "spool", files[0]),
       "utf8",
     );
-    const envelope = JSON.parse(contents.trim());
+    const envelope = spoolEventFromLine(contents.trim());
     assert.match(envelope.payload.systemPrompt, /^\[REDACTED_CONTENT bytes=/);
     assert.equal(JSON.stringify(envelope).includes("private prompt"), false);
     assert.match(
@@ -331,6 +339,101 @@ test("raw capture degrades to redacted spool when core handshake is unreachable"
     assert.equal(result.spooled, true);
     assert.equal(result.reason, "raw_capture_handshake_failed");
     assert.match(result.error, /^unreachable:/);
+  } finally {
+    clearCompatibilityHandshakeCache();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("raw capture outage spool is encrypted when a raw spool key is configured", async () => {
+  const originalFetch = globalThis.fetch;
+  const workspaceDir = await tempWorkspace();
+  globalThis.fetch = async (url) => {
+    const compatibility = compatibleCoreResponse(url);
+    if (compatibility) {
+      return compatibility;
+    }
+    throw new Error("sidecar unavailable after handshake");
+  };
+
+  try {
+    clearCompatibilityHandshakeCache();
+    const result = await captureEvent({
+      eventType: "llm_input",
+      payload: { systemPrompt: "private prompt" },
+      trust: "agent_output",
+      taint: ["llm"],
+      hookContext: {
+        ...hookContext(workspaceDir),
+        config: {
+          autoskill: {
+            ...hookContext(workspaceDir).config.autoskill,
+            captureRawConversation: true,
+            rawSpoolEncryptionKey: "local-test-key",
+          },
+        },
+      },
+    });
+
+    assert.equal(result.spooled, true);
+    assert.equal(result.degraded, undefined);
+    const files = await fs.readdir(path.join(workspaceDir, ".autoskill", "spool"));
+    const contents = await fs.readFile(
+      path.join(workspaceDir, ".autoskill", "spool", files[0]),
+      "utf8",
+    );
+    const record = JSON.parse(contents.trim());
+    assert.equal(record.storage_class, "raw_content_encrypted");
+    assert.equal(contents.includes("private prompt"), false);
+  } finally {
+    clearCompatibilityHandshakeCache();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("raw capture outage spool degrades to redacted content without a raw spool key", async () => {
+  const originalFetch = globalThis.fetch;
+  const workspaceDir = await tempWorkspace();
+  globalThis.fetch = async (url) => {
+    const compatibility = compatibleCoreResponse(url);
+    if (compatibility) {
+      return compatibility;
+    }
+    throw new Error("sidecar unavailable after handshake");
+  };
+
+  try {
+    clearCompatibilityHandshakeCache();
+    const result = await captureEvent({
+      eventType: "llm_input",
+      payload: { systemPrompt: "private prompt" },
+      trust: "agent_output",
+      taint: ["llm"],
+      hookContext: {
+        ...hookContext(workspaceDir),
+        config: {
+          autoskill: {
+            ...hookContext(workspaceDir).config.autoskill,
+            captureRawConversation: true,
+          },
+        },
+      },
+    });
+
+    assert.equal(result.spooled, true);
+    assert.equal(result.degraded, true);
+    const files = await fs.readdir(path.join(workspaceDir, ".autoskill", "spool"));
+    const contents = await fs.readFile(
+      path.join(workspaceDir, ".autoskill", "spool", files[0]),
+      "utf8",
+    );
+    const envelope = spoolEventFromLine(contents.trim());
+    assert.match(envelope.payload.systemPrompt, /^\[REDACTED_CONTENT bytes=/);
+    assert.equal(JSON.stringify(envelope).includes("private prompt"), false);
+    assert.equal(
+      envelope.payload.autoskill_raw_capture_degraded.reason,
+      "raw_spool_encryption_key_missing",
+    );
   } finally {
     clearCompatibilityHandshakeCache();
     globalThis.fetch = originalFetch;
@@ -533,8 +636,8 @@ test("capture spools current event when sidecar ingest is unavailable", async ()
       .trim()
       .split("\n");
     assert.equal(lines.length, 1);
-    assert.equal(JSON.parse(lines[0]).event_type, "message_received");
-    assert.equal(JSON.parse(lines[0]).trust, "external_content");
+    assert.equal(spoolEventFromLine(lines[0]).event_type, "message_received");
+    assert.equal(spoolEventFromLine(lines[0]).trust, "external_content");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -590,7 +693,7 @@ test("capture does not re-spool current event when old spool replay fails", asyn
       .trim()
       .split("\n");
     assert.equal(lines.length, 1);
-    assert.equal(JSON.parse(lines[0]).event_id, "old");
+    assert.equal(spoolEventFromLine(lines[0]).event_id, "old");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -625,7 +728,7 @@ test("concurrent capture appends all failed events to the spool", async () => {
       .trim()
       .split("\n");
     assert.equal(lines.length, 10);
-    assert.equal(new Set(lines.map((line) => JSON.parse(line).event_id)).size, 10);
+    assert.equal(new Set(lines.map((line) => spoolEventFromLine(line).event_id)).size, 10);
   } finally {
     globalThis.fetch = originalFetch;
   }
