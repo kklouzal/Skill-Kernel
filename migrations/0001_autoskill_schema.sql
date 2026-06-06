@@ -1220,6 +1220,206 @@ ALTER TABLE autoskill.model_profiles
   ADD CONSTRAINT model_profiles_thinking_fallback_policy_check
   CHECK (thinking_fallback_policy IN ('strict','downgrade','omit'));
 
+CREATE TABLE IF NOT EXISTS autoskill.text_model_profiles (
+  text_model_profile_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  name text NOT NULL,
+  route_type text NOT NULL CHECK (route_type IN ('openclaw','openai_compatible')),
+  provider text,
+  model text NOT NULL,
+  base_url_env text,
+  api_key_env text,
+  endpoint_kind text NOT NULL DEFAULT 'chat_completions'
+    CHECK (endpoint_kind IN ('chat_completions','responses')),
+  thinking_level text NOT NULL DEFAULT 'off',
+  thinking_fallback_policy text NOT NULL DEFAULT 'omit'
+    CHECK (thinking_fallback_policy IN ('strict','downgrade','omit')),
+  temperature numeric(4,3) NOT NULL DEFAULT 0,
+  max_input_tokens integer NOT NULL DEFAULT 80000,
+  max_output_tokens integer NOT NULL DEFAULT 8000,
+  timeout_ms integer NOT NULL DEFAULT 120000,
+  max_concurrent integer NOT NULL DEFAULT 1,
+  hosted_allowed boolean NOT NULL DEFAULT true,
+  local_only boolean NOT NULL DEFAULT false,
+  enabled boolean NOT NULL DEFAULT true,
+  config jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS text_model_profiles_workspace_enabled_idx
+  ON autoskill.text_model_profiles(workspace_id, enabled, updated_at DESC);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_text_model_profile_from_model_profile()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO autoskill.text_model_profiles (
+    text_model_profile_id,
+    workspace_id,
+    name,
+    route_type,
+    provider,
+    model,
+    base_url_env,
+    api_key_env,
+    endpoint_kind,
+    thinking_level,
+    thinking_fallback_policy,
+    temperature,
+    max_input_tokens,
+    max_output_tokens,
+    timeout_ms,
+    max_concurrent,
+    hosted_allowed,
+    local_only,
+    enabled,
+    config,
+    created_at,
+    updated_at
+  )
+  VALUES (
+    NEW.model_profile_id,
+    NEW.workspace_id,
+    NEW.profile_key,
+    NEW.route_kind,
+    NEW.provider,
+    NEW.model,
+    CASE
+      WHEN NEW.route_kind = 'openai_compatible'
+        THEN COALESCE(NULLIF(NEW.qualification->>'base_url_env', ''), 'SKILLKERNEL_LOCAL_LLM_BASE_URL')
+      ELSE NULL
+    END,
+    CASE
+      WHEN NEW.route_kind = 'openai_compatible'
+        THEN COALESCE(NULLIF(NEW.qualification->>'api_key_env', ''), 'SKILLKERNEL_LOCAL_LLM_API_KEY')
+      ELSE NULL
+    END,
+    NEW.endpoint_kind,
+    NEW.thinking_level,
+    NEW.thinking_fallback_policy,
+    0,
+    80000,
+    8000,
+    GREATEST(1, round(NEW.timeout_seconds * 1000)::integer),
+    1,
+    true,
+    false,
+    NEW.status <> 'disabled',
+    jsonb_build_object(
+      'legacy_model_profile_id', NEW.model_profile_id,
+      'legacy_profile_key', NEW.profile_key,
+      'legacy_status', NEW.status,
+      'endpoint_ref', NEW.endpoint_ref,
+      'qualification', COALESCE(NEW.qualification, '{}'::jsonb)
+    ),
+    NEW.created_at,
+    NEW.updated_at
+  )
+  ON CONFLICT (text_model_profile_id) DO UPDATE
+  SET workspace_id = EXCLUDED.workspace_id,
+      name = EXCLUDED.name,
+      route_type = EXCLUDED.route_type,
+      provider = EXCLUDED.provider,
+      model = EXCLUDED.model,
+      base_url_env = EXCLUDED.base_url_env,
+      api_key_env = EXCLUDED.api_key_env,
+      endpoint_kind = EXCLUDED.endpoint_kind,
+      thinking_level = EXCLUDED.thinking_level,
+      thinking_fallback_policy = EXCLUDED.thinking_fallback_policy,
+      timeout_ms = EXCLUDED.timeout_ms,
+      enabled = EXCLUDED.enabled,
+      config = EXCLUDED.config,
+      updated_at = EXCLUDED.updated_at;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS model_profiles_sync_text_model_profiles ON autoskill.model_profiles;
+CREATE TRIGGER model_profiles_sync_text_model_profiles
+AFTER INSERT OR UPDATE ON autoskill.model_profiles
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_text_model_profile_from_model_profile();
+
+INSERT INTO autoskill.text_model_profiles (
+  text_model_profile_id,
+  workspace_id,
+  name,
+  route_type,
+  provider,
+  model,
+  base_url_env,
+  api_key_env,
+  endpoint_kind,
+  thinking_level,
+  thinking_fallback_policy,
+  temperature,
+  max_input_tokens,
+  max_output_tokens,
+  timeout_ms,
+  max_concurrent,
+  hosted_allowed,
+  local_only,
+  enabled,
+  config,
+  created_at,
+  updated_at
+)
+SELECT
+  model_profile_id,
+  workspace_id,
+  profile_key,
+  route_kind,
+  provider,
+  model,
+  CASE
+    WHEN route_kind = 'openai_compatible'
+      THEN COALESCE(NULLIF(qualification->>'base_url_env', ''), 'SKILLKERNEL_LOCAL_LLM_BASE_URL')
+    ELSE NULL
+  END,
+  CASE
+    WHEN route_kind = 'openai_compatible'
+      THEN COALESCE(NULLIF(qualification->>'api_key_env', ''), 'SKILLKERNEL_LOCAL_LLM_API_KEY')
+    ELSE NULL
+  END,
+  endpoint_kind,
+  thinking_level,
+  thinking_fallback_policy,
+  0,
+  80000,
+  8000,
+  GREATEST(1, round(timeout_seconds * 1000)::integer),
+  1,
+  true,
+  false,
+  status <> 'disabled',
+  jsonb_build_object(
+    'legacy_model_profile_id', model_profile_id,
+    'legacy_profile_key', profile_key,
+    'legacy_status', status,
+    'endpoint_ref', endpoint_ref,
+    'qualification', COALESCE(qualification, '{}'::jsonb)
+  ),
+  created_at,
+  updated_at
+FROM autoskill.model_profiles
+ON CONFLICT (text_model_profile_id) DO UPDATE
+SET workspace_id = EXCLUDED.workspace_id,
+    name = EXCLUDED.name,
+    route_type = EXCLUDED.route_type,
+    provider = EXCLUDED.provider,
+    model = EXCLUDED.model,
+    base_url_env = EXCLUDED.base_url_env,
+    api_key_env = EXCLUDED.api_key_env,
+    endpoint_kind = EXCLUDED.endpoint_kind,
+    thinking_level = EXCLUDED.thinking_level,
+    thinking_fallback_policy = EXCLUDED.thinking_fallback_policy,
+    timeout_ms = EXCLUDED.timeout_ms,
+    enabled = EXCLUDED.enabled,
+    config = EXCLUDED.config,
+    updated_at = EXCLUDED.updated_at;
+
 CREATE TABLE IF NOT EXISTS autoskill.llm_invocations (
   llm_invocation_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
@@ -1228,6 +1428,7 @@ CREATE TABLE IF NOT EXISTS autoskill.llm_invocations (
   purpose text NOT NULL,
   profile_key text NOT NULL,
   model_profile_id uuid REFERENCES autoskill.model_profiles(model_profile_id),
+  text_model_profile_id uuid,
   route_kind text NOT NULL CHECK (route_kind IN ('openclaw','openai_compatible')),
   provider text NOT NULL,
   model text NOT NULL,
@@ -1246,10 +1447,44 @@ CREATE TABLE IF NOT EXISTS autoskill.llm_invocations (
 CREATE INDEX IF NOT EXISTS llm_invocations_workspace_created_idx
   ON autoskill.llm_invocations(workspace_id, created_at DESC);
 
+ALTER TABLE autoskill.llm_invocations
+  ADD COLUMN IF NOT EXISTS text_model_profile_id uuid;
+
+UPDATE autoskill.llm_invocations
+SET text_model_profile_id = model_profile_id
+WHERE text_model_profile_id IS NULL
+  AND model_profile_id IS NOT NULL;
+
+ALTER TABLE autoskill.llm_invocations
+  DROP CONSTRAINT IF EXISTS llm_invocations_text_model_profile_fk;
+
+ALTER TABLE autoskill.llm_invocations
+  ADD CONSTRAINT llm_invocations_text_model_profile_fk
+  FOREIGN KEY (text_model_profile_id)
+  REFERENCES autoskill.text_model_profiles(text_model_profile_id);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_llm_invocation_text_model_profile_id()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.text_model_profile_id IS NULL AND NEW.model_profile_id IS NOT NULL THEN
+    NEW.text_model_profile_id := NEW.model_profile_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS llm_invocations_sync_text_model_profile_id ON autoskill.llm_invocations;
+CREATE TRIGGER llm_invocations_sync_text_model_profile_id
+BEFORE INSERT OR UPDATE OF model_profile_id, text_model_profile_id ON autoskill.llm_invocations
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_llm_invocation_text_model_profile_id();
+
 CREATE TABLE IF NOT EXISTS autoskill.model_profile_qualification_runs (
   model_profile_qualification_run_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
   model_profile_id uuid REFERENCES autoskill.model_profiles(model_profile_id),
+  text_model_profile_id uuid,
   profile_key text NOT NULL,
   route_kind text NOT NULL CHECK (route_kind IN ('openclaw','openai_compatible')),
   provider text NOT NULL,
@@ -1273,6 +1508,41 @@ CREATE TABLE IF NOT EXISTS autoskill.model_profile_qualification_runs (
 
 CREATE INDEX IF NOT EXISTS model_profile_qualification_runs_profile_created_idx
   ON autoskill.model_profile_qualification_runs(workspace_id, profile_key, created_at DESC);
+
+ALTER TABLE autoskill.model_profile_qualification_runs
+  ADD COLUMN IF NOT EXISTS text_model_profile_id uuid;
+
+UPDATE autoskill.model_profile_qualification_runs
+SET text_model_profile_id = model_profile_id
+WHERE text_model_profile_id IS NULL
+  AND model_profile_id IS NOT NULL;
+
+ALTER TABLE autoskill.model_profile_qualification_runs
+  DROP CONSTRAINT IF EXISTS model_profile_qualification_runs_text_model_profile_fk;
+
+ALTER TABLE autoskill.model_profile_qualification_runs
+  ADD CONSTRAINT model_profile_qualification_runs_text_model_profile_fk
+  FOREIGN KEY (text_model_profile_id)
+  REFERENCES autoskill.text_model_profiles(text_model_profile_id);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_model_profile_qualification_text_model_profile_id()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.text_model_profile_id IS NULL AND NEW.model_profile_id IS NOT NULL THEN
+    NEW.text_model_profile_id := NEW.model_profile_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS model_profile_qualification_runs_sync_text_model_profile_id
+ON autoskill.model_profile_qualification_runs;
+CREATE TRIGGER model_profile_qualification_runs_sync_text_model_profile_id
+BEFORE INSERT OR UPDATE OF model_profile_id, text_model_profile_id
+ON autoskill.model_profile_qualification_runs
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_model_profile_qualification_text_model_profile_id();
 
 CREATE TABLE IF NOT EXISTS autoskill.embedding_profiles (
   embedding_profile_id uuid PRIMARY KEY,

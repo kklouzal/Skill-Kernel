@@ -27,6 +27,7 @@ class ModelProfileQualificationRunRecord:
     workspace_id: UUID | None
     workspace_key: str | None
     model_profile_id: UUID | None
+    text_model_profile_id: UUID | None
     profile_key: str
     route_kind: str
     provider: str
@@ -48,6 +49,7 @@ class ModelProfileQualificationRunRecord:
             workspace_id=_row_get(row, "workspace_id"),
             workspace_key=_row_get(row, "workspace_key"),
             model_profile_id=_row_get(row, "model_profile_id"),
+            text_model_profile_id=_row_get(row, "text_model_profile_id"),
             profile_key=row["profile_key"],
             route_kind=row["route_kind"],
             provider=row["provider"],
@@ -69,6 +71,9 @@ class ModelProfileQualificationRunRecord:
             "workspace_key": self.workspace_key,
             "model_profile_id": (
                 str(self.model_profile_id) if self.model_profile_id else None
+            ),
+            "text_model_profile_id": (
+                str(self.text_model_profile_id) if self.text_model_profile_id else None
             ),
             "profile_key": self.profile_key,
             "route_kind": self.route_kind,
@@ -246,6 +251,7 @@ class NullProfileQualificationStore:
             workspace_id=None,
             workspace_key=workspace_key,
             model_profile_id=model_profile_id,
+            text_model_profile_id=model_profile_id,
             profile_key=profile_key,
             route_kind=route_kind,
             provider=provider,

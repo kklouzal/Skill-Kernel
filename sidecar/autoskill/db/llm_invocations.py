@@ -24,6 +24,7 @@ class LLMInvocationRecord:
     purpose: str
     profile_key: str
     model_profile_id: UUID | None
+    text_model_profile_id: UUID | None
     route_kind: str
     provider: str
     model: str
@@ -49,6 +50,7 @@ class LLMInvocationRecord:
             purpose=row["purpose"],
             profile_key=row["profile_key"],
             model_profile_id=_row_get(row, "model_profile_id"),
+            text_model_profile_id=_row_get(row, "text_model_profile_id"),
             route_kind=row["route_kind"],
             provider=row["provider"],
             model=row["model"],
@@ -74,6 +76,9 @@ class LLMInvocationRecord:
             "purpose": self.purpose,
             "profile_key": self.profile_key,
             "model_profile_id": str(self.model_profile_id) if self.model_profile_id else None,
+            "text_model_profile_id": (
+                str(self.text_model_profile_id) if self.text_model_profile_id else None
+            ),
             "route_kind": self.route_kind,
             "provider": self.provider,
             "model": self.model,
@@ -170,6 +175,7 @@ class NullLLMInvocationStore:
             purpose=purpose,
             profile_key=profile_key,
             model_profile_id=model_profile_id,
+            text_model_profile_id=model_profile_id,
             route_kind=route_kind,
             provider=provider,
             model=model,

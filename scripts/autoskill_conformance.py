@@ -92,6 +92,7 @@ def build_report(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
         _check_no_raw_vault_streaming(),
         _check_no_raw_private_read_model_defaults(),
         _check_raw_vault_schema_contract(),
+        _check_text_model_profile_schema_contract(),
         _check_autonomy_control_schema_contract(),
         _check_canonical_evidence_schema_contract(),
         _check_skillir_package_schema_contract(),
@@ -282,6 +283,35 @@ def _check_raw_vault_schema_contract() -> StaticCheck:
             "migrations/0001_autoskill_schema.sql raw-vault tables",
             "sidecar/autoskill/api/app.py raw-vault capability and ingest route",
             "plugin/autoskill/src event envelope/client",
+        ),
+        details,
+    )
+
+
+def _check_text_model_profile_schema_contract() -> StaticCheck:
+    migration = MIGRATION_PATH.read_text(encoding="utf-8")
+    details: list[str] = []
+    for required in (
+        "CREATE TABLE IF NOT EXISTS autoskill.text_model_profiles",
+        "text_model_profile_id uuid PRIMARY KEY",
+        "route_type text NOT NULL CHECK (route_type IN ('openclaw','openai_compatible'))",
+        "endpoint_kind text NOT NULL DEFAULT 'chat_completions'",
+        "max_input_tokens integer NOT NULL DEFAULT 80000",
+        "sync_text_model_profile_from_model_profile",
+        "model_profiles_sync_text_model_profiles",
+        "llm_invocations_text_model_profile_fk",
+        "model_profile_qualification_runs_text_model_profile_fk",
+        "sync_llm_invocation_text_model_profile_id",
+        "sync_model_profile_qualification_text_model_profile_id",
+    ):
+        if required not in migration:
+            details.append(f"text model control-plane bridge missing {required}")
+    return _result(
+        "SKX-STATIC-006J",
+        "canonical text_model_profiles table mirrors the active text model profile write path",
+        (
+            "migrations/0001_autoskill_schema.sql text_model_profiles",
+            "model_profiles, llm_invocations, and qualification sync triggers",
         ),
         details,
     )

@@ -46,6 +46,7 @@ class MemoryInvocationStore:
             purpose=kwargs["purpose"],
             profile_key=kwargs["profile_key"],
             model_profile_id=kwargs.get("model_profile_id"),
+            text_model_profile_id=kwargs.get("model_profile_id"),
             route_kind=kwargs["route_kind"],
             provider=kwargs["provider"],
             model=kwargs["model"],

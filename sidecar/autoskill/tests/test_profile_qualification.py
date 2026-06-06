@@ -54,6 +54,7 @@ class MemoryProfileStore:
 
 class FakeLLMClient:
     async def complete(self, completion):
+        model_profile_id = uuid4()
         invocation = LLMInvocationRecord(
             llm_invocation_id=uuid4(),
             workspace_id=None,
@@ -62,7 +63,8 @@ class FakeLLMClient:
             span_id=completion.span_id,
             purpose=completion.purpose,
             profile_key=completion.profile_key,
-            model_profile_id=uuid4(),
+            model_profile_id=model_profile_id,
+            text_model_profile_id=model_profile_id,
             route_kind="openai_compatible",
             provider="test-provider",
             model="test-model",
