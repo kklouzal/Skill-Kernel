@@ -7634,6 +7634,153 @@ def create_app(
             "audit": {"links": [], "chain_visible": True},
         }
 
+    def _safe_policy_scalar_thresholds(
+        value: Any,
+        *,
+        prefix: str = "",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        thresholds: list[dict[str, Any]] = []
+        if isinstance(value, dict):
+            for key in sorted(str(item) for item in value):
+                if len(thresholds) >= limit:
+                    break
+                child_prefix = f"{prefix}.{key}" if prefix else key
+                thresholds.extend(
+                    _safe_policy_scalar_thresholds(
+                        value.get(key),
+                        prefix=child_prefix,
+                        limit=limit - len(thresholds),
+                    )
+                )
+            return thresholds
+        if isinstance(value, bool | int | float):
+            thresholds.append({"path": prefix, "value": value})
+        return thresholds[:limit]
+
+    def _threshold_policy_microscope(policy_version: Any) -> dict[str, Any]:
+        payload = policy_version.to_json()
+        policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
+        runtime_feedback = (
+            policy.get("runtime_feedback")
+            if isinstance(policy.get("runtime_feedback"), dict)
+            else {}
+        )
+        last_canary = (
+            runtime_feedback.get("last_canary")
+            if isinstance(runtime_feedback.get("last_canary"), dict)
+            else {}
+        )
+        metrics = last_canary.get("metrics") if isinstance(last_canary.get("metrics"), dict) else {}
+        policy_configuration = {
+            key: value for key, value in policy.items() if key != "runtime_feedback"
+        }
+        scalar_thresholds = _safe_policy_scalar_thresholds(policy_configuration)
+        policy_hash = "sha256:" + sha256_text(
+            json.dumps(policy, sort_keys=True, default=str)
+        )
+        object_id = str(payload["broker_policy_version_id"])
+        timeline = [
+            {
+                "at": payload["created_at"],
+                "event": "threshold_policy_recorded",
+                "status": payload["status"],
+            }
+        ]
+        if payload.get("activated_at"):
+            timeline.append(
+                {
+                    "at": payload["activated_at"],
+                    "event": "threshold_policy_activated",
+                    "status": payload["status"],
+                }
+            )
+        if payload.get("rolled_back_at"):
+            timeline.append(
+                {
+                    "at": payload["rolled_back_at"],
+                    "event": "threshold_policy_rolled_back",
+                    "status": payload["status"],
+                }
+            )
+        return {
+            "schema_version": "skillkernel.observatory.threshold-policy.v1",
+            "object_type": "threshold_policy",
+            "object_id": object_id,
+            "broker_policy_version_id": object_id,
+            "workspace_id": payload.get("workspace_key"),
+            "title": f"Threshold policy {payload['version']}",
+            "summary": (
+                f"{payload['version']} / {payload['status']}; "
+                f"policy_keys={len(policy)}; scalar_thresholds={len(scalar_thresholds)}"
+            ),
+            "version": payload["version"],
+            "status": payload["status"],
+            "lifecycle": {
+                "created_at": payload["created_at"],
+                "activated_at": payload.get("activated_at"),
+                "rolled_back_at": payload.get("rolled_back_at"),
+                "lifecycle_stage": payload["status"],
+            },
+            "policy_identity": {
+                "policy_sha256": policy_hash,
+                "policy_keys": sorted(str(key) for key in policy),
+                "scalar_thresholds": scalar_thresholds,
+                "scalar_threshold_limit": 50,
+            },
+            "runtime_feedback": {
+                "last_canary_status": last_canary.get("status"),
+                "last_canary_observed_at": last_canary.get("observed_at"),
+                "last_canary_metric_keys": sorted(str(key) for key in metrics),
+                "last_canary_reason_sha256": (
+                    "sha256:" + sha256_text(str(last_canary.get("reason")))
+                    if last_canary.get("reason")
+                    else None
+                ),
+                "raw_reason_returned": False,
+                "metric_values_returned": False,
+            },
+            "timeline": timeline,
+            "provenance": {
+                "upstream": [
+                    {
+                        "object_type": "autonomy_decision",
+                        "object_id": "broker_decision_adjudication",
+                        "relationship": "calibration_family",
+                    }
+                ],
+                "downstream": [
+                    {
+                        "object_type": "broker_policy",
+                        "object_id": object_id,
+                        "relationship": "policy_artifact",
+                    }
+                ],
+            },
+            "effects": {
+                "can_adjust_soft_thresholds": True,
+                "can_relax_hard_invariants": False,
+                "autonomous_apply_allowed_from_observatory": False,
+                "replay_shadow_canary_required": True,
+            },
+            "diagnostics": {
+                "supporting_component": "autonomy_orchestrator",
+                "decision_family": "broker_decision_adjudication",
+                "calibration_policy_version": payload["version"],
+                "policy_hash": policy_hash,
+                "policy_values_returned": False,
+                "hard_invariant_relaxation_allowed": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "raw_policy_returned": False,
+                "arbitrary_policy_values_returned": False,
+                "redaction_state": "content_safe_threshold_policy_metadata",
+            },
+            "audit": {"links": [], "chain_visible": True},
+        }
+
     def _safe_broker_ref(item: Any) -> dict[str, object] | None:
         if not isinstance(item, dict):
             return None
@@ -9880,6 +10027,63 @@ def create_app(
             )
         return ObservatoryObjectResponse(object=_threshold_deadlock_payload(record))
 
+    @app.get(
+        "/admin/api/v1/autonomy/policies",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_autonomy_policies(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        effective_workspace_id = workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID
+        records = await broker_policies.list_policy_versions(
+            workspace_key=effective_workspace_id,
+            status=status,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="threshold_policy",
+            title="Autonomy threshold policies",
+            items=[_threshold_policy_microscope(record) for record in records],
+            limit=limit,
+            cursor=cursor,
+            source="broker_policy_store.list_policy_versions",
+            diagnostics={
+                "supporting_component": "autonomy_orchestrator",
+                "workspace_id": effective_workspace_id,
+                "policy_values_returned": False,
+                "hard_invariant_relaxation_allowed": False,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/autonomy/policies/{policy_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_autonomy_policy_detail(
+        policy_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_id = _uuid_or_404(policy_id, "threshold policy")
+        policy = await broker_policies.get_policy_version(
+            workspace_key=workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+            broker_policy_version_id=parsed_id,
+        )
+        if policy is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="threshold policy not found",
+            )
+        return ObservatoryObjectResponse(object=_threshold_policy_microscope(policy))
+
     @app.get("/admin/api/v1/escalations", response_model=ObservatoryCollectionResponse)
     async def observatory_administrative_escalations(
         authorization: Annotated[str | None, Header()] = None,
@@ -10123,6 +10327,22 @@ def create_app(
             if decision is not None and _is_threshold_deadlock_decision(decision):
                 return ObservatoryObjectResponse(
                     object=_threshold_deadlock_payload(decision)
+                )
+        if object_type in {
+            "threshold_policy",
+            "threshold-policy",
+            "calibration_policy",
+            "broker_policy",
+            "broker-policy",
+        }:
+            policy_id = _uuid_or_404(object_id, "threshold policy")
+            policy = await broker_policies.get_policy_version(
+                workspace_key=workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+                broker_policy_version_id=policy_id,
+            )
+            if policy is not None:
+                return ObservatoryObjectResponse(
+                    object=_threshold_policy_microscope(policy)
                 )
         if object_type in {"semantic_adjudication", "adjudication"}:
             adjudication_id = _uuid_or_404(object_id, "semantic adjudication")

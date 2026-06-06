@@ -1726,6 +1726,8 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/autonomy/decisions/{decision_id}", "GET"),
         ("/admin/api/v1/autonomy/threshold-deadlocks", "GET"),
         ("/admin/api/v1/autonomy/threshold-deadlocks/{decision_id}", "GET"),
+        ("/admin/api/v1/autonomy/policies", "GET"),
+        ("/admin/api/v1/autonomy/policies/{policy_id}", "GET"),
         ("/admin/api/v1/escalations", "GET"),
         ("/admin/api/v1/escalations/{event_id}", "GET"),
         ("/admin/api/v1/components", "GET"),
@@ -3454,6 +3456,91 @@ def test_observatory_broker_replay_episode_read_model_is_content_safe() -> None:
         "operator_notes",
         "query_hash",
     ]
+
+
+def test_observatory_threshold_policy_read_model_is_content_safe() -> None:
+    broker_policy_store = NullBrokerPolicyStore()
+
+    async def seed_policy():
+        created = await broker_policy_store.upsert_policy_version(
+            workspace_key="dev-01",
+            version="broker-soft-thresholds.v1",
+            policy={
+                "runtime_context_broker": {
+                    "lexical_limit": 4,
+                    "graph_limit": 1,
+                    "max_rendered_skills": 2,
+                    "secret_operator_note": "never show this policy note",
+                },
+                "calibration": {
+                    "decision_family": "broker_decision_adjudication",
+                    "raw_reason": "private calibration rationale",
+                },
+            },
+            status="active",
+        )
+        return await broker_policy_store.record_canary_feedback(
+            workspace_key="dev-01",
+            broker_policy_version_id=created.broker_policy_version_id,
+            status="degraded",
+            metrics={"false_accept_rate": 0.1, "sample_count": 20},
+            reason="private canary reason",
+        )
+
+    policy = asyncio.run(seed_policy())
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        broker_policy_store=broker_policy_store,
+    )
+    routes = _routes(app)
+
+    async def run():
+        collection = await routes[
+            ("/admin/api/v1/autonomy/policies", "GET")
+        ].endpoint(workspace_id="dev-01", limit=10)
+        detail = await routes[
+            ("/admin/api/v1/autonomy/policies/{policy_id}", "GET")
+        ].endpoint(
+            policy_id=str(policy.broker_policy_version_id),
+            workspace_id="dev-01",
+        )
+        object_detail = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="threshold_policy",
+            object_id=str(policy.broker_policy_version_id),
+            workspace_id="dev-01",
+        )
+        return collection, detail, object_detail
+
+    collection, detail, object_detail = asyncio.run(run())
+
+    assert collection.collection["source"] == "broker_policy_store.list_policy_versions"
+    assert collection.collection["items"][0]["object_type"] == "threshold_policy"
+    assert collection.collection["content_policy"]["raw_available"] is False
+    assert detail.object["object_type"] == "threshold_policy"
+    assert detail.object["status"] == "active"
+    assert detail.object["effects"]["can_relax_hard_invariants"] is False
+    assert detail.object["content_policy"]["raw_policy_returned"] is False
+    assert detail.object["content_policy"]["arbitrary_policy_values_returned"] is False
+    assert detail.object["runtime_feedback"]["last_canary_status"] == "degraded"
+    assert detail.object["runtime_feedback"]["last_canary_metric_keys"] == [
+        "false_accept_rate",
+        "sample_count",
+    ]
+    assert {
+        item["path"]: item["value"]
+        for item in detail.object["policy_identity"]["scalar_thresholds"]
+    } == {
+        "runtime_context_broker.graph_limit": 1,
+        "runtime_context_broker.lexical_limit": 4,
+        "runtime_context_broker.max_rendered_skills": 2,
+    }
+    assert object_detail.object["object_id"] == str(policy.broker_policy_version_id)
+    rendered = json.dumps(detail.object, sort_keys=True)
+    assert "never show this policy note" not in rendered
+    assert "private calibration rationale" not in rendered
+    assert "private canary reason" not in rendered
 
 
 def test_observatory_event_and_trace_read_models_are_bounded_and_content_safe() -> None:

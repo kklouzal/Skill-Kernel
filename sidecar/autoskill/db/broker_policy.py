@@ -126,6 +126,15 @@ class BrokerPolicyStore(Protocol):
     ) -> BrokerPolicyVersionRecord | None:
         """Return the active broker policy artifact for a workspace."""
 
+    async def list_policy_versions(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[BrokerPolicyVersionRecord]:
+        """List persisted broker policy artifacts for Observatory read models."""
+
     async def upsert_policy_version(
         self,
         *,
@@ -211,6 +220,22 @@ class NullBrokerPolicyStore:
         broker_policy_version_id: UUID,
     ) -> BrokerPolicyVersionRecord | None:
         return self.policies.get((workspace_key, broker_policy_version_id))
+
+    async def list_policy_versions(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[BrokerPolicyVersionRecord]:
+        records = [
+            record
+            for (record_workspace, _), record in self.policies.items()
+            if record_workspace == workspace_key
+            and (status is None or record.status == status)
+        ]
+        records.sort(key=lambda record: record.created_at, reverse=True)
+        return records[: max(1, min(limit, 500))]
 
     async def upsert_policy_version(
         self,
@@ -383,6 +408,31 @@ class AsyncpgBrokerPolicyStore(AsyncpgPoolOwner):
                 broker_policy_version_id,
             )
         return BrokerPolicyVersionRecord.from_row(row) if row else None
+
+    async def list_policy_versions(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[BrokerPolicyVersionRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT p.*, w.external_key AS workspace_key
+                FROM autoskill.broker_policy_versions p
+                JOIN autoskill.workspaces w ON w.workspace_id = p.workspace_id
+                WHERE w.external_key = $1
+                  AND ($2::text IS NULL OR p.status = $2)
+                ORDER BY p.created_at DESC
+                LIMIT $3
+                """,
+                workspace_key,
+                status,
+                max(1, min(limit, 500)),
+            )
+        return [BrokerPolicyVersionRecord.from_row(row) for row in rows]
 
     async def record_replay_episode(
         self,

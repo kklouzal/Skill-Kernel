@@ -3,6 +3,31 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Observatory autonomy threshold policies now have a
+sidecar-hosted, content-safe read model and object microscope path. The broker
+policy store exposes bounded policy-version listing, admin routes expose
+`/admin/api/v1/autonomy/policies` and
+`/admin/api/v1/autonomy/policies/{policy_id}`, generated Observatory route
+metadata includes those paths, and generic object aliases resolve
+`threshold_policy`, `calibration_policy`, and broker-policy refs. The read
+model exposes lifecycle state, policy version/status, SHA-256 policy identity,
+top-level policy keys, bounded numeric/bool scalar thresholds, replay/canary
+feedback key names, reason hashes, and explicit hard-invariant non-relaxation
+flags while withholding arbitrary policy values, canary reason text, and raw
+policy payloads. This advances Core Sections 5.8, 5.10, and 5.14 plus
+Observatory Sections 12.1, 12.6, 16.1, and acceptance criterion 21.23 by
+making threshold/calibration policy versions inspectable without adding
+UI-local mutation authority or weakening deterministic hard gates. Focused
+validation passed with the threshold-policy and route-matrix Observatory API
+regressions (`2 passed, 58 deselected`) and targeted Ruff. Required
+pre-commit gates also passed with full sidecar Ruff, full pytest (`401
+passed`), compileall, Observatory frontend build, generated OpenAPI client
+freshness check, diff-check, and the core, Observatory, and conformance reports
+(`70` implemented, `86` satisfied, `14/14` checks, zero validation errors). No
+compose/Postgres smoke was needed because the schema already stores broker
+policy versions and this slice adds read/list shaping covered by the in-memory
+broker policy store.
+
 2026-06-06 update: Observatory context token ledgers now have a
 sidecar-hosted, content-safe read model and object microscope path. The context
 governance store exposes bounded list/detail reads for existing

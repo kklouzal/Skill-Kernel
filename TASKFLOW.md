@@ -16,6 +16,36 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory autonomy threshold policies now have a
+  sidecar-hosted, content-safe read model and object microscope path over the
+  existing broker policy version store. `BrokerPolicyStore` can list persisted
+  policy versions, `/admin/api/v1/autonomy/policies` and
+  `/admin/api/v1/autonomy/policies/{policy_id}` expose bounded list/detail
+  views, and generic object microscopes resolve `threshold_policy`,
+  `calibration_policy`, and broker-policy aliases. The read model exposes
+  policy lifecycle state, version/status, policy SHA-256 identity, top-level
+  policy key names, bounded numeric/bool scalar thresholds, replay/canary
+  feedback key names and reason hashes, and explicit hard-invariant
+  non-relaxation flags while suppressing arbitrary policy values, canary reason
+  text, and raw policy payloads. This advances Core Sections 5.8, 5.10, and
+  5.14 plus Observatory Sections 12.1, 12.6, 16.1, and acceptance criterion
+  21.23 by making threshold/calibration policy versions inspectable without
+  adding UI mutation authority or weakening deterministic hard gates. Focused
+  validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py -q -k
+  'threshold_policy_read_model or required_admin_route_matrix'` (`2 passed, 58
+  deselected`) and targeted Ruff. Required pre-commit gates also passed with
+  `uv run ruff check sidecar`, `uv run pytest` (`401 passed`), `uv run python
+  -m compileall -q sidecar`, `npm run build --prefix
+  sidecar/autoskill/observatory`, `uv run python
+  scripts/generate_observatory_openapi_client.py --check`, `git diff --check`,
+  `uv run python scripts/autoskill_acceptance.py --json` (`ready=true`, `70`
+  implemented), `uv run python scripts/autoskill_observatory_acceptance.py
+  --json` (`ready=true`, `86` satisfied), and `uv run python
+  scripts/autoskill_conformance.py --json` (`ready=true`, `14/14` checks). No
+  compose/Postgres smoke was needed because the schema already stores broker
+  policy versions and this slice adds read/list shaping covered by the
+  in-memory broker policy store.
 - 2026-06-06: Observatory now exposes context token-ledger records through
   Core-backed, content-safe admin read models. The context governance store can
   list/detail `context_token_ledgers`, `/admin/api/v1/context/token-ledgers`
