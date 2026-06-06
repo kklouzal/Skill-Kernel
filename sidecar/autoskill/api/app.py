@@ -11207,6 +11207,220 @@ def create_app(
             )
         return ObservatoryObjectResponse(object=_canary_result_admin_record(canary))
 
+    @app.get(
+        "/admin/api/v1/evolution/transactions",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_evolution_transactions(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        transaction_kind_prefix: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        transactions = await governance.list_transactions(
+            workspace_key=workspace_id,
+            transaction_kind_prefix=transaction_kind_prefix,
+            limit=250,
+        )
+        items: list[dict[str, Any]] = []
+        for transaction in transactions:
+            if status is not None and transaction.status != status:
+                continue
+            transaction_items = await governance.list_transaction_items(
+                evolution_transaction_id=transaction.evolution_transaction_id,
+            )
+            items.append(_evolution_transaction_microscope(transaction, transaction_items))
+        return _observatory_collection(
+            object_type="evolution_transaction",
+            title="Evolution transactions",
+            items=items,
+            limit=limit,
+            cursor=cursor,
+            source="governance_store.list_transactions",
+            diagnostics={
+                "supporting_component": "audit_trace",
+                "filter": {
+                    "workspace_id": workspace_id,
+                    "transaction_kind_prefix": transaction_kind_prefix,
+                    "status": status,
+                },
+                "raw_transaction_payload_returned": False,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/evolution/transactions/{transaction_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_evolution_transaction_detail(
+        transaction_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_transaction_id = _uuid_or_404(transaction_id, "evolution transaction")
+        transaction = await governance.get_transaction(
+            workspace_key=workspace_id,
+            evolution_transaction_id=parsed_transaction_id,
+        )
+        if transaction is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="evolution transaction not found",
+            )
+        transaction_items = await governance.list_transaction_items(
+            evolution_transaction_id=parsed_transaction_id,
+        )
+        return ObservatoryObjectResponse(
+            object=_evolution_transaction_microscope(transaction, transaction_items)
+        )
+
+    @app.get(
+        "/admin/api/v1/writer/transactions",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_writer_transactions(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        transaction_kind_prefix: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        transactions = await governance.list_transactions(
+            workspace_key=workspace_id,
+            transaction_kind_prefix=transaction_kind_prefix,
+            limit=250,
+        )
+        items: list[dict[str, Any]] = []
+        for transaction in transactions:
+            if status is not None and transaction.status != status:
+                continue
+            transaction_items = await governance.list_transaction_items(
+                evolution_transaction_id=transaction.evolution_transaction_id,
+            )
+            writer_object = _writer_transaction_microscope(transaction, transaction_items)
+            if writer_object is not None:
+                items.append(writer_object)
+        return _observatory_collection(
+            object_type="writer_transaction",
+            title="Deterministic writer transactions",
+            items=items,
+            limit=limit,
+            cursor=cursor,
+            source="governance_store.list_transactions.writer_filter",
+            diagnostics={
+                "supporting_component": "deterministic_writer",
+                "filter": {
+                    "workspace_id": workspace_id,
+                    "transaction_kind_prefix": transaction_kind_prefix,
+                    "status": status,
+                },
+                "raw_metrics_returned": False,
+                "raw_rollback_payload_returned": False,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/writer/transactions/{transaction_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_writer_transaction_detail(
+        transaction_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_transaction_id = _uuid_or_404(transaction_id, "writer transaction")
+        transaction = await governance.get_transaction(
+            workspace_key=workspace_id,
+            evolution_transaction_id=parsed_transaction_id,
+        )
+        if transaction is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="writer transaction not found",
+            )
+        transaction_items = await governance.list_transaction_items(
+            evolution_transaction_id=parsed_transaction_id,
+        )
+        writer_object = _writer_transaction_microscope(transaction, transaction_items)
+        if writer_object is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="writer transaction not found",
+            )
+        return ObservatoryObjectResponse(object=writer_object)
+
+    @app.get(
+        "/admin/api/v1/revocations/requests",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_revocation_requests(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        request_kind: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        revocations = await governance.list_revocation_requests(
+            workspace_key=workspace_id,
+            request_kind=request_kind,
+            status=status,
+            limit=250,
+        )
+        return _observatory_collection(
+            object_type="revocation_request",
+            title="Revocation requests",
+            items=[_revocation_request_microscope(record) for record in revocations],
+            limit=limit,
+            cursor=cursor,
+            source="governance_store.list_revocation_requests",
+            diagnostics={
+                "supporting_component": "canary_rollback_freeze",
+                "filter": {
+                    "workspace_id": workspace_id,
+                    "request_kind": request_kind,
+                    "status": status,
+                },
+                "raw_traversal_summary_returned": False,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/revocations/requests/{revocation_request_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_revocation_request_detail(
+        revocation_request_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_request_id = _uuid_or_404(revocation_request_id, "revocation request")
+        revocation = await governance.get_revocation_request(
+            workspace_key=workspace_id,
+            revocation_request_id=parsed_request_id,
+        )
+        if revocation is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="revocation request not found",
+            )
+        return ObservatoryObjectResponse(object=_revocation_request_microscope(revocation))
+
     @app.get("/admin/api/v1/traces", response_model=ObservatoryCollectionResponse)
     async def observatory_traces(
         authorization: Annotated[str | None, Header()] = None,

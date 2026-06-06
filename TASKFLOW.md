@@ -16,6 +16,40 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory governance transaction records now have direct
+  sidecar-hosted, content-safe admin read models in addition to generic object
+  microscopes. `/admin/api/v1/evolution/transactions`,
+  `/admin/api/v1/evolution/transactions/{transaction_id}`,
+  `/admin/api/v1/writer/transactions`,
+  `/admin/api/v1/writer/transactions/{transaction_id}`,
+  `/admin/api/v1/revocations/requests`, and
+  `/admin/api/v1/revocations/requests/{revocation_request_id}` expose bounded
+  evolution transaction, deterministic-writer transaction, and revocation
+  traversal request views backed by the Core governance store. The read models
+  preserve stable IDs, lifecycle/timeline state, provenance links, item counts,
+  manifest/rollback metadata, activation-defer metadata, and traversal
+  summaries while suppressing raw idempotency text, transaction causes, raw
+  generated skill bodies, rollback instructions, and raw traversal payloads.
+  This advances Core Sections 1.2, 9.6, 12.11, 23, 25, and 28.2 plus
+  Observatory Sections 7.6, 7.7, 8.5.4, 12.6, 13.1, 16.1, and acceptance
+  criteria 21.16, 21.23, and 21.40 by closing the rollback-complete
+  governance aggregate-to-evidence path without adding UI mutation authority.
+  Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py -q -k
+  'writer_transaction_object_microscope or
+  revocation_request_object_microscope or required_admin_route_matrix'` (`3
+  passed, 57 deselected`) and targeted Ruff. Required pre-commit gates also
+  passed with `uv run ruff check sidecar`, `uv run pytest` (`401 passed`),
+  `uv run python -m compileall -q sidecar`, `npm run build --prefix
+  sidecar/autoskill/observatory`, `uv run python
+  scripts/generate_observatory_openapi_client.py --check`, `uv run python
+  scripts/autoskill_acceptance.py --json` (`ready=true`, `70` implemented),
+  `uv run python scripts/autoskill_observatory_acceptance.py --json`
+  (`ready=true`, `86` satisfied), and `uv run python
+  scripts/autoskill_conformance.py --json` (`ready=true`, `14/14` checks).
+  No compose/Postgres smoke was needed because no schema changed and the
+  asyncpg implementation is a bounded read over existing governance tables
+  covered through in-memory route regressions.
 - 2026-06-06: Observatory semantic-autonomy evidence surfaces now use
   content-safe object microscopes instead of raw status-row JSON for
   evidence-fidelity, semantic-adjudication, and autonomy-decision records.

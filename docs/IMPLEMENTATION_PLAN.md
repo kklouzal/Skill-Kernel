@@ -3,6 +3,28 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Observatory governance transaction records now have direct
+sidecar-hosted, content-safe read-model routes for evolution transactions,
+deterministic writer transactions, and revocation requests. The new
+`/admin/api/v1/evolution/transactions`, `/admin/api/v1/writer/transactions`,
+and `/admin/api/v1/revocations/requests` collection/detail surfaces reuse the
+existing object microscopes and expose bounded lifecycle state, timelines,
+provenance, item summaries, manifest/rollback metadata, activation-defer
+metadata, and traversal summaries while withholding raw idempotency keys,
+transaction causes, generated skill text, rollback instructions, and raw
+traversal payloads. This advances Core Sections 1.2, 9.6, 12.11, 23, 25, and
+28.2 plus Observatory Sections 7.6, 7.7, 8.5.4, 12.6, 13.1, and 16.1 by
+closing the rollback-complete governance aggregate-to-evidence path without
+adding UI mutation authority. Focused validation passed with the writer,
+revocation, and route-matrix Observatory API regressions (`3 passed, 57
+deselected`) plus targeted Ruff. Required pre-commit gates also passed with
+full sidecar Ruff, full pytest (`401 passed`), compileall, Observatory
+frontend build, generated OpenAPI client freshness check, the core and
+Observatory acceptance reports (`70` implemented, `86` satisfied), and the
+conformance report (`14/14` checks, zero validation errors). No compose/Postgres
+smoke was needed because no schema changed and the asyncpg path only adds
+bounded reads over existing governance tables.
+
 2026-06-06 update: Observatory semantic-autonomy evidence read models now use
 content-safe microscopes across direct and generic API paths. Evidence-fidelity
 status, semantic-adjudication status, and autonomy-decision status records

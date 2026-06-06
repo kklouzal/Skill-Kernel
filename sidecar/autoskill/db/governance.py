@@ -364,6 +364,16 @@ class GovernanceStore(Protocol):
     ) -> RevocationRequestRecord | None:
         """Return one revocation request for a content-safe object microscope."""
 
+    async def list_revocation_requests(
+        self,
+        *,
+        workspace_key: str | None = None,
+        request_kind: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[RevocationRequestRecord]:
+        """Return recent revocation requests for content-safe read models."""
+
     async def claim_next_revocation_request(
         self,
         *,
@@ -589,6 +599,16 @@ class NullGovernanceStore:
         revocation_request_id: UUID,
     ) -> RevocationRequestRecord | None:
         return None
+
+    async def list_revocation_requests(
+        self,
+        *,
+        workspace_key: str | None = None,
+        request_kind: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[RevocationRequestRecord]:
+        return []
 
     async def claim_next_revocation_request(
         self,
@@ -1068,6 +1088,34 @@ class AsyncpgGovernanceStore(AsyncpgPoolOwner):
             if row is None:
                 return None
             return RevocationRequestRecord.from_row(row)
+
+    async def list_revocation_requests(
+        self,
+        *,
+        workspace_key: str | None = None,
+        request_kind: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[RevocationRequestRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT rr.*, w.external_key AS workspace_key
+                FROM autoskill.revocation_requests rr
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE ($1::text IS NULL OR w.external_key = $1)
+                  AND ($2::text IS NULL OR rr.request_kind = $2)
+                  AND ($3::text IS NULL OR rr.status = $3)
+                ORDER BY rr.created_at DESC, rr.revocation_request_id DESC
+                LIMIT $4
+                """,
+                workspace_key,
+                request_kind,
+                status,
+                max(1, min(limit, 250)),
+            )
+            return [RevocationRequestRecord.from_row(row) for row in rows]
 
     async def claim_next_revocation_request(
         self,

@@ -262,6 +262,23 @@ class MemoryTopologyGovernanceStore(NullGovernanceStore):
                 return revocation
         return None
 
+    async def list_revocation_requests(
+        self,
+        *,
+        workspace_key: str | None = None,
+        request_kind: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[RevocationRequestRecord]:
+        records = [
+            revocation
+            for revocation in self.revocations
+            if (workspace_key is None or revocation.workspace_key == workspace_key)
+            and (request_kind is None or revocation.request_kind == request_kind)
+            and (status is None or revocation.status == status)
+        ]
+        return records[:limit]
+
 
 class MemoryRetrievalLogStore:
     def __init__(self, logs: list[RetrievalLog]) -> None:
@@ -1739,6 +1756,12 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/control-flow/events/{control_flow_event_id}", "GET"),
         ("/admin/api/v1/canary/results", "GET"),
         ("/admin/api/v1/canary/results/{canary_result_id}", "GET"),
+        ("/admin/api/v1/evolution/transactions", "GET"),
+        ("/admin/api/v1/evolution/transactions/{transaction_id}", "GET"),
+        ("/admin/api/v1/writer/transactions", "GET"),
+        ("/admin/api/v1/writer/transactions/{transaction_id}", "GET"),
+        ("/admin/api/v1/revocations/requests", "GET"),
+        ("/admin/api/v1/revocations/requests/{revocation_request_id}", "GET"),
         ("/admin/api/v1/traces", "GET"),
         ("/admin/api/v1/traces/{trace_id}", "GET"),
         ("/admin/api/v1/jobs", "GET"),
@@ -3173,12 +3196,44 @@ def test_observatory_writer_transaction_object_microscope_is_content_safe() -> N
         ],
     )
     app = create_app(governance_store=governance, audit_store=MemoryAuditStore())
-    route = next(
-        route for route in app.routes if route.path == "/admin/api/v1/objects/{object_type}/{object_id}"
-    )
+    routes = _routes(app)
 
     async def run():
-        return await route.endpoint(
+        transactions = await routes[
+            ("/admin/api/v1/evolution/transactions", "GET")
+        ].endpoint(
+            authorization=None,
+            x_skillkernel_roles=None,
+            workspace_id="dev-01",
+            transaction_kind_prefix="compile",
+            status="applied",
+        )
+        transaction_detail = await routes[
+            ("/admin/api/v1/evolution/transactions/{transaction_id}", "GET")
+        ].endpoint(
+            transaction_id=str(transaction_id),
+            authorization=None,
+            x_skillkernel_roles=None,
+            workspace_id="dev-01",
+        )
+        writers = await routes[("/admin/api/v1/writer/transactions", "GET")].endpoint(
+            authorization=None,
+            x_skillkernel_roles=None,
+            workspace_id="dev-01",
+            transaction_kind_prefix="compile",
+            status="applied",
+        )
+        writer_detail = await routes[
+            ("/admin/api/v1/writer/transactions/{transaction_id}", "GET")
+        ].endpoint(
+            transaction_id=str(transaction_id),
+            authorization=None,
+            x_skillkernel_roles=None,
+            workspace_id="dev-01",
+        )
+        writer_microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
             object_type="writer_transaction",
             object_id=str(transaction_id),
             authorization=None,
@@ -3186,13 +3241,41 @@ def test_observatory_writer_transaction_object_microscope_is_content_safe() -> N
             workspace_id="dev-01",
             window_minutes=60,
         )
+        hidden = await routes[("/admin/api/v1/writer/transactions", "GET")].endpoint(
+            authorization=None,
+            x_skillkernel_roles=None,
+            workspace_id="other-workspace",
+        )
+        return (
+            transactions,
+            transaction_detail,
+            writers,
+            writer_detail,
+            writer_microscope,
+            hidden,
+        )
 
-    response = asyncio.run(run())
-    payload = response.object
+    (
+        transactions,
+        transaction_detail,
+        writers,
+        writer_detail,
+        writer_microscope,
+        hidden,
+    ) = asyncio.run(run())
+    payload = writer_detail.object
 
+    assert transactions.collection["source"] == "governance_store.list_transactions"
+    assert transactions.collection["items"][0]["object_type"] == "evolution_transaction"
+    assert transaction_detail.object["object_type"] == "evolution_transaction"
+    assert writers.collection["source"] == "governance_store.list_transactions.writer_filter"
+    assert writers.collection["object_type"] == "writer_transaction"
+    assert writers.collection["items"][0]["object_id"] == str(transaction_id)
+    assert hidden.collection["items"] == []
     assert payload["schema_version"] == "skillkernel.observatory.writer-transaction.v1"
     assert payload["object_type"] == "writer_transaction"
     assert payload["object_id"] == str(transaction_id)
+    assert writer_microscope.object["object_id"] == str(transaction_id)
     assert payload["content_policy"]["raw_available"] is False
     assert payload["diagnostics"]["supporting_component"] == "deterministic_writer"
     assert payload["diagnostics"]["activation_deferred"] is True
@@ -3213,7 +3296,16 @@ def test_observatory_writer_transaction_object_microscope_is_content_safe() -> N
         {"object_type": "evolution_transaction", "object_id": str(transaction_id)},
         {"object_type": "writer_transaction", "object_id": str(transaction_id)},
     ]
-    rendered = json.dumps(payload, sort_keys=True)
+    rendered = json.dumps(
+        [
+            transactions.collection,
+            transaction_detail.object,
+            writers.collection,
+            writer_detail.object,
+            writer_microscope.object,
+        ],
+        sort_keys=True,
+    )
     assert "raw writer idempotency text" not in rendered
     assert "raw writer rationale" not in rendered
     assert "raw generated skill text" not in rendered
@@ -3280,12 +3372,27 @@ def test_observatory_revocation_request_object_microscope_is_content_safe() -> N
         ],
     )
     app = create_app(governance_store=governance, audit_store=MemoryAuditStore())
-    route = next(
-        route for route in app.routes if route.path == "/admin/api/v1/objects/{object_type}/{object_id}"
-    )
+    routes = _routes(app)
 
     async def run():
-        return await route.endpoint(
+        requests = await routes[("/admin/api/v1/revocations/requests", "GET")].endpoint(
+            authorization=None,
+            x_skillkernel_roles=None,
+            workspace_id="dev-01",
+            request_kind="rollback",
+            status="completed",
+        )
+        detail = await routes[
+            ("/admin/api/v1/revocations/requests/{revocation_request_id}", "GET")
+        ].endpoint(
+            revocation_request_id=str(revocation_request_id),
+            authorization=None,
+            x_skillkernel_roles=None,
+            workspace_id="dev-01",
+        )
+        microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
             object_type="revocation_request",
             object_id=str(revocation_request_id),
             authorization=None,
@@ -3293,13 +3400,24 @@ def test_observatory_revocation_request_object_microscope_is_content_safe() -> N
             workspace_id="dev-01",
             window_minutes=60,
         )
+        hidden = await routes[("/admin/api/v1/revocations/requests", "GET")].endpoint(
+            authorization=None,
+            x_skillkernel_roles=None,
+            workspace_id="other-workspace",
+        )
+        return requests, detail, microscope, hidden
 
-    response = asyncio.run(run())
-    payload = response.object
+    requests, detail, microscope, hidden = asyncio.run(run())
+    payload = detail.object
 
+    assert requests.collection["source"] == "governance_store.list_revocation_requests"
+    assert requests.collection["object_type"] == "revocation_request"
+    assert requests.collection["items"][0]["object_id"] == str(revocation_request_id)
+    assert hidden.collection["items"] == []
     assert payload["schema_version"] == "skillkernel.observatory.revocation-request.v1"
     assert payload["object_type"] == "revocation_request"
     assert payload["object_id"] == str(revocation_request_id)
+    assert microscope.object["object_id"] == str(revocation_request_id)
     assert payload["status"] == "completed"
     assert payload["root"] == {
         "object_type": "evolution_transaction",
@@ -3341,7 +3459,10 @@ def test_observatory_revocation_request_object_microscope_is_content_safe() -> N
     assert traversal["invalidation"]["embeddings_deleted"] == 1
     assert payload["content_policy"]["raw_available"] is False
     assert payload["diagnostics"]["raw_traversal_summary_returned"] is False
-    rendered = json.dumps(payload, sort_keys=True)
+    rendered = json.dumps(
+        [requests.collection, detail.object, microscope.object],
+        sort_keys=True,
+    )
     assert "raw rollback rationale" not in rendered
     assert "raw root payload" not in rendered
     assert "raw generated skill text" not in rendered
