@@ -117,8 +117,7 @@ services:
       dockerfile: containers/observatory/Dockerfile
     networks: *skillkernel-runtime-networks
     environment:
-      AUTOSKILL_DATABASE_URL: postgresql://autoskill:${AUTOSKILL_POSTGRES_PASSWORD:-autoskill-dev}@postgres:5432/autoskill
-      AUTOSKILL_WEB_ADMIN_TOKEN: ${AUTOSKILL_WEB_ADMIN_TOKEN:-}
+      <<: *skillkernel-env
       SKILLKERNEL_OBSERVATORY_PORT: ${SKILLKERNEL_OBSERVATORY_CONTAINER_PORT:-8757}
       SKILLKERNEL_OBSERVATORY_STATIC_ROOT: /app/observatory
     ports:
