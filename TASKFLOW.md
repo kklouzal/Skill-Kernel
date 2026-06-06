@@ -16,6 +16,21 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Exhaustive unified-spec pass continued after pushing
+  `8721d71`. CI for the current head is in progress. A bounded
+  `codex-worker` slice was launched for Part II/III scheduler, governance,
+  admin-action, autonomy, storage/embedding/replay, and control-plane read
+  model surfaces:
+  `agent:codex-worker:subagent:68442cf1-ca30-4afc-b063-4e36485c0460` / run
+  `372e5a53-c74e-4c70-acfd-64c534c0cf95`. Parent continues local,
+  non-overlapping coverage/report verification while waiting for the push-based
+  child result. Current local reports are green: `uv run python
+  scripts/autoskill_conformance.py --json` returned `ready=true` with 13/13
+  checks passing, and `uv run python scripts/autoskill_readiness.py --json`
+  returned `ready=true` with 52 landscape rows, 17 readiness checklist items,
+  and zero validation errors. `uv run python scripts/autoskill_traceability.py
+  --json` returned `ready=true` with 100 anchors, 25 traceability rows, and
+  zero validation errors.
 - 2026-06-06: Core historical bootstrap consolidation now surfaces
   historical-only topology recommendations as propose-only, non-activating
   control-plane evidence. Historical evidence payloads can contribute guarded
