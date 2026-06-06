@@ -141,68 +141,68 @@ npm test
 Create and verify an operator disaster-recovery bundle:
 
 ```bash
-python scripts/autoskill_backup.py --workspace-root /home/kklouzal/.openclaw/workspace --output-dir /tmp/skillkernel-autoskill-backups --include-staging
-python scripts/autoskill_restore.py /path/to/autoskill-backup.tar.gz --workspace-root /home/kklouzal/.openclaw/workspace --dry-run
+uv run python scripts/autoskill_backup.py --workspace-root /home/kklouzal/.openclaw/workspace --output-dir /tmp/skillkernel-autoskill-backups --include-staging
+uv run python scripts/autoskill_restore.py /path/to/autoskill-backup.tar.gz --workspace-root /home/kklouzal/.openclaw/workspace --dry-run
 ```
 
 Run the deterministic scanner red-team smoke:
 
 ```bash
-python scripts/autoskill_red_team.py --output /tmp/autoskill-red-team.json
+uv run python scripts/autoskill_red_team.py --output /tmp/autoskill-red-team.json
 ```
 
 Emit the production acceptance crosswalk:
 
 ```bash
-python scripts/autoskill_acceptance.py --json
+uv run python scripts/autoskill_acceptance.py --json
 ```
 
 Emit the Observatory web/admin acceptance crosswalk:
 
 ```bash
-python scripts/autoskill_observatory_acceptance.py --json
+uv run python scripts/autoskill_observatory_acceptance.py --json
 ```
 
 Regenerate the Observatory frontend admin API route client from FastAPI OpenAPI:
 
 ```bash
-python scripts/generate_observatory_openapi_client.py
+uv run python scripts/generate_observatory_openapi_client.py
 ```
 
 Validate the deterministic Observatory E2E/load/visual fixture catalog:
 
 ```bash
-python scripts/autoskill_observatory_fixtures.py --check
+uv run python scripts/autoskill_observatory_fixtures.py --check
 ```
 
 Emit the Section 32/33 risk and developer handoff crosswalk:
 
 ```bash
-python scripts/autoskill_handoff.py --json
+uv run python scripts/autoskill_handoff.py --json
 ```
 
 Emit the Section 34 research traceability crosswalk:
 
 ```bash
-python scripts/autoskill_traceability.py --json
+uv run python scripts/autoskill_traceability.py --json
 ```
 
 Emit the unified landscape and readiness checklist crosswalk:
 
 ```bash
-python scripts/autoskill_readiness.py --json
+uv run python scripts/autoskill_readiness.py --json
 ```
 
 Run the Part V static implementation conformance gate:
 
 ```bash
-python scripts/autoskill_conformance.py --json
+uv run python scripts/autoskill_conformance.py --json
 ```
 
 List content-safe broker replay candidates from retrieval telemetry:
 
 ```bash
-python scripts/autoskill_replay_corpus.py candidates --workspace-id dev-01 --distinct-query-hash
+uv run python scripts/autoskill_replay_corpus.py candidates --workspace-id dev-01 --distinct-query-hash
 ```
 
 Record replay episodes from an operator-supplied JSON plan. The plan must
@@ -210,7 +210,7 @@ provide explicit `redacted_user_intent` text; retrieval telemetry stores hashes
 and selected skill IDs, not raw prompts.
 
 ```bash
-python scripts/autoskill_replay_corpus.py record --plan /path/to/replay-plan.json
+uv run python scripts/autoskill_replay_corpus.py record --plan /path/to/replay-plan.json
 ```
 
 Inspect the installed hook-only plugin runtime surface:
