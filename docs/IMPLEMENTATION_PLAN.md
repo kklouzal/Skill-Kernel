@@ -3,6 +3,25 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Observatory scheduler job records now use a content-safe
+read-model projection across collection, direct detail, and generic object
+microscope paths. The previous admin job collection returned raw
+`JobRecord.to_json()` dictionaries and the detail microscope embedded the raw
+job dictionary in diagnostics; the new projection preserves stable
+job/workspace/trace/span/status/timing fields, payload key names and payload
+SHA-256, attempts, priority, and hashed idempotency/lease-owner references
+while withholding raw payload values, raw idempotency keys, and raw lease-owner
+strings. This advances Observatory Sections 7.6, 7.7, 12.6, 13.1, 16.1, and
+acceptance criteria 21.16 and 24.27 by closing the scheduler/job read-model
+content-policy seam without changing the public worker job API. Focused
+validation passed with the job-microscope and route-matrix Observatory API
+regressions (`2 passed, 60 deselected`) plus targeted Ruff. Required gates
+also passed with full sidecar Ruff, full pytest (`403 passed`), compileall,
+diff-check, core acceptance (`70` implemented), Observatory acceptance (`86`
+satisfied), and conformance (`14/14`). No compose/Postgres smoke was needed
+because the change is a deterministic API projection over existing scheduler
+job rows.
+
 2026-06-06 update: Observatory baseline comparison and diagnostic bundle
 records now use content-safe read-model projections across collection,
 create/detail, and generic object microscope paths. Persisted comparison

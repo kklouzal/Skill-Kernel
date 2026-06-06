@@ -5707,7 +5707,66 @@ def create_app(
             "audit": {"links": []},
         }
 
+    def _job_admin_record(job: dict[str, Any]) -> dict[str, Any]:
+        payload = job.get("payload")
+        payload_dict = payload if isinstance(payload, dict) else {}
+        payload_keys = (
+            sorted(str(key) for key in payload_dict)
+            if payload_dict
+            else sorted(str(key) for key in job.get("payload_keys", []))
+            if isinstance(job.get("payload_keys"), list)
+            else []
+        )
+        idempotency_key = job.get("idempotency_key")
+        lease_owner = job.get("lease_owner")
+        safe = {
+            "job_id": str(job.get("job_id")),
+            "workspace_id": job.get("workspace_id"),
+            "workspace_key": job.get("workspace_key"),
+            "trace_id": job.get("trace_id"),
+            "span_id": job.get("span_id"),
+            "parent_span_id": job.get("parent_span_id"),
+            "job_kind": job.get("job_kind"),
+            "status": job.get("status"),
+            "priority": job.get("priority"),
+            "attempts": job.get("attempts"),
+            "max_attempts": job.get("max_attempts"),
+            "lease_expires_at": job.get("lease_expires_at"),
+            "available_at": job.get("available_at"),
+            "created_at": job.get("created_at"),
+            "updated_at": job.get("updated_at"),
+            "payload_keys": payload_keys,
+            "payload_sha256": sha256_text(
+                json.dumps(payload_dict, sort_keys=True, default=str)
+            )
+            if payload_dict
+            else job.get("payload_sha256"),
+            "payload_available": False,
+            "payload_redaction": "metadata-only",
+            "idempotency_key_present": idempotency_key is not None,
+            "idempotency_key_sha256": (
+                "sha256:" + sha256_text(str(idempotency_key))
+                if idempotency_key is not None
+                else None
+            ),
+            "lease_owner_present": lease_owner is not None,
+            "lease_owner_sha256": (
+                "sha256:" + sha256_text(str(lease_owner))
+                if lease_owner is not None
+                else None
+            ),
+        }
+        safe["object_type"] = "job"
+        safe["object_id"] = safe["job_id"]
+        safe["title"] = f"Job {safe['job_id']}"
+        safe["summary"] = (
+            f"{safe['job_kind']}; status={safe['status']}; "
+            f"attempts={safe['attempts']}/{safe['max_attempts']}"
+        )
+        return safe
+
     def _job_microscope(job_id: str, job: dict[str, Any] | None) -> dict[str, Any]:
+        effective_job_id = str(job.get("job_id")) if job and job.get("job_id") else job_id
         downstream: list[dict[str, str]] = []
         if job:
             if job.get("trace_id"):
@@ -5721,16 +5780,22 @@ def create_app(
         return {
             "schema_version": "skillkernel.observatory.job.v1",
             "object_type": "job",
-            "object_id": job_id,
-            "title": f"Job {job_id}",
+            "object_id": effective_job_id,
+            "title": f"Job {effective_job_id}",
             "summary": "Sidecar scheduler job detail.",
-            "diagnostics": job
-            or _missing_read_model("job", supporting_component="scheduler_jobs"),
+            "diagnostics": (
+                _job_admin_record(job)
+                if job
+                else _missing_read_model("job", supporting_component="scheduler_jobs")
+            ),
             "timeline": [],
             "provenance": {"upstream": [], "downstream": downstream},
             "content_policy": {
                 "raw_available": False,
                 "raw_reason": "raw-content-disabled",
+                "payload_available": False,
+                "idempotency_key_available": False,
+                "lease_owner_available": False,
             },
             "audit": {"links": []},
         }
@@ -11794,7 +11859,7 @@ def create_app(
         return _observatory_collection(
             object_type="job",
             title="Sidecar jobs",
-            items=[job.to_json() for job in listed],
+            items=[_job_admin_record(job.to_json()) for job in listed],
             limit=limit,
             cursor=cursor,
             source="job_store.list_jobs",

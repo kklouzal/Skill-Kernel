@@ -2063,11 +2063,14 @@ def test_observatory_job_object_microscope_resolves_scheduler_read_model() -> No
                 span_id=span_id,
                 parent_span_id=None,
                 job_kind="revocations.rollback",
-                status="queued",
-                idempotency_key="revocation-job-1",
-                payload={"revocation_request_id": "request-1"},
+                status="leased",
+                idempotency_key="revocation-job-1-raw-idempotency-secret",
+                payload={
+                    "revocation_request_id": "request-1",
+                    "operator_note": "raw job payload must not be returned",
+                },
                 priority=25,
-                lease_owner=None,
+                lease_owner="worker-private-host",
                 lease_expires_at=None,
                 attempts=0,
                 max_attempts=3,
@@ -2081,6 +2084,7 @@ def test_observatory_job_object_microscope_resolves_scheduler_read_model() -> No
     routes = _routes(app)
 
     async def run():
+        collection = await routes[("/admin/api/v1/jobs", "GET")].endpoint()
         direct = await routes[("/admin/api/v1/jobs/{job_id}", "GET")].endpoint(
             job_id=str(job_id),
         )
@@ -2095,20 +2099,49 @@ def test_observatory_job_object_microscope_resolves_scheduler_read_model() -> No
             ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
         ].endpoint(
             object_type="scheduler_job",
-            object_id="revocation-job-1",
+            object_id="revocation-job-1-raw-idempotency-secret",
             workspace_id="dev-01",
         )
-        return direct, microscope, scheduler_alias
+        return collection, direct, microscope, scheduler_alias
 
-    direct, microscope, scheduler_alias = asyncio.run(run())
+    collection, direct, microscope, scheduler_alias = asyncio.run(run())
 
+    collection_payload = json.dumps(collection.model_dump(), sort_keys=True)
+    direct_payload = json.dumps(direct.model_dump(), sort_keys=True)
+    alias_payload = json.dumps(scheduler_alias.model_dump(), sort_keys=True)
+    assert "raw job payload must not be returned" not in collection_payload
+    assert "raw job payload must not be returned" not in direct_payload
+    assert "raw job payload must not be returned" not in alias_payload
+    assert "revocation-job-1-raw-idempotency-secret" not in collection_payload
+    assert "revocation-job-1-raw-idempotency-secret" not in direct_payload
+    assert "revocation-job-1-raw-idempotency-secret" not in alias_payload
+    assert "worker-private-host" not in collection_payload
+    assert "worker-private-host" not in direct_payload
+    assert "worker-private-host" not in alias_payload
+    collection_item = collection.collection["items"][0]
+    assert collection_item["payload_available"] is False
+    assert collection_item["payload_keys"] == [
+        "operator_note",
+        "revocation_request_id",
+    ]
+    assert collection_item["idempotency_key_present"] is True
+    assert collection_item["idempotency_key_sha256"]
+    assert collection_item["lease_owner_present"] is True
+    assert collection_item["lease_owner_sha256"]
     assert direct.object["object_type"] == "job"
     assert microscope.object["object_type"] == "job"
     assert scheduler_alias.object["object_type"] == "job"
     assert microscope.object["diagnostics"]["job_kind"] == "revocations.rollback"
     assert scheduler_alias.object["diagnostics"]["job_id"] == str(job_id)
     assert microscope.object["diagnostics"] == direct.object["diagnostics"]
+    assert microscope.object["diagnostics"]["payload_available"] is False
+    assert "payload" not in microscope.object["diagnostics"]
+    assert "idempotency_key" not in microscope.object["diagnostics"]
+    assert "lease_owner" not in microscope.object["diagnostics"]
     assert microscope.object["content_policy"]["raw_available"] is False
+    assert microscope.object["content_policy"]["payload_available"] is False
+    assert microscope.object["content_policy"]["idempotency_key_available"] is False
+    assert microscope.object["content_policy"]["lease_owner_available"] is False
     assert {"object_type": "trace", "object_id": str(trace_id)} in microscope.object[
         "provenance"
     ]["downstream"]

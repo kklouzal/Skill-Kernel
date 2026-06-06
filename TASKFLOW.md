@@ -16,6 +16,29 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory scheduler job read models now use one
+  content-safe projection for collection, direct detail, and generic object
+  microscope paths. The previous admin collection returned `JobRecord.to_json()`
+  and detail diagnostics embedded the raw job dictionary, which could expose
+  caller-shaped job payloads, idempotency keys, and lease-owner identifiers.
+  The new projection preserves stable job/workspace/trace/span/status/timing
+  fields, payload key names and payload SHA-256, attempts, priority, and hashed
+  idempotency/lease-owner references while withholding raw payload values,
+  raw idempotency keys, and raw lease-owner strings. This advances Observatory
+  Sections 7.6, 7.7, 12.6, 13.1, 16.1, and acceptance criteria 21.16 and 24.27
+  by aligning scheduler/job object microscopes with the content-policy model
+  without changing the public worker job API. Focused validation passed with
+  `uv run pytest sidecar/autoskill/tests/test_observatory_api.py -q -k
+  'job_object_microscope or required_admin_route_matrix'` (`2 passed, 60
+  deselected`) and targeted Ruff. Required gates also passed with `uv run ruff
+  check sidecar`, `uv run pytest` (`403 passed`), `uv run python -m compileall
+  -q sidecar`, `git diff --check`, `uv run python
+  scripts/autoskill_acceptance.py --json` (`ready=true`, `70` implemented),
+  `uv run python scripts/autoskill_observatory_acceptance.py --json`
+  (`ready=true`, `86` satisfied), and `uv run python
+  scripts/autoskill_conformance.py --json` (`ready=true`, `14/14` checks).
+  No compose/Postgres smoke was needed because this slice only reshapes
+  existing scheduler job rows through deterministic Observatory projections.
 - 2026-06-06: Observatory baseline comparison and diagnostic bundle read
   models now use content-safe API projections for collection, create/detail,
   and generic object microscope paths. The previous direct `to_json()` route
