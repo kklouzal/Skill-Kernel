@@ -348,6 +348,46 @@ RISK_REGISTER: tuple[RiskRegisterEntry, ...] = (
     ),
     RiskRegisterEntry(
         "32.31",
+        "Soft-threshold rigidity stalls autonomy",
+        "Separate hard invariants from soft decision bands, run autonomous fallback actions before escalation, detect threshold deadlocks, and calibrate policy versions against delayed outcomes.",
+        (
+            "autonomy_decisions and threshold_deadlock_findings schema separates hard invariants, soft thresholds, selected actions, and repeated soft stalls",
+            "evaluator autonomy_assurance reports soft_threshold_misses, autonomous_fallback_actions, and threshold_deadlock_candidate",
+            "sidecar/autoskill/tests/test_evaluator.py covers soft-threshold misses without administrative escalation",
+        ),
+    ),
+    RiskRegisterEntry(
+        "32.32",
+        "Threshold relaxation becomes unsafe",
+        "Threshold updates are policy-versioned, replay-tested, shadowed/canaried, auditable, and forbidden from weakening hard invariants.",
+        (
+            "autonomy_policy_versions and autonomy_policy_trials schema record replay, shadow, canary, and hard_invariant_impact state",
+            "Observatory threshold policy detail reports can_relax_hard_invariants false",
+            "sidecar/autoskill/tests/test_observatory_api.py covers threshold-policy hard-invariant non-relaxation",
+        ),
+    ),
+    RiskRegisterEntry(
+        "32.33",
+        "LLM overconfidence causes bad autonomous decision",
+        "Composite confidence, evidence-linked rationale, calibration, contradiction checks, scanner/evaluator gates, canary containment, repeated/verifier adjudication when needed, and rollback.",
+        (
+            "autonomous adjudication and autonomy decision records store evidence IDs, confidence decomposition, deterministic checks, selected action, and reason codes",
+            "proposal gates keep scanner/evaluator hard failures separate from model confidence",
+            "canary, freeze, rollback, and audit records remain visible through Observatory decision and transaction views",
+        ),
+    ),
+    RiskRegisterEntry(
+        "32.34",
+        "LLM underconfidence suppresses useful autonomy",
+        "Track unnecessary abstention, post-abstention success, and threshold-deadlock cohorts; route near-margin decisions to additional evidence, narrower scope, ephemeral candidates, or canary rather than administrative escalation.",
+        (
+            "autonomy_calibration_observations and autonomy_reliability_metrics track false_reject, unnecessary_abstention, reliability bins, and calibration support",
+            "autonomy decision actions include collect_more_evidence, run_more_probes, reduce_scope, stage_ephemeral_candidate, stage_canary, and no_op_reschedule",
+            "threshold-deadlock detector groups repeated soft stalls and emits autonomous fallback actions",
+        ),
+    ),
+    RiskRegisterEntry(
+        "32.35",
         "Autonomy incident",
         "Freeze, quarantine, rollback, audit, operator controls.",
         (
@@ -492,7 +532,27 @@ BEFORE_CODING_CHECKLIST: tuple[HandoffChecklistEntry, ...] = (
     HandoffChecklistEntry(
         "33.before.14",
         "before_coding",
-        "Define support-artifact planning, loadability classes, approved directories, manifest schema, script/test policy, and integration-proposal handling for hook/tool/cron/service needs.",
+        "Define hard invariants versus soft decision bands for candidate creation, improvement, composition, decomposition, replay-corpus promotion, memory declassification, broker changes, and curation.",
+        (
+            "autonomy_decisions schema stores hard_invariants, soft_thresholds, decision_band, and action",
+            "evaluator autonomy_assurance separates hard_invariant_failures from soft_threshold_misses",
+            "Observatory autonomy decision microscope exposes hard_invariant_state and soft_threshold_state",
+        ),
+    ),
+    HandoffChecklistEntry(
+        "33.before.15",
+        "before_coding",
+        "Define Autonomous Decision Orchestrator action mapping, composite confidence factors, threshold-deadlock detection, and autonomous fallback order before admin escalation.",
+        (
+            "autonomy policy, calibration, decision, and threshold-deadlock tables model orchestrator inputs and outcomes",
+            "proposal-gate autonomy_assurance emits autonomous_fallback_actions before escalation",
+            "threshold-deadlock Observatory/API tests cover fallback ladders and hard-invariant non-relaxation",
+        ),
+    ),
+    HandoffChecklistEntry(
+        "33.before.16",
+        "before_coding",
+        "Define support-artifact planning, loadability classes, approved directories, manifest schema, script/test policy, and integration-proposal handling for hook/tool/Core-schedule/service-adjunct needs.",
         (
             "support artifact paths constrained to approved scripts/references/templates/schemas/data/assets/examples directories",
             "writer manifests include support artifact scan/budget/provenance coverage",
@@ -500,17 +560,17 @@ BEFORE_CODING_CHECKLIST: tuple[HandoffChecklistEntry, ...] = (
         ),
     ),
     HandoffChecklistEntry(
-        "33.before.15",
+        "33.before.17",
         "before_coding",
-        "Define no-human-prose and no-raw-transcript gates for runtime artifacts.",
+        "Define no-operator-prose and no-raw-transcript gates for runtime artifacts.",
         (
             "compiler/runtime artifact gates ban raw transcript/history/rationale unless explicitly promoted through SkillIR",
-            "scanner blocks human-facing unsafe guidance and hidden directives",
+            "scanner and context gates enforce no-operator-prose runtime artifacts",
             "scripts/autoskill_acceptance.py context criterion 31.ctx.6",
         ),
     ),
     HandoffChecklistEntry(
-        "33.before.16",
+        "33.before.18",
         "before_coding",
         "Implement the skill-package artifact planner with support-file allowlists, inclusion rubric, scanner bindings, manifest generation, and adjunct-request handling.",
         (
@@ -520,17 +580,17 @@ BEFORE_CODING_CHECKLIST: tuple[HandoffChecklistEntry, ...] = (
         ),
     ),
     HandoffChecklistEntry(
-        "33.before.17",
+        "33.before.19",
         "before_coding",
-        "Define sidecar authentication.",
+        "Define Core and Observatory authentication separately.",
         (
             "ingest and control bearer-token checks in autoskill.api.app",
+            "_require_admin_auth protects Observatory non-liveness endpoints separately",
             "default bind host is 127.0.0.1 and allow_public_bind is false",
-            "/v1/config/effective reports auth configuration without secrets",
         ),
     ),
     HandoffChecklistEntry(
-        "33.before.18",
+        "33.before.20",
         "before_coding",
         "Define backup, retention, revocation, and derived-data deletion policy.",
         (
@@ -540,7 +600,7 @@ BEFORE_CODING_CHECKLIST: tuple[HandoffChecklistEntry, ...] = (
         ),
     ),
     HandoffChecklistEntry(
-        "33.before.19",
+        "33.before.21",
         "before_coding",
         "Define evolution transaction semantics and rollback-complete invariants.",
         (
@@ -550,7 +610,7 @@ BEFORE_CODING_CHECKLIST: tuple[HandoffChecklistEntry, ...] = (
         ),
     ),
     HandoffChecklistEntry(
-        "33.before.20",
+        "33.before.22",
         "before_coding",
         "Define action-attribution risk tiers and which tool calls require counterfactual checks.",
         (
@@ -560,7 +620,7 @@ BEFORE_CODING_CHECKLIST: tuple[HandoffChecklistEntry, ...] = (
         ),
     ),
     HandoffChecklistEntry(
-        "33.before.21",
+        "33.before.23",
         "before_coding",
         "Define harmful-capability and dual-use skill classifier policy.",
         (
@@ -570,7 +630,7 @@ BEFORE_CODING_CHECKLIST: tuple[HandoffChecklistEntry, ...] = (
         ),
     ),
     HandoffChecklistEntry(
-        "33.before.22",
+        "33.before.24",
         "before_coding",
         "Define topology operation thresholds for create, improve, compose, and decompose.",
         (
@@ -580,7 +640,7 @@ BEFORE_CODING_CHECKLIST: tuple[HandoffChecklistEntry, ...] = (
         ),
     ),
     HandoffChecklistEntry(
-        "33.before.23",
+        "33.before.25",
         "before_coding",
         "Define co-use, sequence, partial-use, and false-positive retrieval metrics.",
         (

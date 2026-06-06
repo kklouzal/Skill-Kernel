@@ -16,6 +16,29 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Section 32/33 handoff traceability now matches the current
+  unified specification after the autonomy/threshold requirements expanded.
+  `scripts/autoskill_handoff.py` now records all `35` Section 32 risk-register
+  rows, including soft-threshold rigidity, unsafe threshold relaxation, LLM
+  overconfidence, LLM underconfidence, and the renumbered `32.35` autonomy
+  incident row. The before-coding handoff checklist now records `25`
+  Section 33 rows, including hard-invariant versus soft-decision-band setup,
+  Autonomous Decision Orchestrator action mapping/fallback order, exact
+  no-operator-prose wording, and separate Core/Observatory authentication.
+  `test_handoff_report.py` now locks the `32.1` through `32.35`,
+  `33.before.1` through `33.before.25`, and `33.during.1` through
+  `33.during.18` sequences so future specification drift fails explicitly.
+  This advances Part I Sections 32/33, autonomy threshold governance
+  traceability, and the final verification requirement that operator reports
+  assert specification behavior instead of stale implementation-state text.
+  Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_handoff_report.py -q` (`2 passed`), `uv run
+  python scripts/autoskill_handoff.py --json` (`ready=true`, `79/79`
+  satisfied), `uv run python scripts/autoskill_readiness.py --json`
+  (`ready=true`), and targeted Ruff. Required gates passed with `uv run ruff
+  check sidecar scripts`, `uv run pytest` (`424 passed`), `uv run python -m
+  compileall -q sidecar scripts`, `git diff --check`, and `uv run python
+  scripts/autoskill_conformance.py --json` (`ready=true`, `23/23`).
 - 2026-06-06: Production acceptance traceability now matches the current
   unified specification after the Part I Section 31 bridge criteria shifted.
   `scripts/autoskill_acceptance.py` now maps criteria `31.33` through `31.35`
