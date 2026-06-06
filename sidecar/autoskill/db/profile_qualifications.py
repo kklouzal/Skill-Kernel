@@ -204,6 +204,22 @@ class ProfileQualificationStore(Protocol):
     ) -> list[EmbeddingProfileQualificationRunRecord]:
         """List recent embedding qualification runs for a profile."""
 
+    async def get_model_qualification_run(
+        self,
+        *,
+        workspace_key: str,
+        model_profile_qualification_run_id: UUID,
+    ) -> ModelProfileQualificationRunRecord | None:
+        """Fetch one text model qualification run by stable run ID."""
+
+    async def get_embedding_qualification_run(
+        self,
+        *,
+        workspace_key: str,
+        embedding_profile_qualification_run_id: UUID,
+    ) -> EmbeddingProfileQualificationRunRecord | None:
+        """Fetch one embedding qualification run by stable run ID."""
+
 
 class NullProfileQualificationStore:
     def __init__(self) -> None:
@@ -307,6 +323,36 @@ class NullProfileQualificationStore:
             if record.workspace_key == workspace_key and record.profile_key == profile_key
         ]
         return records[: max(1, min(limit, 100))]
+
+    async def get_model_qualification_run(
+        self,
+        *,
+        workspace_key: str,
+        model_profile_qualification_run_id: UUID,
+    ) -> ModelProfileQualificationRunRecord | None:
+        for record in self.model_runs:
+            if (
+                record.workspace_key == workspace_key
+                and record.model_profile_qualification_run_id
+                == model_profile_qualification_run_id
+            ):
+                return record
+        return None
+
+    async def get_embedding_qualification_run(
+        self,
+        *,
+        workspace_key: str,
+        embedding_profile_qualification_run_id: UUID,
+    ) -> EmbeddingProfileQualificationRunRecord | None:
+        for record in self.embedding_runs:
+            if (
+                record.workspace_key == workspace_key
+                and record.embedding_profile_qualification_run_id
+                == embedding_profile_qualification_run_id
+            ):
+                return record
+        return None
 
 
 class AsyncpgProfileQualificationStore(AsyncpgPoolOwner):
@@ -524,6 +570,50 @@ class AsyncpgProfileQualificationStore(AsyncpgPoolOwner):
                 max(1, min(limit, 100)),
             )
         return [EmbeddingProfileQualificationRunRecord.from_row(row) for row in rows]
+
+    async def get_model_qualification_run(
+        self,
+        *,
+        workspace_key: str,
+        model_profile_qualification_run_id: UUID,
+    ) -> ModelProfileQualificationRunRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                SELECT *, $3::text AS workspace_key
+                FROM autoskill.model_profile_qualification_runs
+                WHERE workspace_id = $1
+                  AND model_profile_qualification_run_id = $2
+                """,
+                workspace_id,
+                model_profile_qualification_run_id,
+                workspace_key,
+            )
+        return ModelProfileQualificationRunRecord.from_row(row) if row else None
+
+    async def get_embedding_qualification_run(
+        self,
+        *,
+        workspace_key: str,
+        embedding_profile_qualification_run_id: UUID,
+    ) -> EmbeddingProfileQualificationRunRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                SELECT *, $3::text AS workspace_key
+                FROM autoskill.embedding_profile_qualification_runs
+                WHERE workspace_id = $1
+                  AND embedding_profile_qualification_run_id = $2
+                """,
+                workspace_id,
+                embedding_profile_qualification_run_id,
+                workspace_key,
+            )
+        return EmbeddingProfileQualificationRunRecord.from_row(row) if row else None
 
 
 def _json(value: object) -> str:

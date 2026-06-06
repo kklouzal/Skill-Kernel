@@ -16,6 +16,30 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory profile qualification runs now have content-safe
+  object microscopes instead of being visible only as profile-embedded
+  checklist summaries. `ProfileQualificationStore` exposes workspace-filtered
+  detail reads for text-model and embedding qualification runs, and generic
+  `/admin/api/v1/objects/model_profile_qualification_run/{id}`,
+  `/admin/api/v1/objects/profile_qualification_run/{id}`, and
+  `/admin/api/v1/objects/embedding_profile_qualification_run/{id}` aliases
+  return deterministic check outcomes, bounded scalar metrics, profile refs,
+  LLM invocation refs when present, verdicts, probe-set versions, timestamps,
+  and explicit raw-probe/error denial metadata while withholding raw probe
+  payloads, endpoint refs, API keys, raw provider errors, and cost analytics.
+  This advances core handoff Sections 2.40-2.41 and 3.3 plus Observatory
+  Sections 1.5, 1.9, 5.1, 7.3, 8.18, 12.6, 16.1, and 21.16/21.26/21.40 by
+  closing the aggregate-to-evidence path for model/embedding qualification
+  gates without adding UI-local model authority. Validation passed with focused
+  Observatory/profile qualification coverage (`1 passed`, `4 passed`), `uv run
+  ruff check sidecar`, `uv run pytest` (`390 passed`), `uv run python -m
+  compileall -q sidecar`, `docker compose config --quiet`, `git diff --check`,
+  and core and Observatory acceptance reports (`70` implemented, `86`
+  satisfied, `0` validation errors). An isolated compose/Postgres smoke on
+  port `59647` migrated a fresh database, recorded one text-model and one
+  embedding qualification run through `AsyncpgProfileQualificationStore`,
+  detail-read both by workspace/run ID, verified a cross-workspace miss, and
+  removed the temporary compose project/volume.
 - 2026-06-06: Observatory historical import sources now have a content-safe
   source microscope instead of returning raw historical source records directly
   to the admin UI. `/admin/api/v1/historical/imports`,

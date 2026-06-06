@@ -5622,6 +5622,66 @@ def create_app(
             "raw_error_returned": False,
         }
 
+    def _qualification_run_microscope(run: Any, *, object_type: str) -> dict[str, Any]:
+        summary = _qualification_run_summary(run)
+        run_id = str(summary["qualification_run_id"])
+        profile_kind = "text model" if object_type.startswith("model") else "embedding"
+        downstream = []
+        invocation_ref = summary["metrics"].get("llm_invocation_ref")
+        if invocation_ref:
+            downstream.append(invocation_ref)
+        return {
+            "schema_version": "skillkernel.observatory.profile-qualification-run.v1",
+            "object_type": object_type,
+            "object_id": run_id,
+            "title": f"{profile_kind.title()} qualification run {run_id}",
+            "summary": (
+                "Content-safe profile qualification run with deterministic check "
+                "outcomes and bounded scalar metrics."
+            ),
+            "workspace_key": getattr(run, "workspace_key", None),
+            "profile": {
+                "object_type": (
+                    "model_profile"
+                    if object_type.startswith("model")
+                    else "embedding_profile"
+                ),
+                "object_id": summary["profile_key"],
+            },
+            "profile_key": summary["profile_key"],
+            "route_kind": summary["route_kind"],
+            "provider": summary["provider"],
+            "model": summary["model"],
+            "thinking_level": summary["thinking_level"],
+            "embedding_dim": summary["embedding_dim"],
+            "distance_metric": summary["distance_metric"],
+            "probe_set_version": summary["probe_set_version"],
+            "verdict": summary["verdict"],
+            "checks": summary["checks"],
+            "metrics": summary["metrics"],
+            "created_at": summary["created_at"],
+            "expires_at": summary["expires_at"],
+            "provenance": {
+                "upstream": [],
+                "downstream": downstream,
+            },
+            "diagnostics": {
+                "supporting_component": "model_embedding_profiles",
+                "profile_kind": profile_kind,
+                "raw_probe_results_returned": False,
+                "raw_error_returned": False,
+                "endpoint_ref_returned": False,
+                "api_key_available": False,
+                "cost_analytics_returned": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "redacted_or_not_applicable",
+            },
+            "audit": {"links": []},
+        }
+
     def _profile_microscope(
         *,
         profile: Any,
@@ -9597,6 +9657,47 @@ def create_app(
                         profile=profile,
                         qualification_runs=qualification_runs,
                         object_type="embedding_profile",
+                    )
+                )
+        if object_type in {
+            "model_profile_qualification_run",
+            "model-profile-qualification-run",
+            "text_model_qualification_run",
+            "profile_qualification_run",
+        }:
+            qualification_run_id = _uuid_or_404(
+                object_id,
+                "model profile qualification run",
+            )
+            run = await profile_qualifications.get_model_qualification_run(
+                workspace_key=workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+                model_profile_qualification_run_id=qualification_run_id,
+            )
+            if run is not None:
+                return ObservatoryObjectResponse(
+                    object=_qualification_run_microscope(
+                        run,
+                        object_type="model_profile_qualification_run",
+                    )
+                )
+        if object_type in {
+            "embedding_profile_qualification_run",
+            "embedding-profile-qualification-run",
+            "embedding_qualification_run",
+        }:
+            qualification_run_id = _uuid_or_404(
+                object_id,
+                "embedding profile qualification run",
+            )
+            run = await profile_qualifications.get_embedding_qualification_run(
+                workspace_key=workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+                embedding_profile_qualification_run_id=qualification_run_id,
+            )
+            if run is not None:
+                return ObservatoryObjectResponse(
+                    object=_qualification_run_microscope(
+                        run,
+                        object_type="embedding_profile_qualification_run",
                     )
                 )
         if object_type in {"topology_operation", "skill_graph_operation"}:

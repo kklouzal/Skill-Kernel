@@ -2128,7 +2128,7 @@ def test_observatory_profile_microscopes_show_redacted_qualification_state() -> 
     routes = _routes(app)
 
     async def run():
-        await qualifications.record_model_qualification_run(
+        model_run = await qualifications.record_model_qualification_run(
             workspace_key="dev-01",
             model_profile_id=model_profile_id,
             profile_key="semantic-main",
@@ -2148,7 +2148,7 @@ def test_observatory_profile_microscopes_show_redacted_qualification_state() -> 
                 "error": "provider leaked sk-live-secret in a raw error",
             },
         )
-        await qualifications.record_embedding_qualification_run(
+        embedding_run = await qualifications.record_embedding_qualification_run(
             workspace_key="dev-01",
             embedding_profile_id=embedding_profile_id,
             profile_key="retrieval-main",
@@ -2183,9 +2183,35 @@ def test_observatory_profile_microscopes_show_redacted_qualification_state() -> 
         embedding_detail = await routes[
             ("/admin/api/v1/embedding-profile/{profile_key}", "GET")
         ].endpoint(profile_key="retrieval-main", workspace_id="dev-01")
-        return model_detail, model_object, embedding_detail
+        model_run_object = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="model_profile_qualification_run",
+            object_id=str(model_run.model_profile_qualification_run_id),
+            workspace_id="dev-01",
+        )
+        embedding_run_object = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="embedding_profile_qualification_run",
+            object_id=str(embedding_run.embedding_profile_qualification_run_id),
+            workspace_id="dev-01",
+        )
+        return (
+            model_detail,
+            model_object,
+            embedding_detail,
+            model_run_object,
+            embedding_run_object,
+        )
 
-    model_detail, model_object, embedding_detail = asyncio.run(run())
+    (
+        model_detail,
+        model_object,
+        embedding_detail,
+        model_run_object,
+        embedding_run_object,
+    ) = asyncio.run(run())
 
     model_payload = model_detail.object
     assert model_payload["object_type"] == "model_profile"
@@ -2201,10 +2227,31 @@ def test_observatory_profile_microscopes_show_redacted_qualification_state() -> 
     assert embedding_payload["configuration"]["embedding_dim"] == 16
     assert embedding_payload["qualification_runs"][0]["checks"]["dimension_matches"] is True
     assert embedding_payload["qualification_runs"][0]["metrics"]["positive_similarity"] == 1.0
+    model_run_payload = model_run_object.object
+    assert model_run_payload["object_type"] == "model_profile_qualification_run"
+    assert model_run_payload["profile"] == {
+        "object_type": "model_profile",
+        "object_id": "semantic-main",
+    }
+    assert model_run_payload["checks"]["evidence_id_preserved"] is True
+    assert model_run_payload["metrics"]["output_token_estimate"] == 42
+    assert model_run_payload["diagnostics"]["raw_probe_results_returned"] is False
+    assert model_run_payload["diagnostics"]["raw_error_returned"] is False
+
+    embedding_run_payload = embedding_run_object.object
+    assert embedding_run_payload["object_type"] == "embedding_profile_qualification_run"
+    assert embedding_run_payload["profile"] == {
+        "object_type": "embedding_profile",
+        "object_id": "retrieval-main",
+    }
+    assert embedding_run_payload["checks"]["dimension_matches"] is True
+    assert embedding_run_payload["metrics"]["negative_similarity"] == 0.2
     serialized = json.dumps(
         {
             "model": model_payload,
             "embedding": embedding_payload,
+            "model_run": model_run_payload,
+            "embedding_run": embedding_run_payload,
         },
         sort_keys=True,
     )

@@ -2,6 +2,26 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-06 update: Observatory model/embedding profile qualification runs now
+have content-safe object microscopes. `ProfileQualificationStore` can fetch
+individual text-model and embedding qualification runs by workspace/run ID, and
+generic `model_profile_qualification_run`, `profile_qualification_run`, and
+`embedding_profile_qualification_run` object aliases expose deterministic
+check outcomes, bounded scalar metrics, profile refs, optional LLM invocation
+refs, verdicts, probe-set versions, timestamps, and raw-denial metadata while
+suppressing raw probe payloads, endpoint refs, API keys, raw provider errors,
+and cost analytics. This advances core Sections 2.40-2.41 and 3.3 plus
+Observatory Sections 1.5, 1.9, 5.1, 7.3, 8.18, 12.6, 16.1, and
+21.16/21.26/21.40 by making qualification-gate evidence directly traversable
+without adding UI-local model authority. Validation passed with focused
+Observatory/profile qualification coverage, full sidecar ruff/pytest
+(`390 passed`)/compileall gates, compose config, diff-check, core and
+Observatory acceptance reports (`70` implemented, `86` satisfied, `0`
+validation errors), and an isolated compose/Postgres smoke that migrated a
+fresh database, recorded/detail-read one text-model and one embedding
+qualification run through `AsyncpgProfileQualificationStore`, verified
+workspace isolation, and removed the temporary compose project/volume.
+
 2026-06-06 update: Observatory historical import source records now use a
 content-safe source microscope. `/admin/api/v1/historical/imports`,
 `/admin/api/v1/historical/imports/{historical_import_id}`, and generic
