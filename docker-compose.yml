@@ -112,6 +112,8 @@ services:
     build: *skillkernel-core-build
     environment: *skillkernel-env
     networks: *skillkernel-runtime-networks
+    healthcheck:
+      disable: true
     command:
       - python
       - -m
@@ -140,6 +142,8 @@ services:
     build: *skillkernel-core-build
     environment: *skillkernel-env
     networks: *skillkernel-runtime-networks
+    healthcheck:
+      disable: true
     command:
       - python
       - -m
@@ -168,6 +172,8 @@ services:
     build: *skillkernel-core-build
     environment: *skillkernel-env
     networks: *skillkernel-runtime-networks
+    healthcheck:
+      disable: true
     command:
       - python
       - -m
