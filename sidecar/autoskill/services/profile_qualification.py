@@ -12,6 +12,7 @@ from autoskill.db.profile_qualifications import (
 )
 from autoskill.db.profiles import ProfileStore
 from autoskill.services.embedding_generation import (
+    HASH_EMBEDDING_DEGRADED_REASON,
     HashingTextEmbedder,
     OpenAICompatibleTextEmbedder,
     TextEmbedder,
@@ -134,6 +135,7 @@ async def qualify_embedding_profile(
     profile_key: str,
     probe_set_version: str = EMBEDDING_PROFILE_PROBE_SET_VERSION,
     embedding_api_key: str | None = None,
+    allow_degraded_hash: bool = False,
 ) -> EmbeddingProfileQualificationResult:
     profile = await profiles.get_embedding_profile(
         workspace_key=workspace_key,
@@ -145,31 +147,49 @@ async def qualify_embedding_profile(
         )
 
     try:
-        embedder = _embedder_for_profile(profile, embedding_api_key=embedding_api_key)
-        first = embedder.embed("autoskill qualification positive sample")
-        second = embedder.embed("autoskill qualification positive sample")
-        negative = embedder.embed("unrelated negative sample")
-        positive_similarity = _cosine(first, second)
-        negative_similarity = _cosine(first, negative)
-        checks = {
-            "route_supported": True,
-            "dimension_matches": len(first) == profile.embedding_dim,
-            "finite_values": _all_finite(first) and _all_finite(second) and _all_finite(negative),
-            "non_zero": _has_signal(first) and _has_signal(second) and _has_signal(negative),
-            "stable_single": positive_similarity >= 0.999,
-            "negative_pair_separation": positive_similarity - negative_similarity >= 0.05,
-        }
-        probe_results = {
-            "checks": checks,
-            "positive_similarity": positive_similarity,
-            "negative_similarity": negative_similarity,
-            "distance_metric": "cosine",
-        }
-        verdict = "qualified" if all(checks.values()) else "failed"
+        if profile.route_kind == "hash" and not allow_degraded_hash:
+            checks = {
+                "route_supported": False,
+                "dimension_matches": profile.embedding_dim > 0,
+                "finite_values": False,
+                "non_zero": False,
+                "stable_single": False,
+                "negative_pair_separation": False,
+            }
+            probe_results = {
+                "checks": checks,
+                "reason_code": HASH_EMBEDDING_DEGRADED_REASON,
+                "distance_metric": "cosine",
+            }
+            verdict = "failed"
+        else:
+            embedder = _embedder_for_profile(profile, embedding_api_key=embedding_api_key)
+            first = embedder.embed("autoskill qualification positive sample")
+            second = embedder.embed("autoskill qualification positive sample")
+            negative = embedder.embed("unrelated negative sample")
+            positive_similarity = _cosine(first, second)
+            negative_similarity = _cosine(first, negative)
+            checks = {
+                "route_supported": True,
+                "dimension_matches": len(first) == profile.embedding_dim,
+                "finite_values": (
+                    _all_finite(first) and _all_finite(second) and _all_finite(negative)
+                ),
+                "non_zero": _has_signal(first) and _has_signal(second) and _has_signal(negative),
+                "stable_single": positive_similarity >= 0.999,
+                "negative_pair_separation": positive_similarity - negative_similarity >= 0.05,
+            }
+            probe_results = {
+                "checks": checks,
+                "positive_similarity": positive_similarity,
+                "negative_similarity": negative_similarity,
+                "distance_metric": "cosine",
+            }
+            verdict = "qualified" if all(checks.values()) else "failed"
     except Exception as exc:
         probe_results = {
             "checks": {
-                "route_supported": profile.route_kind in {"hash", "openai_compatible"},
+                "route_supported": profile.route_kind in {"openai_compatible"},
                 "dimension_matches": False,
                 "finite_values": False,
                 "non_zero": False,

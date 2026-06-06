@@ -18,6 +18,7 @@ from autoskill.services.broker import (
     replay_broker_policy,
 )
 from autoskill.services.embedding_generation import HashingTextEmbedder
+from autoskill.tests.test_embedding_generation import install_fake_embedding_provider
 
 
 class MemoryBrokerRetrievalStore:
@@ -226,11 +227,11 @@ def _embedding_profile(*, embedding_dim: int = 8) -> ModelProfileRecord:
         profile_id=uuid4(),
         workspace_id=uuid4(),
         workspace_key="dev-01",
-        profile_key="runtime-hash",
+        profile_key="runtime-embedding",
         provider="test-provider",
-        model="runtime-hash-model",
-        route_kind="hash",
-        endpoint_ref=None,
+        model="runtime-openai-compatible-model",
+        route_kind="openai_compatible",
+        endpoint_ref="http://127.0.0.1:9999/v1",
         timeout_seconds=30.0,
         status="active",
         qualification={"verdict": "qualified"},
@@ -551,6 +552,7 @@ def test_context_broker_can_render_vector_fused_candidates_when_lexical_is_empty
 def test_context_hint_route_uses_active_embedding_profile_for_semantic_retrieval(
     monkeypatch,
 ) -> None:
+    install_fake_embedding_provider(monkeypatch, embedding_dim=8)
     skill_id = uuid4()
     profile = _embedding_profile()
     store = MemoryBrokerRetrievalStore(
@@ -574,6 +576,7 @@ def test_context_hint_route_uses_active_embedding_profile_for_semantic_retrieval
     profiles = MemoryBrokerProfileStore(active_embedding_profile=profile)
     monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
     monkeypatch.setenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", "true")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
     get_settings.cache_clear()
     app = create_app(retrieval_store=store, profile_store=profiles)
     route = next(route for route in app.routes if route.path == "/v1/runtime/context-hint")
@@ -596,7 +599,7 @@ def test_context_hint_route_uses_active_embedding_profile_for_semantic_retrieval
     assert response.skill_ids == [str(skill_id)]
     assert "vector-fused" in response.reason_codes
     assert profiles.calls == [{"workspace_key": "dev-01"}]
-    assert store.semantic_calls[0]["embedding_model"] == "runtime-hash-model"
+    assert store.semantic_calls[0]["embedding_model"] == "runtime-openai-compatible-model"
     assert store.semantic_calls[0]["embedding_profile_id"] == profile.profile_id
 
 

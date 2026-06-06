@@ -123,6 +123,17 @@ class LLMInvocationStore(Protocol):
     ) -> LLMInvocationRecord | None:
         """Return one content-safe LLM invocation audit row."""
 
+    async def list_invocations(
+        self,
+        *,
+        workspace_key: str | None = None,
+        purpose: str | None = None,
+        profile_key: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[LLMInvocationRecord]:
+        """Return recent content-safe LLM invocation audit rows."""
+
 
 class NullLLMInvocationStore:
     def __init__(self) -> None:
@@ -188,6 +199,27 @@ class NullLLMInvocationStore:
             ):
                 return record
         return None
+
+    async def list_invocations(
+        self,
+        *,
+        workspace_key: str | None = None,
+        purpose: str | None = None,
+        profile_key: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[LLMInvocationRecord]:
+        bounded_limit = max(1, min(limit, 500))
+        rows = [
+            record
+            for record in self.records
+            if (workspace_key is None or record.workspace_key == workspace_key)
+            and (purpose is None or record.purpose == purpose)
+            and (profile_key is None or record.profile_key == profile_key)
+            and (status is None or record.status == status)
+        ]
+        rows.sort(key=lambda record: record.created_at, reverse=True)
+        return rows[:bounded_limit]
 
 
 class AsyncpgLLMInvocationStore(AsyncpgPoolOwner):
@@ -289,6 +321,38 @@ class AsyncpgLLMInvocationStore(AsyncpgPoolOwner):
             if row is None:
                 return None
             return LLMInvocationRecord.from_row(row)
+
+    async def list_invocations(
+        self,
+        *,
+        workspace_key: str | None = None,
+        purpose: str | None = None,
+        profile_key: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[LLMInvocationRecord]:
+        pool = await self._get_pool()
+        bounded_limit = max(1, min(limit, 500))
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT inv.*, w.external_key AS workspace_key
+                FROM autoskill.llm_invocations inv
+                JOIN autoskill.workspaces w USING (workspace_id)
+                WHERE ($1::text IS NULL OR w.external_key = $1)
+                  AND ($2::text IS NULL OR inv.purpose = $2)
+                  AND ($3::text IS NULL OR inv.profile_key = $3)
+                  AND ($4::text IS NULL OR inv.status = $4)
+                ORDER BY inv.created_at DESC, inv.llm_invocation_id DESC
+                LIMIT $5
+                """,
+                workspace_key,
+                purpose,
+                profile_key,
+                status,
+                bounded_limit,
+            )
+        return [LLMInvocationRecord.from_row(row) for row in rows]
 
 
 def _json(value: object) -> str:

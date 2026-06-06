@@ -11,6 +11,10 @@ from uuid import UUID
 from autoskill.db.embeddings import EMBEDDING_DIM, EmbeddingStore
 
 DEFAULT_EMBEDDING_MODEL = "autoskill-hash-embedding.v1"
+PRODUCTION_EMBEDDING_PROVIDERS = {"openclaw", "openai_compatible"}
+HASH_EMBEDDING_DEGRADED_REASON = "hash_embedding_provider_test_mode"
+EMBEDDING_ENDPOINT_MISSING_REASON = "embedding_endpoint_not_configured"
+OPENCLAW_EMBEDDING_ROUTE_UNAVAILABLE_REASON = "openclaw_embedding_route_unavailable"
 
 
 class TextEmbedder(Protocol):
@@ -90,10 +94,73 @@ class OpenAICompatibleTextEmbedder:
         return [float(value) for value in embedding]
 
 
-def build_text_embedder_from_settings(settings: object) -> TextEmbedder:
+@dataclass(frozen=True)
+class EmbeddingProviderPolicy:
+    provider: str
+    production_ready: bool
+    degraded: bool
+    reason_code: str | None
+    jobs_paused: bool
+
+
+def embedding_provider_policy(settings: object) -> EmbeddingProviderPolicy:
+    provider = str(getattr(settings, "embedding_provider", "hash"))
+    if provider == "hash":
+        return EmbeddingProviderPolicy(
+            provider=provider,
+            production_ready=False,
+            degraded=True,
+            reason_code=HASH_EMBEDDING_DEGRADED_REASON,
+            jobs_paused=True,
+        )
+    if provider == "openai_compatible":
+        ready = bool(
+            getattr(settings, "embedding_api_base_url", None)
+            and getattr(settings, "embedding_api_key", None)
+        )
+        return EmbeddingProviderPolicy(
+            provider=provider,
+            production_ready=ready,
+            degraded=not ready,
+            reason_code=None if ready else EMBEDDING_ENDPOINT_MISSING_REASON,
+            jobs_paused=not ready,
+        )
+    if provider == "openclaw":
+        return EmbeddingProviderPolicy(
+            provider=provider,
+            production_ready=False,
+            degraded=True,
+            reason_code=OPENCLAW_EMBEDDING_ROUTE_UNAVAILABLE_REASON,
+            jobs_paused=True,
+        )
+    return EmbeddingProviderPolicy(
+        provider=provider,
+        production_ready=False,
+        degraded=True,
+        reason_code=f"unsupported_embedding_provider:{provider}",
+        jobs_paused=True,
+    )
+
+
+def build_text_embedder_from_settings(
+    settings: object,
+    *,
+    allow_degraded_hash: bool | None = None,
+) -> TextEmbedder:
     provider = str(getattr(settings, "embedding_provider", "hash"))
     model = str(getattr(settings, "embedding_model", DEFAULT_EMBEDDING_MODEL))
     if provider == "hash":
+        allow_hash = (
+            bool(getattr(settings, "embedding_hash_provider_allowed", False))
+            if allow_degraded_hash is None
+            else allow_degraded_hash
+        )
+        if not allow_hash:
+            raise ValueError(
+                "hash embedding provider is test/dev-only degraded mode; configure "
+                "an openclaw or openai_compatible embedding profile for production "
+                "embedding generation"
+            )
         return HashingTextEmbedder(model=model)
     if provider == "openai_compatible":
         base_url = getattr(settings, "embedding_api_base_url", None)
@@ -118,6 +185,7 @@ def build_text_embedder_from_profile(
     *,
     embedding_api_key: str | None = None,
     embedding_api_base_url: str | None = None,
+    allow_degraded_hash: bool = False,
 ) -> TextEmbedder:
     status = getattr(profile, "status", None)
     qualification = getattr(profile, "qualification", {}) or {}
@@ -131,6 +199,11 @@ def build_text_embedder_from_profile(
     if embedding_dim <= 0:
         raise ValueError("embedding profile must declare a positive embedding_dim")
     if route_kind == "hash":
+        if not allow_degraded_hash:
+            raise ValueError(
+                "hash embedding profile is test/dev-only degraded mode; configure "
+                "an openclaw or openai_compatible embedding profile"
+            )
         return HashingTextEmbedder(model=model, embedding_dim=embedding_dim)
     if route_kind == "openai_compatible":
         base_url = getattr(profile, "endpoint_ref", None) or embedding_api_base_url

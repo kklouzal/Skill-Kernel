@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from autoskill.api.app import EmbeddingGenerateRequest, create_app
+from autoskill.core.config import get_settings
 from autoskill.db.embeddings import (
     EMBEDDING_DIM,
     EmbeddingRecord,
@@ -13,13 +14,19 @@ from autoskill.db.embeddings import (
     EmbeddingUpsertResult,
 )
 from autoskill.services.embedding_generation import (
-    DEFAULT_EMBEDDING_MODEL,
     HashingTextEmbedder,
     OpenAICompatibleTextEmbedder,
     build_text_embedder_from_settings,
     generate_pending_embeddings,
 )
 from fastapi import HTTPException
+
+
+@pytest.fixture(autouse=True)
+def clear_settings_cache():
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 class MemoryPendingEmbeddingStore:
@@ -120,6 +127,32 @@ class MemoryEmbeddingProfileStore:
         return self.active_profile
 
 
+def install_fake_embedding_provider(monkeypatch, *, embedding_dim: int = EMBEDDING_DIM) -> None:
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {"data": [{"embedding": [1.0] + [0.0] * (embedding_dim - 1)}]}
+            ).encode()
+
+    def fake_urlopen(_http_request, timeout=None):
+        _ = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr("autoskill.services.embedding_generation.request.urlopen", fake_urlopen)
+
+
+def configure_embedding_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+
 def test_hashing_text_embedder_is_deterministic_and_normalized() -> None:
     embedder = HashingTextEmbedder()
 
@@ -134,9 +167,15 @@ def test_hashing_text_embedder_is_deterministic_and_normalized() -> None:
 
 
 def test_embedder_factory_uses_hash_provider() -> None:
-    embedder = build_text_embedder_from_settings(
-        SimpleNamespace(embedding_provider="hash", embedding_model="custom-hash-model")
+    settings = SimpleNamespace(
+        embedding_provider="hash",
+        embedding_model="custom-hash-model",
     )
+
+    with pytest.raises(ValueError, match="test/dev-only degraded mode"):
+        build_text_embedder_from_settings(settings)
+
+    embedder = build_text_embedder_from_settings(settings, allow_degraded_hash=True)
 
     assert isinstance(embedder, HashingTextEmbedder)
     assert embedder.model == "custom-hash-model"
@@ -227,14 +266,17 @@ def test_generate_embeddings_api_runs_control_primitive() -> None:
             request=EmbeddingGenerateRequest(workspace_id="dev-01", limit=1),
         )
 
-    response = asyncio.run(run())
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(run())
 
-    assert response.generated == 1
-    assert response.embedding_model == DEFAULT_EMBEDDING_MODEL
-    assert response.sources[0]["object_type"] == "evidence_item"
+    assert error.value.status_code == 409
+    assert "hash embedding provider is test/dev-only degraded mode" in error.value.detail
+    assert store.upserts == []
 
 
-def test_generate_embeddings_api_uses_qualified_embedding_profile() -> None:
+def test_generate_embeddings_api_uses_qualified_embedding_profile(monkeypatch) -> None:
+    configure_embedding_api_key(monkeypatch)
+    install_fake_embedding_provider(monkeypatch)
     store = MemoryPendingEmbeddingStore()
     profile_id = uuid4()
     profile_store = MemoryEmbeddingProfileStore(
@@ -242,8 +284,9 @@ def test_generate_embeddings_api_uses_qualified_embedding_profile() -> None:
             profile_id=profile_id,
             status="qualified",
             embedding_dim=1536,
-            route_kind="hash",
-            model="qualified-hash-profile",
+            route_kind="openai_compatible",
+            endpoint_ref="http://127.0.0.1:9999/v1",
+            model="qualified-openai-compatible-profile",
             timeout_seconds=30.0,
         )
     )
@@ -262,10 +305,10 @@ def test_generate_embeddings_api_uses_qualified_embedding_profile() -> None:
     response = asyncio.run(run())
 
     assert response.generated == 1
-    assert response.embedding_model == "qualified-hash-profile"
+    assert response.embedding_model == "qualified-openai-compatible-profile"
     assert response.embedding_profile_id == str(profile_id)
     assert response.embedding_dim == 1536
-    assert store.upserts[0]["embedding_model"] == "qualified-hash-profile"
+    assert store.upserts[0]["embedding_model"] == "qualified-openai-compatible-profile"
     assert store.upserts[0]["embedding_profile_id"] == profile_id
     assert store.last_profile_id == profile_id
     assert profile_store.calls == [
@@ -273,7 +316,9 @@ def test_generate_embeddings_api_uses_qualified_embedding_profile() -> None:
     ]
 
 
-def test_generate_embeddings_api_prefers_active_embedding_profile() -> None:
+def test_generate_embeddings_api_prefers_active_embedding_profile(monkeypatch) -> None:
+    configure_embedding_api_key(monkeypatch)
+    install_fake_embedding_provider(monkeypatch, embedding_dim=8)
     store = MemoryPendingEmbeddingStore(expected_embedding_dim=8)
     profile_id = uuid4()
     profile_store = MemoryEmbeddingProfileStore(
@@ -282,8 +327,9 @@ def test_generate_embeddings_api_prefers_active_embedding_profile() -> None:
             status="active",
             qualification={"verdict": "qualified"},
             embedding_dim=8,
-            route_kind="hash",
-            model="active-hash-profile",
+            route_kind="openai_compatible",
+            endpoint_ref="http://127.0.0.1:9999/v1",
+            model="active-openai-compatible-profile",
             timeout_seconds=30.0,
         )
     )
@@ -298,13 +344,15 @@ def test_generate_embeddings_api_prefers_active_embedding_profile() -> None:
     response = asyncio.run(run())
 
     assert response.generated == 1
-    assert response.embedding_model == "active-hash-profile"
+    assert response.embedding_model == "active-openai-compatible-profile"
     assert response.embedding_profile_id == str(profile_id)
     assert store.upserts[0]["embedding_profile_id"] == profile_id
     assert profile_store.active_calls == [{"workspace_key": "dev-01"}]
 
 
-def test_generate_embeddings_api_uses_qualified_non_default_embedding_dimension() -> None:
+def test_generate_embeddings_api_uses_qualified_non_default_embedding_dimension(monkeypatch) -> None:
+    configure_embedding_api_key(monkeypatch)
+    install_fake_embedding_provider(monkeypatch, embedding_dim=8)
     store = MemoryPendingEmbeddingStore(expected_embedding_dim=8)
     profile_id = uuid4()
     profile_store = MemoryEmbeddingProfileStore(
@@ -312,8 +360,9 @@ def test_generate_embeddings_api_uses_qualified_non_default_embedding_dimension(
             profile_id=profile_id,
             status="qualified",
             embedding_dim=8,
-            route_kind="hash",
-            model="qualified-small-hash-profile",
+            route_kind="openai_compatible",
+            endpoint_ref="http://127.0.0.1:9999/v1",
+            model="qualified-small-openai-compatible-profile",
             timeout_seconds=30.0,
         )
     )
@@ -332,7 +381,7 @@ def test_generate_embeddings_api_uses_qualified_non_default_embedding_dimension(
     response = asyncio.run(run())
 
     assert response.generated == 1
-    assert response.embedding_model == "qualified-small-hash-profile"
+    assert response.embedding_model == "qualified-small-openai-compatible-profile"
     assert response.embedding_profile_id == str(profile_id)
     assert response.embedding_dim == 8
     assert store.upserts[0]["embedding_profile_id"] == profile_id

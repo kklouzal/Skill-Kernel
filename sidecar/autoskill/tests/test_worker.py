@@ -44,6 +44,7 @@ from autoskill.services.writer import (
 from autoskill.tests.test_embedding_generation import (
     MemoryEmbeddingProfileStore,
     MemoryPendingEmbeddingStore,
+    install_fake_embedding_provider,
 )
 from autoskill.tests.test_external_skills import MemoryExternalSkillStore
 from autoskill.tests.test_governance import MemoryGovernanceStore
@@ -611,6 +612,8 @@ class WorkerTestStores:
     observability: MemoryObservabilityStore | None = None
     profiles: MemoryEmbeddingProfileStore | None = None
     audit: MemoryAuditWorkerStore | None = None
+    embedding_api_key: str | None = None
+    embedding_api_base_url: str | None = None
 
     def as_worker_stores(self) -> WorkerStores:
         return WorkerStores(
@@ -622,6 +625,9 @@ class WorkerTestStores:
             observability=self.observability,
             profiles=self.profiles,
             audit=self.audit,
+            embedding_api_key=self.embedding_api_key,
+            embedding_api_base_url=self.embedding_api_base_url,
+            embedding_hash_provider_allowed=True,
         )
 
 
@@ -946,7 +952,8 @@ def test_worker_pool_does_not_claim_other_pool_jobs() -> None:
     assert result.claimed is False
 
 
-def test_worker_embedding_generate_uses_qualified_embedding_profile() -> None:
+def test_worker_embedding_generate_uses_qualified_embedding_profile(monkeypatch) -> None:
+    install_fake_embedding_provider(monkeypatch, embedding_dim=8)
     profile_id = uuid4()
     profiles = MemoryEmbeddingProfileStore(
         profile=SimpleNamespace(
@@ -954,7 +961,8 @@ def test_worker_embedding_generate_uses_qualified_embedding_profile() -> None:
             status="qualified",
             qualification={"verdict": "qualified"},
             embedding_dim=8,
-            route_kind="hash",
+            route_kind="openai_compatible",
+            endpoint_ref="http://127.0.0.1:9999/v1",
             model="queued-profile-model",
             timeout_seconds=30.0,
         )
@@ -966,6 +974,7 @@ def test_worker_embedding_generate_uses_qualified_embedding_profile() -> None:
         embeddings=MemoryPendingEmbeddingStore(expected_embedding_dim=8),
         observability=MemoryObservabilityStore(),
         profiles=profiles,
+        embedding_api_key="test-key",
     )
 
     async def run():
@@ -997,7 +1006,8 @@ def test_worker_embedding_generate_uses_qualified_embedding_profile() -> None:
     assert any(span.operation_kind == "embedding_call" for span in stores.observability.started)
 
 
-def test_worker_embedding_generate_prefers_active_embedding_profile() -> None:
+def test_worker_embedding_generate_prefers_active_embedding_profile(monkeypatch) -> None:
+    install_fake_embedding_provider(monkeypatch, embedding_dim=8)
     profile_id = uuid4()
     profiles = MemoryEmbeddingProfileStore(
         active_profile=SimpleNamespace(
@@ -1005,7 +1015,8 @@ def test_worker_embedding_generate_prefers_active_embedding_profile() -> None:
             status="active",
             qualification={"verdict": "qualified"},
             embedding_dim=8,
-            route_kind="hash",
+            route_kind="openai_compatible",
+            endpoint_ref="http://127.0.0.1:9999/v1",
             model="active-queued-profile",
             timeout_seconds=30.0,
         )
@@ -1016,6 +1027,7 @@ def test_worker_embedding_generate_prefers_active_embedding_profile() -> None:
         evidence=MemoryEvidenceWorkerStore(),
         embeddings=MemoryPendingEmbeddingStore(expected_embedding_dim=8),
         profiles=profiles,
+        embedding_api_key="test-key",
     )
 
     async def run():
@@ -1039,7 +1051,8 @@ def test_worker_embedding_generate_prefers_active_embedding_profile() -> None:
     assert profiles.active_calls == [{"workspace_key": "dev-01"}]
 
 
-def test_worker_embedding_generate_caps_catchup_batch_at_one_thousand() -> None:
+def test_worker_embedding_generate_caps_catchup_batch_at_one_thousand(monkeypatch) -> None:
+    install_fake_embedding_provider(monkeypatch, embedding_dim=8)
     embeddings = MemoryPendingEmbeddingStore(expected_embedding_dim=8)
     embeddings.sources = [
         EmbeddingSourceText(
@@ -1063,11 +1076,13 @@ def test_worker_embedding_generate_caps_catchup_batch_at_one_thousand() -> None:
                 status="active",
                 qualification={"verdict": "qualified"},
                 embedding_dim=8,
-                route_kind="hash",
+                route_kind="openai_compatible",
+                endpoint_ref="http://127.0.0.1:9999/v1",
                 model="active-queued-profile",
                 timeout_seconds=30.0,
             )
         ),
+        embedding_api_key="test-key",
     )
 
     async def run():

@@ -16,6 +16,38 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory model invocation audit rows now have direct,
+  sidecar-hosted, content-safe admin read models in addition to the generic
+  object microscope path. `LLMInvocationStore` can list recent invocation
+  records with workspace/purpose/profile/status filters,
+  `/admin/api/v1/model-invocations` and
+  `/admin/api/v1/model-invocations/{llm_invocation_id}` expose
+  bounded collection/detail views, and the generated Observatory route catalog
+  includes both paths. The read model preserves stable invocation/profile/
+  provider/model/thinking/token/status/trace metadata while hashing raw provider
+  errors and request IDs and withholding prompts, responses, API keys, endpoint
+  URLs, raw audit payloads, and cost analytics. The same run stabilized the
+  in-progress embedding-provider hardening: the default hash provider is
+  explicit degraded/test mode, production embedding jobs require a configured
+  production-ready `openai_compatible` profile, degraded embedding state is
+  surfaced in capabilities/readiness/effective config/Observatory health, and
+  hash profiles only run when the dedicated test/dev allowance is set. This
+  advances Core Sections 3.2-3.3, 10.4-10.5, 28.1-28.2, and 31.48 plus
+  Observatory Sections 8.18, 12.1, 12.6, 13.1, 16.1, and acceptance criteria
+  21.16 and 21.26. Focused validation passed with the LLM invocation route
+  regression plus embedding fail-closed/profile/worker regressions (`13`
+  focused tests) and targeted Ruff. Required gates also passed with `uv run
+  ruff check sidecar`, `uv run pytest` (`411 passed`), `uv run python -m
+  compileall -q sidecar`, `git diff --check`, `npm run build --prefix
+  sidecar/autoskill/observatory`, `uv run python
+  scripts/generate_observatory_openapi_client.py --check`, `uv run python
+  scripts/autoskill_acceptance.py --json` (`ready=true`, `70` implemented),
+  `uv run python scripts/autoskill_observatory_acceptance.py --json`
+  (`ready=true`, `86` satisfied), and `uv run python
+  scripts/autoskill_conformance.py --json` (`ready=true`, `14/14` checks).
+  No compose/Postgres smoke was needed because no schema changed; the slice adds
+  bounded reads over existing LLM invocation rows and config/profile policy
+  behavior covered by deterministic in-memory and route tests.
 - 2026-06-06: Worker heartbeat progress summaries now include static,
   content-safe phase plans for long semantic, topology, repair, historical,
   embedding, rollback, and writer jobs. The new `progress_plan` metadata tells

@@ -1838,6 +1838,8 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/model-profile/{profile_key}", "GET"),
         ("/admin/api/v1/embedding-profile", "GET"),
         ("/admin/api/v1/embedding-profile/{profile_key}", "GET"),
+        ("/admin/api/v1/model-invocations", "GET"),
+        ("/admin/api/v1/model-invocations/{llm_invocation_id}", "GET"),
         ("/admin/api/v1/storage", "GET"),
         ("/admin/api/v1/audit", "GET"),
         ("/admin/api/v1/issues/{issue_id}", "GET"),
@@ -2622,7 +2624,7 @@ def test_observatory_diagnostic_momentum_read_models_are_content_safe() -> None:
     assert "private command transcript" not in serialized
 
 
-def test_observatory_llm_invocation_object_microscope_is_content_safe() -> None:
+def test_observatory_llm_invocation_read_models_are_content_safe() -> None:
     invocations = NullLLMInvocationStore()
     app = create_app(
         audit_store=MemoryAuditStore(),
@@ -2659,17 +2661,36 @@ def test_observatory_llm_invocation_object_microscope_is_content_safe() -> None:
                 "raw_response": "sensitive model output",
             },
         )
-        return await routes[
+        collection = await routes[("/admin/api/v1/model-invocations", "GET")].endpoint(
+            workspace_id="dev-01",
+            profile_key="semantic-main",
+            status="error",
+        )
+        direct = await routes[
+            ("/admin/api/v1/model-invocations/{llm_invocation_id}", "GET")
+        ].endpoint(
+            llm_invocation_id=str(record.llm_invocation_id),
+            workspace_id="dev-01",
+        )
+        generic = await routes[
             ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
         ].endpoint(
             object_type="llm_invocation",
             object_id=str(record.llm_invocation_id),
             workspace_id="dev-01",
         )
+        return collection, direct, generic
 
-    detail = asyncio.run(run())
+    collection, direct, generic = asyncio.run(run())
 
-    payload = detail.object
+    collection_item = collection.collection["items"][0]
+    assert collection.collection["object_type"] == "llm_invocation"
+    assert collection.collection["diagnostics"]["filters"]["profile_key"] == "semantic-main"
+    assert collection.collection["diagnostics"]["raw_error_returned"] is False
+    assert collection_item["object_type"] == "llm_invocation"
+    assert collection_item["status"]["raw_error_returned"] is False
+
+    payload = direct.object
     assert payload["object_type"] == "llm_invocation"
     assert payload["workspace_key"] == "dev-01"
     assert payload["profile"]["profile_key"] == "semantic-main"
@@ -2689,7 +2710,15 @@ def test_observatory_llm_invocation_object_microscope_is_content_safe() -> None:
     assert {"object_type": "trace_span", "object_id": str(span_id)} in payload[
         "provenance"
     ]["downstream"]
-    serialized = json.dumps(payload, sort_keys=True)
+    assert generic.object == payload
+    serialized = json.dumps(
+        {
+            "collection": collection.collection,
+            "direct": direct.object,
+            "generic": generic.object,
+        },
+        sort_keys=True,
+    )
     assert "provider.local" not in serialized
     assert "sk-live-secret" not in serialized
     assert "Return a JSON proposal." not in serialized

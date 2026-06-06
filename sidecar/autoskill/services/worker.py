@@ -168,6 +168,7 @@ class WorkerStores:
     embedder: TextEmbedder | None = None
     embedding_api_key: str | None = None
     embedding_api_base_url: str | None = None
+    embedding_hash_provider_allowed: bool = False
     workspace_root: Path | None = None
     archive_root: Path | None = None
     external_skill_roots: list[Path] | None = None
@@ -819,23 +820,49 @@ async def _run_embedding_generate(stores: WorkerStores, job: JobRecord) -> dict[
         )
         if profile is None:
             raise ValueError(f"embedding profile not found: {workspace}/{profile_key}")
-        embedder = build_text_embedder_from_profile(
-            profile,
-            embedding_api_key=stores.embedding_api_key,
-            embedding_api_base_url=stores.embedding_api_base_url,
-        )
+        try:
+            embedder = build_text_embedder_from_profile(
+                profile,
+                embedding_api_key=stores.embedding_api_key,
+                embedding_api_base_url=stores.embedding_api_base_url,
+                allow_degraded_hash=stores.embedding_hash_provider_allowed,
+            )
+        except ValueError as error:
+            return _paused_embedding_result(
+                reason_code="embedding_profile_degraded",
+                detail=str(error),
+                embedding_model=embedding_model,
+            )
         embedding_model = profile.model
         embedding_profile_id = profile.profile_id
     elif workspace is not None and stores.profiles is not None:
         profile = await stores.profiles.get_active_embedding_profile(workspace_key=workspace)
         if profile is not None:
-            embedder = build_text_embedder_from_profile(
-                profile,
-                embedding_api_key=stores.embedding_api_key,
-                embedding_api_base_url=stores.embedding_api_base_url,
-            )
+            try:
+                embedder = build_text_embedder_from_profile(
+                    profile,
+                    embedding_api_key=stores.embedding_api_key,
+                    embedding_api_base_url=stores.embedding_api_base_url,
+                    allow_degraded_hash=stores.embedding_hash_provider_allowed,
+                )
+            except ValueError as error:
+                return _paused_embedding_result(
+                    reason_code="embedding_profile_degraded",
+                    detail=str(error),
+                    embedding_model=embedding_model,
+                )
             embedding_model = profile.model
             embedding_profile_id = profile.profile_id
+    if embedder is None:
+        return _paused_embedding_result(
+            reason_code="embedding_profile_unavailable",
+            detail=(
+                "embedding generation requires a qualified active embedding profile "
+                "or an explicitly supplied worker embedder"
+            ),
+            embedding_model=embedding_model,
+        )
+    embedding_model = embedding_model or embedder.model
 
     observability = stores.observability or NullObservabilityStore()
     span = await observability.start_span(
@@ -894,6 +921,22 @@ async def _run_embedding_generate(stores: WorkerStores, job: JobRecord) -> dict[
         ],
     )
     return result.to_json()
+
+
+def _paused_embedding_result(
+    *,
+    reason_code: str,
+    detail: str,
+    embedding_model: str | None,
+) -> dict[str, Any]:
+    return {
+        "status": "paused",
+        "reason_code": reason_code,
+        "detail": detail,
+        "generated": 0,
+        "embedding_model": embedding_model,
+        "embedding_profile_id": None,
+    }
 
 
 async def _run_opportunity_mine(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:

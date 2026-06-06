@@ -164,6 +164,7 @@ from autoskill.services.compiler import (
 from autoskill.services.embedding_generation import (
     build_text_embedder_from_profile,
     build_text_embedder_from_settings,
+    embedding_provider_policy,
     generate_pending_embeddings,
 )
 from autoskill.services.evaluation_runner import run_pending_proposal_gates_with_trace
@@ -331,12 +332,13 @@ def _core_protocol_features() -> list[str]:
 
 def _core_degraded_features() -> list[str]:
     settings = get_settings()
+    embedding_policy = embedding_provider_policy(settings)
     degraded: list[str] = []
     if not settings.database_url:
         degraded.append("storage_plane")
     if not settings.llm_api_base_url:
         degraded.append("semantic_adjudication")
-    if settings.embedding_provider != "hash" and not settings.embedding_api_base_url:
+    if embedding_policy.degraded:
         degraded.append("embedding_generation")
     return degraded
 
@@ -2668,6 +2670,9 @@ def _embedder_from_profile(profile: object, settings: object):
             profile,
             embedding_api_key=getattr(settings, "embedding_api_key", None),
             embedding_api_base_url=getattr(settings, "embedding_api_base_url", None),
+            allow_degraded_hash=bool(
+                getattr(settings, "embedding_hash_provider_allowed", False)
+            ),
         )
     except ValueError as error:
         raise HTTPException(
@@ -2685,7 +2690,7 @@ async def _broker_semantic_embedder(
     active_profile = await profiles.get_active_embedding_profile(workspace_key=workspace_id)
     if active_profile is not None:
         return _embedder_from_profile(active_profile, settings), active_profile.profile_id
-    if getattr(settings, "embedding_provider", "hash") == "hash":
+    if embedding_provider_policy(settings).production_ready:
         return build_text_embedder_from_settings(settings), None
     return None, None
 
@@ -2745,6 +2750,9 @@ def _worker_stores(
         memory_governance=memory_governance,
         embedding_api_key=getattr(settings, "embedding_api_key", None),
         embedding_api_base_url=getattr(settings, "embedding_api_base_url", None),
+        embedding_hash_provider_allowed=bool(
+            getattr(settings, "embedding_hash_provider_allowed", False)
+        ),
         workspace_root=workspace_root,
         archive_root=archive_root,
         external_skill_roots=external_skill_roots,
@@ -3999,6 +4007,7 @@ def create_app(
     @app.get("/v1/capabilities", response_model=CoreCapabilitiesResponse)
     async def capabilities() -> CoreCapabilitiesResponse:
         settings = get_settings()
+        embedding_policy = embedding_provider_policy(settings)
         return CoreCapabilitiesResponse(
             **_core_protocol_payload(),
             capabilities={
@@ -4026,7 +4035,18 @@ def create_app(
                     "raw_capture_still_redacts_secrets": True,
                 },
                 "semantic_adjudication": True,
-                "embedding_generation": True,
+                "embedding_generation": embedding_policy.production_ready,
+                "embedding_profile_policy": {
+                    "provider": embedding_policy.provider,
+                    "production_ready": embedding_policy.production_ready,
+                    "degraded": embedding_policy.degraded,
+                    "reason_code": embedding_policy.reason_code,
+                    "jobs_paused": embedding_policy.jobs_paused,
+                    "supported_production_providers": [
+                        "openclaw",
+                        "openai_compatible",
+                    ],
+                },
                 "observatory_read_models": True,
                 "observatory_deltas": True,
                 "guarded_action_requests": True,
@@ -4070,6 +4090,7 @@ def create_app(
     @app.get("/v1/health/ready", response_model=CoreReadyResponse)
     async def health_ready() -> CoreReadyResponse:
         settings = get_settings()
+        embedding_policy = embedding_provider_policy(settings)
         checks = {
             "database_configured": bool(settings.database_url),
             "schema_migration_version": SCHEMA_MIGRATION_VERSION,
@@ -4078,14 +4099,28 @@ def create_app(
             "event_ingest_api": True,
             "scanner_evaluator_dependencies": True,
             "text_model_profile_configured": bool(settings.llm_api_base_url),
-            "embedding_profile_configured": (
-                settings.embedding_provider == "hash"
-                or bool(settings.embedding_api_base_url)
+            "embedding_profile_configured": embedding_policy.production_ready,
+            "embedding_profile_degraded": embedding_policy.degraded,
+            "embedding_dependent_jobs_paused": embedding_policy.jobs_paused,
+            "embedding_profile_ready_or_explicitly_degraded": (
+                embedding_policy.production_ready
+                or (embedding_policy.degraded and embedding_policy.jobs_paused)
             ),
+            "embedding_profile_degraded_reason": embedding_policy.reason_code,
+        }
+        ready_checks = {
+            key: value
+            for key, value in checks.items()
+            if key
+            not in {
+                "embedding_profile_configured",
+                "embedding_profile_degraded",
+                "embedding_profile_degraded_reason",
+            }
         }
         return CoreReadyResponse(
             **_core_protocol_payload(),
-            ready=all(bool(value) for value in checks.values()),
+            ready=all(bool(value) for value in ready_checks.values()),
             checks=checks,
         )
 
@@ -6266,6 +6301,9 @@ def create_app(
                 "redaction_state": "redacted_or_not_applicable",
             },
         }
+
+    def _llm_invocation_admin_record(record: Any) -> dict[str, Any]:
+        return _llm_invocation_microscope(record)
 
     def _evaluation_microscope(
         evaluation_id: str,
@@ -13023,6 +13061,69 @@ def create_app(
             )
         )
 
+    @app.get("/admin/api/v1/model-invocations", response_model=ObservatoryCollectionResponse)
+    async def observatory_model_invocations(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str = "default",
+        purpose: str | None = None,
+        profile_key: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        records = await llm_invocations.list_invocations(
+            workspace_key=workspace_id,
+            purpose=purpose,
+            profile_key=profile_key,
+            status=status,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="llm_invocation",
+            title="Model invocation audit",
+            items=[_llm_invocation_admin_record(record) for record in records],
+            limit=limit,
+            cursor=cursor,
+            source="llm_invocation_store.list_invocations",
+            diagnostics={
+                "filters": {
+                    "workspace_id": workspace_id,
+                    "purpose": purpose,
+                    "profile_key": profile_key,
+                    "status": status,
+                },
+                "raw_error_returned": False,
+                "raw_audit_payload_returned": False,
+                "prompt_returned": False,
+                "response_returned": False,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/model-invocations/{llm_invocation_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_model_invocation_detail(
+        llm_invocation_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str = "default",
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        invocation_uuid = _uuid_or_404(llm_invocation_id, "LLM invocation")
+        record = await llm_invocations.get_invocation(
+            workspace_key=workspace_id,
+            llm_invocation_id=invocation_uuid,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="LLM invocation not found",
+            )
+        return ObservatoryObjectResponse(object=_llm_invocation_admin_record(record))
+
     @app.get("/admin/api/v1/storage", response_model=ObservatoryObjectResponse)
     async def observatory_storage(
         authorization: Annotated[str | None, Header()] = None,
@@ -13711,6 +13812,9 @@ def create_app(
                 probe_set_version=request.probe_set_version
                 or "autoskill-embedding-profile-probes.v1",
                 embedding_api_key=getattr(get_settings(), "embedding_api_key", None),
+                allow_degraded_hash=bool(
+                    getattr(get_settings(), "embedding_hash_provider_allowed", False)
+                ),
             )
         except ProfileQualificationError as exc:
             raise HTTPException(
@@ -14904,7 +15008,7 @@ def create_app(
                     embedder = build_text_embedder_from_settings(settings)
                 except ValueError as error:
                     raise HTTPException(
-                        status_code=http_status.HTTP_400_BAD_REQUEST,
+                        status_code=http_status.HTTP_409_CONFLICT,
                         detail=str(error),
                     ) from error
                 embedding_model = request.embedding_model
@@ -14914,7 +15018,7 @@ def create_app(
                 embedder = build_text_embedder_from_settings(settings)
             except ValueError as error:
                 raise HTTPException(
-                    status_code=http_status.HTTP_400_BAD_REQUEST,
+                    status_code=http_status.HTTP_409_CONFLICT,
                     detail=str(error),
                 ) from error
             embedding_model = request.embedding_model
@@ -14988,6 +15092,9 @@ def create_app(
                 probe_set_version=request.probe_set_version
                 or "autoskill-embedding-production-validation.v1",
                 embedding_api_key=getattr(get_settings(), "embedding_api_key", None),
+                allow_degraded_hash=bool(
+                    getattr(get_settings(), "embedding_hash_provider_allowed", False)
+                ),
             )
         except ProfileQualificationError as exc:
             raise HTTPException(

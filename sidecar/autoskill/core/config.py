@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     llm_max_output_tokens: int = 8_000
     llm_timeout_ms: int = 180_000
     embedding_provider: str = "hash"
+    embedding_hash_provider_allowed: bool = False
     embedding_model: str = "autoskill-hash-embedding.v1"
     embedding_dim: int = 1536
     embedding_api_base_url: str | None = Field(
@@ -318,8 +319,49 @@ def effective_skillkernel_config(settings: Settings | None = None) -> dict[str, 
                     "distance_metric": "cosine",
                     "batch_size": resolved.embedding_batch_size,
                     "timeout_seconds": resolved.embedding_timeout_seconds,
-                    "hosted_allowed": resolved.embedding_provider != "hash",
-                    "local_only": resolved.embedding_provider == "hash",
+                    "production_ready": (
+                        resolved.embedding_provider == "openai_compatible"
+                        and bool(resolved.embedding_api_base_url)
+                        and bool(resolved.embedding_api_key)
+                    ),
+                    "degraded": (
+                        resolved.embedding_provider == "hash"
+                        or resolved.embedding_provider == "openclaw"
+                        or (
+                            resolved.embedding_provider == "openai_compatible"
+                            and not (
+                                resolved.embedding_api_base_url
+                                and resolved.embedding_api_key
+                            )
+                        )
+                        or resolved.embedding_provider not in {"openclaw", "openai_compatible"}
+                    ),
+                    "degraded_reason": (
+                        "hash_embedding_provider_test_mode"
+                        if resolved.embedding_provider == "hash"
+                        else (
+                            "embedding_endpoint_not_configured"
+                            if resolved.embedding_provider == "openai_compatible"
+                            and not (
+                                resolved.embedding_api_base_url
+                                and resolved.embedding_api_key
+                            )
+                            else (
+                                "openclaw_embedding_route_unavailable"
+                                if resolved.embedding_provider == "openclaw"
+                                else (
+                                    f"unsupported_embedding_provider:{resolved.embedding_provider}"
+                                    if resolved.embedding_provider
+                                    not in {"hash", "openai_compatible"}
+                                    else None
+                                )
+                            )
+                        )
+                    ),
+                    "jobs_paused_when_degraded": True,
+                    "hash_provider_allowed_for_test": resolved.embedding_hash_provider_allowed,
+                    "hosted_allowed": resolved.embedding_provider not in {"hash", "openclaw"},
+                    "local_only": resolved.embedding_provider in {"hash", "openclaw"},
                 },
             },
         },

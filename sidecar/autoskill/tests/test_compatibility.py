@@ -62,6 +62,7 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
     assert version.read_model_contract_version == "skillkernel.readmodels.v1"
     assert "guarded_action_requests" in version.features
     assert "semantic_adjudication" in version.degraded_features
+    assert "embedding_generation" in version.degraded_features
     assert capabilities.capabilities["ingest_contract"] == {
         "path": "/v1/ingest/events",
         "method": "POST",
@@ -77,6 +78,15 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
         "plugin_redacts_before_forward"
     ] is True
     assert capabilities.capabilities["redaction_policy"]["secret_redaction_required"] is True
+    assert capabilities.capabilities["embedding_generation"] is False
+    assert capabilities.capabilities["embedding_profile_policy"] == {
+        "provider": "hash",
+        "production_ready": False,
+        "degraded": True,
+        "reason_code": "hash_embedding_provider_test_mode",
+        "jobs_paused": True,
+        "supported_production_providers": ["openclaw", "openai_compatible"],
+    }
     assert capabilities.capabilities["topology_operations"] == [
         "create",
         "improve",
@@ -87,6 +97,11 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
     assert contract.contract["content_policy"]["live_stream_raw_content"] == "forbidden"
     assert ready.ready is False
     assert ready.checks["database_configured"] is False
+    assert ready.checks["embedding_profile_configured"] is False
+    assert ready.checks["embedding_profile_degraded"] is True
+    assert ready.checks["embedding_dependent_jobs_paused"] is True
+    assert ready.checks["embedding_profile_ready_or_explicitly_degraded"] is True
+    assert ready.checks["embedding_profile_degraded_reason"] == "hash_embedding_provider_test_mode"
     assert ready.checks["read_model_contract_version"] == "skillkernel.readmodels.v1"
 
     get_settings.cache_clear()

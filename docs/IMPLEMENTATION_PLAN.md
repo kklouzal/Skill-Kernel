@@ -3,6 +3,33 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Observatory model invocation audit records now have direct
+sidecar-hosted, content-safe collection/detail read models in addition to the
+generic object microscope. `LLMInvocationStore` lists recent invocation rows
+with workspace, purpose, profile, and status filters; admin routes expose
+`/admin/api/v1/model-invocations` and
+`/admin/api/v1/model-invocations/{llm_invocation_id}`; and the generated
+Observatory route catalog includes both paths. The projection preserves stable
+invocation, profile, provider/model, thinking, token, status, and trace
+metadata while hashing provider errors/request IDs and withholding prompts,
+responses, API keys, endpoint URLs, raw audit payloads, and cost analytics. The
+run also stabilized the embedding-provider hardening already present in the
+worktree: hash embeddings are explicit degraded/test mode, production
+embedding jobs require a configured production-ready profile, degraded
+embedding state is surfaced through readiness/capabilities/effective
+config/Observatory health, and hash profiles run only under the explicit
+test/dev allowance. This advances Core Sections 3.2-3.3, 10.4-10.5,
+28.1-28.2, and 31.48 plus Observatory Sections 8.18, 12.1, 12.6, 13.1, 16.1,
+and acceptance criteria 21.16 and 21.26. Focused validation passed with the
+LLM invocation route regression plus embedding fail-closed/profile/worker
+regressions (`13` focused tests) and targeted Ruff. Required gates also passed
+with full sidecar Ruff, full pytest (`411 passed`), compileall, diff-check,
+Observatory frontend build, generated OpenAPI client freshness check, core
+acceptance (`70` implemented), Observatory acceptance (`86` satisfied), and
+conformance (`14/14`). No compose/Postgres smoke was needed because no schema
+changed and the slice only adds bounded reads over existing invocation rows
+plus deterministic config/profile policy behavior.
+
 2026-06-06 update: Worker heartbeat summaries now carry content-safe
 `progress_plan` metadata for long semantic, topology, repair, historical,
 embedding, rollback, and writer jobs. The plan is static job-definition

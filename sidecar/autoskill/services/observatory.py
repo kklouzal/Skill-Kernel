@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from autoskill.core.config import Settings
+from autoskill.services.embedding_generation import embedding_provider_policy
 
 OBSERVATORY_SCHEMA_VERSION = "skillkernel.observatory.v1"
 LIVE_SCHEMA_VERSION = "skillkernel.observatory.live.v1"
@@ -1351,9 +1352,10 @@ def _component_snapshot(
             health = _worse(health, "degraded")
             reason_codes.append("queued-work-present")
     elif station.metric_family == "profiles":
-        if settings.embedding_provider != "hash" and not settings.embedding_api_base_url:
+        embedding_policy = embedding_provider_policy(settings)
+        if embedding_policy.degraded:
             health = _worse(health, "degraded")
-            reason_codes.append("embedding-endpoint-not-configured")
+            reason_codes.append(embedding_policy.reason_code or "embedding-profile-degraded")
     elif station.metric_family == "storage":
         if not status.get("database_configured"):
             health = "blocked"

@@ -5,7 +5,9 @@ import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import pytest
 from autoskill.api.app import ProfileQualificationRunRequest, create_app
+from autoskill.core.config import get_settings
 from autoskill.db.llm_invocations import LLMInvocationRecord
 from autoskill.db.profile_qualifications import NullProfileQualificationStore
 from autoskill.db.profiles import ModelProfileRecord
@@ -14,6 +16,13 @@ from autoskill.services.profile_qualification import (
     qualify_embedding_profile,
     qualify_text_profile,
 )
+
+
+@pytest.fixture(autouse=True)
+def clear_settings_cache():
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 class MemoryProfileStore:
@@ -146,10 +155,11 @@ def test_hash_embedding_profile_qualification_records_dimension_and_stability() 
 
     result = asyncio.run(run())
 
-    assert result.run.verdict == "qualified"
+    assert result.run.verdict == "failed"
     assert result.run.embedding_dim == 1536
+    assert result.run.probe_results["reason_code"] == "hash_embedding_provider_test_mode"
+    assert result.run.probe_results["checks"]["route_supported"] is False
     assert result.run.probe_results["checks"]["dimension_matches"] is True
-    assert result.run.probe_results["checks"]["stable_single"] is True
     assert qualifications.embedding_runs[0] == result.run
 
 
@@ -225,12 +235,41 @@ def test_openai_compatible_embedding_profile_qualification_probes_provider(
     assert qualifications.embedding_runs[0] == result.run
 
 
-def test_profile_qualification_api_routes_to_text_and_embedding_services() -> None:
+def test_profile_qualification_api_routes_to_text_and_embedding_services(monkeypatch) -> None:
     qualifications = NullProfileQualificationStore()
+    monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    class FakeResponse:
+        def __init__(self, embedding: list[float]) -> None:
+            self.embedding = embedding
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"data": [{"embedding": self.embedding}]}).encode()
+
+    def fake_urlopen(http_request, timeout=None):
+        _ = timeout
+        payload = json.loads(http_request.data.decode())
+        if payload["input"] == "unrelated negative sample":
+            return FakeResponse([0.0, 1.0, 0.0, 0.0])
+        return FakeResponse([1.0, 0.0, 0.0, 0.0])
+
+    monkeypatch.setattr("autoskill.services.embedding_generation.request.urlopen", fake_urlopen)
     app = create_app(
         profile_store=MemoryProfileStore(
             model_profile=_model_profile(),
-            embedding_profile=_model_profile(kind="embedding"),
+            embedding_profile=_model_profile(
+                kind="embedding",
+                route_kind="openai_compatible",
+                embedding_dim=4,
+            ),
         ),
         profile_qualification_store=qualifications,
         llm_client=FakeLLMClient(),
