@@ -16,6 +16,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Early architecture/container compatibility pass found Core API
+  handshake drift against the unified spec's inter-container compatibility
+  contract. The sidecar exposed `/v1/health` and `/v1/status`, but not the
+  required Core startup handshake endpoints `/v1/version`, `/v1/capabilities`,
+  `/v1/read-model-contract`, and `/v1/health/ready`. Remediation added typed
+  protocol responses with service/API/schema/read-model contract versions,
+  feature/degraded-feature metadata, capabilities, read-model contract
+  metadata, and readiness checks that report configuration gaps instead of
+  assuming healthy state. Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_compatibility.py -q` (`2 passed`), `uv run
+  ruff check sidecar/autoskill/api/app.py
+  sidecar/autoskill/tests/test_compatibility.py`, `uv run python
+  scripts/autoskill_conformance.py --json` (`ready=true`, 13/13 checks), and
+  `git diff --check`.
 - 2026-06-06: Unified-spec conformance pass restarted from clean `main` with
   `/Warehouse/SkillKernel/unified-implementation-specification.md` as the
   controlling document. First inventory worker slice

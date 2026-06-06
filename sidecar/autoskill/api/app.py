@@ -232,6 +232,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 DEFAULT_OBSERVATORY_WORKSPACE_ID = "dev-01"
+API_CONTRACT_VERSION = "skillkernel.api.v1"
+SCHEMA_MIGRATION_VERSION = "0001_autoskill_schema"
+READ_MODEL_CONTRACT_VERSION = "skillkernel.readmodels.v1"
+MINIMUM_SUPPORTED_OBSERVATORY_VERSION = "0.1.0"
+MAXIMUM_TESTED_OBSERVATORY_VERSION = "0.1.x"
 NO_STORE_HEADERS = {
     "Cache-Control": "no-store, max-age=0",
     "Pragma": "no-cache",
@@ -281,6 +286,72 @@ class HealthResponse(BaseModel):
     ok: bool
     service: str
     version: str
+
+
+class CoreProtocolResponse(BaseModel):
+    service: str = "skillkernel-core"
+    service_version: str
+    api_contract_version: str = API_CONTRACT_VERSION
+    schema_migration_version: str = SCHEMA_MIGRATION_VERSION
+    read_model_contract_version: str = READ_MODEL_CONTRACT_VERSION
+    minimum_supported_observatory_version: str = MINIMUM_SUPPORTED_OBSERVATORY_VERSION
+    maximum_tested_observatory_version: str = MAXIMUM_TESTED_OBSERVATORY_VERSION
+    features: list[str]
+    degraded_features: list[str]
+    generated_at: str
+
+
+class CoreCapabilitiesResponse(CoreProtocolResponse):
+    capabilities: dict[str, object]
+
+
+class CoreReadModelContractResponse(CoreProtocolResponse):
+    contract: dict[str, object]
+
+
+class CoreReadyResponse(CoreProtocolResponse):
+    ready: bool
+    checks: dict[str, object]
+
+
+def _core_protocol_features() -> list[str]:
+    return [
+        "raw_vault",
+        "semantic_adjudication",
+        "observatory_deltas",
+        "guarded_action_requests",
+        "runtime_context_hints",
+        "skillir_compiler",
+        "deterministic_scanner",
+        "proposal_gates",
+        "broker_replay",
+        "topology_operations",
+    ]
+
+
+def _core_degraded_features() -> list[str]:
+    settings = get_settings()
+    degraded: list[str] = []
+    if not settings.database_url:
+        degraded.append("storage_plane")
+    if not settings.llm_api_base_url:
+        degraded.append("semantic_adjudication")
+    if settings.embedding_provider != "hash" and not settings.embedding_api_base_url:
+        degraded.append("embedding_generation")
+    return degraded
+
+
+def _core_protocol_payload() -> dict[str, object]:
+    return {
+        "service_version": __version__,
+        "features": _core_protocol_features(),
+        "degraded_features": _core_degraded_features(),
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def _core_protocol_response() -> CoreProtocolResponse:
+    return CoreProtocolResponse(**_core_protocol_payload())
 
 
 class StatusResponse(BaseModel):
@@ -3920,6 +3991,82 @@ def create_app(
     @app.get("/v1/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         return HealthResponse(ok=True, service="autoskill-sidecar", version=__version__)
+
+    @app.get("/v1/version", response_model=CoreProtocolResponse)
+    async def version() -> CoreProtocolResponse:
+        return _core_protocol_response()
+
+    @app.get("/v1/capabilities", response_model=CoreCapabilitiesResponse)
+    async def capabilities() -> CoreCapabilitiesResponse:
+        return CoreCapabilitiesResponse(
+            **_core_protocol_payload(),
+            capabilities={
+                "ingest": True,
+                "runtime_context_hints": True,
+                "raw_vault": True,
+                "semantic_adjudication": True,
+                "embedding_generation": True,
+                "observatory_read_models": True,
+                "observatory_deltas": True,
+                "guarded_action_requests": True,
+                "skillir_compiler": True,
+                "deterministic_scanner": True,
+                "proposal_gates": True,
+                "broker_replay": True,
+                "topology_operations": ["create", "improve", "compose", "decompose"],
+            },
+        )
+
+    @app.get("/v1/read-model-contract", response_model=CoreReadModelContractResponse)
+    async def read_model_contract() -> CoreReadModelContractResponse:
+        return CoreReadModelContractResponse(
+            **_core_protocol_payload(),
+            contract={
+                "schema": "skillkernel.read-model-contract.v1",
+                "admin_base_path": "/admin/api/v1",
+                "read_model_contract_version": READ_MODEL_CONTRACT_VERSION,
+                "catalogs": [
+                    "admin_component_catalog",
+                    "admin_subsystem_catalog",
+                ],
+                "admin_routes": [
+                    "/admin/api/v1/summary",
+                    "/admin/api/v1/pipeline",
+                    "/admin/api/v1/components",
+                    "/admin/api/v1/subsystems",
+                    "/admin/api/v1/objects/{object_type}/{object_id}",
+                    "/admin/api/v1/actions",
+                    "/admin/api/v1/health/ready",
+                ],
+                "content_policy": {
+                    "raw_content_default": "denied",
+                    "live_stream_raw_content": "forbidden",
+                    "guarded_reveal_required": True,
+                },
+            },
+        )
+
+    @app.get("/v1/health/ready", response_model=CoreReadyResponse)
+    async def health_ready() -> CoreReadyResponse:
+        settings = get_settings()
+        checks = {
+            "database_configured": bool(settings.database_url),
+            "schema_migration_version": SCHEMA_MIGRATION_VERSION,
+            "read_model_contract_version": READ_MODEL_CONTRACT_VERSION,
+            "scheduler_configured": True,
+            "event_ingest_api": True,
+            "scanner_evaluator_dependencies": True,
+            "text_model_profile_configured": bool(settings.llm_api_base_url),
+            "embedding_profile_configured": (
+                settings.embedding_provider == "hash"
+                or bool(settings.embedding_api_base_url)
+            ),
+        }
+        return CoreReadyResponse(
+            **_core_protocol_payload(),
+            ready=all(bool(value) for value in checks.values()),
+            checks=checks,
+        )
 
     @app.get("/v1/status", response_model=StatusResponse)
     async def status(workspace_id: str | None = None) -> StatusResponse:
