@@ -28,7 +28,10 @@ from autoskill.db.scheduler import AsyncpgSchedulerStore
 from autoskill.db.topology import AsyncpgTopologyStore
 from autoskill.db.usage import AsyncpgUsageStore
 from autoskill.db.utility import AsyncpgUtilityStore
-from autoskill.services.embedding_generation import build_text_embedder_from_settings
+from autoskill.services.embedding_generation import (
+    build_text_embedder_from_settings,
+    embedding_provider_policy,
+)
 from autoskill.services.external_inventory import ensure_external_skill_scan_schedule
 from autoskill.services.historical_discovery import (
     ensure_historical_discovery_schedule,
@@ -178,6 +181,10 @@ async def run_worker(args: argparse.Namespace) -> int:
             max_files=historical_import_max_files,
             max_bytes=historical_import_max_bytes,
         )
+        embedding_policy = embedding_provider_policy(settings)
+        settings_embedder = None
+        if embedding_policy.production_ready or settings.embedding_hash_provider_allowed:
+            settings_embedder = build_text_embedder_from_settings(settings)
         summary = await run_worker_loop(
             WorkerStores(
                 jobs=jobs,
@@ -202,9 +209,10 @@ async def run_worker(args: argparse.Namespace) -> int:
                 memory_governance=memory_governance,
                 observability=observability,
                 profiles=profiles,
-                embedder=build_text_embedder_from_settings(settings),
+                embedder=settings_embedder,
                 embedding_api_key=settings.embedding_api_key,
                 embedding_api_base_url=settings.embedding_api_base_url,
+                embedding_hash_provider_allowed=settings.embedding_hash_provider_allowed,
                 workspace_root=workspace_root,
                 archive_root=archive_root,
                 external_skill_roots=args.external_skill_root,

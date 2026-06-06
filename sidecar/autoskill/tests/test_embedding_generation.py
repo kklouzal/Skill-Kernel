@@ -244,7 +244,14 @@ def test_openai_compatible_embedder_posts_embedding_request(monkeypatch) -> None
 def test_generate_pending_embeddings_upserts_all_sources() -> None:
     store = MemoryPendingEmbeddingStore()
 
-    result = asyncio.run(generate_pending_embeddings(store, workspace_key="dev-01", limit=10))
+    result = asyncio.run(
+        generate_pending_embeddings(
+            store,
+            embedder=HashingTextEmbedder(model="unit-test-hash"),
+            workspace_key="dev-01",
+            limit=10,
+        )
+    )
 
     assert result.scanned == 2
     assert result.generated == 2

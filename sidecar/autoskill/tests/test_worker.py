@@ -56,8 +56,10 @@ def test_worker_main_wires_profiles_for_active_embedding_jobs() -> None:
 
     assert "AsyncpgProfileStore" in source
     assert "profiles=profiles" in source
+    assert "embedding_provider_policy(settings)" in source
     assert "embedding_api_key=settings.embedding_api_key" in source
     assert "embedding_api_base_url=settings.embedding_api_base_url" in source
+    assert "embedding_hash_provider_allowed=settings.embedding_hash_provider_allowed" in source
 
 
 class MemoryEvidenceWorkerStore:
@@ -614,6 +616,7 @@ class WorkerTestStores:
     audit: MemoryAuditWorkerStore | None = None
     embedding_api_key: str | None = None
     embedding_api_base_url: str | None = None
+    embedding_hash_provider_allowed: bool = False
 
     def as_worker_stores(self) -> WorkerStores:
         return WorkerStores(
@@ -627,7 +630,7 @@ class WorkerTestStores:
             audit=self.audit,
             embedding_api_key=self.embedding_api_key,
             embedding_api_base_url=self.embedding_api_base_url,
-            embedding_hash_provider_allowed=True,
+            embedding_hash_provider_allowed=self.embedding_hash_provider_allowed,
         )
 
 
@@ -950,6 +953,44 @@ def test_worker_pool_does_not_claim_other_pool_jobs() -> None:
 
     assert result.status == "idle"
     assert result.claimed is False
+
+
+def test_worker_embedding_generate_pauses_without_active_embedding_profile() -> None:
+    stores = WorkerTestStores(
+        jobs=MemoryJobStore(),
+        scheduler=MemorySchedulerWorkerStore(),
+        evidence=MemoryEvidenceWorkerStore(),
+        embeddings=MemoryPendingEmbeddingStore(),
+    )
+
+    async def run():
+        await stores.jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="embeddings.generate",
+            idempotency_key="embed:no-profile",
+            payload={"workspace_id": "dev-01", "limit": 1},
+        )
+        return await run_worker_once(
+            stores.as_worker_stores(),
+            worker_id="worker-1",
+            pool="maintenance",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output == {
+        "status": "paused",
+        "reason_code": "embedding_profile_unavailable",
+        "detail": (
+            "embedding generation requires a qualified active embedding profile "
+            "or an explicitly supplied worker embedder"
+        ),
+        "generated": 0,
+        "embedding_model": None,
+        "embedding_profile_id": None,
+    }
+    assert stores.embeddings.upserts == []
 
 
 def test_worker_embedding_generate_uses_qualified_embedding_profile(monkeypatch) -> None:

@@ -254,7 +254,9 @@ async def generate_pending_embeddings(
     workspace_key: str | None = None,
     limit: int = 100,
 ) -> EmbeddingGenerationResult:
-    selected_embedder = embedder or HashingTextEmbedder()
+    if embedder is None:
+        raise ValueError("embedding generation requires an explicit text embedder")
+    selected_embedder = embedder
     model = embedding_model or selected_embedder.model
     sources = await store.list_unembedded_sources(
         embedding_model=model,
