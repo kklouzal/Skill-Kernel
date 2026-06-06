@@ -16,6 +16,29 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory guarded actions now require a non-empty audit
+  reason before any action audit, attribution check, audit-chain row, or live
+  event is recorded. The shared action recorder enforces the requirement for
+  both `/admin/api/v1/actions` and every registered guarded-action alias, while
+  the regression proves blank reasons fail closed with no side effects. This
+  advances Observatory Sections 12.1, 12.6, and 16.1 plus acceptance criterion
+  21.29 by making operator action auditability deterministic without adding
+  UI-local control authority or runtime apply behavior. Focused validation
+  passed with `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py -q -k
+  'action_requires_audit_reason or
+  action_idempotency_replays_existing_audit_without_side_effects or
+  action_audit_read_model_exposes_receipts_without_raw_content'` (`3 passed,
+  61 deselected`) and targeted Ruff. Required gates passed with `uv run ruff
+  check sidecar`, `uv run pytest` (`422 passed`), `uv run python -m compileall
+  -q sidecar`, and `git diff --check`. Acceptance/conformance reports also
+  passed with `uv run python scripts/autoskill_acceptance.py --json`
+  (`ready=true`, `70` implemented), `uv run python
+  scripts/autoskill_observatory_acceptance.py --json` (`ready=true`, `86`
+  satisfied), and `uv run python scripts/autoskill_conformance.py --json`
+  (`ready=true`, `23/23`). No compose/Postgres smoke was required because the
+  slice changes pre-persistence route admission and in-memory action-store tests
+  verify that no rows/events are written on rejection.
 - 2026-06-06: Reference compose/operator access now follows the
   split-container Observatory contract after the Core/Observatory route split.
   The Observatory service is attached to the same runtime networks as Core so

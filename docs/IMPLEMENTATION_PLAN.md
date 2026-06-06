@@ -3,6 +3,21 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Observatory guarded action admission now fails closed unless
+the request includes a non-empty audit reason. The shared action recorder
+enforces the audit-reason requirement for both `/admin/api/v1/actions` and all
+registered guarded-action aliases before recording action audits, attribution
+checks, audit-chain rows, or live events. This advances Observatory Sections
+12.1, 12.6, and 16.1 plus acceptance criterion 21.29 by making operator action
+auditability deterministic without adding UI-local control authority or runtime
+apply behavior. Focused validation passed with the guarded-action regression
+(`3 passed, 61 deselected`) and targeted Ruff. Required gates passed with full
+sidecar Ruff, full pytest (`422 passed`), compileall, diff-check, core
+acceptance (`70` implemented), Observatory acceptance (`86` satisfied), and
+conformance (`23/23`). No compose/Postgres smoke was required because this is a
+pre-persistence route-admission change covered by in-memory action-store tests
+that verify no audit/action/live-event rows are written on rejection.
+
 2026-06-06 update: Reference compose/operator access now matches the
 split-container Observatory route split. The Observatory service is attached
 to the same runtime networks as Core so it can reach the shared Postgres/read

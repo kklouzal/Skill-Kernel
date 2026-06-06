@@ -9538,6 +9538,11 @@ def create_app(
             bucket="admin-actions",
             limit=ADMIN_ACTION_RATE_LIMIT,
         )
+        if not (request.reason or "").strip():
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="reason is required",
+            )
         allowed_actions = {
             "noop.audit",
             "refresh_snapshot",

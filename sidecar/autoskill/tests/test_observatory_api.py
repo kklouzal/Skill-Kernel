@@ -5371,6 +5371,33 @@ def test_observatory_action_idempotency_replays_existing_audit_without_side_effe
     assert len(audit_store.records) == 1
 
 
+def test_observatory_action_requires_audit_reason_before_recording() -> None:
+    audit_store = MemoryAuditStore()
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(audit_store=audit_store, observatory_admin_store=observatory_admin)
+    route = _routes(app)[("/admin/api/v1/actions", "POST")]
+
+    async def run():
+        return await route.endpoint(
+            http_request=None,
+            request=ObservatoryActionRequest(
+                workspace_id="dev-01",
+                action="verify_audit_chain",
+                idempotency_key="obs-missing-reason",
+                reason=" ",
+            ),
+        )
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(run())
+
+    assert error.value.status_code == 400
+    assert error.value.detail == "reason is required"
+    assert observatory_admin.actions == []
+    assert observatory_admin.live_events == []
+    assert audit_store.records == []
+
+
 def test_observatory_raw_reveal_action_fails_closed_by_default() -> None:
     observatory_admin = NullObservatoryAdminStore()
     app = create_app(audit_store=MemoryAuditStore(), observatory_admin_store=observatory_admin)
