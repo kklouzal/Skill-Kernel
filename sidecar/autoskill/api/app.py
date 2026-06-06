@@ -5372,6 +5372,32 @@ def create_app(
                 return item
         return None
 
+    def _component_metrics_microscope(
+        component_id: str,
+        component: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": "skillkernel.observatory.component-metrics.v1",
+            "object_type": "component_metrics",
+            "object_id": component_id,
+            "title": f"{component_id} metrics",
+            "summary": "Component signal contract, bounded records, and data-quality state.",
+            "metrics": component.get("signal_contract", {}) if component else {},
+            "records": component.get("records", []) if component else [],
+            "diagnostics": component
+            or _missing_read_model("component_metrics", supporting_component=component_id),
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "redacted_or_not_applicable",
+            },
+            "provenance": {
+                "upstream": [{"object_type": "component", "object_id": component_id}],
+                "downstream": [],
+            },
+            "audit": {"links": [], "chain_visible": True},
+        }
+
     def _skill_microscope(
         skill_id: str,
         skill: dict[str, Any] | None,
@@ -8984,19 +9010,7 @@ def create_app(
             ("component_id",),
         )
         return ObservatoryObjectResponse(
-            object={
-                "schema_version": "skillkernel.observatory.component-metrics.v1",
-                "object_type": "component_metrics",
-                "object_id": component_id,
-                "metrics": component.get("signal_contract", {}) if component else {},
-                "records": component.get("records", []) if component else [],
-                "diagnostics": component
-                or _missing_read_model("component_metrics", supporting_component=component_id),
-                "content_policy": {
-                    "raw_available": False,
-                    "raw_reason": "raw-content-disabled",
-                },
-            }
+            object=_component_metrics_microscope(component_id, component)
         )
 
     @app.get("/admin/api/v1/issues", response_model=ObservatorySnapshotResponse)
@@ -9545,6 +9559,25 @@ def create_app(
             action = await observatory_admin.get_action_audit(action_id=action_id)
             if action is not None:
                 return ObservatoryObjectResponse(object=_admin_action_microscope(action))
+        if object_type in {
+            "component_metrics",
+            "component-metrics",
+            "station_metrics",
+            "station-metrics",
+        }:
+            snapshot = await _observatory_snapshot(
+                workspace_id=workspace_id,
+                window_minutes=window_minutes,
+            )
+            component = _find_by_id(
+                list(snapshot["pipeline"]["stations"]),  # type: ignore[index]
+                object_id,
+                ("component_id",),
+            )
+            if component is not None:
+                return ObservatoryObjectResponse(
+                    object=_component_metrics_microscope(object_id, component)
+                )
         if object_type in {"job", "scheduler_job", "sidecar_job"}:
             listed = [
                 job.to_json()

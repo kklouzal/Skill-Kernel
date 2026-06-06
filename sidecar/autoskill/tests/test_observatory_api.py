@@ -616,6 +616,40 @@ def test_observatory_summary_defaults_to_effective_workspace(
     get_settings.cache_clear()
 
 
+def test_observatory_component_metrics_generic_object_uses_same_read_model() -> None:
+    app = create_app(audit_store=MemoryAuditStore())
+    route = _routes(app)[("/admin/api/v1/components/{component_id}/metrics", "GET")]
+    generic_route = _routes(app)[("/admin/api/v1/objects/{object_type}/{object_id}", "GET")]
+
+    async def run():
+        dedicated = await route.endpoint(
+            component_id="retrieval_indexing",
+            workspace_id="dev-01",
+            window_minutes=30,
+        )
+        generic = await generic_route.endpoint(
+            object_type="component_metrics",
+            object_id="retrieval_indexing",
+            workspace_id="dev-01",
+            window_minutes=30,
+        )
+        return dedicated, generic
+
+    dedicated, generic = asyncio.run(run())
+
+    assert generic.object["schema_version"] == "skillkernel.observatory.component-metrics.v1"
+    assert generic.object["object_type"] == "component_metrics"
+    assert generic.object["object_id"] == "retrieval_indexing"
+    assert generic.object["metrics"] == dedicated.object["metrics"]
+    assert generic.object["records"] == dedicated.object["records"]
+    assert generic.object["diagnostics"]["component_id"] == "retrieval_indexing"
+    assert generic.object["content_policy"]["raw_available"] is False
+    assert generic.object["content_policy"]["redaction_state"] == "redacted_or_not_applicable"
+    assert generic.object["provenance"]["upstream"] == [
+        {"object_type": "component", "object_id": "retrieval_indexing"}
+    ]
+
+
 def test_status_defaults_to_effective_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AUTOSKILL_WORKSPACE_ID", "prod-ops")
     get_settings.cache_clear()
