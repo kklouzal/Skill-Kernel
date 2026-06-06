@@ -312,6 +312,36 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
     ),
     AcceptanceCriterion(
         "31.33",
+        "No active SkillKernel-owned skill exists without a complete data-to-skill trace from source record through evidence packet, operation plan, SkillIR/SkillGraphIR revision, artifact plan, compiled package, evaluation verdict, evolution transaction, broker registration, and rollback pointer.",
+        (
+            "topology operations persist content-safe data_to_skill_trace metrics on evolution transactions",
+            "Observatory transaction and topology read models expose data_to_skill_trace stages",
+            "sidecar/autoskill/tests/test_topology_services.py",
+            "sidecar/autoskill/tests/test_observatory_api.py",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.34",
+        "Seeded datasets prove the bridge can produce create, improve, compose, and decompose proposals without bypassing scanner/evaluator/token/security gates.",
+        (
+            "topology proposal fixtures cover create, improve, compose, and decompose operation classes",
+            "historical bootstrap fixtures seed improve, compose, and decompose recommendations as propose-only candidates",
+            "sidecar/autoskill/tests/test_topology_services.py",
+            "sidecar/autoskill/tests/test_historical_bootstrap.py",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.35",
+        "Every bridge stage has inspectable input IDs, output IDs, status, reason code, and non-skill failure exit.",
+        (
+            "data_to_skill_trace stages include name/status/reason_codes/input_refs/output_refs/failure_exit",
+            "safe Observatory projections preserve trace stages without raw content",
+            "sidecar/autoskill/services/topology.py",
+            "sidecar/autoskill/tests/test_topology_services.py",
+        ),
+    ),
+    AcceptanceCriterion(
+        "31.36",
         "Every context-loadable artifact has registry row, token count, budget, content hash, compiler version, scanner status, and provenance.",
         (
             "context_artifacts and context_compile_runs tables",
@@ -320,7 +350,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.34",
+        "31.37",
         "Every compressed description passes positive/negative routing-equivalence tests.",
         (
             "description minimization/equivalence metadata",
@@ -329,7 +359,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.35",
+        "31.38",
         "Every compressed body passes information-preservation and regression gates.",
         (
             "context compiler semantic equivalence gate",
@@ -338,7 +368,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.36",
+        "31.39",
         "Every support snippet has classification, budget, scan result, and retrieval boundary.",
         (
             "support artifact manifest load_policy and context registration",
@@ -347,7 +377,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.37",
+        "31.40",
         "Context-value-per-token is measured and can drive archive, compose, decompose, or no-skill decisions.",
         (
             "context token ledger outcome updates",
@@ -356,7 +386,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.38",
+        "31.41",
         "Historical datasource discovery works across configured agents without crossing agent/workspace boundaries.",
         (
             "historical_import.discover bounded configured-root scanning",
@@ -365,7 +395,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.39",
+        "31.42",
         "Historical import supports the required source families.",
         (
             "historical discovery classifiers cover sessions, transcripts, trajectories, summaries, memory/context, tasks, plugin state, queued injections, active-memory, diagnostics/media, and skills",
@@ -374,7 +404,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.40",
+        "31.43",
         "Every historical import row has provenance, fingerprint, parser version, redaction version, trust, and taint.",
         (
             "historical_import_sources/chunks schema",
@@ -383,7 +413,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.41",
+        "31.44",
         "Historical raw content is never embedded, indexed for LLM analysis, or compiled before redaction.",
         (
             "historical chunk recording stores redaction metadata",
@@ -392,7 +422,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.42",
+        "31.45",
         "Historical candidates use the same create/improve/compose/decompose gates as live candidates.",
         (
             "historical bootstrap consolidation calls the normal candidate persistence path",
@@ -401,7 +431,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.43",
+        "31.46",
         "Historical source revocation traverses derived chunks, embeddings, evidence, memories, candidates, probes, broker caches, and compiled artifacts.",
         (
             "historical source revoke endpoint queues revocation traversal",
@@ -410,7 +440,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.44",
+        "31.47",
         "Established deployments can run a bounded bootstrap import without degrading normal OpenClaw runtime behavior.",
         (
             "historical import low-priority worker pool and byte/session/file limits",
@@ -419,17 +449,18 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.45",
-        "Replay-corpus candidates can be promoted automatically from eligible telemetry without requiring an operator-authored replay plan in the normal path.",
+        "31.48",
+        "Replay-corpus candidates can be promoted automatically from raw-vault-linked telemetry by synthesizing redacted_user_intent through LLM adjudication plus deterministic validation, without requiring a preauthored administrative replay plan in the normal path.",
         (
             "/v1/broker/replay-episodes/synthesize can synthesize redacted intent from content-safe retrieval telemetry",
             "synthesis requires eligible evidence fidelity and deterministic validation pass",
+            "broker_replay_episodes metadata stores provenance, exposure policy, deterministic validation, and raw_prompt_stored=false",
             "test_broker_policy_synthesizes_missing_intent_from_safe_retrieval_context",
             "test_broker_policy_synthesis_repairs_stale_telemetry_episode_decision",
         ),
     ),
     AcceptanceCriterion(
-        "31.46",
+        "31.49",
         "Hash-only telemetry is treated as degraded evidence and cannot silently support full-autonomy replay/canary claims.",
         (
             "replay synthesis skips hash_only and metadata_only evidence-fidelity tiers",
@@ -438,7 +469,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.47",
+        "31.50",
         "Memory quarantine can resolve high-confidence safe/unsafe records autonomously and escalates only policy, contradiction, or low-confidence cases.",
         (
             "memory governance store and action routes expose taint/status/provenance safely",
@@ -447,7 +478,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.48",
+        "31.51",
         "Every LLM adjudication record stores evidence identity, exposure level, declassification state, confidence, deterministic checks, decision, and escalation reason.",
         (
             "LLM invocation and trace-spine records link model calls to safe attributes and object refs",
@@ -457,7 +488,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.49",
+        "31.52",
         "Raw-prompt retention disabled remains functional while surfacing limited autonomy and reduced replay/canary evidence confidence.",
         (
             "raw_content_available=false is explicit in Observatory data quality and content policy",
@@ -466,7 +497,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.50",
+        "31.53",
         "Soft-threshold misses trigger autonomous alternatives before administrative escalation.",
         (
             "autonomy orchestrator and playbook detail expose fallback actions and blocked-policy actions",
@@ -475,7 +506,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.51",
+        "31.54",
         "Hard invariants are separate from adaptive soft thresholds in code, database state, UI, and acceptance reports.",
         (
             "scanner/evaluator/writer gates remain deterministic hard blockers",
@@ -484,7 +515,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.52",
+        "31.55",
         "Threshold-deadlock detection and evaluated remediation are represented as first-class diagnostic states.",
         (
             "issue board and guided playbooks expose stalled decision reason codes and safe next actions",
@@ -493,7 +524,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.53",
+        "31.56",
         "Composite confidence records include model confidence, evidence coverage, source fidelity, contradiction, scanner/evaluator, reversibility, canary, and calibration support.",
         (
             "autonomy assurance dashboards expose confidence, evidence, fallback, and calibration fields",
@@ -502,7 +533,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.54",
+        "31.57",
         "Near-margin accepted decisions move to canary, ephemeral, narrower activation, or more-probe states without defaulting to admin when hard gates pass.",
         (
             "broker canary feedback records critical/degraded/pass state and rollback recommendations",
@@ -511,7 +542,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.55",
+        "31.58",
         "Every semantic decision family has calibration observations, delayed outcomes, and reliability metrics visible for operation.",
         (
             "Observatory model/profile, replay, canary, and autonomy assurance read models",
@@ -520,7 +551,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.56",
+        "31.59",
         "Soft-threshold policy versions pass replay/backtest/shadow/canary evidence before activation.",
         (
             "broker policy replay and stored replay corpus endpoints",
@@ -529,7 +560,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.57",
+        "31.60",
         "Adaptive thresholding cannot weaken hard safety, privacy, rollback, scanner, evaluator, filesystem, or audit invariants.",
         (
             "synthesis and action routes require deterministic validation and control auth",
@@ -538,7 +569,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.58",
+        "31.61",
         "High-impact runtime changes use risk tiering, verifier/probe coverage, canary, and rollback rather than default administrative escalation.",
         (
             "activation gates require scanner/evaluator/proposal states",
@@ -547,7 +578,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.59",
+        "31.62",
         "Administrative escalation is reason-coded and cannot be represented merely as a failed soft threshold.",
         (
             "administrative_escalation station, issue board reason codes, and playbook detail",
@@ -556,43 +587,12 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         ),
     ),
     AcceptanceCriterion(
-        "31.60",
+        "31.63",
         "Observatory exposes calibration support, reliability metrics, threshold-deadlock state, and reason codes for stalled decisions.",
         (
             "observatory autonomy acceptance criteria 21.23 and developer checklist autonomy items",
             "playbook signal state includes confidence, issue links, warnings, and actions",
             "scripts/autoskill_observatory_acceptance.py",
-        ),
-    ),
-    AcceptanceCriterion(
-        "31.61",
-        "Replay synthesis stores provenance, exposure policy, deterministic validation, and source retrieval log links for automatically derived episodes.",
-        (
-            "BrokerReplayEpisodeSynthesizeResponse returns episodes and skip reasons",
-            "broker_replay_episodes.metadata includes source, evidence_fidelity, validation, and raw_prompt_stored=false",
-            "test_broker_policy_synthesizes_missing_intent_from_safe_retrieval_context",
-            "test_broker_policy_synthesis_repairs_stale_telemetry_episode_decision",
-        ),
-    ),
-    AcceptanceCriterion(
-        "31.62",
-        "Automatically synthesized replay episodes are immediately usable by normal broker replay/canary evaluation.",
-        (
-            "synthesized episodes are stored through BrokerPolicyStore.record_replay_episode",
-            "stale telemetry-derived episodes are repaired by source retrieval log on synthesis rerun",
-            "BrokerPolicyReplayRequest include_stored_episodes consumes telemetry-derived tags",
-            "test_broker_policy_synthesizes_replay_episodes_from_redacted_telemetry",
-            "test_broker_policy_synthesizes_missing_intent_from_safe_retrieval_context",
-            "test_broker_policy_synthesis_repairs_stale_telemetry_episode_decision",
-        ),
-    ),
-    AcceptanceCriterion(
-        "31.63",
-        "New implementation-spec criteria are covered by executable acceptance crosswalks rather than informal ledger claims.",
-        (
-            "scripts/autoskill_acceptance.py covers production criteria 31.1 through 31.63",
-            "sidecar/autoskill/tests/test_acceptance_report.py asserts the current criterion count",
-            "uv run python scripts/autoskill_acceptance.py --json",
         ),
     ),
 )

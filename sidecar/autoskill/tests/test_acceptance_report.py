@@ -27,3 +27,23 @@ def test_production_acceptance_report_maps_every_concrete_criterion() -> None:
     )
     assert all(item["evidence"] for item in report["production_criteria"])
     assert all(item["evidence"] for item in report["context_criteria"])
+
+
+def test_production_acceptance_ids_match_current_spec_sequence() -> None:
+    report = acceptance.build_report()
+    criteria = {
+        item["criterion_id"]: item["text"] for item in report["production_criteria"]
+    }
+
+    assert list(criteria) == [f"31.{index}" for index in range(1, 64)]
+    assert criteria["31.33"].startswith(
+        "No active SkillKernel-owned skill exists without a complete data-to-skill trace"
+    )
+    assert "Seeded datasets prove the bridge" in criteria["31.34"]
+    assert "Every bridge stage has inspectable input IDs" in criteria["31.35"]
+    assert criteria["31.36"].startswith("Every context-loadable artifact")
+    assert criteria["31.63"].startswith("Observatory exposes calibration support")
+    assert not any(
+        item["text"].startswith("New implementation-spec criteria")
+        for item in report["production_criteria"]
+    )

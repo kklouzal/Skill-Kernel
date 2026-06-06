@@ -16,6 +16,27 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Production acceptance traceability now matches the current
+  unified specification after the Part I Section 31 bridge criteria shifted.
+  `scripts/autoskill_acceptance.py` now maps criteria `31.33` through `31.35`
+  to the required data-to-skill trace, seeded bridge proposal fixtures, and
+  inspectable bridge-stage contract, renumbers the context/artifact and
+  autonomy criteria to the specification's current sequence, and removes the
+  previous non-spec meta criterion. `test_acceptance_report.py` now locks the
+  `31.1` through `31.63` production criterion sequence and checks the
+  data-to-skill trace, seeded bridge, bridge-stage, context-artifact, and
+  final Observatory autonomy rows so future specification drift is caught.
+  This advances Part I Section 31, Part VI traceability/conformance semantics,
+  and the final verification requirement that acceptance tooling assert
+  specification behavior rather than old implementation-state text. Focused
+  validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_acceptance_report.py -q` (`2 passed`), `uv run
+  python scripts/autoskill_acceptance.py --json` (`ready=true`, `70`
+  implemented), topology trace-focused tests (`3 passed, 15 deselected`), and
+  targeted Ruff. Required gates passed with `uv run ruff check sidecar
+  scripts`, `uv run pytest` (`423 passed`), `uv run python -m compileall -q
+  sidecar scripts`, `git diff --check`, and the conformance, acceptance,
+  readiness, and Observatory acceptance reports (`ready=true`).
 - 2026-06-06: Observatory guarded actions now require a non-empty audit
   reason before any action audit, attribution check, audit-chain row, or live
   event is recorded. The shared action recorder enforces the requirement for
