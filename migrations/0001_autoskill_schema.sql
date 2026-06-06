@@ -1366,6 +1366,20 @@ CREATE TABLE IF NOT EXISTS autoskill.broker_policy_versions (
   UNIQUE(workspace_id, version)
 );
 
+CREATE OR REPLACE FUNCTION autoskill.stable_uuid_from_text(seed text)
+RETURNS uuid
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT (
+    substr(md5(coalesce(seed, '')), 1, 8) || '-' ||
+    substr(md5(coalesce(seed, '')), 9, 4) || '-' ||
+    substr(md5(coalesce(seed, '')), 13, 4) || '-' ||
+    substr(md5(coalesce(seed, '')), 17, 4) || '-' ||
+    substr(md5(coalesce(seed, '')), 21, 12)
+  )::uuid;
+$$;
+
 CREATE TABLE IF NOT EXISTS autoskill.retrieval_logs (
   retrieval_log_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
@@ -1391,6 +1405,167 @@ ALTER TABLE autoskill.retrieval_logs
 
 ALTER TABLE autoskill.retrieval_logs
   ADD COLUMN IF NOT EXISTS parent_span_id uuid;
+
+CREATE TABLE IF NOT EXISTS autoskill.retrieval_events (
+  retrieval_event_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  session_id text,
+  turn_id text,
+  query_hash text NOT NULL,
+  query_features jsonb NOT NULL DEFAULT '{}'::jsonb,
+  candidate_skill_ids uuid[] NOT NULL DEFAULT '{}',
+  rendered_skill_ids uuid[] NOT NULL DEFAULT '{}',
+  injected boolean NOT NULL DEFAULT false,
+  budget_tokens integer NOT NULL DEFAULT 0,
+  decision jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_retrieval_event_from_log()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO autoskill.retrieval_events (
+    retrieval_event_id,
+    workspace_id,
+    session_id,
+    turn_id,
+    query_hash,
+    query_features,
+    candidate_skill_ids,
+    rendered_skill_ids,
+    injected,
+    budget_tokens,
+    decision,
+    created_at
+  )
+  VALUES (
+    NEW.retrieval_log_id,
+    NEW.workspace_id,
+    NEW.session_id,
+    NEW.turn_id,
+    COALESCE(
+      NULLIF(NEW.metadata->>'query_hash', ''),
+      'sha256:' || encode(digest(
+        coalesce(NEW.metadata->>'query', '') || ':' || NEW.retrieval_log_id::text,
+        'sha256'
+      ), 'hex')
+    ),
+    jsonb_strip_nulls(
+      jsonb_build_object(
+        'source', 'retrieval_logs',
+        'trace_id', NEW.trace_id,
+        'span_id', NEW.span_id,
+        'parent_span_id', NEW.parent_span_id,
+        'broker_policy_version_id', NEW.broker_policy_version_id
+      )
+    ) ||
+      CASE
+        WHEN jsonb_typeof(NEW.metadata->'query_features') = 'object'
+        THEN NEW.metadata->'query_features'
+        ELSE '{}'::jsonb
+      END,
+    NEW.candidate_skill_ids,
+    NEW.rendered_skill_ids,
+    cardinality(NEW.rendered_skill_ids) > 0,
+    CASE
+      WHEN NEW.metadata->>'budget_tokens' ~ '^[0-9]+$'
+      THEN (NEW.metadata->>'budget_tokens')::integer
+      ELSE 0
+    END,
+    jsonb_strip_nulls(jsonb_build_object(
+      'legacy_decision', NEW.decision,
+      'no_skill_control', NEW.no_skill_control,
+      'metadata', NEW.metadata
+    )),
+    NEW.created_at
+  )
+  ON CONFLICT (retrieval_event_id) DO UPDATE SET
+    workspace_id = EXCLUDED.workspace_id,
+    session_id = EXCLUDED.session_id,
+    turn_id = EXCLUDED.turn_id,
+    query_hash = EXCLUDED.query_hash,
+    query_features = EXCLUDED.query_features,
+    candidate_skill_ids = EXCLUDED.candidate_skill_ids,
+    rendered_skill_ids = EXCLUDED.rendered_skill_ids,
+    injected = EXCLUDED.injected,
+    budget_tokens = EXCLUDED.budget_tokens,
+    decision = EXCLUDED.decision,
+    created_at = EXCLUDED.created_at;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS retrieval_logs_sync_retrieval_events ON autoskill.retrieval_logs;
+CREATE TRIGGER retrieval_logs_sync_retrieval_events
+AFTER INSERT OR UPDATE ON autoskill.retrieval_logs
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_retrieval_event_from_log();
+
+INSERT INTO autoskill.retrieval_events (
+  retrieval_event_id,
+  workspace_id,
+  session_id,
+  turn_id,
+  query_hash,
+  query_features,
+  candidate_skill_ids,
+  rendered_skill_ids,
+  injected,
+  budget_tokens,
+  decision,
+  created_at
+)
+SELECT
+  retrieval_log_id,
+  workspace_id,
+  session_id,
+  turn_id,
+  COALESCE(
+    NULLIF(metadata->>'query_hash', ''),
+    'sha256:' || encode(digest(coalesce(metadata->>'query', '') || ':' || retrieval_log_id::text, 'sha256'), 'hex')
+  ),
+  jsonb_strip_nulls(jsonb_build_object(
+    'source', 'retrieval_logs',
+    'trace_id', trace_id,
+    'span_id', span_id,
+    'parent_span_id', parent_span_id,
+    'broker_policy_version_id', broker_policy_version_id
+  )) ||
+    CASE
+      WHEN jsonb_typeof(metadata->'query_features') = 'object' THEN metadata->'query_features'
+      ELSE '{}'::jsonb
+    END,
+  candidate_skill_ids,
+  rendered_skill_ids,
+  cardinality(rendered_skill_ids) > 0,
+  CASE
+    WHEN metadata->>'budget_tokens' ~ '^[0-9]+$' THEN (metadata->>'budget_tokens')::integer
+    ELSE 0
+  END,
+  jsonb_strip_nulls(jsonb_build_object(
+    'legacy_decision', decision,
+    'no_skill_control', no_skill_control,
+    'metadata', metadata
+  )),
+  created_at
+FROM autoskill.retrieval_logs
+ON CONFLICT (retrieval_event_id) DO UPDATE SET
+  workspace_id = EXCLUDED.workspace_id,
+  session_id = EXCLUDED.session_id,
+  turn_id = EXCLUDED.turn_id,
+  query_hash = EXCLUDED.query_hash,
+  query_features = EXCLUDED.query_features,
+  candidate_skill_ids = EXCLUDED.candidate_skill_ids,
+  rendered_skill_ids = EXCLUDED.rendered_skill_ids,
+  injected = EXCLUDED.injected,
+  budget_tokens = EXCLUDED.budget_tokens,
+  decision = EXCLUDED.decision,
+  created_at = EXCLUDED.created_at;
+
+CREATE INDEX IF NOT EXISTS retrieval_events_workspace_created_idx
+  ON autoskill.retrieval_events (workspace_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS autoskill.broker_replay_episodes (
   broker_replay_episode_id uuid PRIMARY KEY,
@@ -1981,6 +2156,387 @@ BEGIN
   END IF;
 END $$;
 
+CREATE TABLE IF NOT EXISTS autoskill.skill_attributions (
+  attribution_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_id uuid,
+  skill_version_id uuid,
+  session_id text,
+  turn_id text,
+  retrieval_event_id uuid,
+  attribution_kind text NOT NULL CHECK (
+    attribution_kind IN (
+      'helped',
+      'hurt',
+      'ignored',
+      'missing',
+      'shadowed',
+      'misused',
+      'environment_failure',
+      'tool_failure',
+      'agent_exploration',
+      'unknown'
+    )
+  ),
+  confidence numeric NOT NULL DEFAULT 0 CHECK (confidence >= 0 AND confidence <= 1),
+  outcome jsonb NOT NULL DEFAULT '{}'::jsonb,
+  evidence_ids uuid[] NOT NULL DEFAULT '{}',
+  source_kind text NOT NULL,
+  source_record_id uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (source_kind, source_record_id, skill_id)
+);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_skill_attribution_from_event()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  mapped_kind text;
+  source_skill_ids uuid[];
+  source_skill_id uuid;
+  source_confidence numeric;
+  source_skill_version_id uuid;
+  source_retrieval_event_id uuid;
+BEGIN
+  DELETE FROM autoskill.skill_attributions
+  WHERE source_kind = 'attribution_event'
+    AND source_record_id = NEW.attribution_event_id;
+
+  mapped_kind := CASE NEW.outcome
+    WHEN 'skill_helped' THEN 'helped'
+    WHEN 'skill_hurt' THEN 'hurt'
+    WHEN 'skill_ignored' THEN 'ignored'
+    WHEN 'skill_missing' THEN 'missing'
+    WHEN 'skill_shadowed' THEN 'shadowed'
+    WHEN 'tool_failed_independent' THEN 'tool_failure'
+    WHEN 'environment_drifted' THEN 'environment_failure'
+    WHEN 'agent_solved_independently' THEN 'agent_exploration'
+    ELSE 'unknown'
+  END;
+
+  source_skill_ids := CASE
+    WHEN cardinality(NEW.skill_ids) > 0 THEN NEW.skill_ids
+    ELSE ARRAY[NULL::uuid]
+  END;
+  source_confidence := CASE
+    WHEN NEW.metadata->>'confidence' ~ '^[0-9]+(\.[0-9]+)?$'
+    THEN LEAST(1, GREATEST(0, (NEW.metadata->>'confidence')::numeric))
+    ELSE 0
+  END;
+  source_skill_version_id := CASE
+    WHEN NEW.metadata->>'skill_version_id' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    THEN (NEW.metadata->>'skill_version_id')::uuid
+    ELSE NULL
+  END;
+  source_retrieval_event_id := CASE
+    WHEN NEW.metadata->>'retrieval_event_id' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    THEN (NEW.metadata->>'retrieval_event_id')::uuid
+    ELSE NULL
+  END;
+
+  FOREACH source_skill_id IN ARRAY source_skill_ids LOOP
+    INSERT INTO autoskill.skill_attributions (
+      attribution_id,
+      workspace_id,
+      skill_id,
+      skill_version_id,
+      session_id,
+      turn_id,
+      retrieval_event_id,
+      attribution_kind,
+      confidence,
+      outcome,
+      evidence_ids,
+      source_kind,
+      source_record_id,
+      created_at
+    )
+    VALUES (
+      autoskill.stable_uuid_from_text(
+        'attribution_event:' || NEW.attribution_event_id::text || ':' || coalesce(source_skill_id::text, 'none')
+      ),
+      NEW.workspace_id,
+      source_skill_id,
+      source_skill_version_id,
+      NEW.session_id,
+      NEW.turn_id,
+      source_retrieval_event_id,
+      mapped_kind,
+      source_confidence,
+      jsonb_strip_nulls(jsonb_build_object(
+        'source', 'attribution_events',
+        'action_kind', NEW.action_kind,
+        'risk_level', NEW.risk_level,
+        'legacy_outcome', NEW.outcome,
+        'skill_ids', NEW.skill_ids,
+        'memory_ids', NEW.memory_ids,
+        'retrieved_artifact_ids', NEW.retrieved_artifact_ids,
+        'broker_policy_version_id', NEW.broker_policy_version_id,
+        'metadata', NEW.metadata
+      )),
+      '{}',
+      'attribution_event',
+      NEW.attribution_event_id,
+      NEW.created_at
+    )
+    ON CONFLICT (attribution_id) DO NOTHING;
+  END LOOP;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION autoskill.sync_skill_attribution_from_action_check()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  mapped_kind text;
+  source_skill_ids uuid[];
+  source_skill_id uuid;
+  source_confidence numeric;
+  source_skill_version_id uuid;
+  source_retrieval_event_id uuid;
+BEGIN
+  DELETE FROM autoskill.skill_attributions
+  WHERE source_kind = 'action_attribution_check'
+    AND source_record_id = NEW.action_attribution_check_id;
+
+  mapped_kind := CASE NEW.verdict
+    WHEN 'supported' THEN 'helped'
+    WHEN 'unsupported' THEN 'hurt'
+    ELSE 'unknown'
+  END;
+  source_skill_ids := CASE
+    WHEN cardinality(NEW.contributing_skill_ids) > 0 THEN NEW.contributing_skill_ids
+    ELSE ARRAY[NULL::uuid]
+  END;
+  source_confidence := CASE
+    WHEN NEW.metrics->>'confidence' ~ '^[0-9]+(\.[0-9]+)?$'
+    THEN LEAST(1, GREATEST(0, (NEW.metrics->>'confidence')::numeric))
+    ELSE 0
+  END;
+  source_skill_version_id := CASE
+    WHEN NEW.metrics->>'skill_version_id' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    THEN (NEW.metrics->>'skill_version_id')::uuid
+    ELSE NULL
+  END;
+  source_retrieval_event_id := CASE
+    WHEN NEW.metrics->>'retrieval_event_id' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    THEN (NEW.metrics->>'retrieval_event_id')::uuid
+    ELSE NULL
+  END;
+
+  FOREACH source_skill_id IN ARRAY source_skill_ids LOOP
+    INSERT INTO autoskill.skill_attributions (
+      attribution_id,
+      workspace_id,
+      skill_id,
+      skill_version_id,
+      session_id,
+      turn_id,
+      retrieval_event_id,
+      attribution_kind,
+      confidence,
+      outcome,
+      evidence_ids,
+      source_kind,
+      source_record_id,
+      created_at
+    )
+    VALUES (
+      autoskill.stable_uuid_from_text(
+        'action_attribution_check:' || NEW.action_attribution_check_id::text || ':' || coalesce(source_skill_id::text, 'none')
+      ),
+      NEW.workspace_id,
+      source_skill_id,
+      source_skill_version_id,
+      NEW.session_id,
+      NEW.turn_id,
+      source_retrieval_event_id,
+      mapped_kind,
+      source_confidence,
+      jsonb_strip_nulls(jsonb_build_object(
+        'source', 'action_attribution_checks',
+        'tool_call_id', NEW.tool_call_id,
+        'action_kind', NEW.action_kind,
+        'risk_tier', NEW.risk_tier,
+        'user_intent_hash', NEW.user_intent_hash,
+        'contributing_skill_ids', NEW.contributing_skill_ids,
+        'contributing_memory_ids', NEW.contributing_memory_ids,
+        'counterfactual_kind', NEW.counterfactual_kind,
+        'verdict', NEW.verdict,
+        'metrics', NEW.metrics
+      )),
+      NEW.contributing_evidence_ids,
+      'action_attribution_check',
+      NEW.action_attribution_check_id,
+      NEW.created_at
+    )
+    ON CONFLICT (attribution_id) DO NOTHING;
+  END LOOP;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS attribution_events_sync_skill_attributions ON autoskill.attribution_events;
+CREATE TRIGGER attribution_events_sync_skill_attributions
+AFTER INSERT OR UPDATE ON autoskill.attribution_events
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_skill_attribution_from_event();
+
+DROP TRIGGER IF EXISTS action_attribution_checks_sync_skill_attributions ON autoskill.action_attribution_checks;
+CREATE TRIGGER action_attribution_checks_sync_skill_attributions
+AFTER INSERT OR UPDATE ON autoskill.action_attribution_checks
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_skill_attribution_from_action_check();
+
+INSERT INTO autoskill.skill_attributions (
+  attribution_id,
+  workspace_id,
+  skill_id,
+  skill_version_id,
+  session_id,
+  turn_id,
+  retrieval_event_id,
+  attribution_kind,
+  confidence,
+  outcome,
+  evidence_ids,
+  source_kind,
+  source_record_id,
+  created_at
+)
+SELECT
+  autoskill.stable_uuid_from_text(
+    'attribution_event:' || attribution_event_id::text || ':' || coalesce(source_skill_id::text, 'none')
+  ),
+  workspace_id,
+  source_skill_id,
+  CASE
+    WHEN metadata->>'skill_version_id' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    THEN (metadata->>'skill_version_id')::uuid
+    ELSE NULL
+  END,
+  session_id,
+  turn_id,
+  CASE
+    WHEN metadata->>'retrieval_event_id' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    THEN (metadata->>'retrieval_event_id')::uuid
+    ELSE NULL
+  END,
+  CASE outcome
+    WHEN 'skill_helped' THEN 'helped'
+    WHEN 'skill_hurt' THEN 'hurt'
+    WHEN 'skill_ignored' THEN 'ignored'
+    WHEN 'skill_missing' THEN 'missing'
+    WHEN 'skill_shadowed' THEN 'shadowed'
+    WHEN 'tool_failed_independent' THEN 'tool_failure'
+    WHEN 'environment_drifted' THEN 'environment_failure'
+    WHEN 'agent_solved_independently' THEN 'agent_exploration'
+    ELSE 'unknown'
+  END,
+  CASE
+    WHEN metadata->>'confidence' ~ '^[0-9]+(\.[0-9]+)?$'
+    THEN LEAST(1, GREATEST(0, (metadata->>'confidence')::numeric))
+    ELSE 0
+  END,
+  jsonb_strip_nulls(jsonb_build_object(
+    'source', 'attribution_events',
+    'action_kind', action_kind,
+    'risk_level', risk_level,
+    'legacy_outcome', outcome,
+    'skill_ids', skill_ids,
+    'memory_ids', memory_ids,
+    'retrieved_artifact_ids', retrieved_artifact_ids,
+    'broker_policy_version_id', broker_policy_version_id,
+    'metadata', metadata
+  )),
+  '{}',
+  'attribution_event',
+  attribution_event_id,
+  created_at
+FROM autoskill.attribution_events
+CROSS JOIN LATERAL unnest(
+  CASE
+    WHEN cardinality(skill_ids) > 0 THEN skill_ids
+    ELSE ARRAY[NULL::uuid]
+  END
+) AS source_skill_id
+ON CONFLICT (attribution_id) DO NOTHING;
+
+INSERT INTO autoskill.skill_attributions (
+  attribution_id,
+  workspace_id,
+  skill_id,
+  skill_version_id,
+  session_id,
+  turn_id,
+  retrieval_event_id,
+  attribution_kind,
+  confidence,
+  outcome,
+  evidence_ids,
+  source_kind,
+  source_record_id,
+  created_at
+)
+SELECT
+  autoskill.stable_uuid_from_text(
+    'action_attribution_check:' || action_attribution_check_id::text || ':' || coalesce(source_skill_id::text, 'none')
+  ),
+  workspace_id,
+  source_skill_id,
+  CASE
+    WHEN metrics->>'skill_version_id' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    THEN (metrics->>'skill_version_id')::uuid
+    ELSE NULL
+  END,
+  session_id,
+  turn_id,
+  CASE
+    WHEN metrics->>'retrieval_event_id' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    THEN (metrics->>'retrieval_event_id')::uuid
+    ELSE NULL
+  END,
+  CASE verdict
+    WHEN 'supported' THEN 'helped'
+    WHEN 'unsupported' THEN 'hurt'
+    ELSE 'unknown'
+  END,
+  CASE
+    WHEN metrics->>'confidence' ~ '^[0-9]+(\.[0-9]+)?$'
+    THEN LEAST(1, GREATEST(0, (metrics->>'confidence')::numeric))
+    ELSE 0
+  END,
+  jsonb_strip_nulls(jsonb_build_object(
+    'source', 'action_attribution_checks',
+    'tool_call_id', tool_call_id,
+    'action_kind', action_kind,
+    'risk_tier', risk_tier,
+    'user_intent_hash', user_intent_hash,
+    'contributing_skill_ids', contributing_skill_ids,
+    'contributing_memory_ids', contributing_memory_ids,
+    'counterfactual_kind', counterfactual_kind,
+    'verdict', verdict,
+    'metrics', metrics
+  )),
+  contributing_evidence_ids,
+  'action_attribution_check',
+  action_attribution_check_id,
+  created_at
+FROM autoskill.action_attribution_checks
+CROSS JOIN LATERAL unnest(
+  CASE
+    WHEN cardinality(contributing_skill_ids) > 0 THEN contributing_skill_ids
+    ELSE ARRAY[NULL::uuid]
+  END
+) AS source_skill_id
+ON CONFLICT (attribution_id) DO NOTHING;
+
+CREATE INDEX IF NOT EXISTS skill_attributions_workspace_skill_idx
+  ON autoskill.skill_attributions (workspace_id, skill_id, attribution_kind, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS autoskill.historical_import_sources (
   historical_import_source_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
@@ -2212,6 +2768,128 @@ CREATE TABLE IF NOT EXISTS autoskill.audit_records (
   audit_hash text NOT NULL,
   details jsonb NOT NULL DEFAULT '{}'::jsonb
 );
+
+CREATE TABLE IF NOT EXISTS autoskill.audit_log (
+  audit_id uuid PRIMARY KEY,
+  workspace_id uuid REFERENCES autoskill.workspaces(workspace_id),
+  actor text NOT NULL,
+  action text NOT NULL,
+  object_type text NOT NULL,
+  object_id uuid,
+  before_hash text,
+  after_hash text,
+  payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  prev_audit_hash text,
+  audit_hash text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_audit_log_from_record()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO autoskill.audit_log (
+    audit_id,
+    workspace_id,
+    actor,
+    action,
+    object_type,
+    object_id,
+    before_hash,
+    after_hash,
+    payload,
+    prev_audit_hash,
+    audit_hash,
+    created_at
+  )
+  VALUES (
+    NEW.audit_id,
+    NEW.workspace_id,
+    NEW.actor,
+    NEW.action,
+    NEW.subject_type,
+    CASE
+      WHEN NEW.subject_id ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+      THEN NEW.subject_id::uuid
+      ELSE NULL
+    END,
+    NEW.previous_hash,
+    NEW.audit_hash,
+    NEW.details || jsonb_build_object('legacy_subject_id', NEW.subject_id),
+    NEW.previous_hash,
+    NEW.audit_hash,
+    NEW.occurred_at
+  )
+  ON CONFLICT (audit_id) DO UPDATE SET
+    workspace_id = EXCLUDED.workspace_id,
+    actor = EXCLUDED.actor,
+    action = EXCLUDED.action,
+    object_type = EXCLUDED.object_type,
+    object_id = EXCLUDED.object_id,
+    before_hash = EXCLUDED.before_hash,
+    after_hash = EXCLUDED.after_hash,
+    payload = EXCLUDED.payload,
+    prev_audit_hash = EXCLUDED.prev_audit_hash,
+    audit_hash = EXCLUDED.audit_hash,
+    created_at = EXCLUDED.created_at;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS audit_records_sync_audit_log ON autoskill.audit_records;
+CREATE TRIGGER audit_records_sync_audit_log
+AFTER INSERT OR UPDATE ON autoskill.audit_records
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_audit_log_from_record();
+
+INSERT INTO autoskill.audit_log (
+  audit_id,
+  workspace_id,
+  actor,
+  action,
+  object_type,
+  object_id,
+  before_hash,
+  after_hash,
+  payload,
+  prev_audit_hash,
+  audit_hash,
+  created_at
+)
+SELECT
+  audit_id,
+  workspace_id,
+  actor,
+  action,
+  subject_type,
+  CASE
+    WHEN subject_id ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    THEN subject_id::uuid
+    ELSE NULL
+  END,
+  previous_hash,
+  audit_hash,
+  details || jsonb_build_object('legacy_subject_id', subject_id),
+  previous_hash,
+  audit_hash,
+  occurred_at
+FROM autoskill.audit_records
+ON CONFLICT (audit_id) DO UPDATE SET
+  workspace_id = EXCLUDED.workspace_id,
+  actor = EXCLUDED.actor,
+  action = EXCLUDED.action,
+  object_type = EXCLUDED.object_type,
+  object_id = EXCLUDED.object_id,
+  before_hash = EXCLUDED.before_hash,
+  after_hash = EXCLUDED.after_hash,
+  payload = EXCLUDED.payload,
+  prev_audit_hash = EXCLUDED.prev_audit_hash,
+  audit_hash = EXCLUDED.audit_hash,
+  created_at = EXCLUDED.created_at;
+
+CREATE INDEX IF NOT EXISTS audit_log_workspace_created_idx
+  ON autoskill.audit_log (workspace_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS autoskill.skill_utility_rollups (
   skill_utility_rollup_id uuid PRIMARY KEY,

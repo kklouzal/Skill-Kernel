@@ -95,6 +95,7 @@ def build_report(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
         _check_autonomy_control_schema_contract(),
         _check_canonical_evidence_schema_contract(),
         _check_skillir_package_schema_contract(),
+        _check_retrieval_attribution_audit_schema_contract(),
         _check_no_unstable_react_keys(),
         _check_migration_deduplicated_and_ordered(),
         _check_architecture_invariants(spec_path),
@@ -373,6 +374,38 @@ def _check_skillir_package_schema_contract() -> StaticCheck:
         (
             "migrations/0001_autoskill_schema.sql skill_ir_revisions",
             "compiled_files/support_artifacts/skill_versions sync triggers",
+        ),
+        details,
+    )
+
+
+def _check_retrieval_attribution_audit_schema_contract() -> StaticCheck:
+    migration = MIGRATION_PATH.read_text(encoding="utf-8")
+    details: list[str] = []
+    for required in (
+        "CREATE TABLE IF NOT EXISTS autoskill.retrieval_events",
+        "CREATE TABLE IF NOT EXISTS autoskill.skill_attributions",
+        "CREATE TABLE IF NOT EXISTS autoskill.audit_log",
+        "sync_retrieval_event_from_log",
+        "sync_skill_attribution_from_event",
+        "sync_skill_attribution_from_action_check",
+        "sync_audit_log_from_record",
+        "CREATE TRIGGER retrieval_logs_sync_retrieval_events",
+        "CREATE TRIGGER attribution_events_sync_skill_attributions",
+        "CREATE TRIGGER action_attribution_checks_sync_skill_attributions",
+        "CREATE TRIGGER audit_records_sync_audit_log",
+        "query_hash text NOT NULL",
+        "attribution_kind text NOT NULL",
+        "prev_audit_hash text",
+    ):
+        if required not in migration:
+            details.append(f"retrieval/attribution/audit bridge missing {required}")
+    return _result(
+        "SKX-STATIC-006F",
+        "canonical retrieval, skill attribution, and audit tables mirror live telemetry/write paths",
+        (
+            "migrations/0001_autoskill_schema.sql retrieval_events",
+            "retrieval_logs/attribution_events/action_attribution_checks/audit_records sync triggers",
         ),
         details,
     )
