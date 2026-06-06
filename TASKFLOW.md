@@ -16,6 +16,29 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Worker heartbeat progress summaries now include static,
+  content-safe phase plans for long semantic, topology, repair, historical,
+  embedding, rollback, and writer jobs. The new `progress_plan` metadata tells
+  Observatory/operator surfaces what domain milestones to expect while a leased
+  job is claimed or renewed without exposing raw verdicts, prompts, repair
+  text, payload dictionaries, or candidate content. Historical bootstrap plans
+  explicitly remain tainted/propose-only with runtime file writes forbidden,
+  writer plans mark policy/activation-gate requirements, repair plans mark
+  fail-closed gate/writer routing, and topology plans name the four canonical
+  operation classes. This advances Core Sections 26.3 and 28.1-28.2 plus
+  Observatory Sections 12.3, 12.6, and 13.1 by making multi-phase worker
+  progress more explainable through existing heartbeat/read-model surfaces
+  without adding UI-local control authority. Focused validation passed with
+  `uv run pytest sidecar/autoskill/tests/test_worker.py -q -k 'progress'` (`2
+  passed, 38 deselected`) and targeted Ruff. Required gates also passed with
+  `uv run ruff check sidecar`, `uv run pytest` (`405 passed`), `uv run python
+  -m compileall -q sidecar`, `git diff --check`, `uv run python
+  scripts/autoskill_acceptance.py --json` (`ready=true`, `70` implemented),
+  `uv run python scripts/autoskill_observatory_acceptance.py --json`
+  (`ready=true`, `86` satisfied), and `uv run python
+  scripts/autoskill_conformance.py --json` (`ready=true`, `14/14` checks). No
+  compose/Postgres smoke was needed because the slice only shapes existing
+  persisted heartbeat summaries and is covered through the in-memory job store.
 - 2026-06-06: Observatory broker decision collection rows now use the same
   content-safe policy model as broker decision detail/object microscope paths.
   The previous admin collection spread `RetrievalLog.to_json()`, which could
@@ -2511,7 +2534,11 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   outage drill can be run later if the operator wants destructive/noisy failure
   testing.
 - The dev compose Postgres volume is persistent; rerun migrations are intended to be idempotent.
-- Worker health now includes persistent heartbeat records, long-running handlers renew job leases, and single-job worker runs emit content-safe progress phases through heartbeat summaries. Future lengthy semantic handlers may still add deeper domain-specific counters when their internal phases mature.
+- Worker health now includes persistent heartbeat records, long-running
+  handlers renew job leases, and single-job worker runs emit content-safe
+  claimed/renewed/succeeded/failed progress plus static domain phase plans
+  through heartbeat summaries. Future lengthy semantic handlers may still add
+  deeper per-phase counters when their internal phases mature.
 - Evidence derivation now creates observed event evidence plus deterministic recurring evidence clusters, and `usage.aggregate` now mines retrieval/attribution/co-use/context-token-ledger windows into topology evidence tables. Accepted recurring co-use clusters can now become propose-only compose topology operations; structured improve/decompose and broker-abstain consumption now exist, and contrastive induction consumes context-token-ledger outcomes plus marginal-value source metadata. Remaining work is sustained replay/canary validation under real traffic.
 - Memory quarantine/control-flow tables and operator APIs now exist, the runtime broker can record approved memory-influenced retrieval decisions without injecting memory text while blocking unapproved memory references before retrieval, and repair/writer mutation paths now gate and log approved or blocked memory influence.
 - Historical import now has durable source/chunk inventory, bounded discovery,

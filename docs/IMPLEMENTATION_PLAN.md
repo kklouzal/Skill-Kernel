@@ -3,6 +3,25 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Worker heartbeat summaries now carry content-safe
+`progress_plan` metadata for long semantic, topology, repair, historical,
+embedding, rollback, and writer jobs. The plan is static job-definition
+metadata, not caller payload content: it lists expected phase names, marks
+metadata-only content policy, keeps historical bootstrap tainted/propose-only
+with runtime writes forbidden, marks writer policy/activation-gate
+requirements, marks repair fail-closed routing, and names the canonical
+create/improve/compose/decompose topology operation classes. This advances
+Core Sections 26.3 and 28.1-28.2 plus Observatory Sections 12.3, 12.6, and
+13.1 by making leased worker progress explainable through the existing
+heartbeat/read-model surface without adding UI-local control authority.
+Focused validation passed with the worker progress regressions (`2 passed, 38
+deselected`) and targeted Ruff. Required gates also passed with full sidecar
+Ruff, full pytest (`405 passed`), compileall, diff-check, core acceptance
+(`70` implemented), Observatory acceptance (`86` satisfied), and conformance
+(`14/14`). No compose/Postgres smoke was needed because the change only shapes
+existing persisted heartbeat summaries and is covered through the in-memory
+job store.
+
 2026-06-06 update: Observatory broker decision collection rows now use a
 content-safe read-model projection instead of spreading raw
 `RetrievalLog.to_json()` payloads. The projection preserves stable retrieval

@@ -618,6 +618,9 @@ def _job_progress_summary(
         "workspace_key": _payload_workspace(job) or job.workspace_key,
         "payload_controls": _payload_progress_controls(payload),
     }
+    progress_plan = _job_progress_plan(job.job_kind, payload)
+    if progress_plan is not None:
+        summary["progress_plan"] = progress_plan
     if lease_seconds is not None:
         summary["lease_seconds"] = lease_seconds
     if output is not None:
@@ -625,6 +628,89 @@ def _job_progress_summary(
     if error:
         summary["error"] = error[:500]
     return summary
+
+
+_PROGRESS_PHASES_BY_JOB_KIND: dict[str, tuple[str, ...]] = {
+    "embeddings.generate": (
+        "qualify_embedding_profile",
+        "load_redacted_sources",
+        "write_profile_scoped_vectors",
+    ),
+    "evaluations.run": (
+        "load_pending_proposal_gates",
+        "run_target_no_skill_regression_and_adversarial_probes",
+        "record_deterministic_gate_decisions",
+    ),
+    "historical_import.parse": (
+        "discover_bounded_sources",
+        "redact_and_chunk_sources",
+        "record_tainted_provenance",
+    ),
+    "historical_bootstrap.consolidate": (
+        "aggregate_tainted_evidence",
+        "propose_topology_operations",
+        "persist_inactive_candidates_when_requested",
+    ),
+    "usage.aggregate": (
+        "aggregate_retrieval_attribution_and_context_windows",
+        "derive_topology_support",
+        "emit_propose_only_recommendations",
+    ),
+    "repair.execute": (
+        "claim_policy_ready_repair_sources",
+        "record_governance_and_memory_influence_checks",
+        "queue_normal_gate_or_policy_approved_writer_work",
+    ),
+    "topology.apply_downstream": (
+        "load_accepted_skill_graph_operation",
+        "materialize_lifecycle_and_graph_effects",
+        "invalidate_derived_runtime_state",
+    ),
+    "topology.score_broker_trials": (
+        "load_pending_broker_trials",
+        "record_replay_and_canary_scores",
+        "update_apply_readiness",
+    ),
+    "revocations.rollback": (
+        "claim_rollback_revocation_requests",
+        "restore_or_delete_active_artifacts",
+        "record_rollback_and_invalidation_results",
+    ),
+    "writer.apply": (
+        "validate_policy_and_activation_gate",
+        "apply_staged_manifest_with_rollback_archive",
+        "record_writer_governance_and_provenance",
+    ),
+}
+
+
+def _job_progress_plan(
+    job_kind: str,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    phases = _PROGRESS_PHASES_BY_JOB_KIND.get(job_kind)
+    if phases is None:
+        return None
+    plan: dict[str, Any] = {
+        "content_policy": "metadata_only",
+        "expected_phases": list(phases),
+        "source": "worker_job_definition",
+    }
+    if job_kind == "historical_bootstrap.consolidate":
+        plan["autonomy_mode"] = "tainted_propose_only"
+        plan["runtime_file_writes_allowed"] = False
+        plan["candidate_persistence_requested"] = bool(payload.get("persist"))
+    elif job_kind == "writer.apply":
+        plan["policy_approval_required"] = True
+        plan["activation_gate_required"] = bool(payload.get("activation_gate_required", True))
+    elif job_kind == "repair.execute":
+        plan["policy_approved_writer_apply_only"] = True
+        plan["fallback_gate_jobs_allowed"] = True
+    elif job_kind.startswith("topology."):
+        plan["operation_classes"] = ["create", "improve", "compose", "decompose"]
+    elif job_kind == "evaluations.run":
+        plan["hard_gate_family"] = "scanner_evaluator_regression"
+    return plan
 
 
 def _payload_progress_controls(payload: dict[str, Any]) -> dict[str, Any]:

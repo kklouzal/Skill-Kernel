@@ -98,8 +98,9 @@ class MemorySchedulerWorkerStore:
 
 
 class MemoryEvaluationWorkerStore:
-    def __init__(self) -> None:
+    def __init__(self, *, delay_seconds: float = 0.0) -> None:
         self.calls: list[dict[str, object]] = []
+        self.delay_seconds = delay_seconds
 
     async def run_pending_proposal_gates(
         self,
@@ -110,6 +111,8 @@ class MemoryEvaluationWorkerStore:
         span_id=None,
         parent_span_id=None,
     ) -> EvaluationRunResult:
+        if self.delay_seconds:
+            await asyncio.sleep(self.delay_seconds)
         self.calls.append(
             {
                 "workspace_key": workspace_key,
@@ -863,6 +866,58 @@ def test_worker_run_once_records_content_safe_job_progress() -> None:
     assert events[1].summary["lease_seconds"] == 1
     assert events[-1].summary["output"]["created"] == 1
     assert events[-1].summary["output"]["evidence_ids_count"] == 0
+
+
+def test_worker_progress_for_semantic_jobs_exposes_safe_phase_plan() -> None:
+    stores = WorkerTestStores(
+        jobs=MemoryJobStore(),
+        scheduler=MemorySchedulerWorkerStore(),
+        evidence=MemoryEvidenceWorkerStore(),
+        embeddings=MemoryPendingEmbeddingStore(),
+        evaluations=MemoryEvaluationWorkerStore(delay_seconds=0.6),
+    )
+
+    async def run():
+        await stores.jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="evaluations.run",
+            idempotency_key="eval:progress-plan",
+            payload={
+                "workspace_id": "dev-01",
+                "limit": 11,
+                "raw_verdict": "do-not-record",
+            },
+        )
+        return await run_worker_once(
+            stores.as_worker_stores(),
+            worker_id="worker-1",
+            pool="maintenance",
+            lease_seconds=1,
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    events = stores.jobs.heartbeat_events
+    assert [event.status for event in events] == [
+        "claimed",
+        "lease_renewed",
+        "succeeded",
+    ]
+    progress_plan = events[0].summary["progress_plan"]
+    assert progress_plan["content_policy"] == "metadata_only"
+    assert progress_plan["hard_gate_family"] == "scanner_evaluator_regression"
+    assert progress_plan["expected_phases"] == [
+        "load_pending_proposal_gates",
+        "run_target_no_skill_regression_and_adversarial_probes",
+        "record_deterministic_gate_decisions",
+    ]
+    assert events[0].summary["payload_controls"] == {
+        "limit": 11,
+        "workspace_id": "dev-01",
+    }
+    assert "raw_verdict" not in events[0].summary["payload_controls"]
+    assert events[1].summary["progress_plan"] == progress_plan
 
 
 def test_worker_pool_does_not_claim_other_pool_jobs() -> None:
