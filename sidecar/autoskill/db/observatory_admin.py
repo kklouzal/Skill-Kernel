@@ -42,7 +42,10 @@ class AdminLiveEventRecord:
         )
 
     def to_json(self) -> dict[str, Any]:
-        safe_payload = _safe_live_event_payload(self.payload)
+        safe_payload = _safe_live_event_payload(
+            self.payload,
+            preserve_redaction_metadata=True,
+        )
         return {
             "schema_version": "skillkernel.observatory.live-event.v1",
             "seq": self.seq,
@@ -1562,19 +1565,24 @@ def _json_sha256(value: object) -> str:
     return sha256_text(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str))
 
 
-def _safe_live_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _safe_live_event_payload(
+    payload: dict[str, Any],
+    *,
+    preserve_redaction_metadata: bool = False,
+) -> dict[str, Any]:
     safe: dict[str, Any] = {}
     redacted_hashes: dict[str, str] = {}
+    existing_hashes = _validated_existing_redaction_hashes(payload)
+    existing_keys = _validated_existing_redaction_keys(payload, existing_hashes)
     for key, value in sorted(payload.items(), key=lambda item: str(item[0])):
         key_text = str(key)
-        if key_text == "redacted_payload_hashes" and isinstance(value, dict):
-            safe[key_text] = {
-                str(item_key): str(item_value)
-                for item_key, item_value in sorted(value.items(), key=lambda item: str(item[0]))
-            }
+        if key_text == "redacted_payload_hashes":
+            if preserve_redaction_metadata and existing_hashes:
+                safe[key_text] = existing_hashes
             continue
-        if key_text == "redacted_payload_keys" and isinstance(value, list):
-            safe[key_text] = sorted(str(item) for item in value)
+        if key_text == "redacted_payload_keys":
+            if preserve_redaction_metadata and existing_keys:
+                safe[key_text] = existing_keys
             continue
         if _live_event_key_is_sensitive(key_text) or not _live_event_value_is_inline_safe(
             key_text,
@@ -1587,6 +1595,50 @@ def _safe_live_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
         safe["redacted_payload_hashes"] = redacted_hashes
         safe["redacted_payload_keys"] = sorted(redacted_hashes)
     return safe
+
+
+def _validated_existing_redaction_hashes(payload: dict[str, Any]) -> dict[str, str]:
+    hashes = payload.get("redacted_payload_hashes")
+    if not isinstance(hashes, dict):
+        return {}
+    validated: dict[str, str] = {}
+    for key, value in sorted(hashes.items(), key=lambda item: str(item[0])):
+        key_text = str(key)
+        value_text = str(value)
+        if not _is_metadata_key_name(key_text):
+            continue
+        if len(value_text) == 64 and all(ch in "0123456789abcdef" for ch in value_text):
+            validated[key_text] = value_text
+    return validated
+
+
+def _validated_existing_redaction_keys(
+    payload: dict[str, Any],
+    existing_hashes: dict[str, str],
+) -> list[str]:
+    keys = payload.get("redacted_payload_keys")
+    if not isinstance(keys, list) or not existing_hashes:
+        return []
+    validated = sorted(
+        {
+            str(key)
+            for key in keys
+            if isinstance(key, str)
+            and key in existing_hashes
+            and _is_metadata_key_name(key)
+        }
+    )
+    return validated if validated == sorted(existing_hashes) else []
+
+
+def _is_metadata_key_name(value: str) -> bool:
+    if not 1 <= len(value) <= 96:
+        return False
+    first = value[0]
+    if not (first.isalpha() or first == "_"):
+        return False
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-")
+    return all(ch in allowed for ch in value)
 
 
 def _live_event_key_is_sensitive(key: str) -> bool:

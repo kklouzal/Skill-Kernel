@@ -3,6 +3,21 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Observatory live outbox redaction metadata is now
+Core-owned. The sanitizer drops caller-supplied `redacted_payload_keys` and
+`redacted_payload_hashes` while appending events, preserves stored sanitizer
+metadata only after strict key/hash validation during serialization, and keeps
+computed hashes/key lists for redacted values. This advances Observatory
+Sections 12.3, 16.1, and 17.2 plus acceptance criteria 21.11, 21.30, and
+21.31 by closing a reserved-metadata covert channel in WebSocket/SSE payloads
+without adding UI-local policy authority. Focused validation passed with the
+forged-metadata live-SSE regression (`1 passed, 58 deselected`), the
+surrounding live-SSE route tests (`6 passed, 53 deselected`), and targeted
+Ruff. Required pre-commit gates also passed with `uv run ruff check sidecar`,
+`uv run pytest` (`400 passed`), `uv run python -m compileall -q sidecar`, and
+`git diff --check`. No compose/Postgres smoke was needed because the
+deterministic sanitizer is shared by the in-memory and asyncpg admin stores.
+
 2026-06-06 update: Observatory live-stream outbox payloads are now sanitized at
 the Core store/serialization boundary. `AdminLiveEventRecord.to_json`, the
 in-memory admin store, and the asyncpg admin store preserve bounded primitive

@@ -16,6 +16,23 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory live outbox redaction metadata is now Core-owned
+  rather than caller-controlled. The live payload sanitizer drops forged
+  `redacted_payload_keys` and `redacted_payload_hashes` at append time, only
+  preserves already-sanitized metadata after strict key/hash validation, and
+  continues to emit bounded primitive live-event fields plus computed redaction
+  metadata for hidden values. This closes a reserved-metadata covert channel in
+  the WebSocket/SSE payload boundary and advances Observatory Sections 12.3,
+  16.1, 17.2, and acceptance criteria 21.11, 21.30, and 21.31. Focused
+  validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py -q -k
+  live_sse_redacts_outbox_payloads` (`1 passed, 58 deselected`), surrounding
+  live-SSE coverage (`6 passed, 53 deselected`), and targeted Ruff. Required
+  pre-commit gates also passed with `uv run ruff check sidecar`, `uv run
+  pytest` (`400 passed`), `uv run python -m compileall -q sidecar`, and `git
+  diff --check`. No compose/Postgres smoke was needed because the change is a
+  deterministic store/serialization sanitizer shared by the in-memory and
+  asyncpg admin stores.
 - 2026-06-06: Observatory live outbox events now enforce Core-side payload
   sanitization before storage and before WebSocket/SSE serialization. Live
   event payloads preserve bounded primitive status fields such as health,

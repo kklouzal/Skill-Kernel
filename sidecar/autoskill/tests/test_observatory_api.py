@@ -823,6 +823,12 @@ def test_observatory_live_sse_redacts_outbox_payloads() -> None:
                 "raw_prompt": "raw prompt must not leak",
                 "nested": {"message": "nested content must not leak"},
                 "secret": "sk-testsecret000000000000000000",
+                "redacted_payload_keys": [
+                    "sk-forged-secret-key-must-not-leak",
+                ],
+                "redacted_payload_hashes": {
+                    "operator_note": "raw forged redaction metadata must not leak",
+                },
             },
         )
         await anext(response.body_iterator)
@@ -849,6 +855,8 @@ def test_observatory_live_sse_redacts_outbox_payloads() -> None:
     assert "raw prompt must not leak" not in rendered
     assert "nested content must not leak" not in rendered
     assert "sk-testsecret" not in rendered
+    assert "sk-forged-secret-key" not in rendered
+    assert "raw forged redaction metadata must not leak" not in rendered
 
 
 def test_observatory_live_sse_clamps_snapshot_style_last_seq_to_outbox_cursor() -> None:
