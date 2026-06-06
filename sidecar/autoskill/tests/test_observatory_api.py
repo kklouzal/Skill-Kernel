@@ -4194,6 +4194,74 @@ def test_observatory_action_records_audited_policy_receipt() -> None:
     assert audit_store.records[0].action == "observatory.verify_audit_chain"
 
 
+def test_observatory_audit_record_microscope_redacts_arbitrary_details() -> None:
+    audit_store = MemoryAuditStore()
+    app = create_app(audit_store=audit_store)
+    routes = _routes(app)
+
+    async def run():
+        record = await audit_store.append_record(
+            AuditRecord(
+                action="observatory.reveal_raw_content",
+                actor="operator@example.invalid",
+                subject_type="raw_vault_record",
+                subject_id="vault-record-1",
+                details={
+                    "confirmation_required": True,
+                    "attempt_count": 2,
+                    "operator_note": "raw secret token sk-live-secret",
+                    "request_payload": {
+                        "reason": "need raw prompt with private@example.invalid",
+                    },
+                },
+            ),
+            workspace_key="dev-01",
+        )
+        collection = await routes[("/admin/api/v1/audit", "GET")].endpoint(
+            workspace_id="dev-01",
+            limit=5,
+        )
+        microscope = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="audit_record",
+            object_id=str(record.audit_id),
+            workspace_id="dev-01",
+        )
+        return collection, microscope
+
+    collection, microscope = asyncio.run(run())
+
+    item = collection.collection["items"][0]
+    payload = microscope.object
+    assert collection.collection["object_type"] == "audit_record"
+    assert collection.collection["diagnostics"]["chain_valid"] is True
+    assert item["object_type"] == "audit_record"
+    assert item["effects"]["scalar_values"] == {
+        "attempt_count": 2,
+        "confirmation_required": True,
+    }
+    assert set(item["effects"]["value_hashes"]) == {
+        "operator_note",
+        "request_payload",
+    }
+    assert payload["object_type"] == "audit_record"
+    assert payload["actor"]["actor_sha256"].startswith("sha256:")
+    assert payload["diagnostics"]["raw_actor_returned"] is False
+    assert payload["content_policy"]["details_returned"] is False
+    assert payload["effects"] == item["effects"]
+    assert payload["diagnostics"]["hashed_detail_count"] == 2
+    assert {
+        "object_type": "raw_vault_record",
+        "object_id": "vault-record-1",
+    } in payload["provenance"]["downstream"]
+    serialized = json.dumps([collection.collection, payload], sort_keys=True)
+    assert "sk-live-secret" not in serialized
+    assert "operator@example.invalid" not in serialized
+    assert "private@example.invalid" not in serialized
+    assert "raw prompt" not in serialized
+
+
 def test_observatory_action_audit_read_model_exposes_receipts_without_raw_content() -> None:
     audit_store = MemoryAuditStore()
     attribution_store = NullAttributionStore()

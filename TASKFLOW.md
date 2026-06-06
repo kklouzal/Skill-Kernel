@@ -16,6 +16,27 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory audit records now have a content-safe Core-backed
+  object microscope. `/admin/api/v1/audit` no longer emits arbitrary audit
+  `details` payloads directly, and generic
+  `/admin/api/v1/objects/audit_record/{audit_id}` resolves bounded audit
+  metadata through `AuditStore.list_recent`, exposing stable audit IDs, actor
+  and subject refs, hash-chain links, primitive counters/flags, detail key
+  names, and hashes for non-scalar detail values while suppressing raw
+  operator notes, request payloads, secrets, and private prompt fragments. This
+  advances core Sections 28.2-28.3 plus Observatory Sections 8.20, 12.6,
+  13.1, and 16.1 by closing an audit aggregate-to-evidence path without adding
+  mutation authority or treating the browser as the security boundary.
+  Validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py -q -k
+  'audit_record_microscope or action_audit_read_model'` (`2 passed, 56
+  deselected`), `uv run ruff check
+  sidecar/autoskill/api/app.py
+  sidecar/autoskill/tests/test_observatory_api.py`, `uv run ruff check
+  sidecar`, `uv run pytest` (`398 passed`), `uv run python -m compileall -q
+  sidecar`, and `git diff --check`. No compose/Postgres smoke was needed
+  because the slice only reshapes the existing audit read path and validates it
+  through the in-memory audit store.
 - 2026-06-06: Reverse-project render-stability audit found Observatory list
   key fallbacks that were not caught by the narrow static regex gate:
   whole-object `JSON.stringify(...)` fallbacks for skill, topology-operation,

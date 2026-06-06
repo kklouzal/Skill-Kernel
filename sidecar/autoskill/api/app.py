@@ -5372,6 +5372,85 @@ def create_app(
                 return item
         return None
 
+    def _safe_audit_details(details: dict[str, Any]) -> dict[str, Any]:
+        scalar_values: dict[str, bool | int | float | None] = {}
+        value_hashes: dict[str, str] = {}
+        for key, value in sorted(details.items(), key=lambda item: str(item[0])):
+            key_name = str(key)
+            if isinstance(value, bool | int | float) or value is None:
+                scalar_values[key_name] = value
+                continue
+            value_hashes[key_name] = "sha256:" + sha256_text(
+                json.dumps(value, sort_keys=True, default=str)
+            )
+        return {
+            "detail_keys": sorted(str(key) for key in details),
+            "scalar_values": scalar_values,
+            "value_hashes": value_hashes,
+            "raw_details_returned": False,
+        }
+
+    def _audit_record_microscope(record: AuditRecord) -> dict[str, Any]:
+        safe_details = _safe_audit_details(record.details)
+        return {
+            "schema_version": "skillkernel.observatory.audit-record.v1",
+            "object_type": "audit_record",
+            "object_id": str(record.audit_id),
+            "title": f"Audit record {record.action}",
+            "summary": (
+                f"{record.action}; subject={record.subject_type}; "
+                f"details={len(record.details)}"
+            ),
+            "audit_id": str(record.audit_id),
+            "occurred_at": record.occurred_at.isoformat(),
+            "action": record.action,
+            "actor": {
+                "present": bool(record.actor),
+                "actor_sha256": "sha256:" + sha256_text(record.actor)
+                if record.actor
+                else None,
+            },
+            "subject_type": record.subject_type,
+            "subject_id": record.subject_id,
+            "previous_hash": record.previous_hash,
+            "audit_hash": record.audit_hash,
+            "timeline": [
+                {
+                    "at": record.occurred_at.isoformat(),
+                    "event": "audit_record_appended",
+                    "action": record.action,
+                }
+            ],
+            "provenance": {
+                "upstream": [],
+                "downstream": [
+                    {"object_type": record.subject_type, "object_id": record.subject_id}
+                ],
+            },
+            "effects": safe_details,
+            "diagnostics": {
+                "supporting_component": "audit_trace",
+                "detail_key_count": len(safe_details["detail_keys"]),
+                "scalar_detail_count": len(safe_details["scalar_values"]),
+                "hashed_detail_count": len(safe_details["value_hashes"]),
+                "raw_actor_returned": False,
+                "chain_link_present": record.previous_hash is not None,
+                "sealed": record.audit_hash is not None,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "content_safe_audit_metadata",
+                "details_returned": False,
+            },
+            "audit": {
+                "links": [
+                    {"object_type": "audit_record", "object_id": str(record.audit_id)}
+                ],
+                "chain_visible": True,
+            },
+        }
+
     def _component_metrics_microscope(
         component_id: str,
         component: dict[str, Any] | None,
@@ -9559,6 +9638,12 @@ def create_app(
             action = await observatory_admin.get_action_audit(action_id=action_id)
             if action is not None:
                 return ObservatoryObjectResponse(object=_admin_action_microscope(action))
+        if object_type in {"audit_record", "audit-record", "audit"}:
+            audit_id = _uuid_or_404(object_id, "audit record")
+            records = await audit.list_recent(workspace_key=workspace_id, limit=1000)
+            record = next((item for item in records if item.audit_id == audit_id), None)
+            if record is not None:
+                return ObservatoryObjectResponse(object=_audit_record_microscope(record))
         if object_type in {
             "component_metrics",
             "component-metrics",
@@ -11316,7 +11401,7 @@ def create_app(
         return _observatory_collection(
             object_type="audit_record",
             title="Audit trail",
-            items=[record.model_dump(mode="json") for record in records],
+            items=[_audit_record_microscope(record) for record in records],
             limit=bounded_limit,
             cursor=cursor,
             source="audit_store.list_recent",

@@ -2,6 +2,21 @@
 
 This plan tracks the v16 coherence-closed handoff and turns it into repo-level gates.
 
+2026-06-06 update: Observatory audit records now have a content-safe object
+microscope over the Core audit store. `/admin/api/v1/audit` returns bounded
+audit metadata instead of arbitrary raw `details`, and generic
+`/admin/api/v1/objects/audit_record/{audit_id}` resolves stable audit IDs,
+actor hashes and subject refs, hash-chain links, primitive counters/flags, detail key
+names, and hashes for non-scalar detail values while suppressing raw operator
+notes, request payloads, secrets, and private prompt fragments. This advances
+core Sections 28.2-28.3 plus Observatory Sections 8.20, 12.6, 13.1, and 16.1
+by closing the audit aggregate-to-evidence path without adding mutation
+authority or browser-side security assumptions. Validation passed with focused
+audit microscope coverage (`2 passed, 56 deselected`), targeted and full
+sidecar ruff, full `uv run pytest` (`398 passed`), compileall, and diff-check
+gates. No compose/Postgres smoke was needed because the slice only reshapes the
+existing audit read path and validates it through the in-memory audit store.
+
 2026-06-06 update: Observatory station catalog coverage now includes the
 Part II autonomy/adjudication workcell as a first-class overview subsystem.
 The runtime station map and SQL seed expose raw-vault, evidence-fidelity,
