@@ -115,6 +115,7 @@ def test_embeddings_api_upserts_and_searches() -> None:
     upsert_route = next(route for route in app.routes if route.path == "/v1/embeddings/upsert")
     search_route = next(route for route in app.routes if route.path == "/v1/embeddings/search")
     object_id = uuid4()
+    profile_id = uuid4()
     vector = [0.0] * EMBEDDING_DIM
     vector[0] = 1.0
 
@@ -125,6 +126,7 @@ def test_embeddings_api_upserts_and_searches() -> None:
                 object_type="evidence_item",
                 object_id=object_id,
                 embedding_model="test-embedding-model",
+                embedding_profile_id=profile_id,
                 embedding=vector,
                 text="redacted evidence summary",
             )
@@ -133,6 +135,7 @@ def test_embeddings_api_upserts_and_searches() -> None:
             request=EmbeddingSearchRequest(
                 workspace_id="dev-01",
                 embedding_model="test-embedding-model",
+                embedding_profile_id=profile_id,
                 embedding=vector,
             )
         )
@@ -142,8 +145,57 @@ def test_embeddings_api_upserts_and_searches() -> None:
 
     assert upserted.created is True
     assert upserted.embedding["object_id"] == str(object_id)
-    assert upserted.embedding["embedding_profile_id"] is None
+    assert upserted.embedding["embedding_profile_id"] == str(profile_id)
     assert searched.candidates[0]["distance"] == 0.0
+
+
+def test_embeddings_api_rejects_profileless_direct_operations() -> None:
+    store = MemoryEmbeddingStore()
+    app = create_app(embedding_store=store)
+    upsert_route = next(route for route in app.routes if route.path == "/v1/embeddings/upsert")
+    search_route = next(route for route in app.routes if route.path == "/v1/embeddings/search")
+    audit_route = next(route for route in app.routes if route.path == "/v1/embeddings/recall-audit")
+    vector = [0.0] * EMBEDDING_DIM
+    vector[0] = 1.0
+
+    async def run_upsert() -> None:
+        await upsert_route.endpoint(
+            request=EmbeddingUpsertRequest(
+                workspace_id="dev-01",
+                object_type="evidence_item",
+                object_id=uuid4(),
+                embedding_model="test-embedding-model",
+                embedding=vector,
+                text="redacted evidence summary",
+            )
+        )
+
+    async def run_search() -> None:
+        await search_route.endpoint(
+            request=EmbeddingSearchRequest(
+                workspace_id="dev-01",
+                embedding_model="test-embedding-model",
+                embedding=vector,
+            )
+        )
+
+    async def run_audit() -> None:
+        await audit_route.endpoint(
+            request=EmbeddingRecallAuditRequest(
+                workspace_id="dev-01",
+                embedding_model="test-embedding-model",
+            )
+        )
+
+    for operation in (run_upsert, run_search, run_audit):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(operation())
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == (
+            "embedding_profile_id is required for direct vector operations"
+        )
+
+    assert store.calls == []
 
 
 def test_embeddings_api_can_scope_to_embedding_profile_id() -> None:
@@ -197,12 +249,14 @@ def test_embeddings_api_runs_recall_audit() -> None:
     store = MemoryEmbeddingStore()
     app = create_app(embedding_store=store)
     audit_route = next(route for route in app.routes if route.path == "/v1/embeddings/recall-audit")
+    profile_id = uuid4()
 
     async def run():
         return await audit_route.endpoint(
             request=EmbeddingRecallAuditRequest(
                 workspace_id="dev-01",
                 embedding_model="test-embedding-model",
+                embedding_profile_id=profile_id,
                 sample_size=3,
                 k=5,
             )
@@ -227,6 +281,7 @@ def test_embeddings_api_rejects_wrong_dimensions() -> None:
                 object_type="evidence_item",
                 object_id=uuid4(),
                 embedding_model="test-embedding-model",
+                embedding_profile_id=uuid4(),
                 embedding=[0.0],
                 text="redacted evidence summary",
             )

@@ -3,6 +3,21 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Direct vector control endpoints now require an explicit
+`embedding_profile_id` for manual upsert, search, and recall-audit operations.
+`/v1/embeddings/upsert`, `/v1/embeddings/search`, and
+`/v1/embeddings/recall-audit` reject profileless requests before they can
+write, compare, or audit vectors outside a declared embedding profile; the
+generated embedding worker/profile-selection path remains unchanged for its
+existing explicit degraded/test-mode handling. This advances Core Sections
+3.2-3.3 and 10.4-10.5 plus production acceptance criteria 31.6 and 31.36.
+Focused validation passed with the embedding API regression (`5 passed`) and
+targeted Ruff. Required gates passed with full sidecar Ruff, full pytest (`419
+passed`), compileall, diff-check, core acceptance (`70` implemented),
+Observatory acceptance (`86` satisfied), and conformance (`23/23`). No
+compose/Postgres smoke was needed because the slice changes API admission
+behavior and focused in-memory route tests cover the store-bypass prevention.
+
 2026-06-06 update: Raw event capture now carries the spec-aligned event
 identity and evidence-fidelity envelope needed for governed autonomy. The
 plugin emits SHA-256-prefixed payload hashes, deterministic `source_event_key`

@@ -2157,6 +2157,14 @@ def _require_control_auth(authorization: str | None) -> None:
         )
 
 
+def _require_embedding_profile_id(embedding_profile_id: UUID | None) -> None:
+    if embedding_profile_id is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="embedding_profile_id is required for direct vector operations",
+        )
+
+
 def _require_admin_auth(
     authorization: str | None,
     roles_header: str | None = None,
@@ -15041,6 +15049,7 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
     ) -> EmbeddingUpsertResponse:
         _require_control_auth(authorization)
+        _require_embedding_profile_id(request.embedding_profile_id)
         try:
             result = await embeddings.upsert_embedding(
                 workspace_key=request.workspace_id,
@@ -15068,6 +15077,7 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
     ) -> EmbeddingSearchResponse:
         _require_control_auth(authorization)
+        _require_embedding_profile_id(request.embedding_profile_id)
         try:
             candidates = await embeddings.search_embeddings(
                 workspace_key=request.workspace_id,
@@ -15092,6 +15102,7 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
     ) -> EmbeddingRecallAuditResponse:
         _require_control_auth(authorization)
+        _require_embedding_profile_id(request.embedding_profile_id)
         result = await embeddings.audit_recall(
             workspace_key=request.workspace_id,
             embedding_model=request.embedding_model,

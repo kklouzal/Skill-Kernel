@@ -16,6 +16,26 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Direct vector control endpoints now fail closed unless callers
+  provide an explicit `embedding_profile_id`. `/v1/embeddings/upsert`,
+  `/v1/embeddings/search`, and `/v1/embeddings/recall-audit` reject
+  profileless operations before reaching the embedding store, while the
+  generated embedding worker/profile-selection path remains unchanged for its
+  existing explicit degraded/test-mode handling. This advances Core Sections
+  3.2-3.3 and 10.4-10.5 plus production acceptance criteria 31.6 and 31.36 by
+  preventing manual vector writes, searches, and recall audits from comparing
+  or persisting vectors outside a declared embedding profile. Focused
+  validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_embeddings_api.py -q` (`5 passed`) and targeted
+  Ruff. Required gates also passed with `uv run ruff check sidecar`, `uv run
+  pytest` (`419 passed`), `uv run python -m compileall -q sidecar`, `git diff
+  --check`, `uv run python scripts/autoskill_acceptance.py --json`
+  (`ready=true`, `70` implemented), `uv run python
+  scripts/autoskill_observatory_acceptance.py --json` (`ready=true`, `86`
+  satisfied), and `uv run python scripts/autoskill_conformance.py --json`
+  (`ready=true`, `23/23`). No compose/Postgres smoke was needed because the
+  slice changes API admission behavior and focused in-memory route tests cover
+  the store-bypass prevention.
 - 2026-06-06: Raw event capture now carries the event identity and
   evidence-fidelity fields required by the unified evidence contract. The
   plugin emits SHA-256-prefixed payload hashes, deterministic
