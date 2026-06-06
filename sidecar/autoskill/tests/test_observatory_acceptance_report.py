@@ -188,7 +188,7 @@ def test_observatory_e2e_load_and_visual_fixtures_are_fresh() -> None:
 
     assert generated == expected
     assert report["ready"] is True
-    assert report["summary"]["scenario_count"] == 11
+    assert report["summary"]["scenario_count"] == 13
     assert report["summary"]["missing_visual_states"] == []
     assert report["summary"]["high_load_skill_count"] >= 1000
     assert fixture_generator.validate_fixture_report(report["fixtures"]) == []

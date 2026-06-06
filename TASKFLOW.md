@@ -40,6 +40,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   sidecar/autoskill/services/historical_bootstrap.py
   sidecar/autoskill/tests/test_historical_bootstrap.py`, and `uv run python
   scripts/autoskill_readiness.py --json`.
+- 2026-06-06: Observatory fixture/readiness audit found Part IV/Part V visual
+  fixture coverage drift: the fixture set covered stale telemetry and high-load
+  soak, but did not explicitly cover the spec-named `regression` and
+  `historical_bootstrap` states, and freeze coverage was encoded only as
+  `rollback_freeze`. Remediation normalized the required fixture state set,
+  added explicit regression and historical-bootstrap fixtures, renamed the
+  freeze fixture to `freeze`, regenerated
+  `sidecar/autoskill/observatory/fixtures/visual-regression-fixtures.json`, and
+  updated the focused acceptance expectation to 13 scenarios. Validation passed:
+  `uv run python scripts/autoskill_observatory_fixtures.py --json`,
+  `uv run pytest sidecar/autoskill/tests/test_observatory_acceptance_report.py
+  -q` (`9 passed`), and `uv run ruff check
+  scripts/autoskill_observatory_fixtures.py
+  sidecar/autoskill/tests/test_observatory_acceptance_report.py`.
 - 2026-06-06: Observatory opportunity mining now has a sidecar-hosted,
   content-safe admin read model instead of being visible only through the
   control-plane `/v1/opportunities/mine` action. `/admin/api/v1/opportunities`

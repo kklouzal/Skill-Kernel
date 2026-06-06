@@ -162,6 +162,38 @@
     },
     {
       "e2e_journey": [
+        "/admin/?view=cockpit&station=evaluator_probes",
+        "/admin/?view=trace"
+      ],
+      "expected_health": "blocked",
+      "load_profile": {
+        "agents": 4,
+        "historical_imports": 3,
+        "skills": 118,
+        "transcript_months": 2
+      },
+      "operator_modes": {
+        "low_power": false,
+        "reduced_motion": false,
+        "webgl_available": true
+      },
+      "reason_codes": [
+        "regression-gate-failed",
+        "probe-bank-regression"
+      ],
+      "scenario_id": "regression",
+      "title": "Regression and failed probe diagnostics",
+      "viewport": {
+        "height": 920,
+        "width": 1440
+      },
+      "visual_assertions": [
+        "regression gate failure outranks routine degraded state",
+        "failed probe evidence links remain content-safe"
+      ]
+    },
+    {
+      "e2e_journey": [
         "/admin/?view=cockpit&station=canary_rollback",
         "/admin/?view=trace"
       ],
@@ -181,7 +213,7 @@
         "canary-critical-failure",
         "rollback-queued"
       ],
-      "scenario_id": "rollback_freeze",
+      "scenario_id": "freeze",
       "title": "Frozen skill with rollback evidence",
       "viewport": {
         "height": 920,
@@ -190,6 +222,38 @@
       "visual_assertions": [
         "freeze state is visually distinct",
         "rollback links preserve object refs"
+      ]
+    },
+    {
+      "e2e_journey": [
+        "/admin/?view=workcells&subsystem=capture_bootstrap",
+        "/admin/?view=cockpit&station=historical_ingestion"
+      ],
+      "expected_health": "degraded",
+      "load_profile": {
+        "agents": 6,
+        "historical_imports": 12,
+        "skills": 180,
+        "transcript_months": 9
+      },
+      "operator_modes": {
+        "low_power": false,
+        "reduced_motion": false,
+        "webgl_available": true
+      },
+      "reason_codes": [
+        "historical-bootstrap-active",
+        "tainted-historical-evidence"
+      ],
+      "scenario_id": "historical_bootstrap",
+      "title": "Historical bootstrap import and candidate review",
+      "viewport": {
+        "height": 920,
+        "width": 1440
+      },
+      "visual_assertions": [
+        "historical import progress and taint confidence are visible",
+        "bootstrap candidates remain propose-only with source lineage"
       ]
     },
     {
@@ -357,8 +421,8 @@
   "summary": {
     "high_load_skill_count": 1600,
     "missing_visual_states": [],
-    "required_visual_states": 11,
-    "scenario_count": 11,
+    "required_visual_states": 13,
+    "scenario_count": 13,
     "validation_errors": []
   }
 }
