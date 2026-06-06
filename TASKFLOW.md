@@ -16,6 +16,30 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Schwi requested a new exhaustive check/remediate/commit pass
+  against the full `unified-implementation-specification.md` after the
+  cron/spec update aligned report tooling to the unified document. This pass
+  uses a parent-level TaskFlow strategy: extract/track requirement coverage by
+  specification region, inspect existing implementation and executable
+  acceptance reports first, remediate bounded gaps immediately when found,
+  commit each coherent fix before moving on, and preserve child-worker session
+  IDs, commands, gates, commits, blockers, and next slices here. Baseline at
+  start: `main` clean and aligned with `origin/main` at `0f91e61`. First
+  bounded slice targets Part IV/V/VI static conformance and assurance;
+  `codex-worker` child `agent:codex-worker:subagent:67688647-18bb-487f-9b71-9c641209e6d3`
+  / run `44845b0c-f2e3-4874-b16a-f99070a3b4b4` was launched for that
+  slice. Local remediation added the Part V conformance gate/docs/test,
+  tightened the production placeholder scanner to catch `NotImplementedError`,
+  and replaced a historical-bootstrap filtered-store `NotImplementedError`
+  with a deterministic no-op derive result. Focused validation passed:
+  `uv run python scripts/autoskill_conformance.py --json`, `uv run pytest
+  sidecar/autoskill/tests/test_conformance_report.py
+  sidecar/autoskill/tests/test_historical_bootstrap.py -q` (`6 passed`),
+  `uv run ruff check scripts/autoskill_conformance.py
+  sidecar/autoskill/tests/test_conformance_report.py
+  sidecar/autoskill/services/historical_bootstrap.py
+  sidecar/autoskill/tests/test_historical_bootstrap.py`, and `uv run python
+  scripts/autoskill_readiness.py --json`.
 - 2026-06-06: Observatory opportunity mining now has a sidecar-hosted,
   content-safe admin read model instead of being visible only through the
   control-plane `/v1/opportunities/mine` action. `/admin/api/v1/opportunities`

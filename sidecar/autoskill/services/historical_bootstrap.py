@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from autoskill.db.evidence import EvidenceRecord, EvidenceStore
+from autoskill.db.evidence import EvidenceDeriveResult, EvidenceRecord, EvidenceStore
 from autoskill.db.retrieval import RetrievalStore
 from autoskill.services.candidates import (
     CandidateProposalResult,
@@ -79,4 +79,4 @@ class _FilteredEvidenceStore:
         return self.records[:limit]
 
     async def derive_from_raw_events(self, **_kwargs: object):
-        raise NotImplementedError
+        return EvidenceDeriveResult(scanned=0, created=0, duplicate=0, evidence=[])
