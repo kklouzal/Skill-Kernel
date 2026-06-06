@@ -1,5 +1,6 @@
 import {
   fetchContextHint,
+  fetchCoreCompatibility,
   fetchStatus,
   forwardEvent,
   forwardEvents,
@@ -10,6 +11,7 @@ import { buildEventEnvelope } from "./event-envelope.js";
 import { appendSpool, getSpoolStats, replaySpool } from "./spool/index.js";
 
 let replayInFlight = false;
+const compatibilityCache = new Map();
 
 const CAPTURE_HOOKS = [
   ["after_tool_call", "tool_call_end", "tool_output", ["tool"]],
@@ -70,6 +72,33 @@ export async function captureEvent({ eventType, payload, trust, taint, hookConte
   if (!config.enabled) {
     return { captured: false, reason: "disabled" };
   }
+  const rawCompatibility = await rawCaptureCompatibility(config);
+  if (rawCompatibility?.compatible === false) {
+    const envelope = buildEventEnvelope({
+      eventType,
+      payload,
+      trust,
+      taint,
+      ctx: hookContext,
+      config: { ...config, captureRawConversation: false },
+    });
+    envelope.payload = {
+      ...envelope.payload,
+      autoskill_raw_capture_degraded: {
+        reason: rawCompatibility.reason,
+      },
+    };
+    await appendSpool(config.spoolDir, envelope, { maxBytes: config.maxSpoolBytes });
+    return {
+      captured: true,
+      forwarded: false,
+      spooled: true,
+      degraded: true,
+      reason: "raw_capture_handshake_failed",
+      eventId: envelope.event_id,
+      error: rawCompatibility.reason,
+    };
+  }
   const envelope = buildEventEnvelope({ eventType, payload, trust, taint, ctx: hookContext, config });
   try {
     await forwardEvent(config.sidecarUrl, envelope, {
@@ -101,6 +130,39 @@ export async function captureEvent({ eventType, payload, trust, taint, hookConte
       },
     };
   }
+}
+
+export function clearCompatibilityHandshakeCache() {
+  compatibilityCache.clear();
+}
+
+async function rawCaptureCompatibility(config) {
+  if (!config.captureRawConversation) {
+    return null;
+  }
+  const now = Date.now();
+  const cacheKey = `${config.sidecarUrl}|${config.ingestToken ?? ""}`;
+  const cached = compatibilityCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.result;
+  }
+  let result;
+  try {
+    result = await fetchCoreCompatibility(config.sidecarUrl, {
+      timeoutMs: config.compatibilityHandshake.timeoutMs,
+      authToken: config.ingestToken,
+    });
+  } catch (error) {
+    result = {
+      compatible: false,
+      reason: `unreachable:${String(error?.message ?? error)}`,
+    };
+  }
+  compatibilityCache.set(cacheKey, {
+    result,
+    expiresAt: now + Math.max(0, config.compatibilityHandshake.cacheTtlMs),
+  });
+  return result;
 }
 
 export async function beforeToolCall(event, hookContext) {

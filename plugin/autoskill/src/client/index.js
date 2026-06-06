@@ -43,6 +43,55 @@ export async function getJson(url, { timeoutMs = 150, authToken } = {}) {
   }
 }
 
+export async function fetchCoreCompatibility(sidecarUrl, options = {}) {
+  const base = sidecarUrl.replace(/\/$/, "");
+  const [version, capabilities, readModelContract, ready] = await Promise.all([
+    getJson(`${base}/v1/version`, options),
+    getJson(`${base}/v1/capabilities`, options),
+    getJson(`${base}/v1/read-model-contract`, options),
+    getJson(`${base}/v1/health/ready`, options),
+  ]);
+  return assessCoreCompatibility({
+    version,
+    capabilities,
+    readModelContract,
+    ready,
+  });
+}
+
+export function assessCoreCompatibility({ version, capabilities, readModelContract, ready }) {
+  const capabilityMap = capabilities?.capabilities ?? {};
+  const ingestContract = capabilityMap.ingest_contract ?? {};
+  const rawVaultPolicy = capabilityMap.raw_vault_policy ?? {};
+  const redactionPolicy = capabilityMap.redaction_policy ?? {};
+  const contentPolicy = readModelContract?.contract?.content_policy ?? {};
+  const checks = [
+    [version?.service === "skillkernel-core", "version.service"],
+    [version?.api_contract_version === "skillkernel.api.v1", "version.api_contract_version"],
+    [version?.read_model_contract_version === "skillkernel.readmodels.v1", "version.read_model_contract_version"],
+    [capabilityMap.ingest === true, "capabilities.ingest"],
+    [ingestContract.path === "/v1/ingest/events", "capabilities.ingest_contract.path"],
+    [ingestContract.method === "POST", "capabilities.ingest_contract.method"],
+    [ingestContract.auth_mode === "bearer", "capabilities.ingest_contract.auth_mode"],
+    [rawVaultPolicy.raw_capture_supported === true, "capabilities.raw_vault_policy.raw_capture_supported"],
+    [rawVaultPolicy.browser_exposure === "forbidden", "capabilities.raw_vault_policy.browser_exposure"],
+    [redactionPolicy.plugin_redacts_before_forward === true, "capabilities.redaction_policy.plugin_redacts_before_forward"],
+    [redactionPolicy.secret_redaction_required === true, "capabilities.redaction_policy.secret_redaction_required"],
+    [contentPolicy.raw_content_default === "denied", "read_model_contract.content_policy.raw_content_default"],
+    [contentPolicy.live_stream_raw_content === "forbidden", "read_model_contract.content_policy.live_stream_raw_content"],
+    [ready?.checks?.event_ingest_api === true, "ready.checks.event_ingest_api"],
+  ];
+  const missing = checks.filter(([passed]) => !passed).map(([, name]) => name);
+  return {
+    compatible: missing.length === 0,
+    reason: missing.length === 0 ? "compatible" : `missing_or_incompatible:${missing.join(",")}`,
+    version,
+    capabilities,
+    readModelContract,
+    ready,
+  };
+}
+
 export async function forwardEvent(sidecarUrl, event, options = {}) {
   return forwardEvents(sidecarUrl, [event], options);
 }

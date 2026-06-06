@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { beforeToolCall, captureEvent, evaluateToolBoundary } from "../src/index.js";
+import {
+  beforeToolCall,
+  captureEvent,
+  clearCompatibilityHandshakeCache,
+  evaluateToolBoundary,
+} from "../src/index.js";
 import { resolveConfig } from "../src/config.js";
 
 const captureHooks = [
@@ -64,6 +69,85 @@ function runtimeHookContext(workspaceDir) {
   };
 }
 
+function compatibleCoreResponse(url) {
+  const pathname = new URL(url).pathname;
+  if (pathname === "/v1/version") {
+    return Response.json({
+      service: "skillkernel-core",
+      service_version: "0.1.0",
+      api_contract_version: "skillkernel.api.v1",
+      schema_migration_version: "0001_autoskill_schema",
+      read_model_contract_version: "skillkernel.readmodels.v1",
+      features: [],
+      degraded_features: [],
+      generated_at: "2026-06-06T00:00:00Z",
+    });
+  }
+  if (pathname === "/v1/capabilities") {
+    return Response.json({
+      service: "skillkernel-core",
+      service_version: "0.1.0",
+      api_contract_version: "skillkernel.api.v1",
+      schema_migration_version: "0001_autoskill_schema",
+      read_model_contract_version: "skillkernel.readmodels.v1",
+      features: [],
+      degraded_features: [],
+      generated_at: "2026-06-06T00:00:00Z",
+      capabilities: {
+        ingest: true,
+        ingest_contract: {
+          path: "/v1/ingest/events",
+          method: "POST",
+          auth_mode: "bearer",
+        },
+        raw_vault_policy: {
+          raw_capture_supported: true,
+          browser_exposure: "forbidden",
+        },
+        redaction_policy: {
+          plugin_redacts_before_forward: true,
+          secret_redaction_required: true,
+        },
+      },
+    });
+  }
+  if (pathname === "/v1/read-model-contract") {
+    return Response.json({
+      service: "skillkernel-core",
+      service_version: "0.1.0",
+      api_contract_version: "skillkernel.api.v1",
+      schema_migration_version: "0001_autoskill_schema",
+      read_model_contract_version: "skillkernel.readmodels.v1",
+      features: [],
+      degraded_features: [],
+      generated_at: "2026-06-06T00:00:00Z",
+      contract: {
+        content_policy: {
+          raw_content_default: "denied",
+          live_stream_raw_content: "forbidden",
+        },
+      },
+    });
+  }
+  if (pathname === "/v1/health/ready") {
+    return Response.json({
+      service: "skillkernel-core",
+      service_version: "0.1.0",
+      api_contract_version: "skillkernel.api.v1",
+      schema_migration_version: "0001_autoskill_schema",
+      read_model_contract_version: "skillkernel.readmodels.v1",
+      features: [],
+      degraded_features: [],
+      generated_at: "2026-06-06T00:00:00Z",
+      ready: false,
+      checks: {
+        event_ingest_api: true,
+      },
+    });
+  }
+  return null;
+}
+
 test("capture hook handlers import and forward redacted envelopes", async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];
@@ -99,11 +183,16 @@ test("llm input capture strips prompt bodies unless raw capture is enabled", asy
   const originalFetch = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (url, request) => {
+    const compatibility = compatibleCoreResponse(url);
+    if (compatibility) {
+      return compatibility;
+    }
     calls.push({ url, request, body: JSON.parse(request.body) });
     return Response.json({ accepted: 1, duplicate: 0, rejected: 0 });
   };
 
   try {
+    clearCompatibilityHandshakeCache();
     const workspaceDir = await tempWorkspace();
     const { default: handler } = await import("../hooks/llm-input/handler.js");
 
@@ -130,6 +219,7 @@ test("llm input capture strips prompt bodies unless raw capture is enabled", asy
     assert.equal(JSON.stringify(payload).includes("sk-testtoken"), false);
 
     const rawWorkspaceDir = await tempWorkspace();
+    clearCompatibilityHandshakeCache();
     await handler(
       {
         systemPrompt: "keep body but redact sk-testtoken000000000000000000",
@@ -147,7 +237,102 @@ test("llm input capture strips prompt bodies unless raw capture is enabled", asy
 
     const rawPayload = calls.at(-1).body.events[0].payload;
     assert.equal(rawPayload.systemPrompt, "keep body but redact [REDACTED]");
+    assert.deepEqual(
+      calls
+        .filter((call) => call.request.method === "POST")
+        .map((call) => new URL(call.url).pathname),
+      ["/v1/ingest/events", "/v1/ingest/events"],
+    );
   } finally {
+    clearCompatibilityHandshakeCache();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("raw capture degrades to redacted spool when core handshake is incompatible", async () => {
+  const originalFetch = globalThis.fetch;
+  const workspaceDir = await tempWorkspace();
+  const postCalls = [];
+  globalThis.fetch = async (url, request) => {
+    if (request?.method === "GET") {
+      return Response.json({ service: "legacy-sidecar" });
+    }
+    postCalls.push({ url, request });
+    return Response.json({ accepted: 1, duplicate: 0, rejected: 0 });
+  };
+
+  try {
+    clearCompatibilityHandshakeCache();
+    const result = await captureEvent({
+      eventType: "llm_input",
+      payload: { systemPrompt: "private prompt sk-testtoken000000000000000000" },
+      trust: "agent_output",
+      taint: ["llm"],
+      hookContext: {
+        ...hookContext(workspaceDir),
+        config: {
+          autoskill: {
+            ...hookContext(workspaceDir).config.autoskill,
+            captureRawConversation: true,
+          },
+        },
+      },
+    });
+
+    assert.equal(result.spooled, true);
+    assert.equal(result.degraded, true);
+    assert.equal(result.reason, "raw_capture_handshake_failed");
+    assert.equal(postCalls.length, 0);
+
+    const files = await fs.readdir(path.join(workspaceDir, ".autoskill", "spool"));
+    assert.equal(files.length, 1);
+    const contents = await fs.readFile(
+      path.join(workspaceDir, ".autoskill", "spool", files[0]),
+      "utf8",
+    );
+    const envelope = JSON.parse(contents.trim());
+    assert.match(envelope.payload.systemPrompt, /^\[REDACTED_CONTENT bytes=/);
+    assert.equal(JSON.stringify(envelope).includes("private prompt"), false);
+    assert.match(
+      envelope.payload.autoskill_raw_capture_degraded.reason,
+      /^missing_or_incompatible:/,
+    );
+  } finally {
+    clearCompatibilityHandshakeCache();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("raw capture degrades to redacted spool when core handshake is unreachable", async () => {
+  const originalFetch = globalThis.fetch;
+  const workspaceDir = await tempWorkspace();
+  globalThis.fetch = async () => {
+    throw new Error("connection refused");
+  };
+
+  try {
+    clearCompatibilityHandshakeCache();
+    const result = await captureEvent({
+      eventType: "llm_input",
+      payload: { systemPrompt: "private prompt" },
+      trust: "agent_output",
+      taint: ["llm"],
+      hookContext: {
+        ...hookContext(workspaceDir),
+        config: {
+          autoskill: {
+            ...hookContext(workspaceDir).config.autoskill,
+            captureRawConversation: true,
+          },
+        },
+      },
+    });
+
+    assert.equal(result.spooled, true);
+    assert.equal(result.reason, "raw_capture_handshake_failed");
+    assert.match(result.error, /^unreachable:/);
+  } finally {
+    clearCompatibilityHandshakeCache();
     globalThis.fetch = originalFetch;
   }
 });

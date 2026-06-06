@@ -56,6 +56,18 @@ export function resolveConfig(ctx = {}) {
       envBool("AUTOSKILL_PLUGIN_CAPTURE_RAW_CONVERSATION") ??
       envBool("AUTOSKILL_CAPTURE_RAW_CONVERSATION") ??
       false,
+    compatibilityHandshake: {
+      timeoutMs:
+        cfg.compatibilityHandshake?.timeoutMs ??
+        envInt("AUTOSKILL_PLUGIN_COMPATIBILITY_HANDSHAKE_TIMEOUT_MS") ??
+        envInt("AUTOSKILL_COMPATIBILITY_HANDSHAKE_TIMEOUT_MS") ??
+        500,
+      cacheTtlMs:
+        cfg.compatibilityHandshake?.cacheTtlMs ??
+        envInt("AUTOSKILL_PLUGIN_COMPATIBILITY_HANDSHAKE_CACHE_TTL_MS") ??
+        envInt("AUTOSKILL_COMPATIBILITY_HANDSHAKE_CACHE_TTL_MS") ??
+        60_000,
+    },
     runtimeContextBroker: {
       enabled:
         cfg.runtimeContextBroker?.enabled ??

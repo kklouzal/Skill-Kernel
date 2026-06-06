@@ -3998,12 +3998,33 @@ def create_app(
 
     @app.get("/v1/capabilities", response_model=CoreCapabilitiesResponse)
     async def capabilities() -> CoreCapabilitiesResponse:
+        settings = get_settings()
         return CoreCapabilitiesResponse(
             **_core_protocol_payload(),
             capabilities={
                 "ingest": True,
+                "ingest_contract": {
+                    "path": "/v1/ingest/events",
+                    "method": "POST",
+                    "auth_mode": "bearer",
+                    "ingest_auth_configured": bool(settings.ingest_token),
+                    "event_schema": "autoskill.event-envelope.v1",
+                },
                 "runtime_context_hints": True,
                 "raw_vault": True,
+                "raw_vault_policy": {
+                    "raw_capture_supported": True,
+                    "raw_capture_default": False,
+                    "browser_exposure": "forbidden",
+                    "guarded_reveal_required": True,
+                    "raw_capture_requires_plugin_handshake": True,
+                },
+                "redaction_policy": {
+                    "plugin_redacts_before_forward": True,
+                    "core_redacts_before_persistence": True,
+                    "secret_redaction_required": True,
+                    "raw_capture_still_redacts_secrets": True,
+                },
                 "semantic_adjudication": True,
                 "embedding_generation": True,
                 "observatory_read_models": True,

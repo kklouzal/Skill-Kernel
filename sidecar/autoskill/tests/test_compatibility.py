@@ -62,6 +62,21 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
     assert version.read_model_contract_version == "skillkernel.readmodels.v1"
     assert "guarded_action_requests" in version.features
     assert "semantic_adjudication" in version.degraded_features
+    assert capabilities.capabilities["ingest_contract"] == {
+        "path": "/v1/ingest/events",
+        "method": "POST",
+        "auth_mode": "bearer",
+        "ingest_auth_configured": False,
+        "event_schema": "autoskill.event-envelope.v1",
+    }
+    assert capabilities.capabilities["raw_vault_policy"]["browser_exposure"] == "forbidden"
+    assert capabilities.capabilities["raw_vault_policy"][
+        "raw_capture_requires_plugin_handshake"
+    ] is True
+    assert capabilities.capabilities["redaction_policy"][
+        "plugin_redacts_before_forward"
+    ] is True
+    assert capabilities.capabilities["redaction_policy"]["secret_redaction_required"] is True
     assert capabilities.capabilities["topology_operations"] == [
         "create",
         "improve",
