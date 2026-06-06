@@ -97,6 +97,7 @@ def build_report(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
         _check_skillir_package_schema_contract(),
         _check_retrieval_attribution_audit_schema_contract(),
         _check_runtime_memory_control_schema_contract(),
+        _check_topology_operation_schema_contract(),
         _check_no_unstable_react_keys(),
         _check_migration_deduplicated_and_ordered(),
         _check_architecture_invariants(spec_path),
@@ -443,6 +444,35 @@ def _check_runtime_memory_control_schema_contract() -> StaticCheck:
         (
             "migrations/0001_autoskill_schema.sql runtime/memory/control tables",
             "compiled/support/context/skill/token-ledger sync triggers",
+        ),
+        details,
+    )
+
+
+def _check_topology_operation_schema_contract() -> StaticCheck:
+    migration = MIGRATION_PATH.read_text(encoding="utf-8")
+    details: list[str] = []
+    for required in (
+        "CREATE TABLE IF NOT EXISTS autoskill.topology_candidates",
+        "CREATE TABLE IF NOT EXISTS autoskill.topology_operation_trials",
+        "CREATE TABLE IF NOT EXISTS autoskill.topology_operation_results",
+        "sync_topology_candidate_from_skill_graph_operation",
+        "sync_topology_operation_trial_from_planned_trial",
+        "skill_graph_operations_sync_topology_candidates",
+        "planned_topology_trials_sync_topology_operation_trials",
+        "source_skill_graph_operation_id uuid UNIQUE",
+        "source_planned_topology_trial_id uuid UNIQUE",
+        "legacy_trial_kind",
+        "topology_candidates_kind_status_idx",
+    ):
+        if required not in migration:
+            details.append(f"topology operation schema missing {required}")
+    return _result(
+        "SKX-STATIC-006H",
+        "canonical topology candidate, trial, and result tables mirror live topology operations",
+        (
+            "migrations/0001_autoskill_schema.sql topology operation tables",
+            "skill_graph_operations/planned_topology_trials sync triggers",
         ),
         details,
     )

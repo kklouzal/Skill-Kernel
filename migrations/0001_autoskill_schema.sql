@@ -4438,6 +4438,580 @@ CREATE TABLE IF NOT EXISTS autoskill.planned_topology_trials (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.topology_candidates (
+  topology_candidate_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  candidate_kind text NOT NULL CHECK (
+    candidate_kind IN (
+      'create',
+      'improve',
+      'compose',
+      'decompose',
+      'archive',
+      'promote',
+      'merge',
+      'description_repair',
+      'validator_add',
+      'adapter_add',
+      'no_op'
+    )
+  ),
+  target_skill_id uuid,
+  source_skill_ids uuid[] NOT NULL DEFAULT '{}',
+  proposed_skill_ids uuid[] NOT NULL DEFAULT '{}',
+  source_cluster_ids uuid[] NOT NULL DEFAULT '{}',
+  evidence_ids uuid[] NOT NULL DEFAULT '{}',
+  maturity text NOT NULL DEFAULT 'observed',
+  llm_plan_hash text,
+  deterministic_score numeric NOT NULL DEFAULT 0,
+  score_breakdown jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status text NOT NULL CHECK (
+    status IN (
+      'proposed',
+      'deduped',
+      'rejected',
+      'staged',
+      'evaluating',
+      'accepted',
+      'committed',
+      'rolled_back',
+      'quarantined'
+    )
+  ),
+  rejection_reason text,
+  created_by_job_id uuid,
+  source_skill_graph_operation_id uuid UNIQUE REFERENCES autoskill.skill_graph_operations(skill_graph_operation_id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.topology_operation_trials (
+  topology_operation_trial_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  topology_candidate_id uuid NOT NULL REFERENCES autoskill.topology_candidates(topology_candidate_id),
+  trial_kind text NOT NULL CHECK (
+    trial_kind IN (
+      'no_op',
+      'no_skill',
+      'current_skill',
+      'nearest_active',
+      'nearest_archived',
+      'old_version',
+      'new_version',
+      'component_only',
+      'composed_skill',
+      'decomposed_successors',
+      'broker_only',
+      'sibling_bundle'
+    )
+  ),
+  executor_profile_id uuid REFERENCES autoskill.executor_profiles(executor_profile_id),
+  task_fingerprint text NOT NULL,
+  probe_ids uuid[] NOT NULL DEFAULT '{}',
+  outcome jsonb NOT NULL DEFAULT '{}'::jsonb,
+  passed boolean NOT NULL DEFAULT false,
+  score numeric,
+  source_planned_topology_trial_id uuid UNIQUE REFERENCES autoskill.planned_topology_trials(planned_topology_trial_id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.topology_operation_results (
+  topology_operation_result_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  topology_candidate_id uuid NOT NULL REFERENCES autoskill.topology_candidates(topology_candidate_id),
+  evolution_transaction_id uuid REFERENCES autoskill.evolution_transactions(evolution_transaction_id),
+  operation_kind text NOT NULL CHECK (
+    operation_kind IN ('create','improve','compose','decompose','archive','promote','merge','repair','no_op')
+  ),
+  affected_skill_ids uuid[] NOT NULL DEFAULT '{}',
+  before_state jsonb NOT NULL DEFAULT '{}'::jsonb,
+  after_state jsonb NOT NULL DEFAULT '{}'::jsonb,
+  activation_decision text NOT NULL CHECK (
+    activation_decision IN ('accepted','rejected','rolled_back','canarying','kept','frozen','no_op')
+  ),
+  metrics jsonb NOT NULL DEFAULT '{}'::jsonb,
+  source_skill_graph_operation_id uuid UNIQUE REFERENCES autoskill.skill_graph_operations(skill_graph_operation_id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_topology_candidate_from_skill_graph_operation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  mapped_candidate_status text;
+  mapped_activation_decision text;
+  deterministic_score_value numeric;
+BEGIN
+  mapped_candidate_status := CASE NEW.status
+    WHEN 'candidate' THEN 'proposed'
+    WHEN 'blocked' THEN 'rejected'
+    WHEN 'trial' THEN 'evaluating'
+    WHEN 'accepted' THEN 'accepted'
+    WHEN 'rejected' THEN 'rejected'
+    WHEN 'applied' THEN 'committed'
+    WHEN 'rolled_back' THEN 'rolled_back'
+    ELSE 'proposed'
+  END;
+  mapped_activation_decision := CASE NEW.status
+    WHEN 'blocked' THEN 'rejected'
+    WHEN 'rejected' THEN 'rejected'
+    WHEN 'rolled_back' THEN 'rolled_back'
+    WHEN 'trial' THEN 'canarying'
+    WHEN 'accepted' THEN 'accepted'
+    WHEN 'applied' THEN 'accepted'
+    WHEN 'candidate' THEN 'kept'
+    ELSE 'no_op'
+  END;
+  deterministic_score_value := CASE
+    WHEN NEW.effect_coverage->>'deterministic_score' ~ '^-?[0-9]+(\.[0-9]+)?$'
+    THEN (NEW.effect_coverage->>'deterministic_score')::numeric
+    WHEN NEW.trial_summary->>'deterministic_score' ~ '^-?[0-9]+(\.[0-9]+)?$'
+    THEN (NEW.trial_summary->>'deterministic_score')::numeric
+    ELSE 0
+  END;
+
+  INSERT INTO autoskill.topology_candidates (
+    topology_candidate_id,
+    workspace_id,
+    candidate_kind,
+    target_skill_id,
+    source_skill_ids,
+    proposed_skill_ids,
+    source_cluster_ids,
+    evidence_ids,
+    maturity,
+    llm_plan_hash,
+    deterministic_score,
+    score_breakdown,
+    status,
+    rejection_reason,
+    source_skill_graph_operation_id,
+    created_at,
+    updated_at
+  )
+  VALUES (
+    NEW.skill_graph_operation_id,
+    NEW.workspace_id,
+    CASE
+      WHEN NEW.operation_kind IN (
+        'create',
+        'improve',
+        'compose',
+        'decompose',
+        'archive',
+        'promote',
+        'merge'
+      )
+      THEN NEW.operation_kind
+      ELSE 'no_op'
+    END,
+    NEW.subject_skill_ids[1],
+    NEW.subject_skill_ids,
+    NEW.output_skill_ids,
+    '{}',
+    NEW.evidence_ids,
+    COALESCE(NULLIF(NEW.skill_graph_ir->>'maturity', ''), 'observed'),
+    COALESCE(NULLIF(NEW.skill_graph_ir->>'plan_hash', ''), NULLIF(NEW.effect_coverage->>'plan_hash', '')),
+    deterministic_score_value,
+    jsonb_build_object(
+      'source', 'skill_graph_operations',
+      'skill_graph_ir', NEW.skill_graph_ir,
+      'effect_coverage', NEW.effect_coverage,
+      'trial_summary', NEW.trial_summary
+    ),
+    mapped_candidate_status,
+    CASE WHEN NEW.status = 'blocked' THEN NEW.trial_summary->>'blocker' ELSE NULL END,
+    NEW.skill_graph_operation_id,
+    NEW.created_at,
+    NEW.updated_at
+  )
+  ON CONFLICT (source_skill_graph_operation_id) DO UPDATE SET
+    workspace_id = EXCLUDED.workspace_id,
+    candidate_kind = EXCLUDED.candidate_kind,
+    target_skill_id = EXCLUDED.target_skill_id,
+    source_skill_ids = EXCLUDED.source_skill_ids,
+    proposed_skill_ids = EXCLUDED.proposed_skill_ids,
+    source_cluster_ids = EXCLUDED.source_cluster_ids,
+    evidence_ids = EXCLUDED.evidence_ids,
+    maturity = EXCLUDED.maturity,
+    llm_plan_hash = EXCLUDED.llm_plan_hash,
+    deterministic_score = EXCLUDED.deterministic_score,
+    score_breakdown = EXCLUDED.score_breakdown,
+    status = EXCLUDED.status,
+    rejection_reason = EXCLUDED.rejection_reason,
+    updated_at = EXCLUDED.updated_at;
+
+  INSERT INTO autoskill.topology_operation_results (
+    topology_operation_result_id,
+    workspace_id,
+    topology_candidate_id,
+    evolution_transaction_id,
+    operation_kind,
+    affected_skill_ids,
+    before_state,
+    after_state,
+    activation_decision,
+    metrics,
+    source_skill_graph_operation_id,
+    created_at
+  )
+  VALUES (
+    autoskill.stable_uuid_from_text('topology_operation_result:skill_graph_operation:' || NEW.skill_graph_operation_id::text),
+    NEW.workspace_id,
+    NEW.skill_graph_operation_id,
+    NEW.evolution_transaction_id,
+    CASE
+      WHEN NEW.operation_kind IN ('create','improve','compose','decompose','archive','promote','merge')
+      THEN NEW.operation_kind
+      ELSE 'no_op'
+    END,
+    array_cat(NEW.subject_skill_ids, NEW.output_skill_ids),
+    jsonb_build_object(
+      'subject_skill_ids', NEW.subject_skill_ids,
+      'skill_graph_ir', NEW.skill_graph_ir
+    ),
+    jsonb_build_object(
+      'output_skill_ids', NEW.output_skill_ids,
+      'status', NEW.status
+    ),
+    mapped_activation_decision,
+    jsonb_build_object(
+      'source', 'skill_graph_operations',
+      'effect_coverage', NEW.effect_coverage,
+      'trial_summary', NEW.trial_summary
+    ),
+    NEW.skill_graph_operation_id,
+    NEW.updated_at
+  )
+  ON CONFLICT (source_skill_graph_operation_id) DO UPDATE SET
+    workspace_id = EXCLUDED.workspace_id,
+    topology_candidate_id = EXCLUDED.topology_candidate_id,
+    evolution_transaction_id = EXCLUDED.evolution_transaction_id,
+    operation_kind = EXCLUDED.operation_kind,
+    affected_skill_ids = EXCLUDED.affected_skill_ids,
+    before_state = EXCLUDED.before_state,
+    after_state = EXCLUDED.after_state,
+    activation_decision = EXCLUDED.activation_decision,
+    metrics = EXCLUDED.metrics,
+    created_at = EXCLUDED.created_at;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION autoskill.sync_topology_operation_trial_from_planned_trial()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO autoskill.topology_operation_trials (
+    topology_operation_trial_id,
+    workspace_id,
+    topology_candidate_id,
+    trial_kind,
+    executor_profile_id,
+    task_fingerprint,
+    probe_ids,
+    outcome,
+    passed,
+    score,
+    source_planned_topology_trial_id,
+    created_at
+  )
+  VALUES (
+    NEW.planned_topology_trial_id,
+    NEW.workspace_id,
+    NEW.skill_graph_operation_id,
+    CASE NEW.trial_kind
+      WHEN 'no_skill_control' THEN 'no_skill'
+      WHEN 'current_skill_control' THEN 'current_skill'
+      WHEN 'original_baseline' THEN 'current_skill'
+      WHEN 'nearest_active_collision' THEN 'nearest_active'
+      WHEN 'target_creation' THEN 'new_version'
+      WHEN 'target_improvement' THEN 'new_version'
+      WHEN 'component_baseline' THEN 'component_only'
+      WHEN 'composed_workflow' THEN 'composed_skill'
+      WHEN 'successor_routing' THEN 'decomposed_successors'
+      WHEN 'broker_replay' THEN 'broker_only'
+      WHEN 'broker_canary' THEN 'broker_only'
+      WHEN 'sibling_bundle' THEN 'sibling_bundle'
+      ELSE 'no_op'
+    END,
+    NULL,
+    COALESCE(
+      NULLIF(NEW.expected->>'task_fingerprint', ''),
+      'sha256:' || encode(digest(
+        NEW.objective || ':' || NEW.planned_topology_trial_id::text,
+        'sha256'
+      ), 'hex')
+    ),
+    CASE
+      WHEN jsonb_typeof(NEW.expected->'probe_ids') = 'array'
+      THEN ARRAY(
+        SELECT probe_id_text.value::uuid
+        FROM jsonb_array_elements_text(NEW.expected->'probe_ids') AS probe_id_text(value)
+        WHERE probe_id_text.value ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+      )
+      ELSE '{}'
+    END,
+    jsonb_build_object(
+      'source', 'planned_topology_trials',
+      'legacy_trial_kind', NEW.trial_kind,
+      'objective', NEW.objective,
+      'expected', NEW.expected,
+      'status', NEW.status,
+      'result', NEW.result
+    ),
+    NEW.status = 'passed',
+    CASE
+      WHEN NEW.result->>'score' ~ '^-?[0-9]+(\.[0-9]+)?$' THEN (NEW.result->>'score')::numeric
+      ELSE NULL
+    END,
+    NEW.planned_topology_trial_id,
+    NEW.created_at
+  )
+  ON CONFLICT (source_planned_topology_trial_id) DO UPDATE SET
+    workspace_id = EXCLUDED.workspace_id,
+    topology_candidate_id = EXCLUDED.topology_candidate_id,
+    trial_kind = EXCLUDED.trial_kind,
+    executor_profile_id = EXCLUDED.executor_profile_id,
+    task_fingerprint = EXCLUDED.task_fingerprint,
+    probe_ids = EXCLUDED.probe_ids,
+    outcome = EXCLUDED.outcome,
+    passed = EXCLUDED.passed,
+    score = EXCLUDED.score,
+    created_at = EXCLUDED.created_at;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS skill_graph_operations_sync_topology_candidates
+  ON autoskill.skill_graph_operations;
+CREATE TRIGGER skill_graph_operations_sync_topology_candidates
+AFTER INSERT OR UPDATE ON autoskill.skill_graph_operations
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_topology_candidate_from_skill_graph_operation();
+
+DROP TRIGGER IF EXISTS planned_topology_trials_sync_topology_operation_trials
+  ON autoskill.planned_topology_trials;
+CREATE TRIGGER planned_topology_trials_sync_topology_operation_trials
+AFTER INSERT OR UPDATE ON autoskill.planned_topology_trials
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_topology_operation_trial_from_planned_trial();
+
+INSERT INTO autoskill.topology_candidates (
+  topology_candidate_id,
+  workspace_id,
+  candidate_kind,
+  target_skill_id,
+  source_skill_ids,
+  proposed_skill_ids,
+  source_cluster_ids,
+  evidence_ids,
+  maturity,
+  llm_plan_hash,
+  deterministic_score,
+  score_breakdown,
+  status,
+  rejection_reason,
+  source_skill_graph_operation_id,
+  created_at,
+  updated_at
+)
+SELECT
+  skill_graph_operation_id,
+  workspace_id,
+  CASE
+    WHEN operation_kind IN ('create','improve','compose','decompose','archive','promote','merge')
+    THEN operation_kind
+    ELSE 'no_op'
+  END,
+  subject_skill_ids[1],
+  subject_skill_ids,
+  output_skill_ids,
+  '{}',
+  evidence_ids,
+  COALESCE(NULLIF(skill_graph_ir->>'maturity', ''), 'observed'),
+  COALESCE(NULLIF(skill_graph_ir->>'plan_hash', ''), NULLIF(effect_coverage->>'plan_hash', '')),
+  CASE
+    WHEN effect_coverage->>'deterministic_score' ~ '^-?[0-9]+(\.[0-9]+)?$'
+    THEN (effect_coverage->>'deterministic_score')::numeric
+    WHEN trial_summary->>'deterministic_score' ~ '^-?[0-9]+(\.[0-9]+)?$'
+    THEN (trial_summary->>'deterministic_score')::numeric
+    ELSE 0
+  END,
+  jsonb_build_object(
+    'source', 'skill_graph_operations',
+    'skill_graph_ir', skill_graph_ir,
+    'effect_coverage', effect_coverage,
+    'trial_summary', trial_summary
+  ),
+  CASE status
+    WHEN 'candidate' THEN 'proposed'
+    WHEN 'blocked' THEN 'rejected'
+    WHEN 'trial' THEN 'evaluating'
+    WHEN 'accepted' THEN 'accepted'
+    WHEN 'rejected' THEN 'rejected'
+    WHEN 'applied' THEN 'committed'
+    WHEN 'rolled_back' THEN 'rolled_back'
+    ELSE 'proposed'
+  END,
+  CASE WHEN status = 'blocked' THEN trial_summary->>'blocker' ELSE NULL END,
+  skill_graph_operation_id,
+  created_at,
+  updated_at
+FROM autoskill.skill_graph_operations
+ON CONFLICT (source_skill_graph_operation_id) DO UPDATE SET
+  workspace_id = EXCLUDED.workspace_id,
+  candidate_kind = EXCLUDED.candidate_kind,
+  target_skill_id = EXCLUDED.target_skill_id,
+  source_skill_ids = EXCLUDED.source_skill_ids,
+  proposed_skill_ids = EXCLUDED.proposed_skill_ids,
+  source_cluster_ids = EXCLUDED.source_cluster_ids,
+  evidence_ids = EXCLUDED.evidence_ids,
+  maturity = EXCLUDED.maturity,
+  llm_plan_hash = EXCLUDED.llm_plan_hash,
+  deterministic_score = EXCLUDED.deterministic_score,
+  score_breakdown = EXCLUDED.score_breakdown,
+  status = EXCLUDED.status,
+  rejection_reason = EXCLUDED.rejection_reason,
+  updated_at = EXCLUDED.updated_at;
+
+INSERT INTO autoskill.topology_operation_results (
+  topology_operation_result_id,
+  workspace_id,
+  topology_candidate_id,
+  evolution_transaction_id,
+  operation_kind,
+  affected_skill_ids,
+  before_state,
+  after_state,
+  activation_decision,
+  metrics,
+  source_skill_graph_operation_id,
+  created_at
+)
+SELECT
+  autoskill.stable_uuid_from_text('topology_operation_result:skill_graph_operation:' || skill_graph_operation_id::text),
+  workspace_id,
+  skill_graph_operation_id,
+  evolution_transaction_id,
+  CASE
+    WHEN operation_kind IN ('create','improve','compose','decompose','archive','promote','merge')
+    THEN operation_kind
+    ELSE 'no_op'
+  END,
+  array_cat(subject_skill_ids, output_skill_ids),
+  jsonb_build_object('subject_skill_ids', subject_skill_ids, 'skill_graph_ir', skill_graph_ir),
+  jsonb_build_object('output_skill_ids', output_skill_ids, 'status', status),
+  CASE status
+    WHEN 'blocked' THEN 'rejected'
+    WHEN 'rejected' THEN 'rejected'
+    WHEN 'rolled_back' THEN 'rolled_back'
+    WHEN 'trial' THEN 'canarying'
+    WHEN 'accepted' THEN 'accepted'
+    WHEN 'applied' THEN 'accepted'
+    WHEN 'candidate' THEN 'kept'
+    ELSE 'no_op'
+  END,
+  jsonb_build_object(
+    'source', 'skill_graph_operations',
+    'effect_coverage', effect_coverage,
+    'trial_summary', trial_summary
+  ),
+  skill_graph_operation_id,
+  updated_at
+FROM autoskill.skill_graph_operations
+ON CONFLICT (source_skill_graph_operation_id) DO UPDATE SET
+  workspace_id = EXCLUDED.workspace_id,
+  topology_candidate_id = EXCLUDED.topology_candidate_id,
+  evolution_transaction_id = EXCLUDED.evolution_transaction_id,
+  operation_kind = EXCLUDED.operation_kind,
+  affected_skill_ids = EXCLUDED.affected_skill_ids,
+  before_state = EXCLUDED.before_state,
+  after_state = EXCLUDED.after_state,
+  activation_decision = EXCLUDED.activation_decision,
+  metrics = EXCLUDED.metrics,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO autoskill.topology_operation_trials (
+  topology_operation_trial_id,
+  workspace_id,
+  topology_candidate_id,
+  trial_kind,
+  executor_profile_id,
+  task_fingerprint,
+  probe_ids,
+  outcome,
+  passed,
+  score,
+  source_planned_topology_trial_id,
+  created_at
+)
+SELECT
+  planned_topology_trial_id,
+  workspace_id,
+  skill_graph_operation_id,
+  CASE trial_kind
+    WHEN 'no_skill_control' THEN 'no_skill'
+    WHEN 'current_skill_control' THEN 'current_skill'
+    WHEN 'original_baseline' THEN 'current_skill'
+    WHEN 'nearest_active_collision' THEN 'nearest_active'
+    WHEN 'target_creation' THEN 'new_version'
+    WHEN 'target_improvement' THEN 'new_version'
+    WHEN 'component_baseline' THEN 'component_only'
+    WHEN 'composed_workflow' THEN 'composed_skill'
+    WHEN 'successor_routing' THEN 'decomposed_successors'
+    WHEN 'broker_replay' THEN 'broker_only'
+    WHEN 'broker_canary' THEN 'broker_only'
+    WHEN 'sibling_bundle' THEN 'sibling_bundle'
+    ELSE 'no_op'
+  END,
+  NULL,
+  COALESCE(
+    NULLIF(expected->>'task_fingerprint', ''),
+    'sha256:' || encode(digest(objective || ':' || planned_topology_trial_id::text, 'sha256'), 'hex')
+  ),
+  CASE
+    WHEN jsonb_typeof(expected->'probe_ids') = 'array'
+    THEN ARRAY(
+      SELECT probe_id_text.value::uuid
+      FROM jsonb_array_elements_text(expected->'probe_ids') AS probe_id_text(value)
+      WHERE probe_id_text.value ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    )
+    ELSE '{}'
+  END,
+  jsonb_build_object(
+    'source', 'planned_topology_trials',
+    'legacy_trial_kind', trial_kind,
+    'objective', objective,
+    'expected', expected,
+    'status', status,
+    'result', result
+  ),
+  status = 'passed',
+  CASE
+    WHEN result->>'score' ~ '^-?[0-9]+(\.[0-9]+)?$' THEN (result->>'score')::numeric
+    ELSE NULL
+  END,
+  planned_topology_trial_id,
+  created_at
+FROM autoskill.planned_topology_trials
+ON CONFLICT (source_planned_topology_trial_id) DO UPDATE SET
+  workspace_id = EXCLUDED.workspace_id,
+  topology_candidate_id = EXCLUDED.topology_candidate_id,
+  trial_kind = EXCLUDED.trial_kind,
+  executor_profile_id = EXCLUDED.executor_profile_id,
+  task_fingerprint = EXCLUDED.task_fingerprint,
+  probe_ids = EXCLUDED.probe_ids,
+  outcome = EXCLUDED.outcome,
+  passed = EXCLUDED.passed,
+  score = EXCLUDED.score,
+  created_at = EXCLUDED.created_at;
+
+CREATE INDEX IF NOT EXISTS topology_candidates_kind_status_idx
+  ON autoskill.topology_candidates (workspace_id, candidate_kind, status, deterministic_score DESC);
+
 CREATE TABLE IF NOT EXISTS autoskill.skill_usage_windows (
   skill_usage_window_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
