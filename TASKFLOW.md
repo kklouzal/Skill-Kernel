@@ -28,11 +28,18 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   storage, plugin installation, live runtime skill writes, or autonomous apply.
   This advances Plugin Sections 7.2-7.4, Core Sections 12.1-12.1.2, and the
   raw-events DDL contract in Section 31. Focused validation passed with
-  event-store/ingest regressions (`5 passed`), targeted Ruff, plugin `npm
-  test` (`28 passed`), `uv run python scripts/autoskill_conformance.py --json`
-  (`ready=true`, `14/14` checks), `uv run python scripts/autoskill_acceptance.py
-  --json` (`ready=true`, `70` implemented), and `uv run python -m compileall -q
-  sidecar`.
+  event-store and readiness regressions (`8 passed`) plus plugin `npm test`
+  (`28 passed`) and `npm run check`. Required gates passed with `uv run ruff
+  check sidecar`, `uv run pytest` (`415 passed`), `uv run python -m compileall
+  -q sidecar`, `git diff --check`, `uv run python
+  scripts/generate_observatory_openapi_client.py --check`, `uv run python
+  scripts/autoskill_acceptance.py --json` (`ready=true`, `70` implemented),
+  `uv run python scripts/autoskill_observatory_acceptance.py --json`
+  (`ready=true`, `86` satisfied), and `uv run python
+  scripts/autoskill_conformance.py --json` (`ready=true`, `14/14`). An
+  isolated pgvector migration smoke applied `scripts/migrate.py` twice against
+  a fresh temporary database and verified the new raw-event columns plus
+  `raw_events_workspace_source_event_key_idx`.
 - 2026-06-06: The reference split-container boundary now keeps Core to its
   internal `/v1` API surface and hosts the Observatory web shell plus
   `/admin/api`, `/admin/live`, and `/admin/live-sse` from the Observatory

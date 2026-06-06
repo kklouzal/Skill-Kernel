@@ -14,9 +14,14 @@ idempotent raw-event columns, a fidelity check, and a workspace/source/source
 event key uniqueness guard without enabling raw-vault storage or live runtime
 skill apply. This advances Core Sections 12.1-12.1.2 plus the raw-events DDL
 contract in Section 31 and Plugin Sections 7.2-7.4. Focused validation passed
-with event-store/ingest regressions (`5 passed`), targeted Ruff, plugin `npm
-test` (`28 passed`), conformance (`ready=true`, `14/14`), acceptance
-(`ready=true`, `70` implemented), and sidecar compileall.
+with event-store and readiness regressions (`8 passed`) plus plugin `npm test`
+(`28 passed`) and `npm run check`. Required gates passed with full sidecar
+Ruff, full pytest (`415 passed`), compileall, diff-check, generated OpenAPI
+client freshness check, core acceptance (`70` implemented), Observatory
+acceptance (`86` satisfied), and conformance (`14/14`). An isolated pgvector
+migration smoke applied `scripts/migrate.py` twice against a fresh temporary
+database and verified the new raw-event columns plus
+`raw_events_workspace_source_event_key_idx`.
 
 2026-06-06 update: Observatory model invocation audit records now have direct
 sidecar-hosted, content-safe collection/detail read models in addition to the
