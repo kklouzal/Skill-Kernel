@@ -3,6 +3,24 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Reference compose/operator access now matches the
+split-container Observatory route split. The Observatory service is attached
+to the same runtime networks as Core so it can reach the shared Postgres/read
+model plane in the Dev-01 topology, and `scripts/autoskill_admin_token.py`
+defaults `--check` to the sidecar-hosted Observatory admin API on port `8757`
+using `/admin/api/v1/config` instead of Core's old summary endpoint. This
+advances the unified implementation specification's deployment model,
+Observatory image requirements, and Observatory readiness/operator-access
+contract without adding UI-local control authority, runtime skill writes, or
+autonomous apply behavior. Focused validation passed with the operator-script
+regression (`8 passed`), targeted Ruff, and isolated
+`COMPOSE_FILE=docker-compose.yml docker compose config --quiet`. Required
+gates passed with full sidecar Ruff, full pytest (`421 passed`), compileall,
+diff-check, core acceptance (`70` implemented), Observatory acceptance (`86`
+satisfied), and conformance (`23/23`). No Postgres smoke was required because
+the slice changes reference service wiring and the operator helper endpoint
+target only.
+
 2026-06-06 update: Direct vector control endpoints now require an explicit
 `embedding_profile_id` for manual upsert, search, and recall-audit operations.
 `/v1/embeddings/upsert`, `/v1/embeddings/search`, and

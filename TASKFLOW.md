@@ -16,6 +16,28 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Reference compose/operator access now follows the
+  split-container Observatory contract after the Core/Observatory route split.
+  The Observatory service is attached to the same runtime networks as Core so
+  it can reach the shared Postgres/read-model plane in the Dev-01 topology, and
+  `scripts/autoskill_admin_token.py` now defaults `--check` to the
+  sidecar-hosted Observatory admin API on port `8757` using the content-safe
+  `/admin/api/v1/config` endpoint instead of Core's old summary route. This
+  advances the deployment model, Observatory image requirements, and
+  Observatory readiness/operator-access contract in the unified
+  implementation specification without adding UI-local control authority or
+  runtime apply behavior. Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_operator_scripts.py -q` (`8 passed`),
+  targeted Ruff, and isolated `COMPOSE_FILE=docker-compose.yml docker compose
+  config --quiet`. Required gates passed with `uv run ruff check sidecar`, `uv
+  run pytest` (`421 passed`), `uv run python -m compileall -q sidecar`, and
+  `git diff --check`. Acceptance/conformance reports also passed with `uv run
+  python scripts/autoskill_acceptance.py --json` (`ready=true`, `70`
+  implemented), `uv run python scripts/autoskill_observatory_acceptance.py
+  --json` (`ready=true`, `86` satisfied), and `uv run python
+  scripts/autoskill_conformance.py --json` (`ready=true`, `23/23`). No
+  Postgres smoke was required because the slice changes reference service
+  wiring and the operator helper endpoint target only.
 - 2026-06-06: Direct vector control endpoints now fail closed unless callers
   provide an explicit `embedding_profile_id`. `/v1/embeddings/upsert`,
   `/v1/embeddings/search`, and `/v1/embeddings/recall-audit` reject
