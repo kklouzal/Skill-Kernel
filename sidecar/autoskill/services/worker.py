@@ -1532,6 +1532,14 @@ def _writer_apply_payload_for_repair(
     manifest_relative_path = _string_value(payload.get("manifest_relative_path"))
     if not manifest_relative_path:
         return None
+    payload_skill_version_id = _uuid_value(payload.get("skill_version_id"))
+    proposal_skill_version_id = _uuid_value(source.proposal.get("skill_version_id"))
+    skill_version_id = source.skill_version_id or payload_skill_version_id or proposal_skill_version_id
+    if skill_version_id is None:
+        return None
+    if source.skill_version_id is not None and payload_skill_version_id is not None:
+        if payload_skill_version_id != source.skill_version_id:
+            return None
     payload_transaction_id = _uuid_value(payload.get("evolution_transaction_id")) or transaction_id
     return {
         "workspace_id": payload.get("workspace_id"),
@@ -1539,9 +1547,11 @@ def _writer_apply_payload_for_repair(
         "activation_gate_required": True,
         "evolution_transaction_id": str(payload_transaction_id),
         "manifest_relative_path": manifest_relative_path,
+        "source_skill_version_id": str(skill_version_id),
         "repair_execution": {
             "source_kind": source.source_kind,
             "source_id": str(source.source_id),
+            "source_skill_version_id": str(skill_version_id),
         },
     }
 

@@ -2962,6 +2962,7 @@ def test_repair_execute_queues_writer_apply_only_for_policy_approved_manifest() 
                 "repair_plan": {"kind": "localized_contract_repair"},
                 "writer_apply": {
                     "policy_approved": True,
+                    "skill_version_id": str(skill_version_id),
                     "manifest_relative_path": "autoskill-example/writer-manifest.json",
                 },
             },
@@ -2994,8 +2995,64 @@ def test_repair_execute_queues_writer_apply_only_for_policy_approved_manifest() 
     assert queued_apply.job_kind == "writer.apply"
     assert queued_apply.payload["policy_approved"] is True
     assert queued_apply.payload["activation_gate_required"] is True
+    assert queued_apply.payload["source_skill_version_id"] == str(skill_version_id)
     assert queued_apply.payload["manifest_relative_path"] == (
         "autoskill-example/writer-manifest.json"
     )
     assert contracts.completed_repair_events[-1]["status"] == "repair_queued"
     assert governance.items[0].item_kind == "drift_event_repair_proposal"
+
+
+def test_repair_execute_blocks_unanchored_policy_approved_repair_manifest() -> None:
+    jobs = MemoryJobStore()
+    contracts = MemoryContractWorkerStore()
+    governance = MemoryGovernanceStore()
+    drift_event_id = uuid4()
+    contracts.repair_events.append(
+        DriftRepairEventRecord(
+            drift_event_id=drift_event_id,
+            environment_contract_id=uuid4(),
+            skill_id=uuid4(),
+            skill_version_id=None,
+            status="open",
+            reason="unanchored repair manifest should not mutate runtime artifacts",
+            repair_candidate={
+                "kind": "contract_repair",
+                "repair_plan": {"kind": "localized_contract_repair"},
+                "writer_apply": {
+                    "policy_approved": True,
+                    "manifest_relative_path": "autoskill-example/writer-manifest.json",
+                },
+            },
+        )
+    )
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="repair.execute",
+            idempotency_key="repair:unanchored-drift",
+            payload={"workspace_id": "dev-01", "curation_limit": 0, "drift_limit": 1},
+        )
+        stores = WorkerStores(
+            jobs=jobs,
+            scheduler=MemorySchedulerWorkerStore(),
+            evidence=MemoryEvidenceWorkerStore(),
+            embeddings=MemoryPendingEmbeddingStore(),
+            contracts=contracts,
+            governance=governance,
+        )
+        return await run_worker_once(stores, worker_id="worker-1", pool="llm_generation")
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["claimed"] == 1
+    assert result.output["writer_apply_queued"] == 0
+    assert result.output["gate_jobs_queued"] == 1
+    queued_recheck = jobs.jobs[f"repair-execute:drift_event:{drift_event_id}:drift.check"]
+    assert queued_recheck.job_kind == "drift.check"
+    assert queued_recheck.payload["repair_execution"]["reason"] == (
+        "source data insufficient for autonomous writer apply"
+    )
+    assert contracts.completed_repair_events[-1]["status"] == "repair_queued"

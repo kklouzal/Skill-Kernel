@@ -16,6 +16,30 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Direct `repair.execute` writer-apply repair payloads now require
+  a concrete skill-version anchor before the worker can queue runtime artifact
+  mutation. `_writer_apply_payload_for_repair()` admits a policy-approved
+  manifest only when the repair source, proposal, or payload provides a
+  `skill_version_id`, and rejects mismatched direct payload anchors against the
+  source repair version; unanchored repair manifests now fail closed to the
+  normal deterministic gate/recheck job path instead of queuing `writer.apply`.
+  This advances localized repair under Phase 9 plus Core Sections 13.7-13.8
+  and production acceptance criteria 31.14/31.24 by preserving targeted,
+  rollback-complete repair semantics without enabling autonomous apply or
+  runtime skill promotion. Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_worker.py -q -k
+  'repair_execute_queues_writer_apply_only_for_policy_approved_manifest or
+  repair_execute_blocks_unanchored_policy_approved_repair_manifest'` (`2
+  passed, 41 deselected`) and touched-file Ruff. Required gates passed with `uv
+  run ruff check sidecar`, `uv run pytest` (`430 passed`), `uv run python -m
+  compileall -q sidecar`, `git diff --check`, `uv run python
+  scripts/autoskill_acceptance.py --json` (`ready=true`, `70` implemented, `7`
+  context criteria), `uv run python
+  scripts/autoskill_observatory_acceptance.py --json` (`ready=true`, `86`
+  satisfied), and `uv run python scripts/autoskill_conformance.py --json`
+  (`ready=true`, `23/23`). No compose/Postgres smoke was required because this
+  is a pre-queue deterministic repair admission change covered by in-memory
+  worker/governance tests.
 - 2026-06-06: Proposal-gate `needs_intervention` results now route through
   the autonomous fallback/adjudication path required by the unified
   specification instead of remaining a bare operator-intervention stall.

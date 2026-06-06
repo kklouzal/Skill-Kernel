@@ -3,6 +3,24 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: `repair.execute` now fails closed for direct policy-approved
+writer-apply repair payloads unless the repair is anchored to a concrete
+`skill_version_id` for the affected repair source. Direct drift/curation repair
+manifests must carry the same skill-version anchor as the source or proposal
+before a `writer.apply` job can be queued; unanchored manifests now fall back to
+the deterministic gate/recheck path instead of mutating runtime artifacts. This
+advances localized repair under Phase 9 plus Core Sections 13.7-13.8 and
+production acceptance criteria 31.14/31.24 by preserving the spec bias toward
+targeted repair and rollback-complete activation evidence. Focused validation
+passed with the repair-anchor regressions (`2 passed, 41 deselected`) and
+touched-file Ruff. Required gates passed with `uv run ruff check sidecar`, `uv
+run pytest` (`430 passed`), `uv run python -m compileall -q sidecar`, `git diff
+--check`, core acceptance (`ready=true`, `70` implemented, `7` context
+criteria), Observatory acceptance (`ready=true`, `86` satisfied), and
+conformance (`ready=true`, `23/23`). No compose/Postgres smoke was required
+because the slice changes pre-queue deterministic repair admission and is
+covered by in-memory worker/governance tests.
+
 2026-06-06 update: Deterministic writer rollback deletion now validates that
 the target path is exactly `skills/autoskill/<safe-slug>` before recording
 rollback status, transaction items, provenance edges, or touching the
@@ -1335,7 +1353,11 @@ Deliverables:
   records as fail-closed repair sources, record governance/provenance metadata,
   and queue drift rechecks or evaluator gates unless a future policy-approved
   staged manifest exists;
-- localized repair;
+- localized repair; implemented so repair execution consumes drift, diagnostic,
+  and curation repair proposals through a fail-closed worker path, queues
+  gate/recheck jobs when source data is insufficient, and now requires direct
+  policy-approved writer-apply repair manifests to be anchored to the affected
+  skill version before runtime artifact mutation can be queued;
 - skill graph maintenance; implemented for accepted topology operations with
   filesystem-worker downstream materialization that records transaction items,
   provenance edges, active transaction status, lifecycle updates, graph-edge
