@@ -401,6 +401,8 @@ def _source_kind(path: Path) -> str:
         return "workspace_context"
     if name == "TASKFLOW.md" or "taskflow" in lowered_relative:
         return "taskflow_record"
+    if _is_task_record(name, lowered_relative, suffix):
+        return "task_record"
     if name == "SKILL.md":
         return "existing_skill"
     if _is_observability_export(lowered_relative):
@@ -437,6 +439,8 @@ def _recommendation(source_kind: str) -> str:
         return "parse_with_redaction_and_taint"
     if source_kind == "workspace_context":
         return "inventory_policy_context_only"
+    if source_kind == "task_record":
+        return "metadata_only_import_with_task_taint"
     if source_kind == "existing_skill":
         return "inventory_read_only_external_skill"
     if source_kind in {
@@ -463,6 +467,9 @@ def _taint(source_kind: str) -> dict[str, Any]:
         taint["external_instruction"] = True
     if source_kind == "existing_skill":
         taint["third_party_skill"] = True
+    if source_kind == "task_record":
+        taint["task_ledger"] = True
+        taint["metadata_only"] = True
     if source_kind in {"plugin_hook_manifest", "plugin_manifest", "plugin_source"}:
         taint["plugin_surface"] = True
         taint["control_plane_context"] = True
@@ -479,6 +486,34 @@ def _is_transcript_corpus_file(path: Path, lowered_relative: str) -> bool:
     if "transcript" not in lowered_relative and "corpus" not in lowered_relative:
         return False
     return path.name in {"summary.md", "metadata.json", "transcript.jsonl"}
+
+
+def _is_task_record(name: str, lowered_relative: str, suffix: str) -> bool:
+    if suffix not in {".json", ".jsonl", ".md", ".yaml", ".yml", ".txt"}:
+        return False
+    if any(
+        segment in lowered_relative
+        for segment in (
+            "/tasks/",
+            "/subagents/",
+            "/internal-agent-runs/",
+            "/agent-runs/",
+            "/acp/",
+            "/child-sessions/",
+        )
+    ):
+        return True
+    lowered_name = name.lower()
+    return lowered_name in {
+        "tasks.json",
+        "tasks.jsonl",
+        "task-ledger.json",
+        "task-ledger.jsonl",
+        "subagents.json",
+        "subagents.jsonl",
+        "acp-runs.json",
+        "acp-runs.jsonl",
+    }
 
 
 def _supported_historical_file(path: Path) -> bool:

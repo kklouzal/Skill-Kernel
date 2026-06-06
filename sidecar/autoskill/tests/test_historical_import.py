@@ -717,6 +717,33 @@ def test_historical_discovery_can_upsert_inventory_only_sources(tmp_path) -> Non
     assert list(store.sources.values())[0].status == "inventory_only"
 
 
+def test_historical_discovery_classifies_background_task_records(tmp_path) -> None:
+    root = tmp_path / "workspace"
+    tasks = root / "tasks"
+    tasks.mkdir(parents=True)
+    (tasks / "runs.jsonl").write_text(
+        '{"task_id":"task-1","status":"done","goal":"repair flaky test"}\n',
+        encoding="utf-8",
+    )
+    store = MemoryHistoricalImportStore()
+
+    inventory = asyncio.run(
+        discover_historical_sources(
+            store,
+            workspace_key="dev-01",
+            roots=[root],
+            max_files=5,
+            preview_only=True,
+        )
+    )
+
+    assert inventory.source_counts["task_record"] == 1
+    item = inventory.items[0]
+    assert item.source_kind == "task_record"
+    assert item.taint["task_ledger"] is True
+    assert item.metadata["import_recommendation"] == "metadata_only_import_with_task_taint"
+
+
 def test_historical_discovery_classifies_plugin_media_and_observability_sources(
     tmp_path,
 ) -> None:
@@ -1062,6 +1089,57 @@ def test_historical_import_parses_taskflow_jsonl_as_metadata_only(
     assert first.source_item_kind == "taskflow_record"
     assert first.item_key_hash == first.metadata["source_item"]["item_key_hash"]
     assert first.record_index == 0
+    assert first.metadata["source_path_stored"] is False
+
+
+def test_historical_import_parses_task_record_jsonl_as_metadata_only(
+    tmp_path,
+) -> None:
+    root = tmp_path / "workspace"
+    tasks = root / "subagents"
+    tasks.mkdir(parents=True)
+    (tasks / "runs.jsonl").write_text(
+        (
+            '{"task_id":"task-1","parent_session_key":"parent-a",'
+            '"child_session_key":"child-b","runtime_kind":"acp",'
+            '"status":"succeeded","goal":"Fix test@example.com",'
+            '"raw_prompt":"do not persist"}\n'
+        ),
+        encoding="utf-8",
+    )
+    store = MemoryHistoricalImportStore()
+
+    result = asyncio.run(
+        import_historical_sources(
+            store,
+            workspace_key="dev-01",
+            roots=[root],
+            max_files=10,
+            max_chunks=10,
+            idempotency_key="historical-import:task-record-jsonl",
+        )
+    )
+
+    assert result.parsed_sources == 1
+    assert result.chunks.created == 1
+    first = next(iter(store.chunks.values()))
+    assert first.chunk_kind == "task_record_metadata"
+    assert first.metadata["lineage"]["source_kind"] == "task_record"
+    assert first.taint["task_ledger"] is True
+    assert first.taint["metadata_only"] is True
+    assert first.metadata["metadata_only"] is True
+    assert first.metadata["source_item"]["item_kind"] == "task_record"
+    assert first.source_item_kind == "task_record"
+    assert "raw_prompt" not in first.redacted_text
+    assert "test@example.com" not in first.redacted_text
+    assert first.metadata["safe_metadata_keys"] == [
+        "child_session_key",
+        "goal",
+        "parent_session_key",
+        "runtime_kind",
+        "status",
+        "task_id",
+    ]
     assert first.metadata["source_path_stored"] is False
 
 

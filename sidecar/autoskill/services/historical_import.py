@@ -149,6 +149,8 @@ def _parse_item(item: HistoricalDiscoveryItem, *, remaining: int) -> list[Histor
         return _parse_transcript_corpus(item, remaining=remaining)
     if item.source_kind in {"workspace_memory", "workspace_context"}:
         return _parse_markdown_sections(item, remaining=remaining)
+    if item.source_kind == "task_record":
+        return _parse_task_record(item, remaining=remaining)
     if item.source_kind == "taskflow_record":
         return _parse_taskflow_record(item, remaining=remaining)
     if item.source_kind == "existing_skill":
@@ -302,6 +304,80 @@ def _parse_taskflow_record(
                     "metadata_only": True,
                     "safe_metadata_keys": sorted(safe),
                     "status": safe.get("status"),
+                    "record_id_hash": sha256_text(item_suffix),
+                    "chunking_version": HISTORICAL_CHUNKING_VERSION,
+                    "lossy": True,
+                },
+            )
+        )
+    return chunks
+
+
+def _parse_task_record(
+    item: HistoricalDiscoveryItem,
+    *,
+    remaining: int,
+) -> list[HistoricalChunkInput]:
+    assert item.path is not None
+    if item.path.suffix.lower() not in {".json", ".jsonl"}:
+        chunks = _parse_markdown_sections(item, remaining=remaining)
+        return [
+            HistoricalChunkInput(
+                source_kind=chunk.source_kind,
+                source_key=chunk.source_key,
+                fingerprint=chunk.fingerprint,
+                item_key=chunk.item_key,
+                chunk_index=chunk.chunk_index,
+                redacted_text=chunk.redacted_text,
+                parser_version=chunk.parser_version,
+                redaction_policy_version=chunk.redaction_policy_version,
+                chunk_kind="task_record_markdown_section",
+                token_estimate=chunk.token_estimate,
+                trust_level=chunk.trust_level,
+                taint={**(chunk.taint or {}), "task_ledger": True},
+                metadata={**(chunk.metadata or {}), "task_record_variant": "markdown"},
+            )
+            for chunk in chunks
+        ]
+
+    text = item.path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    chunks: list[HistoricalChunkInput] = []
+    for index, payload in enumerate(_json_payloads(text, lines)):
+        if len(chunks) >= remaining:
+            break
+        safe = _task_record_metadata(payload)
+        if not safe:
+            continue
+        record_id = _string(
+            safe.get("task_id")
+            or safe.get("taskId")
+            or safe.get("run_id")
+            or safe.get("runId")
+            or safe.get("id")
+            or safe.get("child_session_key")
+            or safe.get("childSessionKey")
+        )
+        item_suffix = record_id or f"record-{index}"
+        chunks.append(
+            _chunk(
+                item,
+                item_key=(
+                    f"{item.metadata['relative_path_hash']}#"
+                    f"task-{sha256_text(item_suffix)}"
+                ),
+                chunk_index=index,
+                text="Task record metadata: " + json.dumps(safe, sort_keys=True),
+                chunk_kind="task_record_metadata",
+                taint_extra={"task_ledger": True, "metadata_only": True},
+                metadata={
+                    "record_index": index,
+                    "task_record_variant": (
+                        "json" if item.path.suffix.lower() == ".json" else "jsonl"
+                    ),
+                    "metadata_only": True,
+                    "safe_metadata_keys": sorted(safe),
+                    "status": safe.get("status") or safe.get("state"),
                     "record_id_hash": sha256_text(item_suffix),
                     "chunking_version": HISTORICAL_CHUNKING_VERSION,
                     "lossy": True,
@@ -771,6 +847,67 @@ def _taskflow_record_metadata(payload: dict[str, Any]) -> dict[str, Any]:
     return safe
 
 
+def _task_record_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    safe_keys = {
+        "task_id",
+        "taskId",
+        "run_id",
+        "runId",
+        "id",
+        "kind",
+        "runtime_kind",
+        "runtimeKind",
+        "agent_id",
+        "agentId",
+        "parent_session_key",
+        "parentSessionKey",
+        "child_session_key",
+        "childSessionKey",
+        "parent_session_id",
+        "parentSessionId",
+        "child_session_id",
+        "childSessionId",
+        "model",
+        "provider",
+        "status",
+        "state",
+        "phase",
+        "completion_state",
+        "completionState",
+        "goal",
+        "objective",
+        "title",
+        "name",
+        "owner",
+        "created_at",
+        "createdAt",
+        "updated_at",
+        "updatedAt",
+        "completed_at",
+        "completedAt",
+        "error_class",
+        "errorClass",
+        "blocked_summary",
+        "blockedSummary",
+        "next_step",
+        "nextStep",
+    }
+    safe: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key not in safe_keys:
+            continue
+        if isinstance(value, str) and value.strip():
+            safe[key] = value.strip()
+        elif isinstance(value, int | float | bool):
+            safe[key] = value
+    for nested_key in ("task", "run", "child", "session"):
+        nested = payload.get(nested_key)
+        if isinstance(nested, dict):
+            for key, value in _task_record_metadata(nested).items():
+                safe.setdefault(key, value)
+    return safe
+
+
 def _section_taint(item: HistoricalDiscoveryItem, body: str) -> dict[str, Any]:
     taint: dict[str, Any] = {}
     lowered = body.lower()
@@ -851,8 +988,10 @@ def _lineage_item_kind(*, item_key: str, chunk_kind: str) -> str:
         return "line_record"
     if "#section-" in item_key or chunk_kind.endswith("_section"):
         return "markdown_section"
-    if "#task-" in item_key or "taskflow" in chunk_kind:
+    if "taskflow" in chunk_kind:
         return "taskflow_record"
+    if "#task-" in item_key or "task_record" in chunk_kind:
+        return "task_record"
     if "#record-" in item_key or chunk_kind.endswith("_record"):
         return "json_record"
     if "#metadata" in item_key or chunk_kind.endswith("_metadata"):
