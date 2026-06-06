@@ -4322,6 +4322,97 @@ def test_observatory_embedding_backlog_uses_canonical_embedding_object_types() -
     assert EMBEDDING_OBJECT_TYPE_HISTORICAL_IMPORT_CHUNK == "historical_import_chunk"
 
 
+def test_observatory_retrieval_station_reports_embedding_generation_throughput() -> None:
+    operator_metrics_source = inspect.getsource(
+        observability_module.AsyncpgObservabilityStore.operator_metrics
+    )
+
+    assert "operation_name = 'embeddings.generate'" in operator_metrics_source
+    assert "safe_attributes->>'generated'" in operator_metrics_source
+
+    settings = get_settings().model_copy(
+        update={
+            "database_url": "postgresql://autoskill:autoskill-dev@127.0.0.1/autoskill",
+            "control_token": "control-token",
+        }
+    )
+    snapshot = build_observatory_snapshot(
+        settings=settings,
+        status={
+            "mode": "dev",
+            "database_configured": True,
+            "ingest_auth_configured": True,
+            "control_auth_configured": True,
+            "runtime_context_broker": {"enabled": True},
+            "jobs": {},
+            "workers": {},
+        },
+        operator_metrics={
+            "captured_at": datetime.now(UTC).isoformat(),
+            "metrics": {
+                "ingest": {"events_in_window": 1, "total_events": 1},
+                "redaction_counts": {},
+                "spool_backlog": {},
+                "retrieval_decisions": {"semantic_candidates_found": 3},
+                "embedding_backlog": {
+                    "embedding_jobs_pending": 0,
+                    "evidence_items_unembedded": 1000,
+                    "body_documents_unembedded": 0,
+                    "external_skills_unembedded": 0,
+                    "historical_chunks_unembedded": 0,
+                },
+                "embedding_generation": {
+                    "completed_jobs": 2,
+                    "scanned": 2000,
+                    "generated": 2000,
+                    "created": 2000,
+                    "updated": 0,
+                    "generated_per_minute": 200.0,
+                },
+                "context_hint_injection_count": 0,
+                "context_hint_token_cost": 0,
+                "context_hint_token_ledger_count": 0,
+                "skill_creation_improvement_counts": {},
+                "skill_lifecycle_counts": {},
+                "scanner_reject_counts": {},
+                "evaluation_pass_fail_counts": {},
+                "rollback_freeze_counts": {},
+                "job_queue_depth": {},
+                "postgres_table_index_growth": [],
+                "audit": {},
+                "sidecar_latency_ms": {},
+                "latency_by_operation_kind": {},
+            },
+            "dashboards": {},
+        },
+        worker_health={},
+        audit_chain_valid=True,
+        static_available=True,
+        workspace_id="dev-01",
+        window_minutes=10,
+    )
+
+    retrieval = next(
+        station
+        for station in snapshot["pipeline"]["stations"]  # type: ignore[index]
+        if station["component_id"] == "retrieval_indexing"
+    )
+
+    assert retrieval["queue_depth"] == 1000
+    assert retrieval["output_rate_1m"] == 200.0
+    assert {
+        "record_type": "embedding_generation",
+        "summary": {
+            "completed_jobs": 2,
+            "scanned": 2000,
+            "generated": 2000,
+            "created": 2000,
+            "updated": 0,
+            "generated_per_minute": 200.0,
+        },
+    } in retrieval["records"]
+
+
 def test_observatory_planned_evaluations_are_not_failures() -> None:
     settings = get_settings().model_copy(
         update={

@@ -1283,7 +1283,16 @@ def _component_snapshot(
         warning_count += 1
     elif station.metric_family == "retrieval":
         decisions = _dict(metrics.get("retrieval_decisions"))
-        output_rate = float(sum(int(value or 0) for value in decisions.values()))
+        retrieval_decision_count = sum(int(value or 0) for value in decisions.values())
+        embedding_generation = _dict(metrics.get("embedding_generation"))
+        embedding_generation_rate = float(
+            embedding_generation.get("generated_per_minute") or 0.0
+        )
+        output_rate = (
+            embedding_generation_rate
+            if embedding_generation_rate > 0.0
+            else float(retrieval_decision_count)
+        )
         embedding_backlog = sum(
             int(value or 0) for value in _dict(metrics.get("embedding_backlog")).values()
         )
@@ -1883,6 +1892,10 @@ def _station_records(
             {
                 "record_type": "retrieval_decisions",
                 "summary": metrics.get("retrieval_decisions", {}),
+            },
+            {
+                "record_type": "embedding_generation",
+                "summary": metrics.get("embedding_generation", {}),
             },
             {"record_type": "embedding_backlog", "summary": metrics.get("embedding_backlog", {})},
         ]

@@ -518,6 +518,49 @@ class AsyncpgObservabilityStore(AsyncpgPoolOwner):
                 workspace_id,
                 bounded_window,
             )
+            embedding_generation = await conn.fetchrow(
+                """
+                SELECT
+                  count(*)::int AS completed_jobs,
+                  COALESCE(sum(
+                    CASE
+                      WHEN safe_attributes->>'scanned' ~ '^[0-9]+$'
+                      THEN (safe_attributes->>'scanned')::int
+                      ELSE 0
+                    END
+                  ), 0)::int AS scanned,
+                  COALESCE(sum(
+                    CASE
+                      WHEN safe_attributes->>'generated' ~ '^[0-9]+$'
+                      THEN (safe_attributes->>'generated')::int
+                      ELSE 0
+                    END
+                  ), 0)::int AS generated,
+                  COALESCE(sum(
+                    CASE
+                      WHEN safe_attributes->>'created' ~ '^[0-9]+$'
+                      THEN (safe_attributes->>'created')::int
+                      ELSE 0
+                    END
+                  ), 0)::int AS created,
+                  COALESCE(sum(
+                    CASE
+                      WHEN safe_attributes->>'updated' ~ '^[0-9]+$'
+                      THEN (safe_attributes->>'updated')::int
+                      ELSE 0
+                    END
+                  ), 0)::int AS updated
+                FROM autoskill.trace_spans
+                WHERE ($1::uuid IS NULL OR workspace_id = $1)
+                  AND operation_name = 'embeddings.generate'
+                  AND operation_kind = 'embedding_call'
+                  AND status = 'ok'
+                  AND ended_at IS NOT NULL
+                  AND ended_at >= now() - ($2::int * interval '1 minute')
+                """,
+                workspace_id,
+                bounded_window,
+            )
             job_status_rows = await conn.fetch(
                 """
                 SELECT status, count(*)::int AS count
@@ -873,6 +916,7 @@ class AsyncpgObservabilityStore(AsyncpgPoolOwner):
             job_status_counts=_counts(job_status_rows, "status"),
             job_kind_counts=_nested_counts(job_kind_rows, "job_kind", "status"),
             embedding_backlog=dict(embedding_backlog or {}),
+            embedding_generation=dict(embedding_generation or {}),
             retrieval_decisions=_counts(retrieval_rows, "decision"),
             context=dict(context_row or {}),
             context_hints=dict(context_hints or {}),
@@ -986,6 +1030,15 @@ def _empty_operator_metrics(
             "embedding_jobs_pending": 0,
             "evidence_items_unembedded": 0,
             "body_documents_unembedded": 0,
+            "external_skills_unembedded": 0,
+            "historical_chunks_unembedded": 0,
+        },
+        embedding_generation={
+            "completed_jobs": 0,
+            "scanned": 0,
+            "generated": 0,
+            "created": 0,
+            "updated": 0,
         },
         retrieval_decisions={},
         context={"hint_token_ledger_count": 0, "hint_token_cost": 0},
@@ -1039,6 +1092,7 @@ def _operator_metrics_payload(
     utility: dict[str, Any],
     audit: dict[str, Any],
     storage: list[dict[str, Any]],
+    embedding_generation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scanner_rejects = sum(
         int(row["count"])
@@ -1075,6 +1129,13 @@ def _operator_metrics_payload(
         "job_queue_depth": job_status_counts,
         "job_success_failure_by_type": job_kind_counts,
         "embedding_backlog": _int_dict(embedding_backlog),
+        "embedding_generation": {
+            **_int_dict(embedding_generation or {}),
+            "generated_per_minute": (
+                int((embedding_generation or {}).get("generated") or 0)
+                / max(1, window_minutes)
+            ),
+        },
         "retrieval_recall_audit_score": {
             "status": "run_recall_audit_endpoint",
             "reason": "recall audits are computed on demand and not persisted yet",
