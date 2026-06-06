@@ -31,9 +31,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   required_signal or evidence_fidelity or autonomy'` (`5 passed, 52
   deselected`), `uv run ruff check` on the touched files, `uv run python
   scripts/autoskill_observatory_acceptance.py --json` (`ready=true`, zero
-  validation errors), and `git diff --check`. The worker remediation remains
-  `bc2d98f`; the parent verification fix landed as follow-up commit `8c6fcc3`
-  before push.
+  validation errors), and `git diff --check`; parent broad validation also
+  passed with `uv run pytest sidecar/autoskill/tests -q` (`397 passed`). The
+  worker remediation remains `bc2d98f`; the parent verification fix landed as
+  follow-up commit `8c6fcc3` before push.
 - 2026-06-06: Part II/III Observatory control-plane topology gap remediated:
   the station/subsystem catalog now exposes the autonomy/adjudication workcell
   as a first-class overview path. Runtime `STATIONS`, SQL seed rows, and
