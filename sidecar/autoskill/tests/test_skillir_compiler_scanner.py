@@ -52,6 +52,11 @@ def test_skillir_validates_openclaw_skill_names() -> None:
 def test_compiler_emits_required_sections() -> None:
     compiled = compile_skill(valid_skill())
     assert compiled.ok
+    assert 'granularity: "functional"' in compiled.skill_md
+    assert 'scope: "workspace_local"' in compiled.skill_md
+    assert 'topology_role: "standalone"' in compiled.skill_md
+    assert 'component_policy: "broker_decides"' in compiled.skill_md
+    assert 'runtime_visibility_policy: "full_skill_allowed"' in compiled.skill_md
     assert "## WHEN" in compiled.skill_md
     assert "## OUTPUTS" in compiled.skill_md
     assert "## EFFECTS" in compiled.skill_md
@@ -96,6 +101,16 @@ def test_skillir_rejects_arbitrary_runtime_guard_templates() -> None:
         )
 
 
+def test_skillir_validates_topology_labels() -> None:
+    with pytest.raises(ValidationError):
+        SkillIR.model_validate(
+            {
+                **valid_skill().model_dump(by_alias=True, mode="json"),
+                "granularity": "black_hole",
+            }
+        )
+
+
 def test_compiler_applies_context_token_budget() -> None:
     compiled = compile_skill(valid_skill(), max_context_tokens=1)
     assert compiled.token_over_budget
@@ -115,7 +130,10 @@ def test_context_compiler_records_governance_gate_pass() -> None:
     assert result.reject_reason is None
     assert result.context_artifact["artifact_kind"] == "skill_md"
     assert result.context_artifact["metadata"]["loadability_class"] == "runtime_on_skill_load"
+    assert result.context_artifact["metadata"]["granularity"] == "functional"
+    assert result.context_artifact["metadata"]["scope"] == "workspace_local"
     assert result.compile_run["status"] == "passed"
+    assert result.compile_run["metadata"]["topology_role"] == "standalone"
     assert result.compile_run["context_artifact_id"] == result.context_artifact[
         "context_artifact_id"
     ]

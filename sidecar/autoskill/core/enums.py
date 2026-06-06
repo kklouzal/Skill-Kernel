@@ -38,10 +38,77 @@ class EvidenceMaturity(StrEnum):
 
 
 class LifecycleState(StrEnum):
-    CANDIDATE = "candidate"
+    OBSERVED_PATTERN = "observed_pattern"
+    CANDIDATE_CLUSTER = "candidate_cluster"
+    EPHEMERAL_CANDIDATE = "ephemeral_candidate"
+    TRIAL_CANDIDATE = "trial_candidate"
+    VALIDATED_CANDIDATE = "validated_candidate"
     ACTIVE = "active"
+    CANARY_ACTIVE = "canary_active"
     ARCHIVED = "archived"
-    QUARANTINED = "quarantined"
     FROZEN = "frozen"
+    REVOKED = "revoked"
     SUPERSEDED = "superseded"
+    EXTERNAL_READONLY = "external_readonly"
+    CANDIDATE = "candidate"
+    LEGACY_CANDIDATE = "candidate"
+    QUARANTINED = "quarantined"
     DELETED = "deleted"
+
+
+SPEC_LIFECYCLE_STATES = tuple(
+    state.value
+    for state in (
+        LifecycleState.OBSERVED_PATTERN,
+        LifecycleState.CANDIDATE_CLUSTER,
+        LifecycleState.EPHEMERAL_CANDIDATE,
+        LifecycleState.TRIAL_CANDIDATE,
+        LifecycleState.VALIDATED_CANDIDATE,
+        LifecycleState.ACTIVE,
+        LifecycleState.CANARY_ACTIVE,
+        LifecycleState.ARCHIVED,
+        LifecycleState.FROZEN,
+        LifecycleState.REVOKED,
+        LifecycleState.SUPERSEDED,
+        LifecycleState.EXTERNAL_READONLY,
+    )
+)
+
+LEGACY_LIFECYCLE_STATES = tuple(
+    state.value
+    for state in (
+        LifecycleState.LEGACY_CANDIDATE,
+        LifecycleState.QUARANTINED,
+        LifecycleState.DELETED,
+    )
+)
+
+CANDIDATE_REVIEW_LIFECYCLE_STATES = tuple(
+    state.value
+    for state in (
+        LifecycleState.OBSERVED_PATTERN,
+        LifecycleState.CANDIDATE_CLUSTER,
+        LifecycleState.EPHEMERAL_CANDIDATE,
+        LifecycleState.TRIAL_CANDIDATE,
+        LifecycleState.VALIDATED_CANDIDATE,
+        LifecycleState.LEGACY_CANDIDATE,
+    )
+)
+
+PROPOSAL_GATE_LIFECYCLE_STATES = tuple(
+    state.value
+    for state in (
+        LifecycleState.EPHEMERAL_CANDIDATE,
+        LifecycleState.TRIAL_CANDIDATE,
+        LifecycleState.VALIDATED_CANDIDATE,
+        LifecycleState.LEGACY_CANDIDATE,
+    )
+)
+
+RUNTIME_VISIBLE_LIFECYCLE_STATES = tuple(
+    state.value
+    for state in (
+        LifecycleState.ACTIVE,
+        LifecycleState.CANARY_ACTIVE,
+    )
+)

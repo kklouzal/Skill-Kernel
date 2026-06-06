@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS autoskill.skills (
   slug text NOT NULL,
   name text NOT NULL,
   source text NOT NULL DEFAULT 'autoskill',
-  lifecycle_state text NOT NULL DEFAULT 'candidate',
+  lifecycle_state text NOT NULL DEFAULT 'ephemeral_candidate',
   active_version_id uuid,
   last_canary_status text,
   freeze_reason text,
@@ -84,6 +84,32 @@ ALTER TABLE autoskill.skills
 
 ALTER TABLE autoskill.skills
   ADD COLUMN IF NOT EXISTS frozen_at timestamptz;
+
+ALTER TABLE autoskill.skills
+  ALTER COLUMN lifecycle_state SET DEFAULT 'ephemeral_candidate';
+
+ALTER TABLE autoskill.skills
+  DROP CONSTRAINT IF EXISTS skills_lifecycle_state_check;
+ALTER TABLE autoskill.skills
+  ADD CONSTRAINT skills_lifecycle_state_check CHECK (
+    lifecycle_state IN (
+      'observed_pattern',
+      'candidate_cluster',
+      'ephemeral_candidate',
+      'trial_candidate',
+      'validated_candidate',
+      'active',
+      'canary_active',
+      'archived',
+      'frozen',
+      'revoked',
+      'superseded',
+      'external_readonly',
+      'candidate',
+      'quarantined',
+      'deleted'
+    )
+  );
 
 CREATE TABLE IF NOT EXISTS autoskill.skill_versions (
   skill_version_id uuid PRIMARY KEY,

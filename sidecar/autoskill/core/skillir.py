@@ -110,6 +110,40 @@ class SkillIR(BaseModel):
     required_capabilities: list[str] = Field(default_factory=list)
     risk_notes: list[str] = Field(default_factory=list)
     compiler_version: str = "autoskill-compiler.v1"
+    granularity: Literal["atomic", "functional", "workflow", "planning", "meta", "external"] = (
+        "functional"
+    )
+    scope: Literal[
+        "workspace_local",
+        "project_local",
+        "domain",
+        "global_general",
+        "external_readonly",
+        "archived",
+    ] = "workspace_local"
+    topology_role: Literal[
+        "standalone",
+        "component",
+        "composition",
+        "decomposition_successor",
+        "superseded_parent",
+        "sibling",
+        "prerequisite",
+        "alternative",
+    ] = "standalone"
+    component_policy: Literal[
+        "retain_components",
+        "prefer_composed",
+        "prefer_components",
+        "broker_decides",
+    ] = "broker_decides"
+    runtime_visibility_policy: Literal[
+        "metadata_only",
+        "broker_hint_only",
+        "full_skill_allowed",
+        "hidden_by_default",
+        "no_runtime_visibility",
+    ] = "full_skill_allowed"
 
     @property
     def effect_signature(self) -> EffectSignature:

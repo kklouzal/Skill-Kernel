@@ -1,8 +1,13 @@
 import asyncio
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from autoskill.api.app import CandidateProposalRequest, create_app
-from autoskill.db.candidates import CandidatePersistResult
+from autoskill.db.candidates import (
+    CandidatePersistResult,
+    CandidateReviewRecord,
+    NullCandidateStore,
+)
 from autoskill.db.retrieval import RetrievalCandidate
 from autoskill.services.candidates import propose_candidate_skills
 from autoskill.services.opportunity import mine_opportunities
@@ -61,6 +66,11 @@ def test_candidate_proposal_builds_propose_only_skillir() -> None:
     assert proposal["recommendation"] == "propose_candidate"
     assert proposal["skillir"]["schema"] == "skillir.v1"
     assert proposal["skillir"]["slug"].startswith("autoskill-message-received")
+    assert proposal["skillir"]["granularity"] == "functional"
+    assert proposal["skillir"]["scope"] == "workspace_local"
+    assert proposal["skillir"]["topology_role"] == "standalone"
+    assert proposal["skillir"]["component_policy"] == "broker_decides"
+    assert proposal["skillir"]["runtime_visibility_policy"] == "full_skill_allowed"
     assert proposal["compiled_sha256"]
     assert proposal["scanner_findings"] == []
     assert [probe["kind"] for probe in proposal["probe_plan"]] == [
@@ -164,3 +174,52 @@ def test_candidate_proposal_persistence_uses_evolution_transaction() -> None:
         candidates.evolution_transaction_id
     )
     assert response.persistence["transaction"]["status"] == "staged"
+
+
+def test_candidate_review_legacy_candidate_filter_includes_ephemeral_lane() -> None:
+    now = datetime.now(UTC)
+    store = NullCandidateStore()
+    store.reviews = [
+        CandidateReviewRecord(
+            workspace_id=None,
+            workspace_key="dev-01",
+            skill_id=uuid4(),
+            skill_version_id=uuid4(),
+            slug="ephemeral-proposal",
+            name="ephemeral-proposal",
+            lifecycle_state="ephemeral_candidate",
+            version=1,
+            scanner_status="passed",
+            evaluator_status="planned",
+            latest_evaluation_status="planned",
+            created_by_transaction_id=None,
+            created_at=now,
+            updated_at=now,
+        ),
+        CandidateReviewRecord(
+            workspace_id=None,
+            workspace_key="dev-01",
+            skill_id=uuid4(),
+            skill_version_id=uuid4(),
+            slug="active-runtime-skill",
+            name="active-runtime-skill",
+            lifecycle_state="active",
+            version=1,
+            scanner_status="passed",
+            evaluator_status="passed",
+            latest_evaluation_status="passed",
+            created_by_transaction_id=None,
+            created_at=now,
+            updated_at=now,
+        ),
+    ]
+
+    async def run():
+        return await store.list_candidate_reviews(
+            workspace_key="dev-01",
+            lifecycle_state="candidate",
+        )
+
+    reviews = asyncio.run(run())
+
+    assert [review.slug for review in reviews] == ["ephemeral-proposal"]

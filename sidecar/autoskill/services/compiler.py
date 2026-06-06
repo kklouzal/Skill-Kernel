@@ -133,6 +133,11 @@ def render_skill_md(skill: SkillIR) -> str:
             skill_id: "{skill.skill_id}"
             skillir_schema: "{skill.schema_}"
             compiler_version: "{skill.compiler_version}"
+            granularity: "{skill.granularity}"
+            scope: "{skill.scope}"
+            topology_role: "{skill.topology_role}"
+            component_policy: "{skill.component_policy}"
+            runtime_visibility_policy: "{skill.runtime_visibility_policy}"
         ---
         """
     )
@@ -270,6 +275,11 @@ async def compile_skill_with_context_governance(
             "loadability_class": "runtime_on_skill_load",
             "compiler": compiler_version,
             "skill_slug": skill.slug,
+            "granularity": skill.granularity,
+            "scope": skill.scope,
+            "topology_role": skill.topology_role,
+            "component_policy": skill.component_policy,
+            "runtime_visibility_policy": skill.runtime_visibility_policy,
             "description_char_count": len(skill.description),
             "description_max_chars": max(1, description_max_chars),
             "description_style_status": (
@@ -306,6 +316,11 @@ async def compile_skill_with_context_governance(
         "schema": "autoskill.context-compile-manifest.v1",
         "compiler_version": compiler_version,
         "skill_slug": skill.slug,
+        "granularity": skill.granularity,
+        "scope": skill.scope,
+        "topology_role": skill.topology_role,
+        "component_policy": skill.component_policy,
+        "runtime_visibility_policy": skill.runtime_visibility_policy,
         "compiled_sha256": compiled.sha256,
         "support_artifact_count": len(support_artifacts),
         "runtime_guard_count": len(skill.runtime_guards),
@@ -342,6 +357,11 @@ async def compile_skill_with_context_governance(
             "budget_status": artifact.budget_status,
             "safety_status": safety_status,
             "equivalence_status": equivalence_status,
+            "granularity": skill.granularity,
+            "scope": skill.scope,
+            "topology_role": skill.topology_role,
+            "component_policy": skill.component_policy,
+            "runtime_visibility_policy": skill.runtime_visibility_policy,
             "description_over_budget": description_over_budget,
             "description_style_status": (
                 "failed" if description_style_errors else "passed"

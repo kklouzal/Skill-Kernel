@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from autoskill.core.enums import (
+    CANDIDATE_REVIEW_LIFECYCLE_STATES,
+    RUNTIME_VISIBLE_LIFECYCLE_STATES,
+)
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalResult, RetrievalStore
 
 MATCH_STOP_WORDS = {
@@ -219,7 +223,10 @@ async def match_existing_skills(
                 existing = archived_by_skill.get(skill_key)
                 if existing is None or match.score > existing.score:
                     archived_by_skill[skill_key] = match
-            elif match.lifecycle_state in {"active", "candidate"}:
+            elif match.lifecycle_state in {
+                *RUNTIME_VISIBLE_LIFECYCLE_STATES,
+                *CANDIDATE_REVIEW_LIFECYCLE_STATES,
+            }:
                 existing = active_by_skill.get(skill_key)
                 if existing is None or match.score > existing.score:
                     active_by_skill[skill_key] = match

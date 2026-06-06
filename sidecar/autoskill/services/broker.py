@@ -6,6 +6,7 @@ from time import monotonic
 from typing import Any
 from uuid import UUID
 
+from autoskill.core.enums import RUNTIME_VISIBLE_LIFECYCLE_STATES, LifecycleState
 from autoskill.core.hashing import sha256_json
 from autoskill.db.compatibility import CompatibilityStore
 from autoskill.db.context import ContextGovernanceStore
@@ -545,12 +546,12 @@ def _select_skill_candidates(
             continue
         skill_id = str(candidate.skill_id)
         lifecycle_state = str(candidate.metadata.get("lifecycle_state", "unknown"))
-        if lifecycle_state == "archived":
+        if lifecycle_state == LifecycleState.ARCHIVED.value:
             if skill_id not in archive_promotion_skill_ids:
                 archive_promotion_skill_ids.append(skill_id)
             suppressed.append(_suppressed(candidate, "archived-promotion-candidate"))
             continue
-        if lifecycle_state in {"quarantined", "frozen", "deleted", "revoked"}:
+        if lifecycle_state not in RUNTIME_VISIBLE_LIFECYCLE_STATES:
             suppressed.append(_suppressed(candidate, f"lifecycle-{lifecycle_state}"))
             continue
         if skill_id in seen_skill_ids:

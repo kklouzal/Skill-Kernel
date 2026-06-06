@@ -8,6 +8,7 @@ from uuid import UUID
 
 import asyncpg
 
+from autoskill.core.enums import PROPOSAL_GATE_LIFECYCLE_STATES
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.services.contrastive import derive_contrastive_replay
 from autoskill.services.evaluator import evaluate_proposal_gate
@@ -411,7 +412,7 @@ async def _claim_planned_evaluations(
         JOIN autoskill.workspaces w ON w.workspace_id = ev.workspace_id
         WHERE ev.category = 'proposal_gate'
           AND ev.status = 'planned'
-          AND s.lifecycle_state = 'candidate'
+          AND s.lifecycle_state = ANY($3::text[])
           AND ($1::text IS NULL OR w.external_key = $1)
         ORDER BY ev.created_at ASC
         LIMIT $2
@@ -419,6 +420,7 @@ async def _claim_planned_evaluations(
         """,
         workspace_key,
         limit,
+        list(PROPOSAL_GATE_LIFECYCLE_STATES),
     )
 
 

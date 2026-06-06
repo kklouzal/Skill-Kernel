@@ -323,6 +323,42 @@ def test_context_broker_renders_scanned_skill_candidates() -> None:
     )
 
 
+def test_context_broker_suppresses_ephemeral_candidates_from_runtime_context() -> None:
+    skill_id = uuid4()
+    store = MemoryBrokerRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=skill_id,
+                summary="Draft SkillIR candidate should not be rendered as runtime skill.",
+                rank=0.9,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "ephemeral_candidate",
+                    "slug": "draft-skill",
+                },
+            )
+        ]
+    )
+
+    async def run():
+        return await build_context_hint(
+            store,
+            ContextHintRequest(
+                workspace_id="dev-01",
+                user_intent="draft skill",
+                max_tokens=120,
+            ),
+        )
+
+    response = asyncio.run(run())
+
+    assert response.decision == "defer_skill"
+    assert response.skill_ids == []
+    assert response.suppressed[0]["reason"] == "lifecycle-ephemeral_candidate"
+
+
 def test_context_broker_records_memory_control_flow_without_injecting_memory() -> None:
     skill_id = uuid4()
     evidence_id = uuid4()

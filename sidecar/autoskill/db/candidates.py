@@ -9,6 +9,7 @@ from uuid import UUID
 
 import asyncpg
 
+from autoskill.core.enums import CANDIDATE_REVIEW_LIFECYCLE_STATES, LifecycleState
 from autoskill.core.hashing import sha256_text
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
@@ -138,7 +139,7 @@ class CandidateStore(Protocol):
         self,
         *,
         workspace_key: str | None = None,
-        lifecycle_state: str | None = "candidate",
+        lifecycle_state: str | None = LifecycleState.LEGACY_CANDIDATE.value,
         limit: int = 100,
     ) -> list[CandidateReviewRecord]:
         """List proposal candidate revisions for operator review."""
@@ -166,15 +167,16 @@ class NullCandidateStore:
         self,
         *,
         workspace_key: str | None = None,
-        lifecycle_state: str | None = "candidate",
+        lifecycle_state: str | None = LifecycleState.LEGACY_CANDIDATE.value,
         limit: int = 100,
     ) -> list[CandidateReviewRecord]:
         reviews = self.reviews
         if workspace_key is not None:
             reviews = [review for review in reviews if review.workspace_key == workspace_key]
         if lifecycle_state is not None:
+            lifecycle_states = set(_candidate_lifecycle_filter(lifecycle_state) or ())
             reviews = [
-                review for review in reviews if review.lifecycle_state == lifecycle_state
+                review for review in reviews if review.lifecycle_state in lifecycle_states
             ]
         return reviews[: max(1, min(limit, 250))]
 
@@ -219,10 +221,11 @@ class AsyncpgCandidateStore(AsyncpgPoolOwner):
         self,
         *,
         workspace_key: str | None = None,
-        lifecycle_state: str | None = "candidate",
+        lifecycle_state: str | None = LifecycleState.LEGACY_CANDIDATE.value,
         limit: int = 100,
     ) -> list[CandidateReviewRecord]:
         pool = await self._get_pool()
+        lifecycle_states = _candidate_lifecycle_filter(lifecycle_state)
         rows = await pool.fetch(
             """
             SELECT
@@ -251,12 +254,12 @@ class AsyncpgCandidateStore(AsyncpgPoolOwner):
               LIMIT 1
             ) latest_ev ON true
             WHERE ($1::text IS NULL OR w.external_key = $1)
-              AND ($2::text IS NULL OR s.lifecycle_state = $2)
+              AND ($2::text[] IS NULL OR s.lifecycle_state = ANY($2::text[]))
             ORDER BY s.updated_at DESC, sv.created_at DESC, sv.skill_version_id DESC
             LIMIT $3
             """,
             workspace_key,
-            lifecycle_state,
+            lifecycle_states,
             max(1, min(limit, 250)),
         )
         return [CandidateReviewRecord.from_row(row) for row in rows]
@@ -278,7 +281,7 @@ async def _persist_candidate(
         INSERT INTO autoskill.skills (
           skill_id, workspace_id, slug, name, source, lifecycle_state
         )
-        VALUES ($1, $2, $3, $4, 'autoskill', 'candidate')
+        VALUES ($1, $2, $3, $4, 'autoskill', 'ephemeral_candidate')
         ON CONFLICT (workspace_id, slug) DO UPDATE
         SET updated_at = now()
         RETURNING skill_id
@@ -425,7 +428,7 @@ async def _persist_transaction_items(
         relative_path=None,
         before_hash=None,
         after_hash=proposal.compiled_sha256,
-        activation_state="candidate",
+        activation_state=LifecycleState.EPHEMERAL_CANDIDATE.value,
         rollback_action=rollback_action,
     )
     await _insert_transaction_item_once(
@@ -775,6 +778,14 @@ def _scanner_status(proposal: CandidateSkillProposal) -> str:
         for finding in proposal.scanner_findings
     )
     return "blocked" if blocking else "passed"
+
+
+def _candidate_lifecycle_filter(lifecycle_state: str | None) -> list[str] | None:
+    if lifecycle_state is None:
+        return None
+    if lifecycle_state == LifecycleState.LEGACY_CANDIDATE.value:
+        return list(CANDIDATE_REVIEW_LIFECYCLE_STATES)
+    return [lifecycle_state]
 
 
 def _json(payload: dict[str, Any]) -> str:
