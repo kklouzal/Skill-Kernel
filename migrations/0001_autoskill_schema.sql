@@ -12,6 +12,125 @@ CREATE TABLE IF NOT EXISTS autoskill.workspaces (
   config jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.raw_evidence_records (
+  raw_evidence_record_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  source_event_hash text NOT NULL,
+  source_kind text NOT NULL,
+  source_id text,
+  session_id text,
+  turn_id text,
+  raw_kind text NOT NULL CHECK (raw_kind IN (
+    'user_prompt',
+    'agent_message',
+    'system_prompt',
+    'model_input',
+    'model_output',
+    'tool_params',
+    'tool_result',
+    'transcript_window',
+    'trajectory_window',
+    'memory_file',
+    'context_file',
+    'diagnostic_raw_stream',
+    'other'
+  )),
+  content_hash text NOT NULL,
+  sensitivity_level text NOT NULL CHECK (sensitivity_level IN (
+    'public',
+    'internal',
+    'private',
+    'secret_candidate',
+    'credential_candidate',
+    'unknown'
+  )),
+  taint text[] NOT NULL DEFAULT '{}',
+  retention_until timestamptz NOT NULL,
+  encryption_key_id text NOT NULL,
+  ciphertext bytea,
+  external_ciphertext_ref text,
+  compression text NOT NULL DEFAULT 'none',
+  capture_policy_id text NOT NULL,
+  redaction_policy_id text NOT NULL,
+  access_policy jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  revoked_at timestamptz,
+  UNIQUE (workspace_id, source_event_hash, raw_kind, content_hash),
+  CHECK ((ciphertext IS NOT NULL) OR (external_ciphertext_ref IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS raw_evidence_records_workspace_retention_idx
+  ON autoskill.raw_evidence_records(workspace_id, retention_until, revoked_at);
+
+CREATE INDEX IF NOT EXISTS raw_evidence_records_workspace_kind_idx
+  ON autoskill.raw_evidence_records(workspace_id, raw_kind, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.raw_evidence_access_log (
+  raw_access_id uuid PRIMARY KEY,
+  raw_evidence_record_id uuid NOT NULL REFERENCES autoskill.raw_evidence_records(raw_evidence_record_id),
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  job_id uuid,
+  purpose text NOT NULL,
+  accessor_kind text NOT NULL CHECK (accessor_kind IN (
+    'core_job',
+    'llm_profile',
+    'operator_ui',
+    'retention_job',
+    'scanner',
+    'evaluator'
+  )),
+  model_profile_id uuid,
+  exposure_level text NOT NULL CHECK (exposure_level IN (
+    'metadata',
+    'redacted',
+    'secret_masked_raw',
+    'raw_local_only',
+    'raw_allowed_hosted'
+  )),
+  decision text NOT NULL CHECK (decision IN (
+    'allowed',
+    'denied',
+    'masked',
+    'expired',
+    'revoked'
+  )),
+  reason_code text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS raw_evidence_access_log_record_idx
+  ON autoskill.raw_evidence_access_log(raw_evidence_record_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS autoskill.declassification_reports (
+  declassification_report_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  source_raw_evidence_ids uuid[] NOT NULL DEFAULT '{}',
+  output_kind text NOT NULL CHECK (output_kind IN (
+    'redacted_intent',
+    'semantic_summary',
+    'operational_fact',
+    'memory_candidate',
+    'replay_episode',
+    'topology_hint',
+    'rejected'
+  )),
+  redaction_policy_id text NOT NULL,
+  model_profile_id uuid,
+  confidence numeric NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+  privacy_risk numeric NOT NULL CHECK (privacy_risk >= 0 AND privacy_risk <= 1),
+  output jsonb NOT NULL,
+  scanner_status text NOT NULL CHECK (scanner_status IN (
+    'passed',
+    'failed',
+    'quarantined',
+    'not_run'
+  )),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS declassification_reports_workspace_created_idx
+  ON autoskill.declassification_reports(workspace_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS autoskill.raw_events (
   event_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
@@ -87,6 +206,22 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS raw_events_workspace_source_event_key_idx
   ON autoskill.raw_events(workspace_id, source, source_event_key)
   WHERE source_event_key IS NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'raw_events_raw_evidence_record_fk'
+      AND connamespace = 'autoskill'::regnamespace
+  ) THEN
+    ALTER TABLE autoskill.raw_events
+      ADD CONSTRAINT raw_events_raw_evidence_record_fk
+      FOREIGN KEY (raw_evidence_record_id)
+      REFERENCES autoskill.raw_evidence_records(raw_evidence_record_id)
+      DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS autoskill.evidence_items (
   evidence_id uuid PRIMARY KEY,

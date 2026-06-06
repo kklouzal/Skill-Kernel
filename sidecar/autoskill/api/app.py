@@ -123,6 +123,14 @@ from autoskill.db.profile_qualifications import (
     ProfileQualificationStore,
 )
 from autoskill.db.profiles import AsyncpgProfileStore, NullProfileStore, ProfileStore
+from autoskill.db.raw_evidence import (
+    RAW_EVIDENCE_KINDS,
+    SENSITIVITY_LEVELS,
+    AsyncpgRawEvidenceStore,
+    NullRawEvidenceStore,
+    RawEvidenceInput,
+    RawEvidenceStore,
+)
 from autoskill.db.retrieval import (
     AsyncpgRetrievalStore,
     NullRetrievalStore,
@@ -379,6 +387,62 @@ class DeploymentReadinessResponse(BaseModel):
 
 class EffectiveConfigResponse(AdminResponseEnvelope):
     skillkernel: dict[str, object]
+
+
+class RawEvidenceEncryptedPayload(BaseModel):
+    algorithm: str
+    key_id: str
+    iv: str
+    auth_tag: str
+    ciphertext: str
+
+
+class RawEvidenceIngestRequest(BaseModel):
+    workspace_id: str
+    source_event_hash: str
+    source_kind: str = "live_hook"
+    source_id: str | None = None
+    session_id: str | None = None
+    turn_id: str | None = None
+    raw_kind: str = "other"
+    content_hash: str
+    sensitivity_level: str = "private"
+    taint: list[str] = Field(default_factory=list)
+    retention_until: datetime
+    encryption_key_id: str
+    encrypted_payload: RawEvidenceEncryptedPayload | None = None
+    external_ciphertext_ref: str | None = None
+    compression: str = "none"
+    capture_policy_id: str
+    redaction_policy_id: str
+    access_policy: dict[str, object] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_raw_evidence_contract(self) -> RawEvidenceIngestRequest:
+        if self.raw_kind not in RAW_EVIDENCE_KINDS:
+            allowed = ", ".join(sorted(RAW_EVIDENCE_KINDS))
+            raise ValueError(f"raw_kind must be one of: {allowed}")
+        if self.sensitivity_level not in SENSITIVITY_LEVELS:
+            allowed = ", ".join(sorted(SENSITIVITY_LEVELS))
+            raise ValueError(f"sensitivity_level must be one of: {allowed}")
+        if self.encrypted_payload is None and not self.external_ciphertext_ref:
+            raise ValueError("raw evidence requires encrypted_payload or external_ciphertext_ref")
+        if self.encrypted_payload is not None:
+            if self.encrypted_payload.algorithm != "aes-256-gcm":
+                raise ValueError("encrypted_payload.algorithm must be aes-256-gcm")
+            if self.encrypted_payload.key_id != self.encryption_key_id:
+                raise ValueError("encrypted_payload.key_id must match encryption_key_id")
+            for field_name in ("iv", "auth_tag", "ciphertext"):
+                value = getattr(self.encrypted_payload, field_name)
+                try:
+                    base64.b64decode(value.encode("ascii"), validate=True)
+                except Exception as exc:
+                    raise ValueError(f"encrypted_payload.{field_name} must be base64") from exc
+        return self
+
+
+class RawEvidenceIngestResponse(BaseModel):
+    record: dict[str, object]
 
 
 class JobEnqueueRequest(BaseModel):
@@ -1761,6 +1825,16 @@ def _build_event_store() -> EventStore:
             statement_timeout_ms=settings.statement_timeout_ms,
         )
     return NullEventStore()
+
+
+def _build_raw_evidence_store() -> RawEvidenceStore:
+    settings = get_settings()
+    if settings.database_url:
+        return AsyncpgRawEvidenceStore(
+            settings.database_url,
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
+    return NullRawEvidenceStore()
 
 
 def _build_job_store() -> JobStore:
@@ -3836,6 +3910,7 @@ def _replay_context_metadata(context: list[Any]) -> dict[str, Any]:
 
 def create_app(
     event_store: EventStore | None = None,
+    raw_evidence_store: RawEvidenceStore | None = None,
     job_store: JobStore | None = None,
     scheduler_store: SchedulerStore | None = None,
     evidence_store: EvidenceStore | None = None,
@@ -3873,6 +3948,7 @@ def create_app(
     api_surface: str = "all",
 ) -> FastAPI:
     store = event_store or _build_event_store()
+    raw_evidence = raw_evidence_store or _build_raw_evidence_store()
     jobs = job_store or _build_job_store()
     scheduler = scheduler_store or _build_scheduler_store()
     evidence = evidence_store or _build_evidence_store()
@@ -3942,6 +4018,7 @@ def create_app(
         finally:
             for closeable in (
                 store,
+                raw_evidence,
                 jobs,
                 scheduler,
                 evidence,
@@ -4033,13 +4110,18 @@ def create_app(
                 "runtime_context_hints": True,
                 "raw_vault": True,
                 "raw_vault_policy": {
+                    "raw_vault_policy_version": "skillkernel.raw-vault-policy.v1",
                     "raw_capture_supported": True,
                     "raw_capture_default": False,
+                    "raw_record_ingest_path": "/v1/ingest/raw-evidence",
+                    "raw_record_ingest_method": "POST",
+                    "raw_record_storage": "encrypted",
                     "browser_exposure": "forbidden",
                     "guarded_reveal_required": True,
                     "raw_capture_requires_plugin_handshake": True,
                 },
                 "redaction_policy": {
+                    "redaction_policy_version": "skillkernel.redaction-policy.v1",
                     "plugin_redacts_before_forward": True,
                     "core_redacts_before_persistence": True,
                     "secret_redaction_required": True,
@@ -4201,6 +4283,55 @@ def create_app(
             duplicate=summary.duplicate,
             rejected=summary.rejected,
         )
+
+    @app.post("/v1/ingest/raw-evidence", response_model=RawEvidenceIngestResponse)
+    async def ingest_raw_evidence(
+        request: RawEvidenceIngestRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> RawEvidenceIngestResponse:
+        _require_ingest_auth(authorization)
+        encrypted_payload = (
+            request.encrypted_payload.model_dump(mode="json")
+            if request.encrypted_payload is not None
+            else None
+        )
+        ciphertext = (
+            json.dumps(encrypted_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            if encrypted_payload is not None
+            else None
+        )
+        record = await raw_evidence.create_record(
+            RawEvidenceInput(
+                workspace_key=request.workspace_id,
+                source_event_hash=request.source_event_hash,
+                source_kind=request.source_kind,
+                source_id=request.source_id,
+                session_id=request.session_id,
+                turn_id=request.turn_id,
+                raw_kind=request.raw_kind,
+                content_hash=request.content_hash,
+                sensitivity_level=request.sensitivity_level,
+                taint=request.taint,
+                retention_until=request.retention_until,
+                encryption_key_id=request.encryption_key_id,
+                ciphertext=ciphertext,
+                external_ciphertext_ref=request.external_ciphertext_ref,
+                compression=request.compression,
+                capture_policy_id=request.capture_policy_id,
+                redaction_policy_id=request.redaction_policy_id,
+                access_policy=dict(request.access_policy),
+            )
+        )
+        await raw_evidence.record_access(
+            raw_evidence_record_id=record.raw_evidence_record_id,
+            workspace_key=request.workspace_id,
+            purpose="raw_capture_ingest",
+            accessor_kind="core_job",
+            exposure_level="metadata",
+            decision="allowed",
+            reason_code="encrypted_raw_record_stored",
+        )
+        return RawEvidenceIngestResponse(record=record.to_json())
 
     @app.post(
         "/v1/attribution/action-checks",

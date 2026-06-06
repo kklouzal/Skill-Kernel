@@ -102,10 +102,14 @@ function compatibleCoreResponse(url) {
           auth_mode: "bearer",
         },
         raw_vault_policy: {
+          raw_vault_policy_version: "skillkernel.raw-vault-policy.v1",
           raw_capture_supported: true,
+          raw_record_ingest_path: "/v1/ingest/raw-evidence",
+          raw_record_ingest_method: "POST",
           browser_exposure: "forbidden",
         },
         redaction_policy: {
+          redaction_policy_version: "skillkernel.redaction-policy.v1",
           plugin_redacts_before_forward: true,
           secret_redaction_required: true,
         },
@@ -193,7 +197,7 @@ test("capture hook handlers import and forward redacted envelopes", async () => 
   }
 });
 
-test("llm input capture strips prompt bodies unless raw capture is enabled", async () => {
+test("llm input capture keeps normal ingest redacted and stores raw capture in vault", async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (url, request) => {
@@ -202,6 +206,17 @@ test("llm input capture strips prompt bodies unless raw capture is enabled", asy
       return compatibility;
     }
     calls.push({ url, request, body: JSON.parse(request.body) });
+    if (new URL(url).pathname === "/v1/ingest/raw-evidence") {
+      return Response.json({
+        record: {
+          raw_evidence_record_id: "00000000-0000-4000-8000-000000000099",
+          content_hash: JSON.parse(request.body).content_hash,
+          content_policy: {
+            raw_evidence_returned: false,
+          },
+        },
+      });
+    }
     return Response.json({ accepted: 1, duplicate: 0, rejected: 0 });
   };
 
@@ -244,18 +259,31 @@ test("llm input capture strips prompt bodies unless raw capture is enabled", asy
           autoskill: {
             ...hookContext(rawWorkspaceDir).config.autoskill,
             captureRawConversation: true,
+            rawSpoolEncryptionKey: "local-test-key",
           },
         },
       },
     );
 
+    const rawVaultCall = calls.find(
+      (call) => new URL(call.url).pathname === "/v1/ingest/raw-evidence",
+    );
+    assert.ok(rawVaultCall);
+    assert.equal(rawVaultCall.body.raw_kind, "model_input");
+    assert.equal(rawVaultCall.body.encrypted_payload.algorithm, "aes-256-gcm");
+    assert.equal(JSON.stringify(rawVaultCall.body).includes("keep body"), false);
+    assert.equal(JSON.stringify(rawVaultCall.body).includes("sk-testtoken"), false);
+
     const rawPayload = calls.at(-1).body.events[0].payload;
-    assert.equal(rawPayload.systemPrompt, "keep body but redact [REDACTED]");
+    assert.match(rawPayload.systemPrompt, /^\[REDACTED_CONTENT bytes=/);
+    assert.equal(calls.at(-1).body.events[0].raw_evidence_record_id, "00000000-0000-4000-8000-000000000099");
+    assert.equal(calls.at(-1).body.events[0].evidence_fidelity, "raw_vault_linked");
+    assert.equal(JSON.stringify(calls.at(-1).body.events[0]).includes("keep body"), false);
     assert.deepEqual(
       calls
         .filter((call) => call.request.method === "POST")
         .map((call) => new URL(call.url).pathname),
-      ["/v1/ingest/events", "/v1/ingest/events"],
+      ["/v1/ingest/events", "/v1/ingest/raw-evidence", "/v1/ingest/events"],
     );
   } finally {
     clearCompatibilityHandshakeCache();
@@ -382,7 +410,7 @@ test("raw capture outage spool is encrypted when a raw spool key is configured",
     });
 
     assert.equal(result.spooled, true);
-    assert.equal(result.degraded, undefined);
+    assert.equal(result.degraded, true);
     const files = await fs.readdir(path.join(workspaceDir, ".autoskill", "spool"));
     const contents = await fs.readFile(
       path.join(workspaceDir, ".autoskill", "spool", files[0]),

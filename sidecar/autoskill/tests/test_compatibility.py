@@ -104,8 +104,17 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
     }
     assert capabilities.capabilities["raw_vault_policy"]["browser_exposure"] == "forbidden"
     assert capabilities.capabilities["raw_vault_policy"][
+        "raw_vault_policy_version"
+    ] == "skillkernel.raw-vault-policy.v1"
+    assert capabilities.capabilities["raw_vault_policy"][
+        "raw_record_ingest_path"
+    ] == "/v1/ingest/raw-evidence"
+    assert capabilities.capabilities["raw_vault_policy"][
         "raw_capture_requires_plugin_handshake"
     ] is True
+    assert capabilities.capabilities["redaction_policy"][
+        "redaction_policy_version"
+    ] == "skillkernel.redaction-policy.v1"
     assert capabilities.capabilities["redaction_policy"][
         "plugin_redacts_before_forward"
     ] is True

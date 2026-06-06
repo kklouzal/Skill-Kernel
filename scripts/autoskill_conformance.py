@@ -91,6 +91,7 @@ def build_report(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
         _check_no_skill_package_self_registration(spec_path),
         _check_no_raw_vault_streaming(),
         _check_no_raw_private_read_model_defaults(),
+        _check_raw_vault_schema_contract(),
         _check_no_unstable_react_keys(),
         _check_migration_deduplicated_and_ordered(),
         _check_architecture_invariants(spec_path),
@@ -232,6 +233,49 @@ def _check_no_raw_private_read_model_defaults() -> StaticCheck:
         "SKX-STATIC-006",
         "no read-model endpoint returns raw private payloads by default",
         ("raw-vault summary route content policy",),
+        details,
+    )
+
+
+def _check_raw_vault_schema_contract() -> StaticCheck:
+    migration = MIGRATION_PATH.read_text(encoding="utf-8")
+    app = (ROOT / "sidecar" / "autoskill" / "api" / "app.py").read_text(encoding="utf-8")
+    envelope = (ROOT / "plugin" / "autoskill" / "src" / "event-envelope.js").read_text(
+        encoding="utf-8"
+    )
+    client = (ROOT / "plugin" / "autoskill" / "src" / "client" / "index.js").read_text(
+        encoding="utf-8"
+    )
+    details: list[str] = []
+    required_tables = (
+        "CREATE TABLE IF NOT EXISTS autoskill.raw_evidence_records",
+        "CREATE TABLE IF NOT EXISTS autoskill.raw_evidence_access_log",
+        "CREATE TABLE IF NOT EXISTS autoskill.declassification_reports",
+    )
+    for table in required_tables:
+        if table not in migration:
+            details.append(f"migration missing {table}")
+    for required in (
+        "raw_events_raw_evidence_record_fk",
+        "FOREIGN KEY (raw_evidence_record_id)",
+        '"/v1/ingest/raw-evidence"',
+        '"raw_vault_policy_version": "skillkernel.raw-vault-policy.v1"',
+        '"redaction_policy_version": "skillkernel.redaction-policy.v1"',
+    ):
+        if required not in migration + app:
+            details.append(f"raw-vault contract missing {required}")
+    if "captureRawConversation: false" not in envelope:
+        details.append("plugin event envelope does not force normal payload redaction")
+    if "storeRawEvidenceRecord" not in client:
+        details.append("plugin client cannot store raw-vault records separately")
+    return _result(
+        "SKX-STATIC-006B",
+        "raw-vault persistence, handshake, and redacted event contract are present",
+        (
+            "migrations/0001_autoskill_schema.sql raw-vault tables",
+            "sidecar/autoskill/api/app.py raw-vault capability and ingest route",
+            "plugin/autoskill/src event envelope/client",
+        ),
         details,
     )
 

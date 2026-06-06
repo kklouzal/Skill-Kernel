@@ -5,9 +5,16 @@ import {
   forwardEvent,
   forwardEvents,
   recordActionAttributionCheck,
+  storeRawEvidenceRecord,
 } from "./client/index.js";
 import { resolveConfig } from "./config.js";
 import { buildEventEnvelope } from "./event-envelope.js";
+import {
+  buildRawEvidenceRecord,
+  buildRawSpoolEnvelope,
+  payloadHashForPayload,
+  redactEventForForward,
+} from "./raw-vault.js";
 import { appendSpool, getSpoolStats, replaySpool } from "./spool/index.js";
 
 let replayInFlight = false;
@@ -119,8 +126,18 @@ export async function captureEvent({ eventType, payload, trust, taint, hookConte
     ctx: hookContext,
     config,
   });
+  const rawVault = await maybeStoreRawEvidenceRecord({
+    eventType,
+    payload: eventPayload,
+    trust,
+    taint,
+    hookContext,
+    config,
+    envelope,
+    rawCompatibility,
+  });
   try {
-    await forwardEvent(config.sidecarUrl, envelope, {
+    await forwardEvent(config.sidecarUrl, rawVault.envelope, {
       timeoutMs: 500,
       authToken: config.ingestToken,
     });
@@ -132,27 +149,36 @@ export async function captureEvent({ eventType, payload, trust, taint, hookConte
       taint,
       hookContext,
       config,
-      envelope,
+      envelope: rawVault.envelope,
     });
     await appendSpool(config.spoolDir, spooledEnvelope, options);
     return {
       captured: true,
       forwarded: false,
       spooled: true,
-      degraded,
-      eventId: envelope.event_id,
+      degraded: degraded ?? rawVault.degraded,
+      eventId: rawVault.envelope.event_id,
       error: String(error?.message ?? error),
     };
   }
 
   try {
     const replay = await replayCapturedSpool(config);
-    return { captured: true, forwarded: true, eventId: envelope.event_id, replay };
+    return {
+      captured: true,
+      forwarded: true,
+      eventId: rawVault.envelope.event_id,
+      rawEvidenceRecordId: rawVault.rawEvidenceRecordId,
+      degraded: rawVault.degraded,
+      replay,
+    };
   } catch (error) {
     return {
       captured: true,
       forwarded: true,
-      eventId: envelope.event_id,
+      eventId: rawVault.envelope.event_id,
+      rawEvidenceRecordId: rawVault.rawEvidenceRecordId,
+      degraded: rawVault.degraded,
       replay: {
         failed: true,
         error: String(error?.message ?? error),
@@ -246,6 +272,71 @@ async function rawCaptureCompatibility(config) {
     expiresAt: now + Math.max(0, config.compatibilityHandshake.cacheTtlMs),
   });
   return result;
+}
+
+async function maybeStoreRawEvidenceRecord({
+  eventType,
+  payload,
+  taint,
+  hookContext,
+  config,
+  envelope,
+  rawCompatibility,
+}) {
+  if (!config.captureRawConversation || rawCompatibility === null) {
+    return { envelope };
+  }
+  if (!config.rawSpoolEncryptionKey) {
+    return {
+      envelope: markEnvelopeRawCaptureDegraded(envelope, "raw_vault_encryption_key_missing"),
+      degraded: true,
+    };
+  }
+  try {
+    const rawRecord = buildRawEvidenceRecord({
+      eventType,
+      payload,
+      taint,
+      ctx: hookContext,
+      config,
+      envelope,
+    });
+    const rawVaultPolicy = rawCompatibility?.capabilities?.capabilities?.raw_vault_policy ?? {};
+    const response = await storeRawEvidenceRecord(config.sidecarUrl, rawRecord, {
+      timeoutMs: 500,
+      authToken: config.ingestToken,
+      rawRecordIngestPath: rawVaultPolicy.raw_record_ingest_path,
+    });
+    const rawEvidenceRecordId =
+      response?.record?.raw_evidence_record_id ?? response?.raw_evidence_record_id ?? null;
+    if (!rawEvidenceRecordId) {
+      throw new Error("raw vault response omitted raw_evidence_record_id");
+    }
+    envelope.raw_evidence_record_id = rawEvidenceRecordId;
+    envelope.evidence_fidelity = "raw_vault_linked";
+    return { envelope, rawEvidenceRecordId };
+  } catch (error) {
+    return {
+      envelope: markEnvelopeRawCaptureDegraded(
+        envelope,
+        `raw_vault_ingest_failed:${String(error?.message ?? error)}`,
+      ),
+      degraded: true,
+      error: String(error?.message ?? error),
+    };
+  }
+}
+
+function markEnvelopeRawCaptureDegraded(envelope, reason) {
+  envelope.payload = {
+    ...envelope.payload,
+    autoskill_raw_capture_degraded: { reason },
+  };
+  envelope.payload_hash = payloadHashForPayload(envelope.payload);
+  if (envelope.evidence_fidelity === "raw_vault_linked" && !envelope.raw_evidence_record_id) {
+    envelope.evidence_fidelity = "redacted_derivative";
+  }
+  return envelope;
 }
 
 export async function beforeToolCall(event, hookContext) {
@@ -356,7 +447,7 @@ async function replayCapturedSpool(config) {
       maxBytes: config.maxSpoolBytes,
       rawContentEncryptionKey: config.rawSpoolEncryptionKey,
       send: (events) =>
-        forwardEvents(config.sidecarUrl, events, {
+        forwardEvents(config.sidecarUrl, events.map((event) => redactEventForForward(event)), {
           timeoutMs: 1000,
           authToken: config.ingestToken,
         }),
@@ -384,8 +475,23 @@ function rawAwareSpoolEnvelope({ eventType, payload, trust, taint, hookContext, 
   if (!config.captureRawConversation) {
     return { envelope, options: normalSpoolOptions(config), degraded: undefined };
   }
+  if (envelope.raw_evidence_record_id) {
+    return { envelope, options: normalSpoolOptions(config), degraded: undefined };
+  }
   if (config.rawSpoolEncryptionKey) {
-    return { envelope, options: rawSpoolOptions(config), degraded: undefined };
+    return {
+      envelope: buildRawSpoolEnvelope({
+        eventType,
+        payload,
+        trust,
+        taint,
+        ctx: hookContext,
+        config,
+        envelope,
+      }),
+      options: rawSpoolOptions(config),
+      degraded: undefined,
+    };
   }
   const redactedEnvelope = buildEventEnvelope({
     eventType,

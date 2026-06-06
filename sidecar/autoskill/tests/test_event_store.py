@@ -41,6 +41,32 @@ def event() -> EventEnvelope:
     ).redacted()
 
 
+def test_event_redaction_preserves_raw_vault_pointer_without_raw_payload() -> None:
+    raw_id = uuid4()
+    envelope = EventEnvelope(
+        workspace_id="dev-01",
+        trace_id=uuid4(),
+        span_id=uuid4(),
+        agent_id="agent-1",
+        session_id="session-1",
+        turn_id="turn-1",
+        event_type="llm_input",
+        source_event_key="runtime-source-key-raw",
+        trust=TrustClass.AGENT_OUTPUT,
+        evidence_fidelity="raw_vault_linked",
+        raw_evidence_record_id=raw_id,
+        payload={"systemPrompt": "private prompt sk-testtoken000000000000000000"},
+    )
+
+    redacted = envelope.redacted()
+
+    assert redacted.raw_evidence_record_id == raw_id
+    assert redacted.evidence_fidelity == "raw_vault_linked"
+    assert redacted.payload["systemPrompt"].startswith("[REDACTED_CONTENT bytes=")
+    assert "private prompt" not in str(redacted.payload)
+    assert "sk-testtoken" not in str(redacted.payload)
+
+
 @pytest.mark.asyncio
 async def test_event_store_ingest_is_idempotent() -> None:
     store = MemoryEventStore()

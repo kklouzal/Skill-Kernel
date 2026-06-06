@@ -73,8 +73,24 @@ export function assessCoreCompatibility({ version, capabilities, readModelContra
     [ingestContract.path === "/v1/ingest/events", "capabilities.ingest_contract.path"],
     [ingestContract.method === "POST", "capabilities.ingest_contract.method"],
     [ingestContract.auth_mode === "bearer", "capabilities.ingest_contract.auth_mode"],
+    [
+      rawVaultPolicy.raw_vault_policy_version === "skillkernel.raw-vault-policy.v1",
+      "capabilities.raw_vault_policy.raw_vault_policy_version",
+    ],
     [rawVaultPolicy.raw_capture_supported === true, "capabilities.raw_vault_policy.raw_capture_supported"],
+    [
+      rawVaultPolicy.raw_record_ingest_path === "/v1/ingest/raw-evidence",
+      "capabilities.raw_vault_policy.raw_record_ingest_path",
+    ],
+    [
+      rawVaultPolicy.raw_record_ingest_method === "POST",
+      "capabilities.raw_vault_policy.raw_record_ingest_method",
+    ],
     [rawVaultPolicy.browser_exposure === "forbidden", "capabilities.raw_vault_policy.browser_exposure"],
+    [
+      redactionPolicy.redaction_policy_version === "skillkernel.redaction-policy.v1",
+      "capabilities.redaction_policy.redaction_policy_version",
+    ],
     [redactionPolicy.plugin_redacts_before_forward === true, "capabilities.redaction_policy.plugin_redacts_before_forward"],
     [redactionPolicy.secret_redaction_required === true, "capabilities.redaction_policy.secret_redaction_required"],
     [contentPolicy.raw_content_default === "denied", "read_model_contract.content_policy.raw_content_default"],
@@ -102,6 +118,11 @@ export async function forwardEvents(sidecarUrl, events, options = {}) {
     { events: events.map(normalizeEventForSidecar) },
     options,
   );
+}
+
+export async function storeRawEvidenceRecord(sidecarUrl, record, options = {}) {
+  const rawRecordPath = options.rawRecordIngestPath ?? "/v1/ingest/raw-evidence";
+  return postJson(`${sidecarUrl.replace(/\/$/, "")}${rawRecordPath}`, record, options);
 }
 
 function normalizeEventForSidecar(event) {
