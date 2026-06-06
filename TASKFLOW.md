@@ -22,8 +22,9 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   expose raw session IDs, turn IDs, and arbitrary retrieval metadata values
   such as raw query text or candidate/suppression summaries. The new projection
   preserves stable retrieval log, trace/span, policy, decision, rendered/candidate
-  skill, reason-code, query-hash, and metadata-key fields while hashing
-  session/turn IDs and withholding raw metadata values. This advances Core
+  skill, reason-code, validated query-identity, and metadata-key fields while
+  hashing malformed query identity values plus session/turn IDs and withholding
+  raw metadata values. This advances Core
   Section 11 plus Observatory Sections 7.6, 7.7, 12.6, 13.1, 16.1, and
   acceptance criteria 21.15, 21.16, and 21.30 by closing the broker runtime
   aggregate-to-evidence path without adding UI mutation authority. Focused

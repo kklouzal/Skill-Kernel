@@ -7,10 +7,11 @@ repo-level gates.
 content-safe read-model projection instead of spreading raw
 `RetrievalLog.to_json()` payloads. The projection preserves stable retrieval
 log identity, trace/span refs, policy refs, decision state, rendered/candidate
-skill IDs, reason codes, query hash, and metadata key names while replacing raw
-session/turn IDs with SHA-256 hashes and withholding arbitrary retrieval
-metadata values such as raw query text, candidate summaries, or suppression
-context. This advances Core Section 11 plus Observatory Sections 7.6, 7.7,
+skill IDs, reason codes, validated query identity, and metadata key names while
+hashing malformed query identity values, replacing raw session/turn IDs with
+SHA-256 hashes, and withholding arbitrary retrieval metadata values such as raw
+query text, candidate summaries, or suppression context. This advances Core
+Section 11 plus Observatory Sections 7.6, 7.7,
 12.6, 13.1, 16.1, and acceptance criteria 21.15, 21.16, and 21.30 by closing
 the broker runtime aggregate-to-evidence path without adding UI-local authority
 or changing the underlying retrieval log store. Focused validation passed with
