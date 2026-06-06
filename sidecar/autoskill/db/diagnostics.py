@@ -112,6 +112,23 @@ class DiagnosticMomentumStore(Protocol):
     ) -> list[DiagnosticMomentumRecord]:
         """Return diagnostic records ready for probe or patch planning."""
 
+    async def list_records(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[DiagnosticMomentumRecord]:
+        """Return diagnostic records for operator diagnostics."""
+
+    async def get_record(
+        self,
+        *,
+        workspace_key: str,
+        diagnostic_momentum_id: UUID,
+    ) -> DiagnosticMomentumRecord | None:
+        """Fetch one diagnostic momentum record for bounded read models."""
+
     async def claim_ready_for_repair(
         self,
         *,
@@ -187,6 +204,23 @@ class NullDiagnosticMomentumStore:
         limit: int = 100,
     ) -> list[DiagnosticMomentumRecord]:
         return []
+
+    async def list_records(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[DiagnosticMomentumRecord]:
+        return []
+
+    async def get_record(
+        self,
+        *,
+        workspace_key: str,
+        diagnostic_momentum_id: UUID,
+    ) -> DiagnosticMomentumRecord | None:
+        return None
 
     async def claim_ready_for_repair(
         self,
@@ -398,6 +432,54 @@ class AsyncpgDiagnosticMomentumStore(AsyncpgPoolOwner):
                 max(1, min(limit, 1000)),
             )
         return [DiagnosticMomentumRecord.from_row(row) for row in rows]
+
+    async def list_records(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[DiagnosticMomentumRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            rows = await conn.fetch(
+                """
+                SELECT *, $2::text AS workspace_key
+                FROM autoskill.diagnostic_momentum
+                WHERE workspace_id = $1
+                  AND ($3::text IS NULL OR status = $3)
+                ORDER BY momentum_score DESC, last_seen_at DESC
+                LIMIT $4
+                """,
+                workspace_id,
+                workspace_key,
+                status,
+                max(1, min(limit, 1000)),
+            )
+        return [DiagnosticMomentumRecord.from_row(row) for row in rows]
+
+    async def get_record(
+        self,
+        *,
+        workspace_key: str,
+        diagnostic_momentum_id: UUID,
+    ) -> DiagnosticMomentumRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                SELECT *, $3::text AS workspace_key
+                FROM autoskill.diagnostic_momentum
+                WHERE workspace_id = $1
+                  AND diagnostic_momentum_id = $2
+                """,
+                workspace_id,
+                diagnostic_momentum_id,
+                workspace_key,
+            )
+        return DiagnosticMomentumRecord.from_row(row) if row else None
 
     async def claim_ready_for_repair(
         self,

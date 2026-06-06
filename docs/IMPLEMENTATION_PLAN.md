@@ -3,6 +3,28 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Observatory diagnostic momentum records now have
+sidecar-hosted, content-safe read-model routes and generic object microscope
+coverage. The new `/admin/api/v1/diagnostics/momentum` collection/detail
+surfaces use the existing Core diagnostic momentum store and expose stable IDs,
+workspace/status/kind, issue signature hashes, evidence/contrastive/counter
+counts, momentum/risk scores, timeline state, and skill/version/executor
+provenance while withholding raw root-cause hypotheses and suggested repair
+directions behind SHA-256 hashes and lengths. This advances Core Section 1.5
+plus Observatory Sections 7.6, 7.7, 8.5, 12.6, 13.1, and 16.1 by making
+recurring diagnostic evidence drillable without adding UI-local mutation
+authority or returning raw correction/repair text. Focused validation passed
+with the diagnostic-momentum and route-matrix Observatory API regressions (`2
+passed, 59 deselected`) plus targeted Ruff. Required pre-commit gates also
+passed with full sidecar Ruff, full pytest (`402 passed`), compileall,
+Observatory frontend build, generated OpenAPI client freshness check,
+diff-check, core acceptance (`70` implemented), Observatory acceptance (`86`
+satisfied), and conformance (`14/14`). A compose/Postgres smoke applied
+migrations against an isolated project, recorded one `user_correction`
+diagnostic momentum row through `AsyncpgDiagnosticMomentumStore`,
+list/detail-read it through the new methods, and removed the temporary compose
+project/volume.
+
 2026-06-06 update: Observatory governance transaction records now have direct
 sidecar-hosted, content-safe read-model routes for evolution transactions,
 deterministic writer transactions, and revocation requests. The new

@@ -5934,6 +5934,99 @@ def create_app(
             "audit": {"links": []},
         }
 
+    def _diagnostic_momentum_admin_record(record: Any) -> dict[str, Any]:
+        record_id = str(record.diagnostic_momentum_id)
+        upstream: list[dict[str, str]] = []
+        if record.skill_id is not None:
+            upstream.append({"object_type": "skill", "object_id": str(record.skill_id)})
+        if record.skill_version_id is not None:
+            upstream.append(
+                {
+                    "object_type": "skill_version",
+                    "object_id": str(record.skill_version_id),
+                }
+            )
+        if record.executor_profile_id is not None:
+            upstream.append(
+                {
+                    "object_type": "executor_profile",
+                    "object_id": str(record.executor_profile_id),
+                }
+            )
+        hypothesis_hash = sha256_text(record.root_cause_hypothesis)
+        direction_hash = sha256_text(record.suggested_change_direction)
+        return {
+            "schema_version": "skillkernel.observatory.diagnostic-momentum.v1",
+            "object_type": "diagnostic_momentum",
+            "object_id": record_id,
+            "title": f"Diagnostic momentum {record.diagnostic_kind} {record_id}",
+            "summary": (
+                f"{record.diagnostic_kind} / {record.status}; "
+                f"momentum={record.momentum_score:.2f}; risk={record.risk_score:.2f}"
+            ),
+            "workspace_key": record.workspace_key,
+            "workspace_id": str(record.workspace_id) if record.workspace_id else None,
+            "diagnostic_kind": record.diagnostic_kind,
+            "status": record.status,
+            "issue_signature_hash": record.issue_signature_hash,
+            "counts": {
+                "evidence": record.evidence_count,
+                "contrastive_support": record.contrastive_support_count,
+                "counterevidence": record.counterevidence_count,
+            },
+            "scores": {
+                "momentum": record.momentum_score,
+                "risk": record.risk_score,
+            },
+            "hypothesis": {
+                "present": bool(record.root_cause_hypothesis),
+                "sha256": hypothesis_hash,
+                "length": len(record.root_cause_hypothesis),
+            },
+            "suggested_change": {
+                "present": bool(record.suggested_change_direction),
+                "sha256": direction_hash,
+                "length": len(record.suggested_change_direction),
+            },
+            "timeline": [
+                {
+                    "at": record.first_seen_at.isoformat(),
+                    "event": "diagnostic_momentum_opened",
+                    "status": record.status,
+                },
+                {
+                    "at": record.last_seen_at.isoformat(),
+                    "event": "diagnostic_momentum_updated",
+                    "status": record.status,
+                },
+            ],
+            "provenance": {
+                "upstream": upstream,
+                "downstream": [
+                    {
+                        "object_type": "repair_candidate",
+                        "object_id": record_id,
+                    }
+                ]
+                if record.status in {"ready_for_probe", "ready_for_patch"}
+                else [],
+            },
+            "diagnostics": {
+                "supporting_component": "evaluator_probes",
+                "diagnostic_kind": record.diagnostic_kind,
+                "ready_for_repair": record.status
+                in {"ready_for_probe", "ready_for_patch"},
+                "raw_hypothesis_returned": False,
+                "raw_suggested_change_returned": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "redaction_state": "content_safe_diagnostic_hashes_only",
+            },
+            "audit": {"links": []},
+        }
+
     def _profile_microscope(
         *,
         profile: Any,
@@ -10876,6 +10969,20 @@ def create_app(
                 return ObservatoryObjectResponse(
                     object=_evaluation_microscope(str(evaluation_id), evaluation)
                 )
+        if object_type in {
+            "diagnostic_momentum",
+            "diagnostic-momentum",
+            "diagnostic_momentum_record",
+        }:
+            diagnostic_momentum_id = _uuid_or_404(object_id, "diagnostic momentum")
+            record = await diagnostics.get_record(
+                workspace_key=workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+                diagnostic_momentum_id=diagnostic_momentum_id,
+            )
+            if record is not None:
+                return ObservatoryObjectResponse(
+                    object=_diagnostic_momentum_admin_record(record)
+                )
         if object_type in {"memory_quarantine", "quarantined_memory"}:
             quarantine_id = _uuid_or_404(object_id, "memory quarantine")
             memory = await memory_governance.get_memory_quarantine(
@@ -11778,6 +11885,68 @@ def create_app(
         )
         return ObservatoryObjectResponse(
             object=_evaluation_microscope(evaluation_id, evaluation)
+        )
+
+    @app.get(
+        "/admin/api/v1/diagnostics/momentum",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_diagnostic_momentum(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        effective_workspace_id = workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID
+        records = await diagnostics.list_records(
+            workspace_key=effective_workspace_id,
+            status=status,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="diagnostic_momentum",
+            title="Diagnostic momentum records",
+            items=[_diagnostic_momentum_admin_record(record) for record in records],
+            limit=limit,
+            cursor=cursor,
+            source="diagnostic_momentum_store.list_records",
+            diagnostics={
+                "supporting_component": "evaluator_probes",
+                "filter": {
+                    "workspace_id": effective_workspace_id,
+                    "status": status,
+                },
+                "raw_hypothesis_returned": False,
+                "raw_suggested_change_returned": False,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/diagnostics/momentum/{diagnostic_momentum_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_diagnostic_momentum_detail(
+        diagnostic_momentum_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        record_id = _uuid_or_404(diagnostic_momentum_id, "diagnostic momentum")
+        record = await diagnostics.get_record(
+            workspace_key=workspace_id or DEFAULT_OBSERVATORY_WORKSPACE_ID,
+            diagnostic_momentum_id=record_id,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="diagnostic momentum record not found",
+            )
+        return ObservatoryObjectResponse(
+            object=_diagnostic_momentum_admin_record(record)
         )
 
     @app.get("/admin/api/v1/scanner-findings", response_model=ObservatoryCollectionResponse)

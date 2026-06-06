@@ -16,6 +16,35 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory diagnostic momentum records now have a
+  sidecar-hosted, content-safe admin read model and object microscope path over
+  the existing Core diagnostic momentum store. `DiagnosticMomentumStore` can
+  list/detail persisted records, `/admin/api/v1/diagnostics/momentum` and
+  `/admin/api/v1/diagnostics/momentum/{diagnostic_momentum_id}` expose bounded
+  collection/detail views, and generic object microscopes resolve
+  `diagnostic_momentum` aliases. The read model preserves stable IDs,
+  workspace/status/kind, issue signature hashes, evidence/contrastive/counter
+  counts, momentum/risk scores, timeline state, and skill/version/executor
+  provenance while replacing the raw root-cause hypothesis and suggested repair
+  direction with SHA-256 hashes and lengths. This advances Core Section 1.5
+  plus Observatory Sections 7.6, 7.7, 8.5, 12.6, 13.1, 16.1, and acceptance
+  criterion 21.16 by making recurring diagnostic evidence inspectable without
+  returning raw correction or repair text. Focused validation passed with `uv
+  run pytest sidecar/autoskill/tests/test_observatory_api.py -q -k
+  'diagnostic_momentum_read_models_are_content_safe or
+  required_admin_route_matrix'` (`2 passed, 59 deselected`) and targeted Ruff.
+  Required pre-commit gates also passed with `uv run ruff check sidecar`, `uv
+  run pytest` (`402 passed`), `uv run python -m compileall -q sidecar`, `npm
+  run build --prefix sidecar/autoskill/observatory`, `uv run python
+  scripts/generate_observatory_openapi_client.py --check`, `git diff --check`,
+  `uv run python scripts/autoskill_acceptance.py --json` (`ready=true`, `70`
+  implemented), `uv run python scripts/autoskill_observatory_acceptance.py
+  --json` (`ready=true`, `86` satisfied), and `uv run python
+  scripts/autoskill_conformance.py --json` (`ready=true`, `14/14` checks). A
+  compose/Postgres smoke applied migrations against an isolated project,
+  recorded one `user_correction` diagnostic momentum row through
+  `AsyncpgDiagnosticMomentumStore`, list/detail-read it through the new methods,
+  and removed the temporary compose project/volume.
 - 2026-06-06: Observatory governance transaction records now have direct
   sidecar-hosted, content-safe admin read models in addition to generic object
   microscopes. `/admin/api/v1/evolution/transactions`,

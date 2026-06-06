@@ -20,6 +20,10 @@ from autoskill.db.attribution import NullAttributionStore
 from autoskill.db.broker_policy import NullBrokerPolicyStore
 from autoskill.db.candidates import CandidateReviewRecord, NullCandidateStore
 from autoskill.db.context import NullContextGovernanceStore
+from autoskill.db.diagnostics import (
+    DiagnosticMomentumRecord,
+    NullDiagnosticMomentumStore,
+)
 from autoskill.db.embeddings import (
     EMBEDDING_OBJECT_TYPE_BODY_INDEX_DOCUMENT,
     EMBEDDING_OBJECT_TYPE_EVIDENCE_ITEM,
@@ -365,6 +369,40 @@ class MemoryObservatoryProfileStore(NullProfileStore):
         if status is not None and status != self.embedding_profile.status:
             return []
         return [self.embedding_profile][:limit]
+
+
+class MemoryObservatoryDiagnosticMomentumStore(NullDiagnosticMomentumStore):
+    def __init__(self, records: list[DiagnosticMomentumRecord]) -> None:
+        self.records = records
+
+    async def list_records(
+        self,
+        *,
+        workspace_key: str,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[DiagnosticMomentumRecord]:
+        records = [
+            record
+            for record in self.records
+            if (record.workspace_key == workspace_key)
+            and (status is None or record.status == status)
+        ]
+        return records[:limit]
+
+    async def get_record(
+        self,
+        *,
+        workspace_key: str,
+        diagnostic_momentum_id,
+    ) -> DiagnosticMomentumRecord | None:
+        for record in self.records:
+            if (
+                record.workspace_key == workspace_key
+                and record.diagnostic_momentum_id == diagnostic_momentum_id
+            ):
+                return record
+        return None
 
 
 class MemoryTraceStore:
@@ -1775,6 +1813,8 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/candidates/{candidate_id}", "GET"),
         ("/admin/api/v1/evaluations", "GET"),
         ("/admin/api/v1/evaluations/{evaluation_id}", "GET"),
+        ("/admin/api/v1/diagnostics/momentum", "GET"),
+        ("/admin/api/v1/diagnostics/momentum/{diagnostic_momentum_id}", "GET"),
         ("/admin/api/v1/scanner-findings", "GET"),
         ("/admin/api/v1/scanner-findings/{finding_id}", "GET"),
         ("/admin/api/v1/artifacts/{artifact_id}", "GET"),
@@ -2464,6 +2504,89 @@ def test_observatory_profile_microscopes_show_redacted_qualification_state() -> 
     assert "provider.local" not in serialized
     assert "embedding.local" not in serialized
     assert "sk-live-secret" not in serialized
+
+
+def test_observatory_diagnostic_momentum_read_models_are_content_safe() -> None:
+    now = datetime.now(UTC)
+    record_id = uuid4()
+    skill_id = uuid4()
+    skill_version_id = uuid4()
+    executor_profile_id = uuid4()
+    raw_hypothesis = "User correction says the composer leaked private ticket ACME-123."
+    raw_direction = "Patch the skill body with the private command transcript."
+    diagnostics = MemoryObservatoryDiagnosticMomentumStore(
+        [
+            DiagnosticMomentumRecord(
+                diagnostic_momentum_id=record_id,
+                workspace_id=uuid4(),
+                workspace_key="dev-01",
+                skill_id=skill_id,
+                skill_version_id=skill_version_id,
+                executor_profile_id=executor_profile_id,
+                issue_signature_hash="issue-hash",
+                diagnostic_kind="correction_cluster",
+                root_cause_hypothesis=raw_hypothesis,
+                suggested_change_direction=raw_direction,
+                evidence_count=3,
+                contrastive_support_count=2,
+                counterevidence_count=1,
+                momentum_score=6.0,
+                risk_score=0.7,
+                status="ready_for_patch",
+                first_seen_at=now - timedelta(minutes=15),
+                last_seen_at=now,
+            )
+        ]
+    )
+    app = create_app(diagnostic_store=diagnostics)
+    routes = _routes(app)
+
+    async def run():
+        collection = await routes[
+            ("/admin/api/v1/diagnostics/momentum", "GET")
+        ].endpoint(workspace_id="dev-01")
+        detail = await routes[
+            (
+                "/admin/api/v1/diagnostics/momentum/{diagnostic_momentum_id}",
+                "GET",
+            )
+        ].endpoint(diagnostic_momentum_id=str(record_id), workspace_id="dev-01")
+        generic = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="diagnostic_momentum",
+            object_id=str(record_id),
+            workspace_id="dev-01",
+        )
+        return collection, detail, generic
+
+    collection, detail, generic = asyncio.run(run())
+
+    collection_item = collection.collection["items"][0]
+    assert collection_item["object_type"] == "diagnostic_momentum"
+    assert collection_item["counts"]["evidence"] == 3
+    assert collection_item["scores"]["momentum"] == 6.0
+    assert collection_item["hypothesis"]["sha256"] == sha256_text(raw_hypothesis)
+    assert collection_item["suggested_change"]["sha256"] == sha256_text(raw_direction)
+    assert detail.object["object_id"] == str(record_id)
+    assert generic.object["provenance"]["upstream"] == [
+        {"object_type": "skill", "object_id": str(skill_id)},
+        {"object_type": "skill_version", "object_id": str(skill_version_id)},
+        {"object_type": "executor_profile", "object_id": str(executor_profile_id)},
+    ]
+    assert detail.object["diagnostics"]["raw_hypothesis_returned"] is False
+    assert detail.object["diagnostics"]["raw_suggested_change_returned"] is False
+    assert detail.object["content_policy"]["raw_available"] is False
+    serialized = json.dumps(
+        {
+            "collection": collection.collection,
+            "detail": detail.object,
+            "generic": generic.object,
+        },
+        sort_keys=True,
+    )
+    assert "ACME-123" not in serialized
+    assert "private command transcript" not in serialized
 
 
 def test_observatory_llm_invocation_object_microscope_is_content_safe() -> None:
