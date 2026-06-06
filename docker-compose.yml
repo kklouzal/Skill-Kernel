@@ -1,6 +1,6 @@
 x-skillkernel-core-build: &skillkernel-core-build
   context: .
-  dockerfile: Dockerfile.core
+  dockerfile: containers/core/Dockerfile
 
 x-skillkernel-runtime-networks: &skillkernel-runtime-networks
   - default
@@ -98,7 +98,7 @@ services:
   observatory:
     build:
       context: .
-      dockerfile: Dockerfile.observatory
+      dockerfile: containers/observatory/Dockerfile
     environment:
       SKILLKERNEL_OBSERVATORY_PORT: ${SKILLKERNEL_OBSERVATORY_CONTAINER_PORT:-8757}
       SKILLKERNEL_CORE_UPSTREAM: ${SKILLKERNEL_CORE_UPSTREAM:-http://core:8765}

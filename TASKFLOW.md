@@ -16,6 +16,28 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Container packaging pass found split-container asset drift
+  against the unified spec. The repo had root-level Dockerfiles and active
+  Dev-01 compose wiring, but lacked the required `containers/core`,
+  `containers/observatory`, and portable `compose/` reference assets; the
+  existing images also ran as root and had no container-local entrypoint or
+  healthcheck scripts. Remediation added first-class Core and Observatory
+  container directories with Dockerfiles, non-root runtime users, entrypoints,
+  and healthcheck scripts; kept root `Dockerfile.core` and
+  `Dockerfile.observatory` as compatibility aliases; switched active compose
+  build targets to the first-class Dockerfiles; added portable compose/env
+  examples and local-LLM override docs; and extended
+  `scripts/autoskill_conformance.py` with a packaging-asset static gate.
+  Validation passed with `docker compose config --quiet`, `docker compose -f
+  compose/compose.example.yml config --quiet`, local-LLM override compose
+  config with pinned image variables, `python -m py_compile` for both
+  healthchecks, `sh -n` for both entrypoints, `docker build --check` for
+  `containers/core/Dockerfile`, `containers/observatory/Dockerfile`,
+  `Dockerfile.core`, and `Dockerfile.observatory`, `uv run python
+  scripts/autoskill_conformance.py --json` (`ready=true`, 14/14 checks), `uv
+  run pytest sidecar/autoskill/tests/test_conformance_report.py
+  sidecar/autoskill/tests/test_compatibility.py -q` (`3 passed`), targeted
+  Ruff, and `git diff --check`.
 - 2026-06-06: Early architecture/container compatibility pass found Core API
   handshake drift against the unified spec's inter-container compatibility
   contract. The sidecar exposed `/v1/health` and `/v1/status`, but not the

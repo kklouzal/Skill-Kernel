@@ -1,0 +1,31 @@
+services:
+  core:
+    environment:
+      AUTOSKILL_LLM_API_BASE_URL: http://ollama:11434/v1
+      AUTOSKILL_LLM_API_KEY: skillkernel-local
+      AUTOSKILL_EMBEDDING_PROVIDER: openai_compatible
+      AUTOSKILL_EMBEDDING_API_BASE_URL: http://llama-cpp-embeddings:8080/v1
+      AUTOSKILL_EMBEDDING_API_KEY: skillkernel-local
+      AUTOSKILL_EMBEDDING_MODEL: Qwen3-Embedding-4B-Q8_0.gguf
+      AUTOSKILL_EMBEDDING_DIM: 1536
+
+  ollama:
+    image: ${SKILLKERNEL_OLLAMA_IMAGE:?pin-an-ollama-image-tag-or-digest}
+    profiles: ["local-llm"]
+    volumes:
+      - ollama-models:/root/.ollama
+    networks:
+      - skillkernel-models
+    ports:
+      - "127.0.0.1:11434:11434"
+
+  llama-cpp-embeddings:
+    image: ${SKILLKERNEL_LLAMA_CPP_EMBEDDINGS_IMAGE:?pin-a-llama-cpp-image-tag-or-digest}
+    profiles: ["local-llm"]
+    networks:
+      - skillkernel-models
+    ports:
+      - "127.0.0.1:18081:8080"
+
+volumes:
+  ollama-models: {}

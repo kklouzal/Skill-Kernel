@@ -47,6 +47,22 @@ ARCHITECTURE_INVARIANTS = (
     "No Skill Workshop dependency",
     "No LLM-controlled SQL",
 )
+REQUIRED_CONTAINER_ASSETS = (
+    "Dockerfile.core",
+    "Dockerfile.observatory",
+    "containers/core/Dockerfile",
+    "containers/core/entrypoint.sh",
+    "containers/core/healthcheck.py",
+    "containers/observatory/Dockerfile",
+    "containers/observatory/entrypoint.sh",
+    "containers/observatory/healthcheck.py",
+    "compose/compose.example.yml",
+    "compose/compose.local-llm.example.yml",
+    "compose/env.core.example",
+    "compose/env.observatory.example",
+    "compose/env.postgres.example",
+    "compose/README.md",
+)
 
 
 @dataclass(frozen=True)
@@ -79,6 +95,7 @@ def build_report(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
         _check_migration_deduplicated_and_ordered(),
         _check_architecture_invariants(spec_path),
         _check_inter_container_compatibility(),
+        _check_container_packaging_assets(),
         _check_topology_operations_present(),
         _check_evidence_modes_present(),
         _check_observatory_levels_present(spec_path),
@@ -277,15 +294,63 @@ def _check_inter_container_compatibility() -> StaticCheck:
     app = (ROOT / "sidecar" / "autoskill" / "api" / "app.py").read_text(encoding="utf-8")
     tests = (ROOT / "sidecar" / "autoskill" / "tests" / "test_compatibility.py").read_text(encoding="utf-8")
     details: list[str] = []
-    for route in ('"/v1/health"', '"/v1/config/effective"', '"/v1/profiles/compatibility"'):
+    for route in (
+        '"/v1/version"',
+        '"/v1/capabilities"',
+        '"/v1/read-model-contract"',
+        '"/v1/health/ready"',
+        '"/v1/config/effective"',
+        '"/v1/profiles/compatibility"',
+    ):
         if route not in app:
             details.append(f"missing compatibility/readiness route: {route}")
+    for field in (
+        "api_contract_version",
+        "schema_migration_version",
+        "read_model_contract_version",
+        "minimum_supported_observatory_version",
+        "maximum_tested_observatory_version",
+    ):
+        if field not in app:
+            details.append(f"missing compatibility response field: {field}")
     if "/v1/profiles/compatibility" not in tests:
         details.append("compatibility profile route is not exercised by test_compatibility.py")
+    if "/v1/read-model-contract" not in tests or "/v1/health/ready" not in tests:
+        details.append("core compatibility handshake routes are not exercised by test_compatibility.py")
     return _result(
         "SKX-STATIC-010",
         "inter-container API compatibility/version endpoints present and exercised",
         ("health/config/compatibility API routes", "sidecar/autoskill/tests/test_compatibility.py"),
+        details,
+    )
+
+
+def _check_container_packaging_assets() -> StaticCheck:
+    details: list[str] = []
+    for rel_path in REQUIRED_CONTAINER_ASSETS:
+        path = ROOT / rel_path
+        if not path.exists():
+            details.append(f"missing container packaging asset: {rel_path}")
+    core_dockerfiles = _read_files(ROOT / "Dockerfile.core", ROOT / "containers" / "core" / "Dockerfile")
+    observatory_dockerfiles = _read_files(
+        ROOT / "Dockerfile.observatory",
+        ROOT / "containers" / "observatory" / "Dockerfile",
+    )
+    compose = _read_files(ROOT / "docker-compose.yml", ROOT / "compose" / "compose.example.yml")
+    if "USER skillkernel" not in core_dockerfiles:
+        details.append("core Dockerfiles do not switch to non-root skillkernel user")
+    if "USER nginx" not in observatory_dockerfiles:
+        details.append("Observatory Dockerfiles do not switch to non-root nginx user")
+    if "HEALTHCHECK" not in core_dockerfiles or "HEALTHCHECK" not in observatory_dockerfiles:
+        details.append("Dockerfiles do not declare health checks")
+    if "containers/core/Dockerfile" not in compose:
+        details.append("compose files do not build the first-class Core Dockerfile")
+    if "containers/observatory/Dockerfile" not in compose:
+        details.append("compose files do not build the first-class Observatory Dockerfile")
+    return _result(
+        "SKX-STATIC-011",
+        "first-class split-container packaging assets are present",
+        ("containers/* Dockerfiles", "compose reference topology", "root Dockerfile aliases"),
         details,
     )
 
@@ -298,7 +363,7 @@ def _check_topology_operations_present() -> StaticCheck:
     )
     details = [f"missing topology operation: {operation}" for operation in TOPOLOGY_OPERATIONS if operation not in corpus]
     return _result(
-        "SKX-STATIC-011",
+        "SKX-STATIC-012",
         "all four topology operations present: create, improve, compose, decompose",
         ("topology API/service", "canonical migration"),
         details,
@@ -309,7 +374,7 @@ def _check_evidence_modes_present() -> StaticCheck:
     corpus = _read_files(MIGRATION_PATH, ROOT / "sidecar" / "autoskill" / "api" / "app.py")
     details = [f"missing evidence mode: {mode}" for mode in EVIDENCE_MODES if mode not in corpus]
     return _result(
-        "SKX-STATIC-012",
+        "SKX-STATIC-013",
         "all evidence modes present",
         ("admin_evidence_fidelity_status migration", "replay synthesis API"),
         details,
@@ -324,7 +389,7 @@ def _check_observatory_levels_present(spec_path: Path) -> StaticCheck:
     ).lower()
     details = [f"missing Observatory level: {level}" for level in OBSERVATORY_LEVELS if level not in corpus]
     return _result(
-        "SKX-STATIC-013",
+        "SKX-STATIC-014",
         "all Observatory levels present: system map, subsystem workcell, station cockpit, object microscope",
         ("Part V Observatory assurance", "Observatory acceptance crosswalk", "Observatory UI source"),
         details,

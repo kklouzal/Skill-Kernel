@@ -1,0 +1,76 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: skillkernel
+      POSTGRES_USER: skillkernel
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    volumes:
+      - skillkernel-postgres:/var/lib/postgresql/data
+    networks:
+      - skillkernel-data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skillkernel -d skillkernel"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    secrets:
+      - postgres_password
+
+  core:
+    build:
+      context: ..
+      dockerfile: containers/core/Dockerfile
+    env_file:
+      - env.core.example
+      - env.postgres.example
+    environment:
+      AUTOSKILL_DATABASE_URL: postgresql://skillkernel:${SKILLKERNEL_POSTGRES_PASSWORD:-change-me}@postgres:5432/skillkernel
+      SKILLKERNEL_CORE_PORT: 8765
+    volumes:
+      - skillkernel-runtime:/var/lib/skillkernel
+      - ../.skillkernel/workspace:/workspace
+      - ../.skillkernel/openclaw:/openclaw:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - skillkernel-data
+      - skillkernel-control
+      - skillkernel-models
+    ports:
+      - "127.0.0.1:8765:8765"
+
+  observatory:
+    build:
+      context: ..
+      dockerfile: containers/observatory/Dockerfile
+    env_file:
+      - env.observatory.example
+      - env.postgres.example
+    environment:
+      SKILLKERNEL_CORE_UPSTREAM: http://core:8765
+      SKILLKERNEL_OBSERVATORY_PORT: 8757
+    depends_on:
+      core:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    networks:
+      - skillkernel-data
+      - skillkernel-control
+    ports:
+      - "127.0.0.1:8757:8757"
+
+networks:
+  skillkernel-data: {}
+  skillkernel-control: {}
+  skillkernel-models: {}
+
+volumes:
+  skillkernel-postgres: {}
+  skillkernel-runtime: {}
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
