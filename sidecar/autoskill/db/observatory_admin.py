@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import asyncpg
 
+from autoskill.core.hashing import sha256_text
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 
@@ -41,6 +42,7 @@ class AdminLiveEventRecord:
         )
 
     def to_json(self) -> dict[str, Any]:
+        safe_payload = _safe_live_event_payload(self.payload)
         return {
             "schema_version": "skillkernel.observatory.live-event.v1",
             "seq": self.seq,
@@ -51,8 +53,16 @@ class AdminLiveEventRecord:
             "trace_id": self.trace_id,
             "object_type": self.object_type,
             "object_id": self.object_id,
-            "payload": self.payload,
+            "payload": safe_payload,
+            "payload_keys": sorted(str(key) for key in self.payload),
+            "payload_sha256": _json_sha256(self.payload),
             "redaction_level": self.redaction_level,
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "observatory-live-event-payload-sanitized",
+                "redaction_level": self.redaction_level,
+                "payload_returned": "sanitized",
+            },
             "requires_snapshot_reload": self.kind == "read_model_invalidated",
         }
 
@@ -689,7 +699,7 @@ class NullObservatoryAdminStore:
             trace_id=trace_id,
             object_type=object_type,
             object_id=object_id,
-            payload=payload or {},
+            payload=_safe_live_event_payload(payload or {}),
             redaction_level=redaction_level,
             created_at=datetime.now(UTC),
             delivered_hint=False,
@@ -1040,7 +1050,7 @@ class AsyncpgObservatoryAdminStore(AsyncpgPoolOwner):
                 trace_id,
                 object_type,
                 object_id,
-                _json(payload or {}),
+                _json(_safe_live_event_payload(payload or {})),
                 redaction_level,
             )
         return AdminLiveEventRecord.from_row(row)
@@ -1546,6 +1556,74 @@ class AsyncpgObservatoryAdminStore(AsyncpgPoolOwner):
 
 def _json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _json_sha256(value: object) -> str:
+    return sha256_text(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str))
+
+
+def _safe_live_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    redacted_hashes: dict[str, str] = {}
+    for key, value in sorted(payload.items(), key=lambda item: str(item[0])):
+        key_text = str(key)
+        if key_text == "redacted_payload_hashes" and isinstance(value, dict):
+            safe[key_text] = {
+                str(item_key): str(item_value)
+                for item_key, item_value in sorted(value.items(), key=lambda item: str(item[0]))
+            }
+            continue
+        if key_text == "redacted_payload_keys" and isinstance(value, list):
+            safe[key_text] = sorted(str(item) for item in value)
+            continue
+        if _live_event_key_is_sensitive(key_text) or not _live_event_value_is_inline_safe(
+            key_text,
+            value,
+        ):
+            redacted_hashes[key_text] = _json_sha256(value)
+            continue
+        safe[key_text] = value
+    if redacted_hashes:
+        safe["redacted_payload_hashes"] = redacted_hashes
+        safe["redacted_payload_keys"] = sorted(redacted_hashes)
+    return safe
+
+
+def _live_event_key_is_sensitive(key: str) -> bool:
+    normalized = "".join(ch for ch in key.lower() if ch.isalnum())
+    sensitive_markers = (
+        "apikey",
+        "authorization",
+        "bearer",
+        "body",
+        "content",
+        "conversation",
+        "cookie",
+        "credential",
+        "message",
+        "note",
+        "password",
+        "payload",
+        "prompt",
+        "raw",
+        "request",
+        "response",
+        "secret",
+        "session",
+        "text",
+        "token",
+    )
+    return any(marker in normalized for marker in sensitive_markers)
+
+
+def _live_event_value_is_inline_safe(key: str, value: object) -> bool:
+    if value is None or isinstance(value, bool | int | float):
+        return True
+    if isinstance(value, str):
+        return len(value) <= 160
+    if key == "reason_codes" and isinstance(value, list):
+        return len(value) <= 50 and all(isinstance(item, str) and len(item) <= 96 for item in value)
+    return False
 
 
 def _json_dict(value: object) -> dict[str, Any]:

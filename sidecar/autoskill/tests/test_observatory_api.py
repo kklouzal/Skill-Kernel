@@ -801,6 +801,56 @@ def test_observatory_live_sse_replays_outbox_after_timestamp_snapshot() -> None:
     assert live_payload["payload"]["reason_codes"] == ["broker-replay-stale"]
 
 
+def test_observatory_live_sse_redacts_outbox_payloads() -> None:
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        observatory_admin_store=observatory_admin,
+    )
+    route = _routes(app)[("/admin/live-sse", "GET")]
+
+    async def run():
+        response = await route.endpoint(workspace_id="dev-01")
+        await anext(response.body_iterator)
+        await anext(response.body_iterator)
+        live_event = await observatory_admin.append_live_event(
+            kind="component_health_changed",
+            component_id="broker_runtime",
+            payload={
+                "health": "degraded",
+                "reason_codes": ["broker-replay-stale"],
+                "operator_note": "raw operator note must not leak",
+                "raw_prompt": "raw prompt must not leak",
+                "nested": {"message": "nested content must not leak"},
+                "secret": "sk-testsecret000000000000000000",
+            },
+        )
+        await anext(response.body_iterator)
+        live_data_chunk = await anext(response.body_iterator)
+        await response.body_iterator.aclose()
+        return live_event, json.loads(live_data_chunk.removeprefix("data: ").strip())
+
+    live_event, live_payload = asyncio.run(run())
+
+    assert live_payload["seq"] == live_event.seq
+    assert live_payload["content_policy"]["raw_available"] is False
+    assert live_payload["content_policy"]["payload_returned"] == "sanitized"
+    assert live_payload["payload"]["health"] == "degraded"
+    assert live_payload["payload"]["reason_codes"] == ["broker-replay-stale"]
+    assert sorted(live_payload["payload"]["redacted_payload_keys"]) == [
+        "nested",
+        "operator_note",
+        "raw_prompt",
+        "secret",
+    ]
+    assert live_payload["payload_sha256"]
+    rendered = json.dumps(live_payload, sort_keys=True)
+    assert "raw operator note must not leak" not in rendered
+    assert "raw prompt must not leak" not in rendered
+    assert "nested content must not leak" not in rendered
+    assert "sk-testsecret" not in rendered
+
+
 def test_observatory_live_sse_clamps_snapshot_style_last_seq_to_outbox_cursor() -> None:
     observatory_admin = NullObservatoryAdminStore()
     app = create_app(

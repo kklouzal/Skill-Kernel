@@ -16,6 +16,23 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory live outbox events now enforce Core-side payload
+  sanitization before storage and before WebSocket/SSE serialization. Live
+  event payloads preserve bounded primitive status fields such as health,
+  action state, IDs, and reason codes, but nested values and sensitive/content
+  keys are replaced with per-key SHA-256 hashes plus explicit
+  `redacted_payload_keys`, `payload_keys`, `payload_sha256`, and
+  `content_policy` metadata. This advances Observatory Sections 12.3, 12.6,
+  16.1, 17.2, and acceptance criteria 21.11, 21.30, and 21.31 by making the
+  live-stream read boundary deterministic instead of relying on every caller to
+  pre-shape payloads correctly. Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py -q -k 'live_sse'` (`6
+  passed, 53 deselected`) and targeted Ruff. Required pre-commit gates also
+  passed with `uv run ruff check sidecar`, `uv run pytest` (`400 passed`), `uv
+  run python -m compileall -q sidecar`, and `git diff --check`. No
+  compose/Postgres smoke was needed because the slice only hardens the
+  Observatory admin live-event store and stream serialization contract, covered
+  through the in-memory admin store and browser-facing SSE route.
 - 2026-06-06: Observatory administrative escalations now use a
   content-safe Core-backed object microscope across list, direct detail, and
   generic object routes. The previous direct `record.to_json()` path returned

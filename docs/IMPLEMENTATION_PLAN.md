@@ -3,6 +3,21 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Observatory live-stream outbox payloads are now sanitized at
+the Core store/serialization boundary. `AdminLiveEventRecord.to_json`, the
+in-memory admin store, and the asyncpg admin store preserve bounded primitive
+status fields and reason codes while replacing nested or sensitive/content
+payload fields with per-key SHA-256 hashes, key lists, payload hash identity,
+and explicit `content_policy` metadata. This advances Observatory Sections
+12.3, 12.6, 16.1, and 17.2 plus acceptance criteria 21.11, 21.30, and 21.31 by
+making WebSocket/SSE deltas policy-safe even if a future caller accidentally
+passes raw notes, prompts, nested content, or secrets. Focused validation passed
+with the live-SSE regression (`6 passed, 53 deselected`) and targeted Ruff.
+Required pre-commit gates also passed with full sidecar Ruff, full pytest (`400
+passed`), compileall, and diff-check. No compose/Postgres smoke was needed
+because the slice only hardens the live-event read boundary and validates it
+through the in-memory admin store plus browser-facing SSE route.
+
 2026-06-06 update: Observatory administrative escalations now have a
 content-safe object microscope over the Core admin read model. The
 administrative-escalation list, direct detail route, and generic
