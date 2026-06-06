@@ -1108,6 +1108,34 @@ def _operator_metrics_payload(
         },
         "drift_violation_counts": _int_dict(drift),
         "utility_deltas": _json_safe(utility),
+        "raw_vault_summary": {
+            "state": "not_reported_by_operator_metrics",
+            "reason": "raw-vault policy state is exposed through the Observatory admin read model",
+            "raw_vault_records_returned": False,
+            "declassification_reports": 0,
+            "access_audits": 0,
+            "revocation_paths": 0,
+        },
+        "evidence_fidelity_status": {
+            "state": "not_reported_by_operator_metrics",
+            "reason": "evidence-fidelity rows are exposed through the Observatory admin read model",
+        },
+        "semantic_adjudication_status": {
+            "state": "not_reported_by_operator_metrics",
+            "reason": "semantic adjudication rows are exposed through the Observatory admin read model",
+        },
+        "autonomy_decision_status": {
+            "state": "not_reported_by_operator_metrics",
+            "reason": "autonomy decision rows are exposed through the Observatory admin read model",
+        },
+        "broker_replay_episode_status": {
+            "state": "not_reported_by_operator_metrics",
+            "reason": "broker replay episodes are exposed through replay read models",
+        },
+        "administrative_escalation_status": {
+            "state": "not_reported_by_operator_metrics",
+            "reason": "administrative escalation rows are exposed through the Observatory admin read model",
+        },
         "postgres_table_index_growth": storage,
         "audit": _json_safe(audit),
     }

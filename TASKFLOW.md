@@ -16,6 +16,24 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Parent verification of the Part II/III worker result found the
+  specific autonomy/adjudication required-signal remediation was directionally
+  correct but incomplete: zero-count read-model snapshots could still trip
+  `missing-required-signal` diagnostics unless the new signal keys were present
+  as empty/policy-bounded telemetry. The follow-up fix keeps the specific
+  required metric keys for raw vault, evidence fidelity, semantic adjudication,
+  autonomy decisions, broker replay episodes, and administrative escalations;
+  emits corresponding station records; and extends regression coverage so
+  zero-count read models remain present rather than missing. Focused validation
+  passed with `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py -q -k
+  'summary_exposes_all_pipeline_stations or zero_count_read_models or
+  required_signal or evidence_fidelity or autonomy'` (`5 passed, 52
+  deselected`), `uv run ruff check` on the touched files, `uv run python
+  scripts/autoskill_observatory_acceptance.py --json` (`ready=true`, zero
+  validation errors), and `git diff --check`. The worker remediation remains
+  `bc2d98f`; the parent verification fix landed as follow-up commit `8c6fcc3`
+  before push.
 - 2026-06-06: Part II/III Observatory control-plane topology gap remediated:
   the station/subsystem catalog now exposes the autonomy/adjudication workcell
   as a first-class overview path. Runtime `STATIONS`, SQL seed rows, and

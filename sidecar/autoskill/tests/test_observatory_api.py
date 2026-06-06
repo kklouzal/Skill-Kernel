@@ -3529,6 +3529,16 @@ def test_observatory_zero_count_read_models_are_not_missing_required_signals() -
         },
         "redaction_counts": {},
         "spool_backlog": {},
+        "raw_vault_summary": {
+            "raw_vault_records_returned": False,
+            "declassification_reports": 0,
+            "access_audits": 0,
+            "revocation_paths": 0,
+        },
+        "evidence_fidelity_status": {},
+        "semantic_adjudication_status": {},
+        "autonomy_decision_status": {},
+        "broker_replay_episode_status": {},
         "retrieval_decisions": {},
         "embedding_backlog": {},
         "context_hint_injection_count": 0,
@@ -3539,6 +3549,7 @@ def test_observatory_zero_count_read_models_are_not_missing_required_signals() -
         "scanner_reject_counts": {},
         "evaluation_pass_fail_counts": {},
         "rollback_freeze_counts": {},
+        "administrative_escalation_status": {},
         "job_queue_depth": {},
         "postgres_table_index_growth": [],
         "audit": {},
@@ -3568,12 +3579,31 @@ def test_observatory_zero_count_read_models_are_not_missing_required_signals() -
     )
 
     stations = snapshot["pipeline"]["stations"]
+    records_by_component = {station["component_id"]: station["records"] for station in stations}
     assert not [
         station
         for station in stations
         if "missing-required-signal" in station["reason_codes"]
     ]
     assert all(station["data_quality"]["missing_signal_keys"] == [] for station in stations)
+    assert records_by_component["raw_evidence_vault"][0]["record_type"] == (
+        "raw_vault_summary"
+    )
+    assert records_by_component["evidence_fidelity"][0]["record_type"] == (
+        "evidence_fidelity_status"
+    )
+    assert records_by_component["semantic_adjudication"][0]["record_type"] == (
+        "semantic_adjudication_status"
+    )
+    assert records_by_component["autonomy_orchestrator"][0]["record_type"] == (
+        "autonomy_decision_status"
+    )
+    assert records_by_component["replay_corpus"][0]["record_type"] == (
+        "broker_replay_episode_status"
+    )
+    assert records_by_component["administrative_escalation"][0]["record_type"] == (
+        "administrative_escalation_status"
+    )
     assert any(
         station["reason_codes"] == ["spool-diagnostics-required"]
         for station in stations
@@ -3872,6 +3902,12 @@ def test_observatory_missing_required_signal_issue_cites_metric_contract() -> No
         "scanner_reject_counts": {},
         "evaluation_pass_fail_counts": {},
         "rollback_freeze_counts": {},
+        "raw_vault_summary": {},
+        "evidence_fidelity_status": {},
+        "semantic_adjudication_status": {},
+        "autonomy_decision_status": {},
+        "broker_replay_episode_status": {},
+        "administrative_escalation_status": {},
         "job_queue_depth": {},
         "postgres_table_index_growth": [],
         "audit": {},

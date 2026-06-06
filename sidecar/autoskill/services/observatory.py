@@ -1896,6 +1896,41 @@ def _station_records(
                 },
             }
         ]
+    if metric_family == "vault":
+        return [
+            {
+                "record_type": "raw_vault_summary",
+                "summary": metrics.get("raw_vault_summary", {}),
+            }
+        ]
+    if metric_family == "fidelity":
+        return [
+            {
+                "record_type": "evidence_fidelity_status",
+                "summary": metrics.get("evidence_fidelity_status", {}),
+            }
+        ]
+    if metric_family == "adjudication":
+        return [
+            {
+                "record_type": "semantic_adjudication_status",
+                "summary": metrics.get("semantic_adjudication_status", {}),
+            }
+        ]
+    if metric_family == "autonomy":
+        return [
+            {
+                "record_type": "autonomy_decision_status",
+                "summary": metrics.get("autonomy_decision_status", {}),
+            }
+        ]
+    if metric_family == "replay":
+        return [
+            {
+                "record_type": "broker_replay_episode_status",
+                "summary": metrics.get("broker_replay_episode_status", {}),
+            }
+        ]
     if metric_family == "scanner":
         return [
             {
@@ -1904,6 +1939,13 @@ def _station_records(
                 "record_type": "scanner_reject_counts",
                 "component_id": "scanner_security",
                 "summary": metrics.get("scanner_reject_counts", {}),
+            }
+        ]
+    if metric_family == "escalation":
+        return [
+            {
+                "record_type": "administrative_escalation_status",
+                "summary": metrics.get("administrative_escalation_status", {}),
             }
         ]
     return [{"record_type": metric_family, "summary": metrics.get(metric_family, {})}]
