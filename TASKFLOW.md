@@ -16,6 +16,25 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Deterministic writer rollback deletion now fails closed unless
+  the target is exactly a SkillKernel-owned active skill root,
+  `skills/autoskill/<safe-slug>`. `delete_active_skill_with_governance()`
+  validates and normalizes the active path before recording rollback status,
+  transaction items, provenance edges, or touching the filesystem, so malformed
+  rollback actions cannot delete arbitrary contained workspace paths such as
+  the workspace root. This advances Core Sections 9.6 and 17.1 plus production
+  acceptance criteria 31.9 and 31.14 by tightening rollback-complete writer
+  path authority without enabling runtime skill promotion or autonomous apply.
+  Focused validation passed with the new writer regression and full writer
+  event module (`31 passed`) plus targeted Ruff. Required gates passed with
+  `uv run ruff check sidecar`, `uv run pytest` (`427 passed`), `uv run python
+  -m compileall -q sidecar`, and `git diff --check`. Acceptance/conformance
+  reports also passed with core acceptance (`ready=true`, `70` implemented,
+  `7` context criteria), Observatory acceptance (`ready=true`, `86`
+  satisfied), and implementation conformance (`ready=true`, `23/23`). No
+  compose/Postgres smoke was required because this slice changes deterministic
+  filesystem path admission before persistence and is covered by in-memory
+  governance tests.
 - 2026-06-06: Part III split-container deployment readiness now fails closed
   when the Observatory container declares a static bundle root but the compiled
   frontend entrypoint is absent. `_admin_static_available()` checks

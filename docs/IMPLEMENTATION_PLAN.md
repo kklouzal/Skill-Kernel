@@ -3,6 +3,24 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Deterministic writer rollback deletion now validates that
+the target path is exactly `skills/autoskill/<safe-slug>` before recording
+rollback status, transaction items, provenance edges, or touching the
+filesystem. This closes a fail-closed path-authority gap where the helper that
+deletes newly-created active skills accepted any contained workspace-relative
+path; malformed rollback actions now cannot delete arbitrary workspace
+content. This advances Core Sections 9.6 and 17.1 plus production acceptance
+criteria 31.9 and 31.14 without enabling runtime skill promotion,
+autonomous apply, or broader production mutation. Focused validation passed
+with the writer rollback path regression and full writer event module (`31
+passed`) plus targeted Ruff. Required gates passed with full sidecar Ruff,
+full pytest (`427 passed`), compileall, diff-check, core acceptance
+(`ready=true`, `70` implemented, `7` context criteria), Observatory acceptance
+(`ready=true`, `86` satisfied), and conformance (`ready=true`, `23/23`). No
+compose/Postgres smoke was required because this is a deterministic
+pre-persistence filesystem path admission change covered by in-memory
+governance tests.
+
 2026-06-06 update: Observatory guarded action admission now fails closed unless
 the request includes a non-empty audit reason. The shared action recorder
 enforces the audit-reason requirement for both `/admin/api/v1/actions` and all

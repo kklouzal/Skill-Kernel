@@ -948,6 +948,7 @@ async def delete_active_skill_with_governance(
 ) -> dict[str, Any]:
     """Delete a newly-created active skill path and record the rollback transaction item."""
 
+    active_relative_path = validate_active_skill_root_relative_path(active_relative_path)
     rolling_back_transaction = await governance.update_transaction_status(
         evolution_transaction_id=evolution_transaction_id,
         status="rolling_back",
@@ -955,8 +956,6 @@ async def delete_active_skill_with_governance(
     )
     workspace_key = _transaction_workspace_key(rolling_back_transaction)
     active_path = resolve_contained(workspace_root, active_relative_path)
-    if active_path != (workspace_root.resolve() / active_relative_path).resolve():
-        raise PathContainmentError("active path failed containment check")
     _remove_path(active_path)
     item = await governance.record_transaction_item(
         evolution_transaction_id=evolution_transaction_id,
@@ -1017,6 +1016,17 @@ def validate_active_skill_relative_path(relative_path: str) -> str:
     }:
         return relative_path
     return validate_support_artifact_path(relative_path)
+
+
+def validate_active_skill_root_relative_path(active_relative_path: str) -> str:
+    path = Path(active_relative_path)
+    parts = path.parts
+    if len(parts) != 3 or parts[0] != "skills" or parts[1] != "autoskill":
+        raise WriterPolicyError("active skill root must be skills/autoskill/<safe-slug>")
+    slug = parts[2]
+    if not SAFE_SKILL_SLUG.fullmatch(slug):
+        raise WriterPolicyError("active skill root slug is not safe")
+    return f"skills/autoskill/{slug}"
 
 
 def _stage_support_artifacts(

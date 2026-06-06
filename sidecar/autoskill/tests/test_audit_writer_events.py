@@ -19,6 +19,7 @@ from autoskill.services.writer import (
     apply_staged_manifest,
     apply_staged_manifest_with_governance,
     archive_active_skill_and_remove,
+    delete_active_skill_with_governance,
     latest_archive_manifest_for_slug,
     resolve_contained,
     rollback_active_skill,
@@ -1145,6 +1146,30 @@ class MemoryWriterGovernance:
         }
         self.edges.append(edge)
         return {"created": True, "edge": edge}
+
+
+def test_delete_active_skill_rejects_non_autoskill_root(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    protected_file = workspace_root / "README.md"
+    protected_file.parent.mkdir(parents=True)
+    protected_file.write_text("operator notes\n", encoding="utf-8")
+    governance = MemoryWriterGovernance()
+
+    async def run() -> None:
+        with pytest.raises(WriterPolicyError, match="active skill root"):
+            await delete_active_skill_with_governance(
+                governance,
+                evolution_transaction_id=uuid4(),
+                workspace_root=workspace_root,
+                active_relative_path=".",
+            )
+
+    asyncio.run(run())
+
+    assert protected_file.read_text(encoding="utf-8") == "operator notes\n"
+    assert governance.statuses == []
+    assert governance.items == []
+    assert governance.edges == []
 
 
 class MemoryActivationGate:
