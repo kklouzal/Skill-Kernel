@@ -1002,7 +1002,7 @@ function SkillsAndTopology({
               const id = skillIdentifier(skill);
               return (
                 <button
-                  key={id ?? JSON.stringify(skill)}
+                  key={skillKey(skill)}
                   className={id === selectedSkillId ? "is-selected" : ""}
                   disabled={!id}
                   type="button"
@@ -1084,7 +1084,7 @@ function SkillsAndTopology({
                     const operationId = topologyOperationIdentifier(operation);
                     return (
                       <button
-                        key={operationId ?? JSON.stringify(operation)}
+                        key={topologyOperationKey(operation)}
                         className={operationId === selectedTopologyOperationId ? "is-selected" : ""}
                         disabled={!operationId}
                         type="button"
@@ -1176,6 +1176,19 @@ function topologyOperationIdentifier(operation?: Record<string, unknown>) {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function topologyOperationKey(operation: Record<string, unknown>) {
+  return (
+    topologyOperationIdentifier(operation) ??
+    stableRecordKey("topology-operation", operation, [
+      "operation_kind",
+      "status",
+      "created_at",
+      "proposed_at",
+      "source",
+    ])
+  );
+}
+
 function numericCount(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -1187,6 +1200,21 @@ function skillIdentifier(skill?: Record<string, unknown>) {
     if (typeof value === "string" && value.trim()) return value;
   }
   return undefined;
+}
+
+function skillKey(skill: Record<string, unknown>) {
+  return (
+    skillIdentifier(skill) ??
+    stableRecordKey("skill", skill, [
+      "name",
+      "slug",
+      "title",
+      "lifecycle_state",
+      "status",
+      "active_version_id",
+      "version_id",
+    ])
+  );
 }
 
 function skillLabel(skill: Record<string, unknown>) {
@@ -1378,9 +1406,9 @@ function TraceAndInspector({
               <h3>Object Links</h3>
               <div className="trace-link-list">
                 {traceObjectRefs(activeSpan, activeDetailDrawer).length ? (
-                  traceObjectRefs(activeSpan, activeDetailDrawer).map((ref, index) => (
+                  traceObjectRefs(activeSpan, activeDetailDrawer).map((ref) => (
                     <a
-                      key={`${String(ref.object_type)}:${String(ref.object_id)}:${index}`}
+                      key={traceObjectRefKey(ref)}
                       href={`/admin?view=trace&workspace=${encodeURIComponent(
                         snapshot.workspace_id ?? ""
                       )}&trace=${encodeURIComponent(selectedTraceId ?? "")}`}
@@ -1508,6 +1536,45 @@ function traceObjectRefs(span?: TraceSpan, detailDrawer?: Record<string, unknown
   const refs = detailDrawer?.object_refs;
   if (Array.isArray(refs)) return refs as Array<Record<string, unknown>>;
   return span?.object_refs ?? [];
+}
+
+function traceObjectRefKey(ref: Record<string, unknown>) {
+  return stableRecordKey("trace-ref", ref, [
+    "object_type",
+    "object_id",
+    "relationship",
+    "component_id",
+    "span_id",
+    "target_type",
+    "target_id",
+  ]);
+}
+
+function actionAuditKey(audit: Record<string, unknown>) {
+  return stableRecordKey("action-audit", audit, [
+    "object_id",
+    "action_id",
+    "idempotency_key",
+    "action_kind",
+    "target_type",
+    "target_id",
+    "created_at",
+  ]);
+}
+
+function stableRecordKey(
+  prefix: string,
+  record: Record<string, unknown>,
+  fields: string[]
+) {
+  const parts = fields
+    .map((field) => record[field])
+    .filter((value): value is string | number | boolean => {
+      if (typeof value === "string") return value.trim().length > 0;
+      return typeof value === "number" || typeof value === "boolean";
+    })
+    .map((value) => String(value).trim());
+  return [prefix, ...parts].join(":");
 }
 
 function traceTitle(trace: TraceSummary) {
@@ -1859,7 +1926,7 @@ function Admin({
         <div className="audit-row-grid">
           {actionAudits.length ? (
             actionAudits.map((audit) => (
-              <div key={String(audit.object_id ?? audit.action_id ?? JSON.stringify(audit))} className="audit-row">
+              <div key={actionAuditKey(audit)} className="audit-row">
                 <strong>{String(audit.action_kind ?? audit.title ?? "operator action")}</strong>
                 <span>{String(audit.result ?? "unknown")}</span>
                 <small>{String(audit.created_at ?? audit.summary ?? "")}</small>
