@@ -54,6 +54,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   -q` (`9 passed`), and `uv run ruff check
   scripts/autoskill_observatory_fixtures.py
   sidecar/autoskill/tests/test_observatory_acceptance_report.py`.
+- 2026-06-06: Core capture/evidence/historical-bootstrap audit found Section
+  14 historical source coverage drift for generic task/subagent/ACP run
+  records: task-flow ledgers were handled, but adjacent task-run records were
+  not classified or parsed as first-class metadata-only historical sources.
+  Remediation added task-record discovery classification, task ledger taint,
+  metadata-only import recommendation, safe metadata extraction for JSON/JSONL
+  task records, lineage/source-item typing, and focused discovery/import tests
+  proving raw prompts and private email-like content do not persist in the
+  redacted chunk text. Validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_historical_import.py -q` (`24 passed`), `uv run
+  ruff check sidecar/autoskill/services/historical_discovery.py
+  sidecar/autoskill/services/historical_import.py
+  sidecar/autoskill/tests/test_historical_import.py`, and `git diff --check`.
 - 2026-06-06: Observatory opportunity mining now has a sidecar-hosted,
   content-safe admin read model instead of being visible only through the
   control-plane `/v1/opportunities/mine` action. `/admin/api/v1/opportunities`
