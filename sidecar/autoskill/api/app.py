@@ -8446,6 +8446,69 @@ def create_app(
                 ][:10]
         return ref or None
 
+    def _safe_broker_query_hash(value: Any) -> str | None:
+        if not isinstance(value, str) or not value:
+            return None
+        if value.startswith("sha256:"):
+            return value[:96]
+        lowered = value.lower()
+        if len(value) == 64 and all(char in "0123456789abcdef" for char in lowered):
+            return value
+        return "sha256:" + sha256_text(value)
+
+    def _broker_decision_admin_record(log: Any) -> dict[str, Any]:
+        payload = log.to_json()
+        metadata = log.metadata if isinstance(log.metadata, dict) else {}
+        reason_codes = [
+            str(code)
+            for code in metadata.get("reason_codes", [])
+            if isinstance(code, str | int | float | bool)
+        ][:25]
+        candidate_count = metadata.get("candidate_count")
+        if not isinstance(candidate_count, int):
+            candidate_count = len(log.candidate_skill_ids)
+        session_id = payload.get("session_id")
+        turn_id = payload.get("turn_id")
+        return {
+            "schema_version": "skillkernel.observatory.broker-decision.v1",
+            "object_type": "broker_decision",
+            "object_id": str(log.retrieval_log_id),
+            "title": f"Broker decision {log.retrieval_log_id}",
+            "summary": (
+                f"{log.decision}; rendered={len(log.rendered_skill_ids)}; "
+                f"candidates={len(log.candidate_skill_ids)}"
+            ),
+            "decision": log.decision,
+            "created_at": payload["created_at"],
+            "trace_id": payload["trace_id"],
+            "span_id": payload["span_id"],
+            "parent_span_id": payload["parent_span_id"],
+            "broker_policy_version_id": payload["broker_policy_version_id"],
+            "candidate_skill_ids": payload["candidate_skill_ids"],
+            "rendered_skill_ids": payload["rendered_skill_ids"],
+            "no_skill_control": log.no_skill_control,
+            "query_hash": _safe_broker_query_hash(metadata.get("query_hash")),
+            "reason_codes": reason_codes,
+            "candidate_count": candidate_count,
+            "metadata_keys": sorted(str(key) for key in metadata),
+            "session_id_sha256": (
+                "sha256:" + sha256_text(str(session_id)) if session_id else None
+            ),
+            "turn_id_sha256": (
+                "sha256:" + sha256_text(str(turn_id)) if turn_id else None
+            ),
+            "details_url": f"/admin/broker/decisions/{log.retrieval_log_id}",
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "raw_query_stored": False,
+                "session_ids_returned": False,
+                "turn_ids_returned": False,
+                "metadata_values_returned": False,
+                "redaction_state": "broker_decision_refs_and_hashes_only",
+            },
+        }
+
     def _broker_decision_microscope(log: Any) -> dict[str, Any]:
         payload = log.to_json()
         metadata = log.metadata if isinstance(log.metadata, dict) else {}
@@ -8500,9 +8563,7 @@ def create_app(
                     for code in metadata.get("reason_codes", [])
                     if isinstance(code, str | int | float | bool)
                 ][:25],
-                "query_hash": metadata.get("query_hash")
-                if isinstance(metadata.get("query_hash"), str)
-                else None,
+                "query_hash": _safe_broker_query_hash(metadata.get("query_hash")),
                 "candidate_count": metadata.get("candidate_count")
                 if isinstance(metadata.get("candidate_count"), int)
                 else len(candidate_objects),
@@ -12413,20 +12474,7 @@ def create_app(
         return _observatory_collection(
             object_type="broker_decision",
             title="Broker decisions",
-            items=[
-                {
-                    **log.to_json(),
-                    "object_id": str(log.retrieval_log_id),
-                    "object_type": "broker_decision",
-                    "title": f"Broker decision {log.retrieval_log_id}",
-                    "summary": (
-                        f"{log.decision}; rendered={len(log.rendered_skill_ids)}; "
-                        f"candidates={len(log.candidate_skill_ids)}"
-                    ),
-                    "details_url": f"/admin/broker/decisions/{log.retrieval_log_id}",
-                }
-                for log in logs
-            ],
+            items=[_broker_decision_admin_record(log) for log in logs],
             limit=limit,
             cursor=cursor,
             source="retrieval_store.list_recent_logs",
@@ -12434,6 +12482,9 @@ def create_app(
                 "supporting_component": "broker_runtime",
                 "raw_query_available": False,
                 "query_identity": "metadata.query_hash",
+                "session_ids_returned": False,
+                "turn_ids_returned": False,
+                "metadata_values_returned": False,
             },
         )
 

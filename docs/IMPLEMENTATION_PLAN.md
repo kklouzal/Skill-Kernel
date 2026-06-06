@@ -3,6 +3,25 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: Observatory broker decision collection rows now use a
+content-safe read-model projection instead of spreading raw
+`RetrievalLog.to_json()` payloads. The projection preserves stable retrieval
+log identity, trace/span refs, policy refs, decision state, rendered/candidate
+skill IDs, reason codes, query hash, and metadata key names while replacing raw
+session/turn IDs with SHA-256 hashes and withholding arbitrary retrieval
+metadata values such as raw query text, candidate summaries, or suppression
+context. This advances Core Section 11 plus Observatory Sections 7.6, 7.7,
+12.6, 13.1, 16.1, and acceptance criteria 21.15, 21.16, and 21.30 by closing
+the broker runtime aggregate-to-evidence path without adding UI-local authority
+or changing the underlying retrieval log store. Focused validation passed with
+the broker-decision and route-matrix Observatory API regressions (`2 passed, 60
+deselected`) plus targeted Ruff. Required gates also passed with full sidecar
+Ruff, full pytest (`403 passed`), compileall, generated OpenAPI client
+freshness check, core acceptance (`70` implemented), Observatory acceptance
+(`86` satisfied), and conformance (`14/14`). No compose/Postgres smoke was
+needed because the change is a deterministic API projection over existing
+retrieval log rows.
+
 2026-06-06 update: Observatory scheduler job records now use a content-safe
 read-model projection across collection, direct detail, and generic object
 microscope paths. The previous admin job collection returned raw

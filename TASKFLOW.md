@@ -16,6 +16,30 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Observatory broker decision collection rows now use the same
+  content-safe policy model as broker decision detail/object microscope paths.
+  The previous admin collection spread `RetrievalLog.to_json()`, which could
+  expose raw session IDs, turn IDs, and arbitrary retrieval metadata values
+  such as raw query text or candidate/suppression summaries. The new projection
+  preserves stable retrieval log, trace/span, policy, decision, rendered/candidate
+  skill, reason-code, query-hash, and metadata-key fields while hashing
+  session/turn IDs and withholding raw metadata values. This advances Core
+  Section 11 plus Observatory Sections 7.6, 7.7, 12.6, 13.1, 16.1, and
+  acceptance criteria 21.15, 21.16, and 21.30 by closing the broker runtime
+  aggregate-to-evidence path without adding UI mutation authority. Focused
+  validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py -q -k
+  'broker_decisions_use_content_safe_retrieval_logs or
+  required_admin_route_matrix'` (`2 passed, 60 deselected`) and targeted Ruff.
+  Required gates also passed with `uv run ruff check sidecar`, `uv run pytest`
+  (`403 passed`), `uv run python -m compileall -q sidecar`, `uv run python
+  scripts/generate_observatory_openapi_client.py --check`, `uv run python
+  scripts/autoskill_acceptance.py --json` (`ready=true`, `70` implemented),
+  `uv run python scripts/autoskill_observatory_acceptance.py --json`
+  (`ready=true`, `86` satisfied), and `uv run python
+  scripts/autoskill_conformance.py --json` (`ready=true`, `14/14` checks).
+  No compose/Postgres smoke was needed because this slice only reshapes
+  existing retrieval log rows through deterministic Observatory projections.
 - 2026-06-06: Observatory scheduler job read models now use one
   content-safe projection for collection, direct detail, and generic object
   microscope paths. The previous admin collection returned `JobRecord.to_json()`

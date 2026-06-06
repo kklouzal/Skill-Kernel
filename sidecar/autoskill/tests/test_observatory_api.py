@@ -3646,7 +3646,7 @@ def test_observatory_broker_decisions_use_content_safe_retrieval_logs() -> None:
                 rendered_skill_ids=[rendered_skill_id],
                 no_skill_control=False,
                 metadata={
-                    "query_hash": "sha256:query",
+                    "query_hash": "operator secret query hash field",
                     "candidate_count": 1,
                     "candidate_objects": [
                         {
@@ -3696,8 +3696,30 @@ def test_observatory_broker_decisions_use_content_safe_retrieval_logs() -> None:
     assert collection.collection["source"] == "retrieval_store.list_recent_logs"
     assert collection.collection["items"][0]["object_id"] == str(retrieval_log_id)
     assert collection.collection["content_policy"]["raw_available"] is False
+    assert collection.collection["items"][0]["query_hash"].startswith("sha256:")
+    assert (
+        collection.collection["items"][0]["query_hash"]
+        != "operator secret query hash field"
+    )
+    assert collection.collection["items"][0]["reason_codes"] == ["vector-fused"]
+    assert collection.collection["items"][0]["metadata_keys"] == [
+        "candidate_count",
+        "candidate_objects",
+        "query_hash",
+        "raw_query_text",
+        "reason_codes",
+        "suppressed",
+    ]
+    assert collection.collection["items"][0]["session_id_sha256"].startswith(
+        "sha256:"
+    )
+    assert collection.collection["items"][0]["turn_id_sha256"].startswith("sha256:")
+    assert collection.collection["items"][0]["content_policy"][
+        "metadata_values_returned"
+    ] is False
     assert detail.object["object_type"] == "broker_decision"
-    assert detail.object["diagnostics"]["query_hash"] == "sha256:query"
+    assert detail.object["diagnostics"]["query_hash"].startswith("sha256:")
+    assert detail.object["diagnostics"]["query_hash"] != "operator secret query hash field"
     assert detail.object["diagnostics"]["reason_codes"] == ["vector-fused"]
     assert detail.object["content_policy"]["raw_query_stored"] is False
     assert detail.object["provenance"]["candidate_objects"][0]["object_id"] == str(
@@ -3707,10 +3729,16 @@ def test_observatory_broker_decisions_use_content_safe_retrieval_logs() -> None:
     assert object_detail.object == detail.object
     assert detail.object["effects"]["suppressed"][0]["reason"] == "duplicate-skill"
     assert detail.object["content_policy"]["metadata_values_returned"] is False
-    rendered = json.dumps(detail.object, sort_keys=True)
+    rendered = json.dumps(
+        [collection.collection, detail.object, object_detail.object],
+        sort_keys=True,
+    )
     assert "operator secret retrieval query" not in rendered
+    assert "operator secret query hash field" not in rendered
     assert "raw candidate body text" not in rendered
     assert "raw suppressed body text" not in rendered
+    assert "session-1" not in rendered
+    assert "turn-1" not in rendered
 
 
 def test_observatory_broker_replay_episode_read_model_is_content_safe() -> None:
