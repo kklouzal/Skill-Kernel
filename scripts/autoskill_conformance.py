@@ -96,6 +96,7 @@ def build_report(spec_path: Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
         _check_canonical_evidence_schema_contract(),
         _check_skillir_package_schema_contract(),
         _check_retrieval_attribution_audit_schema_contract(),
+        _check_runtime_memory_control_schema_contract(),
         _check_no_unstable_react_keys(),
         _check_migration_deduplicated_and_ordered(),
         _check_architecture_invariants(spec_path),
@@ -406,6 +407,42 @@ def _check_retrieval_attribution_audit_schema_contract() -> StaticCheck:
         (
             "migrations/0001_autoskill_schema.sql retrieval_events",
             "retrieval_logs/attribution_events/action_attribution_checks/audit_records sync triggers",
+        ),
+        details,
+    )
+
+
+def _check_runtime_memory_control_schema_contract() -> StaticCheck:
+    migration = MIGRATION_PATH.read_text(encoding="utf-8")
+    details: list[str] = []
+    for required in (
+        "CREATE TABLE IF NOT EXISTS autoskill.runtime_guard_templates",
+        "CREATE TABLE IF NOT EXISTS autoskill.memory_contracts",
+        "CREATE TABLE IF NOT EXISTS autoskill.runtime_artifacts",
+        "CREATE TABLE IF NOT EXISTS autoskill.integration_proposals",
+        "CREATE TABLE IF NOT EXISTS autoskill.skill_state_records",
+        "CREATE TABLE IF NOT EXISTS autoskill.skill_marginal_value_trials",
+        "sync_default_memory_contracts_for_workspace",
+        "sync_runtime_artifact_from_compiled_file",
+        "sync_runtime_artifact_from_support_artifact",
+        "sync_runtime_artifact_from_context_artifact",
+        "sync_skill_state_record_from_skill",
+        "sync_skill_marginal_value_trial_from_context_ledger",
+        "workspaces_sync_default_memory_contracts",
+        "compiled_files_sync_runtime_artifacts",
+        "context_artifacts_sync_runtime_artifacts",
+        "context_token_ledgers_sync_skill_marginal_value_trials",
+        '"executable_logic_allowed":false',
+        "external_content_policy",
+    ):
+        if required not in migration:
+            details.append(f"runtime/memory/control schema missing {required}")
+    return _result(
+        "SKX-STATIC-006G",
+        "canonical runtime guard, memory contract, artifact, proposal, state, and marginal-value tables are present",
+        (
+            "migrations/0001_autoskill_schema.sql runtime/memory/control tables",
+            "compiled/support/context/skill/token-ledger sync triggers",
         ),
         details,
     )

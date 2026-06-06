@@ -16,8 +16,8 @@ def test_part_v_static_conformance_report_covers_required_checks() -> None:
 
     assert report["ready"] is True
     assert report["summary"]["validation_errors"] == []
-    assert report["summary"]["checks"] == 19
-    assert report["summary"]["passed"] == 19
+    assert report["summary"]["checks"] == 20
+    assert report["summary"]["passed"] == 20
     assert all(check["evidence"] for check in report["checks"])
     assert {
         "SKX-STATIC-001",
@@ -31,6 +31,7 @@ def test_part_v_static_conformance_report_covers_required_checks() -> None:
         "SKX-STATIC-006D",
         "SKX-STATIC-006E",
         "SKX-STATIC-006F",
+        "SKX-STATIC-006G",
         "SKX-STATIC-007",
         "SKX-STATIC-008",
         "SKX-STATIC-009",

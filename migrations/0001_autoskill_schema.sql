@@ -1642,6 +1642,1062 @@ CREATE TABLE IF NOT EXISTS autoskill.context_token_ledgers (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS autoskill.runtime_guard_templates (
+  guard_template_id uuid PRIMARY KEY,
+  guard_name text UNIQUE NOT NULL,
+  guard_kind text NOT NULL CHECK (
+    guard_kind IN (
+      'preflight',
+      'verify_only',
+      'warn',
+      'block',
+      'context_hint',
+      'drift_check',
+      'capability_check',
+      'shadowing_hint'
+    )
+  ),
+  allowed_parameters jsonb NOT NULL DEFAULT '{}'::jsonb,
+  renderer_version text NOT NULL,
+  enabled boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO autoskill.runtime_guard_templates (
+  guard_template_id,
+  guard_name,
+  guard_kind,
+  allowed_parameters,
+  renderer_version
+)
+VALUES
+  (
+    autoskill.stable_uuid_from_text('runtime_guard_template:preflight_check'),
+    'preflight_check',
+    'preflight',
+    '{"fields":["condition_summary","operator_message","required_capabilities"],"executable_logic_allowed":false}'::jsonb,
+    'skillkernel-guard-template.v1'
+  ),
+  (
+    autoskill.stable_uuid_from_text('runtime_guard_template:verify_only_check'),
+    'verify_only_check',
+    'verify_only',
+    '{"fields":["condition_summary","operator_message","required_capabilities"],"executable_logic_allowed":false}'::jsonb,
+    'skillkernel-guard-template.v1'
+  ),
+  (
+    autoskill.stable_uuid_from_text('runtime_guard_template:capability_warning'),
+    'capability_warning',
+    'warn',
+    '{"fields":["condition_summary","operator_message","required_capabilities"],"executable_logic_allowed":false}'::jsonb,
+    'skillkernel-guard-template.v1'
+  ),
+  (
+    autoskill.stable_uuid_from_text('runtime_guard_template:sibling_disambiguation_hint'),
+    'sibling_disambiguation_hint',
+    'shadowing_hint',
+    '{"fields":["condition_summary","operator_message","required_capabilities"],"executable_logic_allowed":false}'::jsonb,
+    'skillkernel-guard-template.v1'
+  ),
+  (
+    autoskill.stable_uuid_from_text('runtime_guard_template:drift_block'),
+    'drift_block',
+    'drift_check',
+    '{"fields":["condition_summary","operator_message","required_capabilities"],"executable_logic_allowed":false}'::jsonb,
+    'skillkernel-guard-template.v1'
+  )
+ON CONFLICT (guard_name) DO UPDATE SET
+  guard_kind = EXCLUDED.guard_kind,
+  allowed_parameters = EXCLUDED.allowed_parameters,
+  renderer_version = EXCLUDED.renderer_version,
+  enabled = EXCLUDED.enabled;
+
+CREATE TABLE IF NOT EXISTS autoskill.memory_contracts (
+  memory_contract_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  memory_kind text NOT NULL CHECK (
+    memory_kind IN (
+      'evidence',
+      'procedural_lesson',
+      'negative_control',
+      'environment_fact',
+      'user_correction',
+      'tool_capability',
+      'drift_signal'
+    )
+  ),
+  allowed_sources jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ttl_policy jsonb NOT NULL DEFAULT '{}'::jsonb,
+  declassification_rules jsonb NOT NULL DEFAULT '{}'::jsonb,
+  validator jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, memory_kind)
+);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_default_memory_contracts_for_workspace()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  memory_kind_value text;
+BEGIN
+  FOREACH memory_kind_value IN ARRAY ARRAY[
+    'evidence',
+    'procedural_lesson',
+    'negative_control',
+    'environment_fact',
+    'user_correction',
+    'tool_capability',
+    'drift_signal'
+  ]::text[] LOOP
+    INSERT INTO autoskill.memory_contracts (
+      memory_contract_id,
+      workspace_id,
+      memory_kind,
+      allowed_sources,
+      ttl_policy,
+      declassification_rules,
+      validator
+    )
+    VALUES (
+      autoskill.stable_uuid_from_text('memory_contract:' || NEW.workspace_id::text || ':' || memory_kind_value),
+      NEW.workspace_id,
+      memory_kind_value,
+      jsonb_build_object(
+        'required_provenance', true,
+        'required_source_event_ids', true,
+        'external_content_policy', 'evidence_only'
+      ),
+      jsonb_build_object(
+        'retention_class', 'standard',
+        'requires_expiry_for_private_or_secret', true
+      ),
+      jsonb_build_object(
+        'requires_verifier_before_skillir_influence', true,
+        'quarantine_imperative_or_policy_language', true,
+        'prefer_false_negatives', true
+      ),
+      jsonb_build_object(
+        'required_fields', jsonb_build_array('provenance', 'trust', 'taint', 'source_event_ids'),
+        'reject_external_direct_instruction', true,
+        'compare_for_contradictions', true
+      )
+    )
+    ON CONFLICT (workspace_id, memory_kind) DO NOTHING;
+  END LOOP;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS workspaces_sync_default_memory_contracts ON autoskill.workspaces;
+CREATE TRIGGER workspaces_sync_default_memory_contracts
+AFTER INSERT ON autoskill.workspaces
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_default_memory_contracts_for_workspace();
+
+INSERT INTO autoskill.memory_contracts (
+  memory_contract_id,
+  workspace_id,
+  memory_kind,
+  allowed_sources,
+  ttl_policy,
+  declassification_rules,
+  validator
+)
+SELECT
+  autoskill.stable_uuid_from_text('memory_contract:' || workspace_id::text || ':' || memory_kind_value),
+  workspace_id,
+  memory_kind_value,
+  jsonb_build_object(
+    'required_provenance', true,
+    'required_source_event_ids', true,
+    'external_content_policy', 'evidence_only'
+  ),
+  jsonb_build_object(
+    'retention_class', 'standard',
+    'requires_expiry_for_private_or_secret', true
+  ),
+  jsonb_build_object(
+    'requires_verifier_before_skillir_influence', true,
+    'quarantine_imperative_or_policy_language', true,
+    'prefer_false_negatives', true
+  ),
+  jsonb_build_object(
+    'required_fields', jsonb_build_array('provenance', 'trust', 'taint', 'source_event_ids'),
+    'reject_external_direct_instruction', true,
+    'compare_for_contradictions', true
+  )
+FROM autoskill.workspaces
+CROSS JOIN unnest(ARRAY[
+  'evidence',
+  'procedural_lesson',
+  'negative_control',
+  'environment_fact',
+  'user_correction',
+  'tool_capability',
+  'drift_signal'
+]::text[]) AS memory_kind_value
+ON CONFLICT (workspace_id, memory_kind) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS autoskill.runtime_artifacts (
+  runtime_artifact_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_version_id uuid NOT NULL REFERENCES autoskill.skill_versions(skill_version_id),
+  artifact_type text NOT NULL CHECK (
+    artifact_type IN (
+      'skill_md',
+      'manifest',
+      'contract',
+      'script',
+      'reference',
+      'template',
+      'schema',
+      'static_data',
+      'asset',
+      'example',
+      'test',
+      'probe_fixture',
+      'adjunct_request',
+      'profile_rendering',
+      'broker_hint',
+      'context_excerpt'
+    )
+  ),
+  loadability_class text NOT NULL CHECK (
+    loadability_class IN (
+      'runtime_always_metadata',
+      'runtime_on_skill_load',
+      'agent_may_read',
+      'broker_excerpt_only',
+      'script_only',
+      'probe_only',
+      'operator_only',
+      'never_loaded'
+    )
+  ),
+  relative_path text NOT NULL DEFAULT '',
+  content_hash text NOT NULL,
+  byte_size bigint NOT NULL DEFAULT 0 CHECK (byte_size >= 0),
+  context_token_estimate integer NOT NULL DEFAULT 0 CHECK (context_token_estimate >= 0),
+  capabilities jsonb NOT NULL DEFAULT '{}'::jsonb,
+  artifact_contract jsonb NOT NULL DEFAULT '{}'::jsonb,
+  scanner_status text NOT NULL,
+  test_status text NOT NULL DEFAULT 'not_applicable',
+  source_kind text NOT NULL,
+  source_record_id uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (skill_version_id, artifact_type, relative_path)
+);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_runtime_artifact_from_compiled_file()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  source_workspace_id uuid;
+BEGIN
+  SELECT s.workspace_id
+  INTO source_workspace_id
+  FROM autoskill.skill_versions sv
+  JOIN autoskill.skills s ON s.skill_id = sv.skill_id
+  WHERE sv.skill_version_id = NEW.skill_version_id;
+
+  IF source_workspace_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  INSERT INTO autoskill.runtime_artifacts (
+    runtime_artifact_id,
+    workspace_id,
+    skill_version_id,
+    artifact_type,
+    loadability_class,
+    relative_path,
+    content_hash,
+    byte_size,
+    context_token_estimate,
+    capabilities,
+    artifact_contract,
+    scanner_status,
+    test_status,
+    source_kind,
+    source_record_id,
+    created_at
+  )
+  VALUES (
+    autoskill.stable_uuid_from_text('runtime_artifact:compiled_file:' || NEW.compiled_file_id::text),
+    source_workspace_id,
+    NEW.skill_version_id,
+    CASE
+      WHEN lower(NEW.path) = 'skill.md' OR lower(NEW.path) LIKE '%/skill.md' THEN 'skill_md'
+      WHEN lower(NEW.path) LIKE '%.schema.json' THEN 'schema'
+      WHEN lower(NEW.path) LIKE '%.json' THEN 'manifest'
+      ELSE 'script'
+    END,
+    CASE WHEN NEW.active THEN 'runtime_on_skill_load' ELSE 'never_loaded' END,
+    NEW.path,
+    NEW.sha256,
+    GREATEST(0, NEW.bytes)::bigint,
+    0,
+    '{}'::jsonb,
+    jsonb_build_object(
+      'source', 'compiled_files',
+      'renderer_version', NEW.renderer_version,
+      'active', NEW.active
+    ),
+    'not_run',
+    'not_applicable',
+    'compiled_file',
+    NEW.compiled_file_id,
+    NEW.created_at
+  )
+  ON CONFLICT (skill_version_id, artifact_type, relative_path) DO UPDATE SET
+    workspace_id = EXCLUDED.workspace_id,
+    content_hash = EXCLUDED.content_hash,
+    byte_size = EXCLUDED.byte_size,
+    context_token_estimate = EXCLUDED.context_token_estimate,
+    capabilities = EXCLUDED.capabilities,
+    artifact_contract = EXCLUDED.artifact_contract,
+    scanner_status = EXCLUDED.scanner_status,
+    test_status = EXCLUDED.test_status,
+    source_kind = EXCLUDED.source_kind,
+    source_record_id = EXCLUDED.source_record_id,
+    created_at = EXCLUDED.created_at;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION autoskill.sync_runtime_artifact_from_support_artifact()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  source_workspace_id uuid;
+BEGIN
+  SELECT s.workspace_id
+  INTO source_workspace_id
+  FROM autoskill.skill_versions sv
+  JOIN autoskill.skills s ON s.skill_id = sv.skill_id
+  WHERE sv.skill_version_id = NEW.skill_version_id;
+
+  IF source_workspace_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  INSERT INTO autoskill.runtime_artifacts (
+    runtime_artifact_id,
+    workspace_id,
+    skill_version_id,
+    artifact_type,
+    loadability_class,
+    relative_path,
+    content_hash,
+    byte_size,
+    context_token_estimate,
+    capabilities,
+    artifact_contract,
+    scanner_status,
+    test_status,
+    source_kind,
+    source_record_id,
+    created_at
+  )
+  VALUES (
+    autoskill.stable_uuid_from_text('runtime_artifact:support_artifact:' || NEW.support_artifact_id::text),
+    source_workspace_id,
+    NEW.skill_version_id,
+    CASE NEW.kind
+      WHEN 'script' THEN 'script'
+      WHEN 'template' THEN 'template'
+      WHEN 'fixture' THEN 'probe_fixture'
+      WHEN 'manifest' THEN 'manifest'
+      WHEN 'asset' THEN 'asset'
+      ELSE 'reference'
+    END,
+    CASE
+      WHEN NEW.load_policy IN (
+        'agent_may_read',
+        'broker_excerpt_only',
+        'script_only',
+        'probe_only',
+        'operator_only',
+        'never_loaded'
+      )
+      THEN NEW.load_policy
+      ELSE 'never_loaded'
+    END,
+    NEW.path,
+    NEW.sha256,
+    CASE
+      WHEN NEW.manifest->>'byte_size' ~ '^[0-9]+$' THEN (NEW.manifest->>'byte_size')::bigint
+      ELSE 0
+    END,
+    CASE
+      WHEN NEW.manifest->>'token_count' ~ '^[0-9]+$' THEN (NEW.manifest->>'token_count')::integer
+      ELSE 0
+    END,
+    to_jsonb(NEW.capabilities),
+    jsonb_build_object('source', 'support_artifacts', 'manifest', NEW.manifest, 'active', NEW.active),
+    COALESCE(NULLIF(NEW.manifest->>'scanner_status', ''), 'not_run'),
+    COALESCE(NULLIF(NEW.manifest->>'test_status', ''), 'not_applicable'),
+    'support_artifact',
+    NEW.support_artifact_id,
+    NEW.created_at
+  )
+  ON CONFLICT (skill_version_id, artifact_type, relative_path) DO UPDATE SET
+    workspace_id = EXCLUDED.workspace_id,
+    content_hash = EXCLUDED.content_hash,
+    byte_size = EXCLUDED.byte_size,
+    context_token_estimate = EXCLUDED.context_token_estimate,
+    capabilities = EXCLUDED.capabilities,
+    artifact_contract = EXCLUDED.artifact_contract,
+    scanner_status = EXCLUDED.scanner_status,
+    test_status = EXCLUDED.test_status,
+    source_kind = EXCLUDED.source_kind,
+    source_record_id = EXCLUDED.source_record_id,
+    created_at = EXCLUDED.created_at;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION autoskill.sync_runtime_artifact_from_context_artifact()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.skill_version_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  INSERT INTO autoskill.runtime_artifacts (
+    runtime_artifact_id,
+    workspace_id,
+    skill_version_id,
+    artifact_type,
+    loadability_class,
+    relative_path,
+    content_hash,
+    byte_size,
+    context_token_estimate,
+    capabilities,
+    artifact_contract,
+    scanner_status,
+    test_status,
+    source_kind,
+    source_record_id,
+    created_at
+  )
+  VALUES (
+    autoskill.stable_uuid_from_text('runtime_artifact:context_artifact:' || NEW.context_artifact_id::text),
+    NEW.workspace_id,
+    NEW.skill_version_id,
+    CASE NEW.artifact_kind
+      WHEN 'skill_md' THEN 'skill_md'
+      WHEN 'broker_hint' THEN 'broker_hint'
+      WHEN 'tool_template' THEN 'template'
+      WHEN 'support_excerpt' THEN 'context_excerpt'
+      ELSE 'reference'
+    END,
+    CASE
+      WHEN NEW.metadata->>'loadability_class' IN (
+        'runtime_always_metadata',
+        'runtime_on_skill_load',
+        'agent_may_read',
+        'broker_excerpt_only',
+        'script_only',
+        'probe_only',
+        'operator_only',
+        'never_loaded'
+      )
+      THEN NEW.metadata->>'loadability_class'
+      ELSE 'broker_excerpt_only'
+    END,
+    COALESCE(NULLIF(NEW.metadata->>'relative_path', ''), 'context/' || NEW.context_artifact_id::text || '.txt'),
+    NEW.text_hash,
+    GREATEST(0, NEW.token_count * 4)::bigint,
+    GREATEST(0, NEW.token_count),
+    CASE
+      WHEN jsonb_typeof(NEW.metadata->'capabilities') = 'array' THEN NEW.metadata->'capabilities'
+      ELSE '{}'::jsonb
+    END,
+    jsonb_build_object(
+      'source', 'context_artifacts',
+      'artifact_kind', NEW.artifact_kind,
+      'source_object_type', NEW.source_object_type,
+      'source_object_id', NEW.source_object_id,
+      'metadata', NEW.metadata
+    ),
+    NEW.safety_status,
+    COALESCE(NULLIF(NEW.equivalence_status, ''), 'not_applicable'),
+    'context_artifact',
+    NEW.context_artifact_id,
+    NEW.created_at
+  )
+  ON CONFLICT (skill_version_id, artifact_type, relative_path) DO UPDATE SET
+    workspace_id = EXCLUDED.workspace_id,
+    content_hash = EXCLUDED.content_hash,
+    byte_size = EXCLUDED.byte_size,
+    context_token_estimate = EXCLUDED.context_token_estimate,
+    capabilities = EXCLUDED.capabilities,
+    artifact_contract = EXCLUDED.artifact_contract,
+    scanner_status = EXCLUDED.scanner_status,
+    test_status = EXCLUDED.test_status,
+    source_kind = EXCLUDED.source_kind,
+    source_record_id = EXCLUDED.source_record_id,
+    created_at = EXCLUDED.created_at;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS compiled_files_sync_runtime_artifacts ON autoskill.compiled_files;
+CREATE TRIGGER compiled_files_sync_runtime_artifacts
+AFTER INSERT OR UPDATE ON autoskill.compiled_files
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_runtime_artifact_from_compiled_file();
+
+DROP TRIGGER IF EXISTS support_artifacts_sync_runtime_artifacts ON autoskill.support_artifacts;
+CREATE TRIGGER support_artifacts_sync_runtime_artifacts
+AFTER INSERT OR UPDATE ON autoskill.support_artifacts
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_runtime_artifact_from_support_artifact();
+
+DROP TRIGGER IF EXISTS context_artifacts_sync_runtime_artifacts ON autoskill.context_artifacts;
+CREATE TRIGGER context_artifacts_sync_runtime_artifacts
+AFTER INSERT OR UPDATE ON autoskill.context_artifacts
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_runtime_artifact_from_context_artifact();
+
+INSERT INTO autoskill.runtime_artifacts (
+  runtime_artifact_id,
+  workspace_id,
+  skill_version_id,
+  artifact_type,
+  loadability_class,
+  relative_path,
+  content_hash,
+  byte_size,
+  context_token_estimate,
+  capabilities,
+  artifact_contract,
+  scanner_status,
+  test_status,
+  source_kind,
+  source_record_id,
+  created_at
+)
+SELECT
+  autoskill.stable_uuid_from_text('runtime_artifact:compiled_file:' || cf.compiled_file_id::text),
+  s.workspace_id,
+  cf.skill_version_id,
+  CASE
+    WHEN lower(cf.path) = 'skill.md' OR lower(cf.path) LIKE '%/skill.md' THEN 'skill_md'
+    WHEN lower(cf.path) LIKE '%.schema.json' THEN 'schema'
+    WHEN lower(cf.path) LIKE '%.json' THEN 'manifest'
+    ELSE 'script'
+  END,
+  CASE WHEN cf.active THEN 'runtime_on_skill_load' ELSE 'never_loaded' END,
+  cf.path,
+  cf.sha256,
+  GREATEST(0, cf.bytes)::bigint,
+  0,
+  '{}'::jsonb,
+  jsonb_build_object('source', 'compiled_files', 'renderer_version', cf.renderer_version, 'active', cf.active),
+  'not_run',
+  'not_applicable',
+  'compiled_file',
+  cf.compiled_file_id,
+  cf.created_at
+FROM autoskill.compiled_files cf
+JOIN autoskill.skill_versions sv ON sv.skill_version_id = cf.skill_version_id
+JOIN autoskill.skills s ON s.skill_id = sv.skill_id
+ON CONFLICT (skill_version_id, artifact_type, relative_path) DO UPDATE SET
+  workspace_id = EXCLUDED.workspace_id,
+  content_hash = EXCLUDED.content_hash,
+  byte_size = EXCLUDED.byte_size,
+  context_token_estimate = EXCLUDED.context_token_estimate,
+  capabilities = EXCLUDED.capabilities,
+  artifact_contract = EXCLUDED.artifact_contract,
+  scanner_status = EXCLUDED.scanner_status,
+  test_status = EXCLUDED.test_status,
+  source_kind = EXCLUDED.source_kind,
+  source_record_id = EXCLUDED.source_record_id,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO autoskill.runtime_artifacts (
+  runtime_artifact_id,
+  workspace_id,
+  skill_version_id,
+  artifact_type,
+  loadability_class,
+  relative_path,
+  content_hash,
+  byte_size,
+  context_token_estimate,
+  capabilities,
+  artifact_contract,
+  scanner_status,
+  test_status,
+  source_kind,
+  source_record_id,
+  created_at
+)
+SELECT
+  autoskill.stable_uuid_from_text('runtime_artifact:support_artifact:' || sa.support_artifact_id::text),
+  s.workspace_id,
+  sa.skill_version_id,
+  CASE sa.kind
+    WHEN 'script' THEN 'script'
+    WHEN 'template' THEN 'template'
+    WHEN 'fixture' THEN 'probe_fixture'
+    WHEN 'manifest' THEN 'manifest'
+    WHEN 'asset' THEN 'asset'
+    ELSE 'reference'
+  END,
+  CASE
+    WHEN sa.load_policy IN (
+      'agent_may_read',
+      'broker_excerpt_only',
+      'script_only',
+      'probe_only',
+      'operator_only',
+      'never_loaded'
+    )
+    THEN sa.load_policy
+    ELSE 'never_loaded'
+  END,
+  sa.path,
+  sa.sha256,
+  CASE WHEN sa.manifest->>'byte_size' ~ '^[0-9]+$' THEN (sa.manifest->>'byte_size')::bigint ELSE 0 END,
+  CASE WHEN sa.manifest->>'token_count' ~ '^[0-9]+$' THEN (sa.manifest->>'token_count')::integer ELSE 0 END,
+  to_jsonb(sa.capabilities),
+  jsonb_build_object('source', 'support_artifacts', 'manifest', sa.manifest, 'active', sa.active),
+  COALESCE(NULLIF(sa.manifest->>'scanner_status', ''), 'not_run'),
+  COALESCE(NULLIF(sa.manifest->>'test_status', ''), 'not_applicable'),
+  'support_artifact',
+  sa.support_artifact_id,
+  sa.created_at
+FROM autoskill.support_artifacts sa
+JOIN autoskill.skill_versions sv ON sv.skill_version_id = sa.skill_version_id
+JOIN autoskill.skills s ON s.skill_id = sv.skill_id
+ON CONFLICT (skill_version_id, artifact_type, relative_path) DO UPDATE SET
+  workspace_id = EXCLUDED.workspace_id,
+  content_hash = EXCLUDED.content_hash,
+  byte_size = EXCLUDED.byte_size,
+  context_token_estimate = EXCLUDED.context_token_estimate,
+  capabilities = EXCLUDED.capabilities,
+  artifact_contract = EXCLUDED.artifact_contract,
+  scanner_status = EXCLUDED.scanner_status,
+  test_status = EXCLUDED.test_status,
+  source_kind = EXCLUDED.source_kind,
+  source_record_id = EXCLUDED.source_record_id,
+  created_at = EXCLUDED.created_at;
+
+INSERT INTO autoskill.runtime_artifacts (
+  runtime_artifact_id,
+  workspace_id,
+  skill_version_id,
+  artifact_type,
+  loadability_class,
+  relative_path,
+  content_hash,
+  byte_size,
+  context_token_estimate,
+  capabilities,
+  artifact_contract,
+  scanner_status,
+  test_status,
+  source_kind,
+  source_record_id,
+  created_at
+)
+SELECT
+  autoskill.stable_uuid_from_text('runtime_artifact:context_artifact:' || context_artifact_id::text),
+  workspace_id,
+  skill_version_id,
+  CASE artifact_kind
+    WHEN 'skill_md' THEN 'skill_md'
+    WHEN 'broker_hint' THEN 'broker_hint'
+    WHEN 'tool_template' THEN 'template'
+    WHEN 'support_excerpt' THEN 'context_excerpt'
+    ELSE 'reference'
+  END,
+  CASE
+    WHEN metadata->>'loadability_class' IN (
+      'runtime_always_metadata',
+      'runtime_on_skill_load',
+      'agent_may_read',
+      'broker_excerpt_only',
+      'script_only',
+      'probe_only',
+      'operator_only',
+      'never_loaded'
+    )
+    THEN metadata->>'loadability_class'
+    ELSE 'broker_excerpt_only'
+  END,
+  COALESCE(NULLIF(metadata->>'relative_path', ''), 'context/' || context_artifact_id::text || '.txt'),
+  text_hash,
+  GREATEST(0, token_count * 4)::bigint,
+  GREATEST(0, token_count),
+  CASE WHEN jsonb_typeof(metadata->'capabilities') = 'array' THEN metadata->'capabilities' ELSE '{}'::jsonb END,
+  jsonb_build_object(
+    'source', 'context_artifacts',
+    'artifact_kind', artifact_kind,
+    'source_object_type', source_object_type,
+    'source_object_id', source_object_id,
+    'metadata', metadata
+  ),
+  safety_status,
+  COALESCE(NULLIF(equivalence_status, ''), 'not_applicable'),
+  'context_artifact',
+  context_artifact_id,
+  created_at
+FROM autoskill.context_artifacts
+WHERE skill_version_id IS NOT NULL
+ON CONFLICT (skill_version_id, artifact_type, relative_path) DO UPDATE SET
+  workspace_id = EXCLUDED.workspace_id,
+  content_hash = EXCLUDED.content_hash,
+  byte_size = EXCLUDED.byte_size,
+  context_token_estimate = EXCLUDED.context_token_estimate,
+  capabilities = EXCLUDED.capabilities,
+  artifact_contract = EXCLUDED.artifact_contract,
+  scanner_status = EXCLUDED.scanner_status,
+  test_status = EXCLUDED.test_status,
+  source_kind = EXCLUDED.source_kind,
+  source_record_id = EXCLUDED.source_record_id,
+  created_at = EXCLUDED.created_at;
+
+CREATE INDEX IF NOT EXISTS runtime_artifacts_skill_version_idx
+  ON autoskill.runtime_artifacts (workspace_id, skill_version_id, artifact_type);
+
+CREATE TABLE IF NOT EXISTS autoskill.integration_proposals (
+  integration_proposal_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  originating_skill_id uuid REFERENCES autoskill.skills(skill_id),
+  originating_skill_version_id uuid REFERENCES autoskill.skill_versions(skill_version_id),
+  proposal_kind text NOT NULL CHECK (
+    proposal_kind IN (
+      'openclaw_tool',
+      'plugin_hook',
+      'plugin_service',
+      'mcp_server',
+      'sidecar_schedule',
+      'taskflow_template',
+      'persistent_store',
+      'capability_policy_change'
+    )
+  ),
+  status text NOT NULL CHECK (
+    status IN (
+      'draft',
+      'administrative_authority_required',
+      'authorized',
+      'denied',
+      'implemented',
+      'superseded'
+    )
+  ),
+  reason text NOT NULL,
+  proposed_contract jsonb NOT NULL DEFAULT '{}'::jsonb,
+  inert_template_artifact_id uuid REFERENCES autoskill.runtime_artifacts(runtime_artifact_id),
+  source_evidence_ids uuid[] NOT NULL DEFAULT '{}',
+  scanner_findings jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_by_job_id uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  decided_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS autoskill.skill_state_records (
+  skill_state_record_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_id uuid NOT NULL REFERENCES autoskill.skills(skill_id),
+  skill_version_id uuid REFERENCES autoskill.skill_versions(skill_version_id) DEFERRABLE INITIALLY DEFERRED,
+  state_key text NOT NULL,
+  state_kind text NOT NULL CHECK (
+    state_kind IN ('counter','cache','checkpoint','runtime_fact','drift_state','adjunct_state')
+  ),
+  state_value jsonb NOT NULL,
+  provenance jsonb NOT NULL DEFAULT '{}'::jsonb,
+  taint_state text NOT NULL DEFAULT 'clean',
+  retention_class text NOT NULL DEFAULT 'standard',
+  expires_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, skill_id, state_key)
+);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_skill_state_record_from_skill()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO autoskill.skill_state_records (
+    skill_state_record_id,
+    workspace_id,
+    skill_id,
+    skill_version_id,
+    state_key,
+    state_kind,
+    state_value,
+    provenance,
+    taint_state,
+    retention_class,
+    created_at,
+    updated_at
+  )
+  VALUES (
+    autoskill.stable_uuid_from_text('skill_state_record:skills:' || NEW.skill_id::text || ':lifecycle'),
+    NEW.workspace_id,
+    NEW.skill_id,
+    NEW.active_version_id,
+    'lifecycle',
+    'runtime_fact',
+    jsonb_strip_nulls(jsonb_build_object(
+      'slug', NEW.slug,
+      'name', NEW.name,
+      'source', NEW.source,
+      'lifecycle_state', NEW.lifecycle_state,
+      'active_version_id', NEW.active_version_id,
+      'last_canary_status', NEW.last_canary_status,
+      'freeze_reason', NEW.freeze_reason,
+      'frozen_at', NEW.frozen_at
+    )),
+    jsonb_build_object('source', 'skills'),
+    CASE
+      WHEN NEW.lifecycle_state IN ('quarantined','revoked','deleted') THEN 'tainted'
+      ELSE 'clean'
+    END,
+    CASE
+      WHEN NEW.lifecycle_state IN ('deleted','revoked') THEN 'retention_delete'
+      ELSE 'standard'
+    END,
+    NEW.created_at,
+    NEW.updated_at
+  )
+  ON CONFLICT (workspace_id, skill_id, state_key) DO UPDATE SET
+    skill_version_id = EXCLUDED.skill_version_id,
+    state_kind = EXCLUDED.state_kind,
+    state_value = EXCLUDED.state_value,
+    provenance = EXCLUDED.provenance,
+    taint_state = EXCLUDED.taint_state,
+    retention_class = EXCLUDED.retention_class,
+    updated_at = EXCLUDED.updated_at;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS skills_sync_skill_state_records ON autoskill.skills;
+CREATE TRIGGER skills_sync_skill_state_records
+AFTER INSERT OR UPDATE ON autoskill.skills
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_skill_state_record_from_skill();
+
+INSERT INTO autoskill.skill_state_records (
+  skill_state_record_id,
+  workspace_id,
+  skill_id,
+  skill_version_id,
+  state_key,
+  state_kind,
+  state_value,
+  provenance,
+  taint_state,
+  retention_class,
+  created_at,
+  updated_at
+)
+SELECT
+  autoskill.stable_uuid_from_text('skill_state_record:skills:' || skill_id::text || ':lifecycle'),
+  workspace_id,
+  skill_id,
+  active_version_id,
+  'lifecycle',
+  'runtime_fact',
+  jsonb_strip_nulls(jsonb_build_object(
+    'slug', slug,
+    'name', name,
+    'source', source,
+    'lifecycle_state', lifecycle_state,
+    'active_version_id', active_version_id,
+    'last_canary_status', last_canary_status,
+    'freeze_reason', freeze_reason,
+    'frozen_at', frozen_at
+  )),
+  jsonb_build_object('source', 'skills'),
+  CASE WHEN lifecycle_state IN ('quarantined','revoked','deleted') THEN 'tainted' ELSE 'clean' END,
+  CASE WHEN lifecycle_state IN ('deleted','revoked') THEN 'retention_delete' ELSE 'standard' END,
+  created_at,
+  updated_at
+FROM autoskill.skills
+ON CONFLICT (workspace_id, skill_id, state_key) DO UPDATE SET
+  skill_version_id = EXCLUDED.skill_version_id,
+  state_kind = EXCLUDED.state_kind,
+  state_value = EXCLUDED.state_value,
+  provenance = EXCLUDED.provenance,
+  taint_state = EXCLUDED.taint_state,
+  retention_class = EXCLUDED.retention_class,
+  updated_at = EXCLUDED.updated_at;
+
+CREATE TABLE IF NOT EXISTS autoskill.skill_marginal_value_trials (
+  trial_id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
+  skill_version_id uuid REFERENCES autoskill.skill_versions(skill_version_id),
+  executor_profile_id uuid REFERENCES autoskill.executor_profiles(executor_profile_id),
+  trial_kind text NOT NULL CHECK (
+    trial_kind IN (
+      'no_skill',
+      'old_skill',
+      'new_skill',
+      'skill_hidden',
+      'skill_visible',
+      'sibling_bundle',
+      'broker_variant'
+    )
+  ),
+  task_fingerprint text NOT NULL,
+  outcome jsonb NOT NULL,
+  score numeric,
+  source_context_token_ledger_id uuid UNIQUE REFERENCES autoskill.context_token_ledgers(context_token_ledger_id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION autoskill.sync_skill_marginal_value_trial_from_context_ledger()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO autoskill.skill_marginal_value_trials (
+    trial_id,
+    workspace_id,
+    skill_version_id,
+    executor_profile_id,
+    trial_kind,
+    task_fingerprint,
+    outcome,
+    score,
+    source_context_token_ledger_id,
+    created_at
+  )
+  VALUES (
+    autoskill.stable_uuid_from_text('skill_marginal_value_trial:context_token_ledger:' || NEW.context_token_ledger_id::text),
+    NEW.workspace_id,
+    NEW.skill_version_id,
+    NULL,
+    CASE NEW.visibility_state
+      WHEN 'no_skill' THEN 'no_skill'
+      WHEN 'skill_hidden' THEN 'skill_hidden'
+      WHEN 'defer_skill' THEN 'skill_hidden'
+      WHEN 'skill_visible' THEN 'skill_visible'
+      WHEN 'sibling_bundle' THEN 'sibling_bundle'
+      ELSE 'broker_variant'
+    END,
+    COALESCE(
+      NULLIF(NEW.metadata->>'task_fingerprint', ''),
+      'sha256:' || encode(digest(
+        coalesce(NEW.session_id, '') || ':' || coalesce(NEW.turn_id, '') || ':' || NEW.context_token_ledger_id::text,
+        'sha256'
+      ), 'hex')
+    ),
+    jsonb_build_object(
+      'source', 'context_token_ledgers',
+      'context_artifact_id', NEW.context_artifact_id,
+      'skill_id', NEW.skill_id,
+      'visibility_state', NEW.visibility_state,
+      'token_count', NEW.token_count,
+      'outcome', NEW.outcome,
+      'metadata', NEW.metadata
+    ),
+    CASE
+      WHEN NEW.metadata #>> '{marginal_value,marginal_value}' ~ '^-?[0-9]+(\.[0-9]+)?$'
+      THEN (NEW.metadata #>> '{marginal_value,marginal_value}')::numeric
+      WHEN NEW.metadata #>> '{source_metadata,marginal_value,marginal_value}' ~ '^-?[0-9]+(\.[0-9]+)?$'
+      THEN (NEW.metadata #>> '{source_metadata,marginal_value,marginal_value}')::numeric
+      ELSE NULL
+    END,
+    NEW.context_token_ledger_id,
+    NEW.created_at
+  )
+  ON CONFLICT (source_context_token_ledger_id) DO UPDATE SET
+    workspace_id = EXCLUDED.workspace_id,
+    skill_version_id = EXCLUDED.skill_version_id,
+    executor_profile_id = EXCLUDED.executor_profile_id,
+    trial_kind = EXCLUDED.trial_kind,
+    task_fingerprint = EXCLUDED.task_fingerprint,
+    outcome = EXCLUDED.outcome,
+    score = EXCLUDED.score,
+    created_at = EXCLUDED.created_at;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS context_token_ledgers_sync_skill_marginal_value_trials
+  ON autoskill.context_token_ledgers;
+CREATE TRIGGER context_token_ledgers_sync_skill_marginal_value_trials
+AFTER INSERT OR UPDATE ON autoskill.context_token_ledgers
+FOR EACH ROW EXECUTE FUNCTION autoskill.sync_skill_marginal_value_trial_from_context_ledger();
+
+INSERT INTO autoskill.skill_marginal_value_trials (
+  trial_id,
+  workspace_id,
+  skill_version_id,
+  executor_profile_id,
+  trial_kind,
+  task_fingerprint,
+  outcome,
+  score,
+  source_context_token_ledger_id,
+  created_at
+)
+SELECT
+  autoskill.stable_uuid_from_text('skill_marginal_value_trial:context_token_ledger:' || context_token_ledger_id::text),
+  workspace_id,
+  skill_version_id,
+  NULL,
+  CASE visibility_state
+    WHEN 'no_skill' THEN 'no_skill'
+    WHEN 'skill_hidden' THEN 'skill_hidden'
+    WHEN 'defer_skill' THEN 'skill_hidden'
+    WHEN 'skill_visible' THEN 'skill_visible'
+    WHEN 'sibling_bundle' THEN 'sibling_bundle'
+    ELSE 'broker_variant'
+  END,
+  COALESCE(
+    NULLIF(metadata->>'task_fingerprint', ''),
+    'sha256:' || encode(digest(coalesce(session_id, '') || ':' || coalesce(turn_id, '') || ':' || context_token_ledger_id::text, 'sha256'), 'hex')
+  ),
+  jsonb_build_object(
+    'source', 'context_token_ledgers',
+    'context_artifact_id', context_artifact_id,
+    'skill_id', skill_id,
+    'visibility_state', visibility_state,
+    'token_count', token_count,
+    'outcome', outcome,
+    'metadata', metadata
+  ),
+  CASE
+    WHEN metadata #>> '{marginal_value,marginal_value}' ~ '^-?[0-9]+(\.[0-9]+)?$'
+    THEN (metadata #>> '{marginal_value,marginal_value}')::numeric
+    WHEN metadata #>> '{source_metadata,marginal_value,marginal_value}' ~ '^-?[0-9]+(\.[0-9]+)?$'
+    THEN (metadata #>> '{source_metadata,marginal_value,marginal_value}')::numeric
+    ELSE NULL
+  END,
+  context_token_ledger_id,
+  created_at
+FROM autoskill.context_token_ledgers
+ON CONFLICT (source_context_token_ledger_id) DO UPDATE SET
+  workspace_id = EXCLUDED.workspace_id,
+  skill_version_id = EXCLUDED.skill_version_id,
+  executor_profile_id = EXCLUDED.executor_profile_id,
+  trial_kind = EXCLUDED.trial_kind,
+  task_fingerprint = EXCLUDED.task_fingerprint,
+  outcome = EXCLUDED.outcome,
+  score = EXCLUDED.score,
+  created_at = EXCLUDED.created_at;
+
+CREATE INDEX IF NOT EXISTS skill_marginal_value_trials_task_idx
+  ON autoskill.skill_marginal_value_trials (workspace_id, task_fingerprint, trial_kind, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS autoskill.context_compile_runs (
   context_compile_run_id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES autoskill.workspaces(workspace_id),
