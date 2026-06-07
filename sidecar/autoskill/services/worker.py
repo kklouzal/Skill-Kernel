@@ -1157,9 +1157,162 @@ async def _run_curation(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
         ),
         max_merge=_payload_int(job.payload, "max_merge", default=5, minimum=0, maximum=100),
     )
+    await _record_lifecycle_curation_calibration(
+        stores,
+        workspace_key=workspace,
+        result=result,
+        contract_preflight=contract_preflight,
+    )
     payload = result.to_json()
     payload["contract_preflight"] = contract_preflight
     return payload
+
+
+async def _record_lifecycle_curation_calibration(
+    stores: WorkerStores,
+    *,
+    workspace_key: str,
+    result: Any,
+    contract_preflight: dict[str, Any] | None,
+) -> None:
+    orchestrator = stores.autonomy_orchestrator
+    autonomy = getattr(orchestrator, "autonomy", None) if orchestrator is not None else None
+    if autonomy is None:
+        return
+    actions = list(getattr(result, "actions", []) or [])
+    for action in actions:
+        selected_action, risk_tier, confidence = _lifecycle_curation_calibration_action(action)
+        await autonomy.record_calibration_observation(
+            workspace_key=workspace_key,
+            calibration_family="lifecycle_curation",
+            selected_action=selected_action,
+            predicted_confidence=confidence,
+            confidence_components=_lifecycle_curation_calibration_components(
+                action,
+                result=result,
+                contract_preflight=contract_preflight,
+            ),
+            action_risk_tier=risk_tier,
+            outcome_status="pending",
+        )
+
+
+def _lifecycle_curation_calibration_action(action: Any) -> tuple[str, str, float]:
+    action_name = str(getattr(action, "action", "") or "")
+    status = str(getattr(action, "status", "") or "")
+    if status == "blocked":
+        return "quarantine", "T1_internal_record", 0.42
+    if action_name == "promote_archive":
+        return "promote_archived_skill", "T3_owned_runtime_change", 0.82
+    if action_name in {"archive", "enforce_active_budget"}:
+        return "archive_low_utility_skill", "T3_owned_runtime_change", 0.8
+    if action_name == "merge_duplicate":
+        return "merge_duplicate_skill", "T3_owned_runtime_change", 0.76
+    if action_name == "plan_split":
+        return "stage_lifecycle_decomposition_repair", "T2_trial_artifact", 0.68
+    if action_name in {"plan_improvement", "plan_disambiguation_repair"}:
+        return "stage_lifecycle_improvement_repair", "T2_trial_artifact", 0.66
+    return "no_op_reschedule", "T1_internal_record", 0.5
+
+
+def _lifecycle_curation_calibration_components(
+    action: Any,
+    *,
+    result: Any,
+    contract_preflight: dict[str, Any] | None,
+) -> dict[str, Any]:
+    features = _json_object(getattr(action, "features", None))
+    filesystem_archive = _json_object(features.get("filesystem_archive"))
+    filesystem_promotion = _json_object(features.get("filesystem_promotion"))
+    merge_probe_plan = _json_object(features.get("merge_probe_plan"))
+    repair_proposal = _json_object(features.get("repair_proposal"))
+    return {
+        "schema": "autoskill.lifecycle-curation-calibration-components.v1",
+        "curation_action_id": str(getattr(action, "curation_action_id", "")),
+        "skill_id": str(getattr(action, "skill_id", "")) if getattr(action, "skill_id", None) else None,
+        "action": str(getattr(action, "action", "") or ""),
+        "status": str(getattr(action, "status", "") or ""),
+        "reason_code": _lifecycle_curation_reason_code(str(getattr(action, "reason", "") or "")),
+        "feature_key_names": sorted(str(key) for key in features if isinstance(key, str)),
+        "utility_score": _json_number(features.get("utility_score")),
+        "helped_count": _json_int(features.get("helped_count")),
+        "hurt_count": _json_int(features.get("hurt_count")),
+        "shadow_count": _json_int(features.get("shadow_count")),
+        "retrieval_count": _json_int(features.get("retrieval_count")),
+        "ignored_load_count": _json_int(features.get("ignored_load_count")),
+        "false_positive_load_count": _json_int(features.get("false_positive_load_count")),
+        "token_waste": _json_int(features.get("token_waste")),
+        "promotion_min_retrieval": _json_int(features.get("promotion_min_retrieval")),
+        "archive_threshold": _json_number(features.get("archive_threshold")),
+        "active_budget": _json_int(features.get("active_budget")),
+        "filesystem_archive_status": str(filesystem_archive.get("status") or "") or None,
+        "filesystem_promotion_status": str(filesystem_promotion.get("status") or "") or None,
+        "merge_probe_plan_schema": str(merge_probe_plan.get("schema") or "") or None,
+        "repair_proposal_schema": str(repair_proposal.get("schema") or "") or None,
+        "repair_proposal_kind": str(repair_proposal.get("proposal_kind") or "") or None,
+        "repair_trial_kinds": [
+            str(kind) for kind in repair_proposal.get("planned_trials") or [] if kind is not None
+        ],
+        "result_counts": {
+            "scanned": _json_int(getattr(result, "scanned", None)),
+            "archived": _json_int(getattr(result, "archived", None)),
+            "promoted": _json_int(getattr(result, "promoted", None)),
+            "merged": _json_int(getattr(result, "merged", None)),
+            "planned": _json_int(getattr(result, "planned", None)),
+        },
+        "contract_preflight_status": (
+            "violated"
+            if _json_int((contract_preflight or {}).get("violated")) > 0
+            else "passed_or_unavailable"
+        ),
+        "raw_reason_returned": False,
+        "raw_skill_text_returned": False,
+        "runtime_write_completed_by_llm": False,
+        "observatory_direct_mutation_authority": False,
+    }
+
+
+def _lifecycle_curation_reason_code(reason: str) -> str:
+    normalized = " ".join(reason.lower().split())
+    if "promotion requires evaluator pass" in normalized:
+        return "promotion_evaluator_gate_missing"
+    if "promotion requires current contracts valid" in normalized:
+        return "promotion_contract_gate_missing"
+    if "promotion requires restorable archive snapshot" in normalized:
+        return "promotion_archive_snapshot_missing"
+    if "duplicate merge requires evaluator pass" in normalized:
+        return "merge_evaluator_gate_missing"
+    if "requires filesystem archive snapshot" in normalized:
+        return "archive_snapshot_missing"
+    if "demand recurred" in normalized:
+        return "archived_demand_recurred"
+    if "below archive threshold" in normalized:
+        return "utility_below_archive_threshold"
+    if "budget exceeded" in normalized:
+        return "active_bank_budget_exceeded"
+    if "duplicate edge" in normalized:
+        return "duplicate_edge_lower_utility"
+    if "shadowing" in normalized and "harm" in normalized:
+        return "shadowing_plus_harm"
+    if "context" in normalized and "waste" in normalized:
+        return "context_token_waste"
+    if "harmful outcomes" in normalized:
+        return "repeated_harmful_outcomes"
+    return "lifecycle_curation"
+
+
+def _json_number(value: Any) -> float | None:
+    try:
+        return round(float(value), 6)
+    except (TypeError, ValueError):
+        return None
+
+
+def _json_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 async def _run_usage_aggregate(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:

@@ -2647,6 +2647,115 @@ def test_worker_dispatches_utility_and_curation_jobs() -> None:
     ]
 
 
+def test_curation_worker_records_lifecycle_calibration_observations() -> None:
+    jobs = MemoryJobStore()
+    action_id = uuid4()
+    archived_skill_id = uuid4()
+    repair_skill_id = uuid4()
+
+    class CaptureAutonomyControlStore(NullAutonomyControlStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[dict[str, object]] = []
+
+        async def record_calibration_observation(self, **kwargs):
+            self.calls.append(kwargs)
+            return await super().record_calibration_observation(**kwargs)
+
+    class CurationUtilityStore(MemoryUtilityWorkerStore):
+        async def run_curation(self, **_kwargs) -> CurationRunResult:
+            return CurationRunResult(
+                scanned=3,
+                archived=1,
+                promoted=0,
+                merged=0,
+                planned=1,
+                actions=[
+                    CurationActionRecord(
+                        curation_action_id=action_id,
+                        skill_id=archived_skill_id,
+                        action="archive",
+                        status="applied",
+                        reason="utility below archive threshold",
+                        features={
+                            "utility_score": -2.5,
+                            "hurt_count": 2,
+                            "shadow_count": 1,
+                            "archive_threshold": -1.0,
+                            "filesystem_archive": {"status": "archived"},
+                        },
+                        created_at=datetime.now(UTC),
+                    ),
+                    CurationActionRecord(
+                        curation_action_id=uuid4(),
+                        skill_id=repair_skill_id,
+                        action="plan_split",
+                        status="planned",
+                        reason="material context waste suggests decomposing broad text",
+                        features={
+                            "utility_score": -0.7,
+                            "ignored_load_count": 2,
+                            "false_positive_load_count": 1,
+                            "token_waste": 900,
+                            "repair_proposal": {
+                                "schema": "autoskill.curation_repair_proposal.v1",
+                                "proposal_kind": "decompose",
+                                "planned_trials": ["target", "context_value", "sibling"],
+                            },
+                        },
+                        created_at=datetime.now(UTC),
+                    ),
+                ],
+            )
+
+    autonomy = CaptureAutonomyControlStore()
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="curation.run",
+            idempotency_key="curation:lifecycle-calibration",
+            payload={"workspace_id": "dev-01"},
+        )
+        stores = WorkerStores(
+            jobs=jobs,
+            scheduler=MemorySchedulerWorkerStore(),
+            evidence=MemoryEvidenceWorkerStore(),
+            embeddings=MemoryPendingEmbeddingStore(),
+            utility=CurationUtilityStore(),
+            autonomy_orchestrator=SimpleNamespace(autonomy=autonomy),
+        )
+        return await run_worker_once(stores, worker_id="worker-1", pool="analysis")
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert [call["calibration_family"] for call in autonomy.calls] == [
+        "lifecycle_curation",
+        "lifecycle_curation",
+    ]
+    assert [call["selected_action"] for call in autonomy.calls] == [
+        "archive_low_utility_skill",
+        "stage_lifecycle_decomposition_repair",
+    ]
+    assert [call["action_risk_tier"] for call in autonomy.calls] == [
+        "T3_owned_runtime_change",
+        "T2_trial_artifact",
+    ]
+    first_components = autonomy.calls[0]["confidence_components"]
+    second_components = autonomy.calls[1]["confidence_components"]
+    assert first_components["reason_code"] == "utility_below_archive_threshold"
+    assert first_components["raw_reason_returned"] is False
+    assert first_components["raw_skill_text_returned"] is False
+    assert first_components["runtime_write_completed_by_llm"] is False
+    assert second_components["repair_proposal_kind"] == "decompose"
+    assert second_components["repair_trial_kinds"] == [
+        "target",
+        "context_value",
+        "sibling",
+    ]
+
+
 def test_worker_dispatches_usage_aggregation_job() -> None:
     jobs = MemoryJobStore()
     usage = MemoryUsageWorkerStore()

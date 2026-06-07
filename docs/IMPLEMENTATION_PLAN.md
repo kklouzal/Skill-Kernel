@@ -3,6 +3,34 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: lifecycle curation actions now write pending calibration
+observations for the `lifecycle_curation` semantic family. After `curation.run`
+finishes, the worker records one content-safe observation per curation action
+through the existing autonomy control store. Applied archive and active-budget
+decisions record `archive_low_utility_skill`; archive promotions record
+`promote_archived_skill`; duplicate merges record `merge_duplicate_skill`;
+split/decomposition repair plans record `stage_lifecycle_decomposition_repair`;
+improvement/disambiguation repair plans record
+`stage_lifecycle_improvement_repair`; blocked actions record `quarantine`.
+Calibration components include action IDs, skill IDs, action/status, safe
+reason codes, utility/count/token signals, feature key names, filesystem
+archive/promotion status, merge/repair schema names, repair trial kinds,
+curation result counts, and explicit `raw_reason_returned=false`,
+`raw_skill_text_returned=false`, `runtime_write_completed_by_llm=false`, and
+`observatory_direct_mutation_authority=false`. The payload omits raw skill
+text, raw curation rationale, and any direct Observatory mutation authority.
+This advances Sections 5.5, 5.12, 5.13, 5.14, 21, and 27 plus Part IV/Part V
+lifecycle-curation coverage while preserving deterministic worker authority and
+adding no autonomous production apply. Focused validation passed with `uv run
+pytest sidecar/autoskill/tests/test_worker.py -q -k
+"curation_worker_records_lifecycle_calibration_observations or
+dispatches_utility_and_curation"` (`2 passed, 43 deselected`) and touched-file
+Ruff. Required gates passed with `uv run ruff check sidecar`, `uv run pytest`
+(`466 passed`), `uv run python -m compileall -q sidecar`, `docker compose
+config --quiet`, and `git diff --check`. No Postgres smoke was required because
+the slice reuses existing curation persistence and the existing asyncpg
+autonomy observation primitive without schema changes.
+
 2026-06-07 update: administrative escalation events now write pending
 calibration observations for the `administrative_escalation` semantic family.
 After `record_administrative_escalation` persists the hard-boundary escalation

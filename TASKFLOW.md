@@ -16,6 +16,34 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Lifecycle curation actions now feed the generic semantic
+  calibration corpus for the `lifecycle_curation` family instead of leaving
+  archive/promote/merge/split-repair decisions only as curation rows. After
+  `curation.run` completes, the worker records one pending observation per
+  curation action through the existing autonomy control store. Applied archive
+  and active-budget decisions record `archive_low_utility_skill`; archive
+  promotions record `promote_archived_skill`; duplicate merges record
+  `merge_duplicate_skill`; split/decomposition repair plans record
+  `stage_lifecycle_decomposition_repair`; improvement/disambiguation repair
+  plans record `stage_lifecycle_improvement_repair`; blocked actions record
+  deterministic `quarantine`. Confidence components include curation/action
+  IDs, skill IDs, status, safe reason codes, utility/count/token signals,
+  feature key names, filesystem archive/promotion status, merge/repair schema
+  names, repair trial kinds, result counts, and explicit
+  `raw_reason_returned=false`, `raw_skill_text_returned=false`,
+  `runtime_write_completed_by_llm=false`, and
+  `observatory_direct_mutation_authority=false`. This advances unified Sections
+  5.5, 5.12, 5.13, 5.14, 21, 27, and Part IV/Part V lifecycle-curation
+  coverage while preserving deterministic worker authority and adding no
+  Observatory direct mutation path or autonomous production apply. Focused
+  validation passed with `uv run pytest sidecar/autoskill/tests/test_worker.py
+  -q -k "curation_worker_records_lifecycle_calibration_observations or
+  dispatches_utility_and_curation"` (`2 passed, 43 deselected`) and
+  touched-file Ruff. Required gates passed with `uv run ruff check sidecar`,
+  `uv run pytest` (`466 passed`), `uv run python -m compileall -q sidecar`,
+  `docker compose config --quiet`, and `git diff --check`. No Postgres smoke
+  was required because the slice reuses existing curation rows and the existing
+  asyncpg autonomy observation primitive without schema changes.
 - 2026-06-07: Administrative escalation events now feed the generic semantic
   calibration corpus for the `administrative_escalation` family instead of
   remaining only as escalation/read-model rows. `record_administrative_escalation`
