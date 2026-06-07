@@ -369,6 +369,181 @@ class AdminAutonomyDecisionStatusRecord:
 
 
 @dataclass(frozen=True)
+class AdminAutonomyCalibrationObservationRecord:
+    calibration_observation_id: UUID
+    workspace_key: str
+    calibration_family: str
+    model_profile_id: UUID | None
+    adjudication_id: UUID | None
+    autonomy_decision_id: UUID | None
+    action_risk_tier: str
+    predicted_confidence: float
+    selected_action: str
+    outcome_status: str
+    false_accept: bool | None
+    false_reject: bool | None
+    unnecessary_abstention: bool | None
+    harm_finding: bool | None
+    utility_score: float | None
+    context_token_delta: int | None
+    outcome_observed_at: datetime | None
+    created_at: datetime
+
+    @classmethod
+    def from_row(
+        cls, row: asyncpg.Record | dict[str, Any]
+    ) -> AdminAutonomyCalibrationObservationRecord:
+        utility_score = _row_get(row, "utility_score")
+        return cls(
+            calibration_observation_id=row["calibration_observation_id"],
+            workspace_key=row["workspace_key"],
+            calibration_family=row["calibration_family"],
+            model_profile_id=_row_get(row, "model_profile_id"),
+            adjudication_id=_row_get(row, "adjudication_id"),
+            autonomy_decision_id=_row_get(row, "autonomy_decision_id"),
+            action_risk_tier=row["action_risk_tier"],
+            predicted_confidence=float(row["predicted_confidence"]),
+            selected_action=row["selected_action"],
+            outcome_status=row["outcome_status"],
+            false_accept=_row_get(row, "false_accept"),
+            false_reject=_row_get(row, "false_reject"),
+            unnecessary_abstention=_row_get(row, "unnecessary_abstention"),
+            harm_finding=_row_get(row, "harm_finding"),
+            utility_score=float(utility_score) if utility_score is not None else None,
+            context_token_delta=_row_get(row, "context_token_delta"),
+            outcome_observed_at=_row_get(row, "outcome_observed_at"),
+            created_at=row["created_at"],
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "schema_version": "skillkernel.observatory.autonomy-calibration-observation.v1",
+            "object_type": "autonomy_calibration_observation",
+            "object_id": str(self.calibration_observation_id),
+            "calibration_observation_id": str(self.calibration_observation_id),
+            "workspace_id": self.workspace_key,
+            "calibration_family": self.calibration_family,
+            "model_profile_id": str(self.model_profile_id) if self.model_profile_id else None,
+            "adjudication_id": str(self.adjudication_id) if self.adjudication_id else None,
+            "autonomy_decision_id": (
+                str(self.autonomy_decision_id) if self.autonomy_decision_id else None
+            ),
+            "action_risk_tier": self.action_risk_tier,
+            "predicted_confidence": self.predicted_confidence,
+            "selected_action": self.selected_action,
+            "outcome_status": self.outcome_status,
+            "outcome_signals": {
+                "false_accept": self.false_accept,
+                "false_reject": self.false_reject,
+                "unnecessary_abstention": self.unnecessary_abstention,
+                "harm_finding": self.harm_finding,
+                "utility_score": self.utility_score,
+                "context_token_delta": self.context_token_delta,
+            },
+            "outcome_observed_at": (
+                self.outcome_observed_at.isoformat()
+                if self.outcome_observed_at
+                else None
+            ),
+            "created_at": self.created_at.isoformat(),
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "calibration-observation-status-only",
+                "redaction_state": "outcome_payload_omitted",
+            },
+        }
+
+
+@dataclass(frozen=True)
+class AdminAutonomyReliabilityMetricRecord:
+    reliability_metric_id: UUID
+    workspace_key: str
+    calibration_family: str
+    window_start: datetime
+    window_end: datetime
+    sample_count: int
+    coverage_rate: float | None
+    false_accept_rate: float | None
+    false_reject_rate: float | None
+    abstention_rate: float | None
+    unnecessary_abstention_rate: float | None
+    calibration_error: float | None
+    brier_like_score: float | None
+    canary_failure_rate: float | None
+    rollback_rate: float | None
+    harm_finding_rate: float | None
+    utility_per_context_token: float | None
+    reliability_bins: list[dict[str, Any]]
+    calibration_support: str
+    created_at: datetime
+
+    @classmethod
+    def from_row(
+        cls, row: asyncpg.Record | dict[str, Any]
+    ) -> AdminAutonomyReliabilityMetricRecord:
+        return cls(
+            reliability_metric_id=row["reliability_metric_id"],
+            workspace_key=row["workspace_key"],
+            calibration_family=row["calibration_family"],
+            window_start=row["window_start"],
+            window_end=row["window_end"],
+            sample_count=int(row["sample_count"]),
+            coverage_rate=_optional_float(_row_get(row, "coverage_rate")),
+            false_accept_rate=_optional_float(_row_get(row, "false_accept_rate")),
+            false_reject_rate=_optional_float(_row_get(row, "false_reject_rate")),
+            abstention_rate=_optional_float(_row_get(row, "abstention_rate")),
+            unnecessary_abstention_rate=_optional_float(
+                _row_get(row, "unnecessary_abstention_rate")
+            ),
+            calibration_error=_optional_float(_row_get(row, "calibration_error")),
+            brier_like_score=_optional_float(_row_get(row, "brier_like_score")),
+            canary_failure_rate=_optional_float(_row_get(row, "canary_failure_rate")),
+            rollback_rate=_optional_float(_row_get(row, "rollback_rate")),
+            harm_finding_rate=_optional_float(_row_get(row, "harm_finding_rate")),
+            utility_per_context_token=_optional_float(
+                _row_get(row, "utility_per_context_token")
+            ),
+            reliability_bins=_json_list(row["reliability_bins"]),
+            calibration_support=row["calibration_support"],
+            created_at=row["created_at"],
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "schema_version": "skillkernel.observatory.autonomy-reliability-metric.v1",
+            "object_type": "autonomy_reliability_metric",
+            "object_id": str(self.reliability_metric_id),
+            "reliability_metric_id": str(self.reliability_metric_id),
+            "workspace_id": self.workspace_key,
+            "calibration_family": self.calibration_family,
+            "window": {
+                "start": self.window_start.isoformat(),
+                "end": self.window_end.isoformat(),
+            },
+            "sample_count": self.sample_count,
+            "coverage_rate": self.coverage_rate,
+            "false_accept_rate": self.false_accept_rate,
+            "false_reject_rate": self.false_reject_rate,
+            "abstention_rate": self.abstention_rate,
+            "unnecessary_abstention_rate": self.unnecessary_abstention_rate,
+            "calibration_error": self.calibration_error,
+            "brier_like_score": self.brier_like_score,
+            "canary_failure_rate": self.canary_failure_rate,
+            "rollback_rate": self.rollback_rate,
+            "harm_finding_rate": self.harm_finding_rate,
+            "utility_per_context_token": self.utility_per_context_token,
+            "reliability_bins": self.reliability_bins,
+            "calibration_support": self.calibration_support,
+            "created_at": self.created_at.isoformat(),
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "aggregate-reliability-metric",
+                "redaction_state": "aggregate_status",
+            },
+        }
+
+
+@dataclass(frozen=True)
 class AdminSemanticAdjudicationStatusRecord:
     adjudication_run_id: UUID
     workspace_key: str
@@ -638,6 +813,39 @@ class ObservatoryAdminStore(Protocol):
     ) -> AdminAutonomyDecisionStatusRecord | None:
         """Fetch one autonomy-decision status row."""
 
+    async def list_autonomy_calibration_observations(
+        self,
+        *,
+        workspace_key: str | None = None,
+        calibration_family: str | None = None,
+        outcome_status: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminAutonomyCalibrationObservationRecord]:
+        """Return bounded calibration observation rows without outcome payloads."""
+
+    async def get_autonomy_calibration_observation(
+        self,
+        *,
+        calibration_observation_id: UUID,
+    ) -> AdminAutonomyCalibrationObservationRecord | None:
+        """Fetch one calibration observation row without outcome payloads."""
+
+    async def list_autonomy_reliability_metrics(
+        self,
+        *,
+        workspace_key: str | None = None,
+        calibration_family: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminAutonomyReliabilityMetricRecord]:
+        """Return bounded aggregate autonomy reliability metric rows."""
+
+    async def get_autonomy_reliability_metric(
+        self,
+        *,
+        reliability_metric_id: UUID,
+    ) -> AdminAutonomyReliabilityMetricRecord | None:
+        """Fetch one aggregate autonomy reliability metric row."""
+
     async def list_semantic_adjudications(
         self,
         *,
@@ -679,6 +887,10 @@ class NullObservatoryAdminStore:
         self.bundles: list[AdminDiagnosticBundleRecord] = []
         self.evidence_fidelity: list[AdminEvidenceFidelityStatusRecord] = []
         self.autonomy_decisions: list[AdminAutonomyDecisionStatusRecord] = []
+        self.calibration_observations: list[
+            AdminAutonomyCalibrationObservationRecord
+        ] = []
+        self.reliability_metrics: list[AdminAutonomyReliabilityMetricRecord] = []
         self.semantic_adjudications: list[AdminSemanticAdjudicationStatusRecord] = []
         self.administrative_escalations: list[
             AdminAdministrativeEscalationStatusRecord
@@ -959,6 +1171,73 @@ class NullObservatoryAdminStore:
     ) -> AdminAutonomyDecisionStatusRecord | None:
         for record in self.autonomy_decisions:
             if record.decision_id == decision_id:
+                return record
+        return None
+
+    async def list_autonomy_calibration_observations(
+        self,
+        *,
+        workspace_key: str | None = None,
+        calibration_family: str | None = None,
+        outcome_status: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminAutonomyCalibrationObservationRecord]:
+        records = list(self.calibration_observations)
+        if workspace_key is not None:
+            records = [record for record in records if record.workspace_key == workspace_key]
+        if calibration_family is not None:
+            records = [
+                record
+                for record in records
+                if record.calibration_family == calibration_family
+            ]
+        if outcome_status is not None:
+            records = [record for record in records if record.outcome_status == outcome_status]
+        records.sort(
+            key=lambda record: (record.created_at, record.calibration_observation_id),
+            reverse=True,
+        )
+        return records[: max(1, min(limit, 500))]
+
+    async def get_autonomy_calibration_observation(
+        self,
+        *,
+        calibration_observation_id: UUID,
+    ) -> AdminAutonomyCalibrationObservationRecord | None:
+        for record in self.calibration_observations:
+            if record.calibration_observation_id == calibration_observation_id:
+                return record
+        return None
+
+    async def list_autonomy_reliability_metrics(
+        self,
+        *,
+        workspace_key: str | None = None,
+        calibration_family: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminAutonomyReliabilityMetricRecord]:
+        records = list(self.reliability_metrics)
+        if workspace_key is not None:
+            records = [record for record in records if record.workspace_key == workspace_key]
+        if calibration_family is not None:
+            records = [
+                record
+                for record in records
+                if record.calibration_family == calibration_family
+            ]
+        records.sort(
+            key=lambda record: (record.window_end, record.reliability_metric_id),
+            reverse=True,
+        )
+        return records[: max(1, min(limit, 500))]
+
+    async def get_autonomy_reliability_metric(
+        self,
+        *,
+        reliability_metric_id: UUID,
+    ) -> AdminAutonomyReliabilityMetricRecord | None:
+        for record in self.reliability_metrics:
+            if record.reliability_metric_id == reliability_metric_id:
                 return record
         return None
 
@@ -1472,6 +1751,114 @@ class AsyncpgObservatoryAdminStore(AsyncpgPoolOwner):
             )
         return AdminAutonomyDecisionStatusRecord.from_row(row) if row else None
 
+    async def list_autonomy_calibration_observations(
+        self,
+        *,
+        workspace_key: str | None = None,
+        calibration_family: str | None = None,
+        outcome_status: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminAutonomyCalibrationObservationRecord]:
+        bounded_limit = max(1, min(limit, 500))
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                  observation.*,
+                  workspace.external_key AS workspace_key
+                FROM autoskill.autonomy_calibration_observations observation
+                JOIN autoskill.workspaces workspace
+                  ON workspace.workspace_id = observation.workspace_id
+                WHERE ($1::text IS NULL OR workspace.external_key = $1)
+                  AND ($2::text IS NULL OR observation.calibration_family = $2)
+                  AND ($3::text IS NULL OR observation.outcome_status = $3)
+                ORDER BY observation.created_at DESC,
+                         observation.calibration_observation_id DESC
+                LIMIT $4
+                """,
+                workspace_key,
+                calibration_family,
+                outcome_status,
+                bounded_limit,
+            )
+        return [
+            AdminAutonomyCalibrationObservationRecord.from_row(row) for row in rows
+        ]
+
+    async def get_autonomy_calibration_observation(
+        self,
+        *,
+        calibration_observation_id: UUID,
+    ) -> AdminAutonomyCalibrationObservationRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                  observation.*,
+                  workspace.external_key AS workspace_key
+                FROM autoskill.autonomy_calibration_observations observation
+                JOIN autoskill.workspaces workspace
+                  ON workspace.workspace_id = observation.workspace_id
+                WHERE observation.calibration_observation_id = $1
+                """,
+                calibration_observation_id,
+            )
+        return (
+            AdminAutonomyCalibrationObservationRecord.from_row(row) if row else None
+        )
+
+    async def list_autonomy_reliability_metrics(
+        self,
+        *,
+        workspace_key: str | None = None,
+        calibration_family: str | None = None,
+        limit: int = 50,
+    ) -> list[AdminAutonomyReliabilityMetricRecord]:
+        bounded_limit = max(1, min(limit, 500))
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                  metric.*,
+                  workspace.external_key AS workspace_key
+                FROM autoskill.autonomy_reliability_metrics metric
+                JOIN autoskill.workspaces workspace
+                  ON workspace.workspace_id = metric.workspace_id
+                WHERE ($1::text IS NULL OR workspace.external_key = $1)
+                  AND ($2::text IS NULL OR metric.calibration_family = $2)
+                ORDER BY metric.window_end DESC, metric.reliability_metric_id DESC
+                LIMIT $3
+                """,
+                workspace_key,
+                calibration_family,
+                bounded_limit,
+            )
+        return [AdminAutonomyReliabilityMetricRecord.from_row(row) for row in rows]
+
+    async def get_autonomy_reliability_metric(
+        self,
+        *,
+        reliability_metric_id: UUID,
+    ) -> AdminAutonomyReliabilityMetricRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                  metric.*,
+                  workspace.external_key AS workspace_key
+                FROM autoskill.autonomy_reliability_metrics metric
+                JOIN autoskill.workspaces workspace
+                  ON workspace.workspace_id = metric.workspace_id
+                WHERE metric.reliability_metric_id = $1
+                """,
+                reliability_metric_id,
+            )
+        return AdminAutonomyReliabilityMetricRecord.from_row(row) if row else None
+
     async def list_semantic_adjudications(
         self,
         *,
@@ -1563,6 +1950,10 @@ def _json(value: object) -> str:
 
 def _json_sha256(value: object) -> str:
     return sha256_text(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str))
+
+
+def _optional_float(value: object | None) -> float | None:
+    return float(value) if value is not None else None
 
 
 def _safe_live_event_payload(

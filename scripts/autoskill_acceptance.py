@@ -545,7 +545,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         "31.58",
         "Every semantic decision family has calibration observations, delayed outcomes, and reliability metrics visible for operation.",
         (
-            "Observatory model/profile, replay, canary, and autonomy assurance read models",
+            "/admin/api/v1/autonomy/calibration/observations and /admin/api/v1/autonomy/calibration/metrics expose content-safe calibration state",
             "operator metrics include scanner/evaluator failures and replay corpus coverage",
             "scripts/autoskill_observatory_acceptance.py",
         ),
@@ -590,7 +590,7 @@ PRODUCTION_CRITERIA: tuple[AcceptanceCriterion, ...] = (
         "31.63",
         "Observatory exposes calibration support, reliability metrics, threshold-deadlock state, and reason codes for stalled decisions.",
         (
-            "observatory autonomy acceptance criteria 21.23 and developer checklist autonomy items",
+            "observatory autonomy acceptance criteria 21.23 and developer checklist autonomy items include calibration observation and reliability metric routes",
             "playbook signal state includes confidence, issue links, warnings, and actions",
             "scripts/autoskill_observatory_acceptance.py",
         ),

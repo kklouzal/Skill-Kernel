@@ -16,6 +16,36 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Observatory now exposes the autonomy calibration corpus as
+  content-safe sidecar read models instead of leaving calibration outcomes and
+  reliability metrics Core-store-only. The admin store lists/details
+  `autonomy_calibration_observations` and `autonomy_reliability_metrics`
+  through workspace-scoped asyncpg queries, the admin API adds list/detail
+  routes at `/admin/api/v1/autonomy/calibration/observations` and
+  `/admin/api/v1/autonomy/calibration/metrics`, and the generic object
+  microscope can resolve both object types with provenance links to autonomy
+  decisions, semantic adjudications, and threshold-policy inputs. Payloads stay
+  read-only and content-safe: outcome JSON, confidence component payloads, raw
+  semantic verdicts, and raw evidence remain omitted while status, aggregate
+  rates, calibration support, over-action/over-deferral signals, and low-support
+  diagnostics are visible to operators. This advances unified autonomy
+  Sections 5.5, 5.9, 5.12, and 5.14 plus Observatory acceptance Sections
+  21.16/21.23/24.auto.1 and production criteria 31.58/31.63 by making delayed
+  outcomes and reliability metrics inspectable without adding runtime-write
+  authority or relaxing hard invariants. Focused validation passed with the
+  Observatory autonomy route/content-safety regression (`2 passed, 64
+  deselected`), touched-file Ruff, and regenerated OpenAPI client freshness.
+  Required gates passed with `uv run ruff check sidecar`, `uv run pytest`
+  (`453 passed`), `uv run python -m compileall -q sidecar`, `git diff
+  --check`, and `npm run build` in `sidecar/autoskill/observatory`. Report
+  gates passed with core acceptance (`ready=true`, `63` production criteria,
+  `7` context criteria), Observatory acceptance (`ready=true`, `42` acceptance
+  criteria, `44` developer checklist items), conformance (`ready=true`,
+  `23/23`), readiness (`ready=true`, `17` checklist items), and handoff
+  governance (`35` risks mitigated). A Dev-01 Postgres smoke inserted a
+  throwaway `cron-calibration-readmodel-smoke-*` workspace, verified the new
+  asyncpg observation/metric list and detail methods, and deleted the smoke
+  workspace plus its calibration rows.
 - 2026-06-07: Autonomy calibration persistence now turns proposal-gate
   fallback decisions into real calibration corpus state. The autonomy control
   store seeds a pending `autonomy_calibration_observations` row for each

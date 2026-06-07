@@ -52,7 +52,9 @@ from autoskill.db.observability import (
 )
 from autoskill.db.observatory_admin import (
     AdminAdministrativeEscalationStatusRecord,
+    AdminAutonomyCalibrationObservationRecord,
     AdminAutonomyDecisionStatusRecord,
+    AdminAutonomyReliabilityMetricRecord,
     AdminEvidenceFidelityStatusRecord,
     AdminSemanticAdjudicationStatusRecord,
     NullObservatoryAdminStore,
@@ -1807,6 +1809,13 @@ def test_observatory_required_admin_route_matrix_and_microscope_objects_exist() 
         ("/admin/api/v1/adjudications/{adjudication_run_id}", "GET"),
         ("/admin/api/v1/autonomy/decisions", "GET"),
         ("/admin/api/v1/autonomy/decisions/{decision_id}", "GET"),
+        ("/admin/api/v1/autonomy/calibration/observations", "GET"),
+        (
+            "/admin/api/v1/autonomy/calibration/observations/{observation_id}",
+            "GET",
+        ),
+        ("/admin/api/v1/autonomy/calibration/metrics", "GET"),
+        ("/admin/api/v1/autonomy/calibration/metrics/{metric_id}", "GET"),
         ("/admin/api/v1/autonomy/threshold-deadlocks", "GET"),
         ("/admin/api/v1/autonomy/threshold-deadlocks/{decision_id}", "GET"),
         ("/admin/api/v1/autonomy/policies", "GET"),
@@ -2760,6 +2769,8 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
     decision_id = uuid4()
     adjudication_id = uuid4()
     escalation_id = uuid4()
+    calibration_observation_id = uuid4()
+    reliability_metric_id = uuid4()
     observatory_admin.evidence_fidelity.append(
         AdminEvidenceFidelityStatusRecord(
             workspace_key="dev-01",
@@ -2789,6 +2800,58 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             dominant_reason_code="threshold_deadlock",
             created_at=now,
             updated_at=now,
+        )
+    )
+    observatory_admin.calibration_observations.append(
+        AdminAutonomyCalibrationObservationRecord(
+            calibration_observation_id=calibration_observation_id,
+            workspace_key="dev-01",
+            calibration_family="skill_plan_semantic_adjudication",
+            model_profile_id=None,
+            adjudication_id=adjudication_id,
+            autonomy_decision_id=decision_id,
+            action_risk_tier="T2_trial_artifact",
+            predicted_confidence=0.91,
+            selected_action="stage_canary",
+            outcome_status="success",
+            false_accept=False,
+            false_reject=False,
+            unnecessary_abstention=True,
+            harm_finding=False,
+            utility_score=0.75,
+            context_token_delta=120,
+            outcome_observed_at=now + timedelta(minutes=5),
+            created_at=now,
+        )
+    )
+    observatory_admin.reliability_metrics.append(
+        AdminAutonomyReliabilityMetricRecord(
+            reliability_metric_id=reliability_metric_id,
+            workspace_key="dev-01",
+            calibration_family="skill_plan_semantic_adjudication",
+            window_start=now - timedelta(days=30),
+            window_end=now,
+            sample_count=31,
+            coverage_rate=0.85,
+            false_accept_rate=0.03,
+            false_reject_rate=0.06,
+            abstention_rate=0.28,
+            unnecessary_abstention_rate=0.08,
+            calibration_error=0.12,
+            brier_like_score=0.04,
+            canary_failure_rate=None,
+            rollback_rate=None,
+            harm_finding_rate=0.0,
+            utility_per_context_token=0.004,
+            reliability_bins=[
+                {
+                    "confidence_min": 0.85,
+                    "confidence_max": 1.0,
+                    "sample_count": 24,
+                }
+            ],
+            calibration_support="empirical_supported",
+            created_at=now,
         )
     )
     observatory_admin.semantic_adjudications.append(
@@ -2857,6 +2920,30 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             decision_family="skill_plan_semantic_adjudication",
             limit=10,
         )
+        calibration_observations = await routes[
+            ("/admin/api/v1/autonomy/calibration/observations", "GET")
+        ].endpoint(
+            workspace_id="dev-01",
+            calibration_family="skill_plan_semantic_adjudication",
+            outcome_status="success",
+            limit=10,
+        )
+        calibration_observation_detail = await routes[
+            (
+                "/admin/api/v1/autonomy/calibration/observations/{observation_id}",
+                "GET",
+            )
+        ].endpoint(observation_id=str(calibration_observation_id))
+        reliability_metrics = await routes[
+            ("/admin/api/v1/autonomy/calibration/metrics", "GET")
+        ].endpoint(
+            workspace_id="dev-01",
+            calibration_family="skill_plan_semantic_adjudication",
+            limit=10,
+        )
+        reliability_metric_detail = await routes[
+            ("/admin/api/v1/autonomy/calibration/metrics/{metric_id}", "GET")
+        ].endpoint(metric_id=str(reliability_metric_id))
         deadlocks = await routes[
             ("/admin/api/v1/autonomy/threshold-deadlocks", "GET")
         ].endpoint(workspace_id="dev-01", limit=10)
@@ -2902,6 +2989,20 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             object_id=str(decision_id),
             workspace_id="dev-01",
         )
+        calibration_object_detail = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="autonomy_calibration_observation",
+            object_id=str(calibration_observation_id),
+            workspace_id="dev-01",
+        )
+        reliability_object_detail = await routes[
+            ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
+        ].endpoint(
+            object_type="autonomy_reliability_metric",
+            object_id=str(reliability_metric_id),
+            workspace_id="dev-01",
+        )
         escalation_object_detail = await routes[
             ("/admin/api/v1/objects/{object_type}/{object_id}", "GET")
         ].endpoint(
@@ -2920,6 +3021,10 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             adjudications,
             adjudication_detail,
             decisions,
+            calibration_observations,
+            calibration_observation_detail,
+            reliability_metrics,
+            reliability_metric_detail,
             deadlocks,
             deadlock_detail,
             decision_detail,
@@ -2929,6 +3034,8 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             adjudication_object_detail,
             fidelity_object_detail,
             deadlock_object_detail,
+            calibration_object_detail,
+            reliability_object_detail,
             escalation_object_detail,
             fidelity_detail,
         )
@@ -2939,6 +3046,10 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
         adjudications,
         adjudication_detail,
         decisions,
+        calibration_observations,
+        calibration_observation_detail,
+        reliability_metrics,
+        reliability_metric_detail,
         deadlocks,
         deadlock_detail,
         decision_detail,
@@ -2948,6 +3059,8 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
         adjudication_object_detail,
         fidelity_object_detail,
         deadlock_object_detail,
+        calibration_object_detail,
+        reliability_object_detail,
         escalation_object_detail,
         fidelity_detail,
     ) = asyncio.run(run())
@@ -2992,6 +3105,38 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
         "object_id": "candidate-1",
         "relationship": "decision_target",
     }
+    calibration_item = calibration_observations.collection["items"][0]
+    assert calibration_observations.collection["diagnostics"][
+        "outcome_payload_returned"
+    ] is False
+    assert calibration_item["selected_action"] == "stage_canary"
+    assert calibration_item["outcome_status"] == "success"
+    assert calibration_item["diagnostics"]["over_deferral_signal"] is True
+    assert calibration_item["read_model"]["outcome_payload_returned"] is False
+    assert calibration_item["content_policy"]["confidence_components_returned"] is False
+    assert calibration_observation_detail.object["object_id"] == str(
+        calibration_observation_id
+    )
+    assert calibration_observation_detail.object["provenance"]["upstream"][0] == {
+        "object_type": "autonomy_decision",
+        "object_id": str(decision_id),
+        "relationship": "calibration_subject",
+    }
+    assert calibration_object_detail.object["object_type"] == (
+        "autonomy_calibration_observation"
+    )
+
+    reliability_item = reliability_metrics.collection["items"][0]
+    assert reliability_metrics.collection["diagnostics"]["raw_outcomes_returned"] is False
+    assert reliability_item["sample_count"] == 31
+    assert reliability_item["calibration_support"] == "empirical_supported"
+    assert reliability_item["diagnostics"]["low_support"] is False
+    assert reliability_item["content_policy"]["individual_observations_returned"] is False
+    assert reliability_metric_detail.object["object_id"] == str(reliability_metric_id)
+    assert reliability_object_detail.object["object_type"] == (
+        "autonomy_reliability_metric"
+    )
+
     assert deadlocks.collection["items"][0]["object_type"] == "threshold_deadlock"
     assert deadlocks.collection["items"][0]["object_id"] == str(decision_id)
     assert deadlock_detail.object["autonomy_decision"]["object_type"] == (
@@ -3030,12 +3175,18 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             raw_vault.collection,
             adjudications.collection,
             decisions.collection,
+            calibration_observations.collection,
+            reliability_metrics.collection,
             escalations.collection,
             adjudication_detail.object,
             decision_detail.object,
+            calibration_observation_detail.object,
+            reliability_metric_detail.object,
             object_detail.object,
             adjudication_object_detail.object,
             fidelity_object_detail.object,
+            calibration_object_detail.object,
+            reliability_object_detail.object,
             escalation_detail.object,
             escalation_object_detail.object,
         ],
@@ -3044,6 +3195,7 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
     assert "raw operator transcript" not in combined
     assert "api-key-secret" not in combined
     assert "verbatim_llm_verdict" not in combined
+    assert "private calibration outcome narrative" not in combined
 
 
 def test_observatory_topology_exposes_operation_metrics_read_model() -> None:

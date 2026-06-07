@@ -6923,6 +6923,200 @@ def create_app(
             },
         }
 
+    def _calibration_observation_microscope(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        outcome_status = str(payload["outcome_status"])
+        upstream: list[dict[str, Any]] = []
+        if payload.get("autonomy_decision_id"):
+            upstream.append(
+                {
+                    "object_type": "autonomy_decision",
+                    "object_id": payload["autonomy_decision_id"],
+                    "relationship": "calibration_subject",
+                }
+            )
+        if payload.get("adjudication_id"):
+            upstream.append(
+                {
+                    "object_type": "semantic_adjudication",
+                    "object_id": payload["adjudication_id"],
+                    "relationship": "semantic_verdict_source",
+                }
+            )
+        if payload.get("model_profile_id"):
+            upstream.append(
+                {
+                    "object_type": "model_profile",
+                    "object_id": payload["model_profile_id"],
+                    "relationship": "profile_under_calibration",
+                }
+            )
+        return {
+            **payload,
+            "schema_version": (
+                "skillkernel.observatory.autonomy-calibration-observation.v1"
+            ),
+            "object_type": "autonomy_calibration_observation",
+            "object_id": str(payload["calibration_observation_id"]),
+            "title": f"Calibration observation {payload['calibration_family']}",
+            "summary": (
+                f"{payload['selected_action']}; outcome={outcome_status}; "
+                f"confidence={payload['predicted_confidence']}"
+            ),
+            "timeline": [
+                {
+                    "at": payload["created_at"],
+                    "event": "calibration_observation_recorded",
+                    "selected_action": payload["selected_action"],
+                    "predicted_confidence": payload["predicted_confidence"],
+                },
+                {
+                    "at": payload["outcome_observed_at"],
+                    "event": "calibration_outcome_recorded",
+                    "outcome_status": outcome_status,
+                },
+            ]
+            if payload.get("outcome_observed_at")
+            else [
+                {
+                    "at": payload["created_at"],
+                    "event": "calibration_observation_recorded",
+                    "selected_action": payload["selected_action"],
+                    "predicted_confidence": payload["predicted_confidence"],
+                }
+            ],
+            "read_model": {
+                "source": "observatory_admin_store.autonomy_calibration_observations",
+                "data_quality": "status-and-outcome-signals",
+                "outcome_payload_returned": False,
+                "confidence_components_returned": False,
+            },
+            "diagnostics": {
+                "calibration_family": payload["calibration_family"],
+                "action_risk_tier": payload["action_risk_tier"],
+                "selected_action": payload["selected_action"],
+                "outcome_status": outcome_status,
+                "predicted_confidence": payload["predicted_confidence"],
+                "outcome_pending": outcome_status in {"pending", "unknown"},
+                "over_action_signal": payload["outcome_signals"].get("false_accept")
+                is True,
+                "over_deferral_signal": (
+                    payload["outcome_signals"].get("false_reject") is True
+                    or payload["outcome_signals"].get("unnecessary_abstention") is True
+                ),
+                "harm_signal": payload["outcome_signals"].get("harm_finding") is True,
+                "safe_next_views": [
+                    "autonomy_decisions",
+                    "semantic_adjudications",
+                    "autonomy_reliability_metrics",
+                ],
+            },
+            "provenance": {
+                "upstream": upstream,
+                "downstream": [
+                    {
+                        "object_type": "autonomy_reliability_metric",
+                        "object_id": payload["calibration_family"],
+                        "relationship": "family_reliability_rollup",
+                    }
+                ],
+            },
+            "effects": {
+                "updates_soft_threshold_calibration": True,
+                "hard_invariants_can_be_relaxed": False,
+                "mutates_runtime": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "calibration-observation-status-only",
+                "redaction_state": "outcome_payload_omitted",
+                "outcome_payload_returned": False,
+                "confidence_components_returned": False,
+            },
+        }
+
+    def _reliability_metric_microscope(record: Any) -> dict[str, Any]:
+        payload = record.to_json()
+        return {
+            **payload,
+            "schema_version": (
+                "skillkernel.observatory.autonomy-reliability-metric.v1"
+            ),
+            "object_type": "autonomy_reliability_metric",
+            "object_id": str(payload["reliability_metric_id"]),
+            "title": f"Autonomy reliability {payload['calibration_family']}",
+            "summary": (
+                f"{payload['sample_count']} samples; "
+                f"support={payload['calibration_support']}"
+            ),
+            "timeline": [
+                {
+                    "at": payload["window"]["start"],
+                    "event": "reliability_window_started",
+                    "calibration_family": payload["calibration_family"],
+                },
+                {
+                    "at": payload["window"]["end"],
+                    "event": "reliability_metric_refreshed",
+                    "sample_count": payload["sample_count"],
+                    "calibration_support": payload["calibration_support"],
+                },
+            ],
+            "read_model": {
+                "source": "observatory_admin_store.autonomy_reliability_metrics",
+                "data_quality": "aggregate-calibration-metrics",
+                "raw_outcomes_returned": False,
+                "individual_observations_returned": False,
+            },
+            "diagnostics": {
+                "calibration_family": payload["calibration_family"],
+                "calibration_support": payload["calibration_support"],
+                "sample_count": payload["sample_count"],
+                "coverage_rate": payload["coverage_rate"],
+                "abstention_rate": payload["abstention_rate"],
+                "false_accept_rate": payload["false_accept_rate"],
+                "false_reject_rate": payload["false_reject_rate"],
+                "unnecessary_abstention_rate": payload[
+                    "unnecessary_abstention_rate"
+                ],
+                "low_support": payload["calibration_support"]
+                in {"none", "empirical_low_support", "stale"},
+                "safe_next_views": [
+                    "autonomy_calibration_observations",
+                    "autonomy_decisions",
+                    "threshold_policies",
+                ],
+            },
+            "provenance": {
+                "upstream": [
+                    {
+                        "object_type": "autonomy_calibration_observation",
+                        "object_id": payload["calibration_family"],
+                        "relationship": "family_observation_rollup",
+                    }
+                ],
+                "downstream": [
+                    {
+                        "object_type": "threshold_policy",
+                        "object_id": payload["calibration_family"],
+                        "relationship": "soft_policy_calibration_input",
+                    }
+                ],
+            },
+            "effects": {
+                "can_adjust_soft_thresholds": True,
+                "hard_invariants_can_be_relaxed": False,
+                "mutates_runtime": False,
+            },
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "aggregate-reliability-metric",
+                "redaction_state": "aggregate_status",
+                "raw_outcomes_returned": False,
+                "individual_observations_returned": False,
+            },
+        }
+
     def _threshold_deadlock_payload(record: Any) -> dict[str, Any]:
         decision = _autonomy_decision_microscope(record)
         return {
@@ -11002,6 +11196,119 @@ def create_app(
         return ObservatoryObjectResponse(object=_autonomy_decision_microscope(record))
 
     @app.get(
+        "/admin/api/v1/autonomy/calibration/observations",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_autonomy_calibration_observations(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        calibration_family: str | None = None,
+        outcome_status: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        records = await observatory_admin.list_autonomy_calibration_observations(
+            workspace_key=workspace_id,
+            calibration_family=calibration_family,
+            outcome_status=outcome_status,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="autonomy_calibration_observation",
+            title="Autonomy calibration observations",
+            items=[_calibration_observation_microscope(record) for record in records],
+            limit=limit,
+            cursor=cursor,
+            source="observatory_admin_store.list_autonomy_calibration_observations",
+            diagnostics={
+                "supporting_component": "autonomy_orchestrator",
+                "calibration_family": calibration_family,
+                "outcome_status": outcome_status,
+                "outcome_payload_returned": False,
+                "confidence_components_returned": False,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/autonomy/calibration/observations/{observation_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_autonomy_calibration_observation_detail(
+        observation_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_id = _uuid_or_404(observation_id, "calibration observation")
+        record = await observatory_admin.get_autonomy_calibration_observation(
+            calibration_observation_id=parsed_id,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="calibration observation not found",
+            )
+        return ObservatoryObjectResponse(
+            object=_calibration_observation_microscope(record)
+        )
+
+    @app.get(
+        "/admin/api/v1/autonomy/calibration/metrics",
+        response_model=ObservatoryCollectionResponse,
+    )
+    async def observatory_autonomy_reliability_metrics(
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+        workspace_id: str | None = None,
+        calibration_family: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ObservatoryCollectionResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        records = await observatory_admin.list_autonomy_reliability_metrics(
+            workspace_key=workspace_id,
+            calibration_family=calibration_family,
+            limit=500,
+        )
+        return _observatory_collection(
+            object_type="autonomy_reliability_metric",
+            title="Autonomy reliability metrics",
+            items=[_reliability_metric_microscope(record) for record in records],
+            limit=limit,
+            cursor=cursor,
+            source="observatory_admin_store.list_autonomy_reliability_metrics",
+            diagnostics={
+                "supporting_component": "autonomy_orchestrator",
+                "calibration_family": calibration_family,
+                "raw_outcomes_returned": False,
+                "hard_invariant_relaxation_allowed": False,
+            },
+        )
+
+    @app.get(
+        "/admin/api/v1/autonomy/calibration/metrics/{metric_id}",
+        response_model=ObservatoryObjectResponse,
+    )
+    async def observatory_autonomy_reliability_metric_detail(
+        metric_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+        x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
+    ) -> ObservatoryObjectResponse:
+        _require_admin_auth(authorization, x_skillkernel_roles)
+        parsed_id = _uuid_or_404(metric_id, "reliability metric")
+        record = await observatory_admin.get_autonomy_reliability_metric(
+            reliability_metric_id=parsed_id,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="reliability metric not found",
+            )
+        return ObservatoryObjectResponse(object=_reliability_metric_microscope(record))
+
+    @app.get(
         "/admin/api/v1/autonomy/threshold-deadlocks",
         response_model=ObservatoryCollectionResponse,
     )
@@ -11351,6 +11658,32 @@ def create_app(
             if decision is not None:
                 return ObservatoryObjectResponse(
                     object=_autonomy_decision_microscope(decision)
+                )
+        if object_type in {
+            "autonomy_calibration_observation",
+            "calibration_observation",
+            "autonomy-calibration-observation",
+        }:
+            observation_id = _uuid_or_404(object_id, "calibration observation")
+            observation = await observatory_admin.get_autonomy_calibration_observation(
+                calibration_observation_id=observation_id,
+            )
+            if observation is not None:
+                return ObservatoryObjectResponse(
+                    object=_calibration_observation_microscope(observation)
+                )
+        if object_type in {
+            "autonomy_reliability_metric",
+            "reliability_metric",
+            "autonomy-reliability-metric",
+        }:
+            metric_id = _uuid_or_404(object_id, "reliability metric")
+            metric = await observatory_admin.get_autonomy_reliability_metric(
+                reliability_metric_id=metric_id,
+            )
+            if metric is not None:
+                return ObservatoryObjectResponse(
+                    object=_reliability_metric_microscope(metric)
                 )
         if object_type in {"threshold_deadlock", "threshold-deadlock"}:
             decision_id = _uuid_or_404(object_id, "threshold deadlock")
