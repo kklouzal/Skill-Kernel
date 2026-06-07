@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from autoskill.api.app import create_app
 from autoskill.core.config import get_settings
+from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.memory import NullMemoryGovernanceStore
 from autoskill.db.profiles import ModelProfileRecord
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalResult
@@ -322,6 +323,53 @@ def test_context_broker_renders_scanned_skill_candidates() -> None:
     assert context.ledgers[0]["metadata"]["bundle_scan"]["bundle_hash"] == (
         bundle_scan["bundle_hash"]
     )
+
+
+def test_context_broker_records_broker_decision_calibration_observation() -> None:
+    skill_id = uuid4()
+    store = MemoryBrokerRetrievalStore(
+        [
+            RetrievalCandidate(
+                object_type="body_index_document",
+                object_id=uuid4(),
+                skill_id=skill_id,
+                summary="WHEN incident logs need triage, use the incident response skill.",
+                rank=0.91,
+                metadata={
+                    "secret_scan_status": "passed",
+                    "lifecycle_state": "active",
+                    "slug": "incident-response",
+                },
+            )
+        ]
+    )
+    autonomy = NullAutonomyControlStore()
+
+    async def run():
+        return await build_context_hint(
+            store,
+            ContextHintRequest(
+                workspace_id="dev-01",
+                user_intent="triage incident logs",
+                max_tokens=120,
+            ),
+            autonomy=autonomy,
+        )
+
+    response = asyncio.run(run())
+
+    assert response.decision == "skill_hint"
+    assert len(autonomy.calibration_observations) == 1
+    observation = autonomy.calibration_observations[0]
+    assert observation.calibration_family == "broker_decision_adjudication"
+    assert observation.selected_action == "skill_hint"
+    assert observation.action_risk_tier == "T1_internal_record"
+    assert observation.outcome_status == "pending"
+    assert observation.predicted_confidence > 0.7
+    assert autonomy.reliability_metrics[-1].calibration_family == (
+        "broker_decision_adjudication"
+    )
+    assert autonomy.reliability_metrics[-1].sample_count == 1
 
 
 def test_context_broker_suppresses_ephemeral_candidates_from_runtime_context() -> None:

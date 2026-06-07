@@ -16,6 +16,37 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Runtime broker decisions now feed the generic semantic
+  calibration corpus instead of leaving `broker_decision_adjudication` as a
+  read-model-only family. `build_context_hint` accepts the existing
+  `AutonomyControlStore` seam and records a pending, content-safe
+  `broker_decision_adjudication` calibration observation for each non-cached
+  broker decision persisted through retrieval logging, including selected
+  action (`skill_hint`, `defer_skill`, or `no_skill`), deterministic confidence,
+  broker policy refs, retrieval-log ref, candidate/rendered/suppressed counts,
+  reason codes, and bundle-scan status. The Core context-hint route passes the
+  already-owned autonomy control store through, preserving runtime broker
+  authority, cache behavior, redaction boundaries, and no live runtime skill
+  writes. This advances unified autonomy Sections 5.5, 5.12, 5.13, and 5.14,
+  Part IV semantic decision-family coverage for broker adjudication, and
+  production criteria 31.58/31.63 by turning broker routing choices into
+  calibration observations visible through the existing Observatory calibration
+  surfaces. Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_broker.py -q -k "calibration or
+  context_broker_renders"` (`2 passed, 22 deselected`) and touched-file Ruff.
+  Required gates passed with `uv run ruff check sidecar`, `uv run pytest`
+  (`459 passed`), `uv run python -m compileall -q sidecar`, and `git diff
+  --check`. Report gates passed with core acceptance (`ready=true`, `63`
+  production criteria, `7` context criteria), Observatory acceptance
+  (`ready=true`, `42` acceptance criteria, `44` developer checklist items),
+  conformance (`ready=true`, `23/23`), readiness (`ready=true`, `17`
+  checklist items), and handoff governance (`35` risks mitigated, `79`
+  satisfied). A Dev-01 Postgres smoke inserted a throwaway
+  `cron-broker-calibration-smoke-*` workspace through the broker path backed by
+  `AsyncpgAutonomyControlStore`, verified `decision=skill_hint`,
+  `sample_count=1`, `coverage_rate=0.0`, `abstention_rate=0.0`, and
+  `calibration_support=empirical_low_support`, then deleted the smoke
+  workspace plus calibration rows.
 - 2026-06-07: Proposal-gate autonomy adjudication now consumes the latest
   calibration reliability metric for `skill_plan_semantic_adjudication` before
   asking the LLM to choose a soft-threshold fallback. `AutonomyControlStore`

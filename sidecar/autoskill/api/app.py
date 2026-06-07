@@ -4529,6 +4529,7 @@ def create_app(
             cache=broker_cache,
             context_governance=context_governance,
             compatibility=compatibility,
+            autonomy=autonomy_control,
             semantic_embedder=semantic_embedder,
             semantic_embedding_profile_id=semantic_profile_id,
             policy=policy,

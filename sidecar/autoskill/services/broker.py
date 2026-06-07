@@ -8,6 +8,7 @@ from uuid import UUID
 
 from autoskill.core.enums import RUNTIME_VISIBLE_LIFECYCLE_STATES, LifecycleState
 from autoskill.core.hashing import sha256_json
+from autoskill.db.autonomy import AutonomyControlStore
 from autoskill.db.compatibility import CompatibilityStore
 from autoskill.db.context import ContextGovernanceStore
 from autoskill.db.memory import MemoryGovernanceStore
@@ -253,6 +254,7 @@ async def build_context_hint(
     context_governance: ContextGovernanceStore | None = None,
     memory_governance: MemoryGovernanceStore | None = None,
     compatibility: CompatibilityStore | None = None,
+    autonomy: AutonomyControlStore | None = None,
     semantic_embedder: TextEmbedder | None = None,
     semantic_embedding_profile_id: UUID | None = None,
     policy: BrokerPolicy | None = None,
@@ -312,6 +314,12 @@ async def build_context_hint(
             reason_codes=["retrieval-empty"],
         )
         await _record_context_hint(retrieval, result.retrieval_log_id, response)
+        await _record_broker_calibration(
+            autonomy,
+            request,
+            response,
+            candidate_count=0,
+        )
         await _record_context_governance(context_governance, request, response)
         await _record_memory_influence(memory_governance, request, response)
         if cache is not None:
@@ -343,6 +351,12 @@ async def build_context_hint(
             reason_codes=_reason_codes(suppressed, archive_promotion_skill_ids),
         )
         await _record_context_hint(retrieval, result.retrieval_log_id, response)
+        await _record_broker_calibration(
+            autonomy,
+            request,
+            response,
+            candidate_count=len(candidates),
+        )
         await _record_context_governance(context_governance, request, response)
         await _record_memory_influence(memory_governance, request, response)
         if cache is not None:
@@ -377,6 +391,12 @@ async def build_context_hint(
             bundle_scan=bundle_scan,
         )
         await _record_context_hint(retrieval, result.retrieval_log_id, response)
+        await _record_broker_calibration(
+            autonomy,
+            request,
+            response,
+            candidate_count=len(candidates),
+        )
         await _record_context_governance(context_governance, request, response)
         await _record_memory_influence(memory_governance, request, response)
         if cache is not None:
@@ -396,6 +416,12 @@ async def build_context_hint(
         bundle_scan=bundle_scan,
     )
     await _record_context_hint(retrieval, result.retrieval_log_id, response)
+    await _record_broker_calibration(
+        autonomy,
+        request,
+        response,
+        candidate_count=len(candidates),
+    )
     await _record_context_governance(context_governance, request, response)
     await _record_memory_influence(memory_governance, request, response)
     if cache is not None:
@@ -837,6 +863,72 @@ async def _record_context_hint(
         if response.broker_policy_version_id
         else None,
     )
+
+
+async def _record_broker_calibration(
+    autonomy: AutonomyControlStore | None,
+    request: ContextHintRequest,
+    response: ContextHintResponse,
+    *,
+    candidate_count: int,
+) -> None:
+    if autonomy is None:
+        return
+    await autonomy.record_calibration_observation(
+        workspace_key=request.workspace_id,
+        calibration_family="broker_decision_adjudication",
+        selected_action=response.decision,
+        predicted_confidence=_broker_decision_confidence(
+            response,
+            candidate_count=candidate_count,
+        ),
+        confidence_components={
+            "schema": "autoskill.broker-decision-calibration-components.v1",
+            "broker_policy_version": response.broker_policy_version,
+            "broker_policy_version_id": response.broker_policy_version_id,
+            "retrieval_log_id": response.retrieval_log_id,
+            "cache_status": response.cache_status,
+            "candidate_count": max(0, candidate_count),
+            "rendered_skill_count": len(response.skill_ids),
+            "suppressed_count": len(response.suppressed),
+            "archive_promotion_candidate_count": len(
+                response.archive_promotion_skill_ids
+            ),
+            "reason_codes": response.reason_codes,
+            "bundle_scan_status": response.bundle_scan.get("status")
+            if response.bundle_scan
+            else None,
+            "bundle_scan_blocking": response.bundle_scan.get("blocking")
+            if response.bundle_scan
+            else None,
+        },
+        action_risk_tier="T1_internal_record",
+        outcome_status="pending",
+    )
+
+
+def _broker_decision_confidence(
+    response: ContextHintResponse,
+    *,
+    candidate_count: int,
+) -> float:
+    if response.decision == "skill_hint":
+        score = 0.78
+    elif response.decision == "defer_skill":
+        score = 0.58
+    elif response.decision == "no_skill":
+        score = 0.64 if candidate_count == 0 else 0.52
+    else:
+        score = 0.5
+    if response.bundle_scan.get("status") == "passed":
+        score += 0.04
+    if response.bundle_scan.get("blocking"):
+        score -= 0.12
+    if response.reason_codes:
+        score -= min(0.12, 0.02 * len(response.reason_codes))
+    if response.skill_ids:
+        score += min(0.08, 0.02 * len(response.skill_ids))
+    return round(max(0.0, min(1.0, score)), 4)
 
 
 async def _record_context_governance(
