@@ -4,7 +4,9 @@ import json
 from dataclasses import dataclass
 from math import isfinite, sqrt
 from typing import Any
+from uuid import UUID
 
+from autoskill.db.autonomy import AutonomyControlStore
 from autoskill.db.profile_qualifications import (
     EmbeddingProfileQualificationRunRecord,
     ModelProfileQualificationRunRecord,
@@ -47,6 +49,7 @@ async def qualify_text_profile(
     *,
     profiles: ProfileStore,
     qualifications: ProfileQualificationStore,
+    autonomy: AutonomyControlStore | None = None,
     llm_client: LLMClient,
     workspace_key: str,
     profile_key: str,
@@ -124,6 +127,21 @@ async def qualify_text_profile(
         verdict=verdict,  # type: ignore[arg-type]
         probe_results=probe_results,
     )
+    await _record_profile_qualification_calibration(
+        autonomy,
+        workspace_key=workspace_key,
+        calibration_family="model_profile_qualification",
+        profile_kind="model",
+        profile_id=profile.profile_id,
+        profile_key=profile.profile_key,
+        route_kind=profile.route_kind,
+        provider=profile.provider,
+        model=profile.model,
+        probe_set_version=probe_set_version,
+        verdict=run.verdict,
+        probe_results=run.probe_results,
+        qualification_run_id=run.model_profile_qualification_run_id,
+    )
     return TextProfileQualificationResult(run=run)
 
 
@@ -131,6 +149,7 @@ async def qualify_embedding_profile(
     *,
     profiles: ProfileStore,
     qualifications: ProfileQualificationStore,
+    autonomy: AutonomyControlStore | None = None,
     workspace_key: str,
     profile_key: str,
     probe_set_version: str = EMBEDDING_PROFILE_PROBE_SET_VERSION,
@@ -213,7 +232,93 @@ async def qualify_embedding_profile(
         verdict=verdict,  # type: ignore[arg-type]
         probe_results=probe_results,
     )
+    await _record_profile_qualification_calibration(
+        autonomy,
+        workspace_key=workspace_key,
+        calibration_family="embedding_profile_qualification",
+        profile_kind="embedding",
+        profile_id=profile.profile_id,
+        profile_key=profile.profile_key,
+        route_kind=profile.route_kind,
+        provider=profile.provider,
+        model=profile.model,
+        probe_set_version=probe_set_version,
+        verdict=run.verdict,
+        probe_results=run.probe_results,
+        qualification_run_id=run.embedding_profile_qualification_run_id,
+    )
     return EmbeddingProfileQualificationResult(run=run)
+
+
+async def _record_profile_qualification_calibration(
+    autonomy: AutonomyControlStore | None,
+    *,
+    workspace_key: str,
+    calibration_family: str,
+    profile_kind: str,
+    profile_id: UUID,
+    profile_key: str,
+    route_kind: str,
+    provider: str,
+    model: str,
+    probe_set_version: str,
+    verdict: str,
+    probe_results: dict[str, Any],
+    qualification_run_id: UUID,
+) -> None:
+    if autonomy is None:
+        return
+    checks = _qualification_checks(probe_results)
+    passed_checks = sum(1 for passed in checks.values() if passed)
+    total_checks = len(checks)
+    confidence = passed_checks / total_checks if total_checks else 0.0
+    await autonomy.record_calibration_observation(
+        workspace_key=workspace_key,
+        calibration_family=calibration_family,
+        selected_action=_qualification_calibration_action(profile_kind, verdict),
+        predicted_confidence=confidence,
+        confidence_components={
+            "schema": "autoskill.profile-qualification-calibration-components.v1",
+            "profile_kind": profile_kind,
+            "profile_id": str(profile_id),
+            "profile_key": profile_key,
+            "route_kind": route_kind,
+            "provider": provider,
+            "model": model,
+            "probe_set_version": probe_set_version,
+            "qualification_run_id": str(qualification_run_id),
+            "verdict": verdict,
+            "checks": checks,
+            "passed_check_count": passed_checks,
+            "total_check_count": total_checks,
+            "reason_code": probe_results.get("reason_code"),
+            "raw_error_returned": False,
+            "runtime_write_authority": False,
+            "profile_activation_authority": False,
+        },
+        action_risk_tier="T1_internal_record",
+        model_profile_id=profile_id if profile_kind == "model" else None,
+        outcome_status="pending",
+    )
+
+
+def _qualification_checks(probe_results: dict[str, Any]) -> dict[str, bool]:
+    checks = probe_results.get("checks")
+    if not isinstance(checks, dict):
+        return {}
+    return {str(key): bool(value) for key, value in checks.items()}
+
+
+def _qualification_calibration_action(profile_kind: str, verdict: str) -> str:
+    if profile_kind == "model" and verdict in {
+        "qualified_autonomous",
+        "qualified_propose_only",
+        "qualified_classify",
+    }:
+        return "accept_model_profile_qualification"
+    if profile_kind == "embedding" and verdict == "qualified":
+        return "accept_embedding_profile_qualification"
+    return "auto_reject"
 
 
 def _embedder_for_profile(

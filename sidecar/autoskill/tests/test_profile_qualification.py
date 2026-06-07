@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from autoskill.api.app import ProfileQualificationRunRequest, create_app
 from autoskill.core.config import get_settings
+from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.llm_invocations import LLMInvocationRecord
 from autoskill.db.profile_qualifications import NullProfileQualificationStore
 from autoskill.db.profiles import ModelProfileRecord
@@ -144,6 +145,34 @@ def test_text_profile_qualification_records_autonomous_verdict() -> None:
     assert qualifications.model_runs[0] == result.run
 
 
+def test_text_profile_qualification_records_calibration_observation() -> None:
+    qualifications = NullProfileQualificationStore()
+    autonomy = NullAutonomyControlStore()
+
+    async def run():
+        return await qualify_text_profile(
+            profiles=MemoryProfileStore(model_profile=_model_profile()),
+            qualifications=qualifications,
+            autonomy=autonomy,
+            llm_client=FakeLLMClient(),
+            workspace_key="dev-01",
+            profile_key="default-model",
+        )
+
+    result = asyncio.run(run())
+
+    observation = autonomy.calibration_observations[0]
+    assert observation.calibration_family == "model_profile_qualification"
+    assert observation.selected_action == "accept_model_profile_qualification"
+    assert observation.action_risk_tier == "T1_internal_record"
+    assert observation.predicted_confidence == 1.0
+    assert observation.outcome_status == "pending"
+    assert autonomy.reliability_metrics[-1].calibration_family == (
+        "model_profile_qualification"
+    )
+    assert qualifications.model_runs[0] == result.run
+
+
 def test_hash_embedding_profile_qualification_records_dimension_and_stability() -> None:
     qualifications = NullProfileQualificationStore()
 
@@ -163,6 +192,32 @@ def test_hash_embedding_profile_qualification_records_dimension_and_stability() 
     assert result.run.probe_results["checks"]["route_supported"] is False
     assert result.run.probe_results["checks"]["dimension_matches"] is True
     assert qualifications.embedding_runs[0] == result.run
+
+
+def test_failed_embedding_profile_qualification_records_calibration_rejection() -> None:
+    qualifications = NullProfileQualificationStore()
+    autonomy = NullAutonomyControlStore()
+
+    async def run():
+        return await qualify_embedding_profile(
+            profiles=MemoryProfileStore(embedding_profile=_model_profile(kind="embedding")),
+            qualifications=qualifications,
+            autonomy=autonomy,
+            workspace_key="dev-01",
+            profile_key="default-embedding",
+        )
+
+    result = asyncio.run(run())
+
+    observation = autonomy.calibration_observations[0]
+    assert result.run.verdict == "failed"
+    assert observation.calibration_family == "embedding_profile_qualification"
+    assert observation.selected_action == "auto_reject"
+    assert observation.action_risk_tier == "T1_internal_record"
+    assert 0.0 < observation.predicted_confidence < 1.0
+    metric = autonomy.reliability_metrics[-1]
+    assert metric.calibration_family == "embedding_profile_qualification"
+    assert metric.abstention_rate == 1.0
 
 
 def test_openai_compatible_embedding_profile_qualification_probes_provider(
@@ -239,6 +294,7 @@ def test_openai_compatible_embedding_profile_qualification_probes_provider(
 
 def test_profile_qualification_api_routes_to_text_and_embedding_services(monkeypatch) -> None:
     qualifications = NullProfileQualificationStore()
+    autonomy = NullAutonomyControlStore()
     monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
     monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
     get_settings.cache_clear()
@@ -274,6 +330,7 @@ def test_profile_qualification_api_routes_to_text_and_embedding_services(monkeyp
             ),
         ),
         profile_qualification_store=qualifications,
+        autonomy_control_store=autonomy,
         llm_client=FakeLLMClient(),
     )
     routes = {(route.path, next(iter(route.methods))): route for route in app.routes}
@@ -299,3 +356,6 @@ def test_profile_qualification_api_routes_to_text_and_embedding_services(monkeyp
     assert embedding.run["verdict"] == "qualified"
     assert len(qualifications.model_runs) == 1
     assert len(qualifications.embedding_runs) == 1
+    assert [
+        observation.calibration_family for observation in autonomy.calibration_observations
+    ] == ["model_profile_qualification", "embedding_profile_qualification"]

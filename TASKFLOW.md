@@ -16,6 +16,38 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Model and embedding profile qualification now feeds the generic
+  autonomy calibration corpus instead of leaving qualification verdicts only in
+  isolated run records. The text and embedding qualification services accept
+  the existing autonomy control store and record content-safe pending
+  observations for `model_profile_qualification` and
+  `embedding_profile_qualification` after qualification rows are persisted.
+  Successful text verdicts record `accept_model_profile_qualification`;
+  successful embedding verdicts record
+  `accept_embedding_profile_qualification`; failed verdicts record defensive
+  `auto_reject` evidence. Confidence components include profile IDs/keys,
+  route/provider/model identifiers, probe-set version, qualification run ID,
+  verdict, check names/results, pass counts, optional reason code, and explicit
+  `raw_error_returned=false`, `runtime_write_authority=false`, and
+  `profile_activation_authority=false`, without endpoint refs, raw errors,
+  prompts, embeddings, or secrets. This advances unified Sections 3.3, 5.3,
+  5.4, 5.5, 5.9, 5.12, 5.13, and 5.14 by making profile gate quality visible
+  to calibration/read-model surfaces while preserving deterministic
+  qualification authority and adding no profile activation, runtime skill
+  writes, or autonomous apply authority. Focused validation passed with `uv run
+  pytest sidecar/autoskill/tests/test_profile_qualification.py -q` (`6
+  passed`) and touched-file Ruff. Required gates passed with `uv run ruff check
+  sidecar`, `uv run pytest` (`465 passed`), `uv run python -m compileall -q
+  sidecar`, `docker compose config --quiet`, and `git diff --check`. A Dev-01
+  Postgres smoke inserted a throwaway
+  `cron-profile-qualification-calibration-smoke-*` workspace through
+  `AsyncpgProfileStore`, `AsyncpgProfileQualificationStore`, and
+  `AsyncpgAutonomyControlStore`, verified
+  `family=model_profile_qualification`,
+  `action=accept_model_profile_qualification`, `risk=T1_internal_record`,
+  `confidence=1.0`, `sample_count=1`, `support=empirical_low_support`,
+  `profile_status=qualified`, then cleaned up and verified
+  `cleanup_remaining_workspaces=0`.
 - 2026-06-07: Repair execution triage now feeds the generic semantic
   calibration corpus for the `freeze_repair_triage` family instead of leaving
   freeze/repair routing decisions outside autonomy reliability metrics. The

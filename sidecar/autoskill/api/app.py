@@ -14667,6 +14667,7 @@ def create_app(
             result = await qualify_text_profile(
                 profiles=profiles,
                 qualifications=profile_qualifications,
+                autonomy=autonomy_control,
                 llm_client=text_llm,
                 workspace_key=request.workspace_id,
                 profile_key=request.profile_key,
@@ -14692,6 +14693,7 @@ def create_app(
             result = await qualify_embedding_profile(
                 profiles=profiles,
                 qualifications=profile_qualifications,
+                autonomy=autonomy_control,
                 workspace_key=request.workspace_id,
                 profile_key=request.profile_key,
                 probe_set_version=request.probe_set_version

@@ -3,6 +3,35 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: model and embedding profile qualification now writes pending
+calibration observations for the `model_profile_qualification` and
+`embedding_profile_qualification` families. After a text or embedding
+qualification run is persisted, the service records a content-safe observation
+through the existing autonomy control store. Successful text verdicts record
+`accept_model_profile_qualification`; successful embedding verdicts record
+`accept_embedding_profile_qualification`; failed verdicts record `auto_reject`.
+The calibration payload includes profile IDs/keys, route/provider/model
+identifiers, probe-set version, qualification run ID, verdict, check
+names/results, pass counts, optional reason code, and explicit
+`raw_error_returned=false`, `runtime_write_authority=false`, and
+`profile_activation_authority=false`; it omits endpoint refs, raw errors,
+prompts, embeddings, and secrets. This advances Sections 3.3, 5.3, 5.4, 5.5,
+5.9, 5.12, 5.13, and 5.14 while preserving deterministic qualification
+authority and adding no profile activation, runtime skill writes, or autonomous
+apply authority. Focused validation passed with `uv run pytest
+sidecar/autoskill/tests/test_profile_qualification.py -q` (`6 passed`) and
+touched-file Ruff. Required gates passed with `uv run ruff check sidecar`, `uv
+run pytest` (`465 passed`), `uv run python -m compileall -q sidecar`, `docker
+compose config --quiet`, and `git diff --check`. A Dev-01 Postgres smoke used
+`AsyncpgProfileStore`, `AsyncpgProfileQualificationStore`, and
+`AsyncpgAutonomyControlStore` to qualify a throwaway
+`cron-profile-qualification-calibration-smoke-*` text profile, verified
+`family=model_profile_qualification`,
+`action=accept_model_profile_qualification`, `risk=T1_internal_record`,
+`confidence=1.0`, `sample_count=1`, `support=empirical_low_support`,
+`profile_status=qualified`, then cleaned up with
+`cleanup_remaining_workspaces=0`.
+
 2026-06-07 update: repair execution triage now writes pending calibration
 observations for the `freeze_repair_triage` semantic family. After each
 `repair.execute` source finishes completion bookkeeping, the worker records a
