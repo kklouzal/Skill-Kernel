@@ -16,6 +16,25 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-06: Activation readiness now consumes the Autonomy Decision
+  Orchestrator action required by the unified specification before writer or
+  topology activation can proceed. API and worker activation checks require a
+  latest admissible autonomy action of `auto_accept` or `stage_canary`; a
+  `stage_canary` decision can unblock only the soft proposal-gate
+  `needs_intervention` stall caused by missing skill-visible/no-skill evidence,
+  while scanner failures, hard evaluator failures, failed context proof,
+  profile incompatibility, and missing/unsupported autonomy decisions still
+  fail closed. Activation readiness read models now expose the selected
+  autonomy action and decision ID so Observatory/operator surfaces can explain
+  whether a stalled candidate is blocked by hard gates or admitted only as a
+  bounded canary path. This advances Part I Sections 5.1-5.3, 5.10-5.12, 17.6,
+  production criterion 31.55, and soak-test closure criterion 5 by connecting
+  LLM/autonomy fallback results to deterministic activation admission without
+  mutating live runtime skills or bypassing rollback/context gates. Focused
+  validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_activation_gate.py -q` (`5 passed`), writer/API
+  activation regressions, topology activation regressions, evaluator fallback
+  regressions, and touched-file Ruff.
 - 2026-06-06: Direct `repair.execute` writer-apply repair payloads now require
   a concrete skill-version anchor before the worker can queue runtime artifact
   mutation. `_writer_apply_payload_for_repair()` admits a policy-approved

@@ -3,6 +3,16 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-06 update: activation readiness now requires the selected Autonomous
+Decision Orchestrator action for writer and topology activation checks. The
+deterministic gate accepts only `auto_accept` or `stage_canary`; `stage_canary`
+can clear the soft proposal-gate `needs_intervention` stall for bounded canary
+admission, but hard scanner/evaluator/context/profile failures and missing
+autonomy decisions still block activation. This advances Sections 5.1-5.3,
+5.10-5.12, and 17.6 by connecting semantic fallback results to activation
+authority without granting the LLM direct write authority or mutating live
+runtime skills during this implementation slice.
+
 2026-06-06 update: `repair.execute` now fails closed for direct policy-approved
 writer-apply repair payloads unless the repair is anchored to a concrete
 `skill_version_id` for the affected repair source. Direct drift/curation repair

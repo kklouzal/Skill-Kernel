@@ -2601,6 +2601,7 @@ async def _check_writer_activation_gate(
             context_gate,
             "context_output_manifest_hash",
         ),
+        allowed_autonomy_actions=("auto_accept", "stage_canary"),
     )
     if not readiness.allowed:
         raise ValueError(

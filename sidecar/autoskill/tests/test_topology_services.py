@@ -70,6 +70,7 @@ class MemoryTopologyActivationGate:
         context_artifact_id=None,
         compiled_text_hash=None,
         context_output_manifest_hash=None,
+        allowed_autonomy_actions=None,
     ) -> ActivationReadiness:
         self.calls.append(
             {
@@ -77,6 +78,7 @@ class MemoryTopologyActivationGate:
                 "skill_version_id": skill_version_id,
                 "executor_profile_id": executor_profile_id,
                 "require_context_compile_proof": require_context_compile_proof,
+                "allowed_autonomy_actions": allowed_autonomy_actions,
             }
         )
         return ActivationReadiness(
@@ -94,6 +96,8 @@ class MemoryTopologyActivationGate:
             context_equivalence_status="passed" if self.allowed else "failed",
             context_budget_status="passed" if self.allowed else "over_budget",
             blockers=[] if self.allowed else ["not ready"],
+            autonomy_action="auto_accept" if allowed_autonomy_actions else None,
+            autonomy_action_required=bool(allowed_autonomy_actions),
         )
 
 

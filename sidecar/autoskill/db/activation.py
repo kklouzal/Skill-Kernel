@@ -26,6 +26,9 @@ class ActivationReadiness:
     context_equivalence_status: str | None
     context_budget_status: str | None
     blockers: list[str]
+    autonomy_action: str | None = None
+    autonomy_decision_id: str | None = None
+    autonomy_action_required: bool = False
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -49,6 +52,9 @@ class ActivationReadiness:
             "context_equivalence_status": self.context_equivalence_status,
             "context_budget_status": self.context_budget_status,
             "blockers": self.blockers,
+            "autonomy_action": self.autonomy_action,
+            "autonomy_decision_id": self.autonomy_decision_id,
+            "autonomy_action_required": self.autonomy_action_required,
         }
 
 
@@ -64,6 +70,7 @@ class ActivationGateStore(Protocol):
         context_artifact_id: UUID | None = None,
         compiled_text_hash: str | None = None,
         context_output_manifest_hash: str | None = None,
+        allowed_autonomy_actions: tuple[str, ...] | None = None,
     ) -> ActivationReadiness:
         """Return deterministic activation readiness for a staged skill version."""
 
@@ -80,6 +87,7 @@ class NullActivationGateStore:
         context_artifact_id: UUID | None = None,
         compiled_text_hash: str | None = None,
         context_output_manifest_hash: str | None = None,
+        allowed_autonomy_actions: tuple[str, ...] | None = None,
     ) -> ActivationReadiness:
         return ActivationReadiness(
             allowed=True,
@@ -96,6 +104,8 @@ class NullActivationGateStore:
             context_equivalence_status="passed",
             context_budget_status="passed",
             blockers=[],
+            autonomy_action="auto_accept" if allowed_autonomy_actions else None,
+            autonomy_action_required=bool(allowed_autonomy_actions),
         )
 
 
@@ -111,6 +121,7 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
         context_artifact_id: UUID | None = None,
         compiled_text_hash: str | None = None,
         context_output_manifest_hash: str | None = None,
+        allowed_autonomy_actions: tuple[str, ...] | None = None,
     ) -> ActivationReadiness:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
@@ -127,7 +138,15 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
                   ccr.status AS context_compile_status,
                   ca.safety_status AS context_safety_status,
                   ca.equivalence_status AS context_equivalence_status,
-                  ca.budget_status AS context_budget_status
+                  ca.budget_status AS context_budget_status,
+                  latest_ev.result #>> '{autonomy_fallback,selected_action}'
+                    AS autonomy_action,
+                  latest_ev.result #>> '{autonomy_fallback,autonomy_decision_id}'
+                    AS autonomy_decision_id,
+                  (
+                    latest_ev.result #>>
+                    '{autonomy_fallback,deterministic_checks,hard_invariants_passed}'
+                  ) = 'true' AS autonomy_hard_invariants_passed
                 FROM autoskill.skill_versions sv
                 JOIN autoskill.skills s ON s.skill_id = sv.skill_id
                 LEFT JOIN LATERAL (
@@ -187,6 +206,7 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
                 context_equivalence_status=None,
                 context_budget_status=None,
                 blockers=["skill-version-not-found"],
+                autonomy_action_required=bool(allowed_autonomy_actions),
             )
         blockers = _activation_blockers(
             row,
@@ -196,6 +216,7 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
             context_artifact_id=context_artifact_id,
             compiled_text_hash=compiled_text_hash,
             context_output_manifest_hash=context_output_manifest_hash,
+            allowed_autonomy_actions=allowed_autonomy_actions,
         )
         return ActivationReadiness(
             allowed=not blockers,
@@ -212,6 +233,9 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
             context_equivalence_status=row["context_equivalence_status"],
             context_budget_status=row["context_budget_status"],
             blockers=blockers,
+            autonomy_action=row["autonomy_action"],
+            autonomy_decision_id=row["autonomy_decision_id"],
+            autonomy_action_required=bool(allowed_autonomy_actions),
         )
 
 
@@ -224,13 +248,31 @@ def _activation_blockers(
     context_artifact_id: UUID | None,
     compiled_text_hash: str | None,
     context_output_manifest_hash: str | None,
+    allowed_autonomy_actions: tuple[str, ...] | None = None,
 ) -> list[str]:
     blockers: list[str] = []
+    autonomy_action = row["autonomy_action"]
+    autonomy_hard_passed = bool(row["autonomy_hard_invariants_passed"])
+    canary_authorized = (
+        autonomy_action == "stage_canary"
+        and autonomy_hard_passed
+        and allowed_autonomy_actions is not None
+        and "stage_canary" in set(allowed_autonomy_actions)
+    )
+    if allowed_autonomy_actions is not None:
+        if autonomy_action not in set(allowed_autonomy_actions):
+            blockers.append("autonomy-action-not-approved")
+        elif not autonomy_hard_passed:
+            blockers.append("autonomy-hard-invariants-not-passed")
     if row["scanner_status"] != "passed":
         blockers.append("scanner-not-passed")
-    if row["evaluator_status"] != "passed":
+    if row["evaluator_status"] != "passed" and not (
+        row["evaluator_status"] == "needs_intervention" and canary_authorized
+    ):
         blockers.append("evaluator-not-passed")
-    if row["latest_evaluation_status"] != "passed":
+    if row["latest_evaluation_status"] != "passed" and not (
+        row["latest_evaluation_status"] == "needs_intervention" and canary_authorized
+    ):
         blockers.append("proposal-gate-not-passed")
     if executor_profile_id is not None and row["compatibility_status"] != "compatible":
         blockers.append("executor-profile-not-compatible")

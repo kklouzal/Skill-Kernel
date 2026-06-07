@@ -3371,6 +3371,7 @@ async def _check_writer_activation_gate_for_api(
             manifest.get("context_gate"),
             "context_output_manifest_hash",
         ),
+        allowed_autonomy_actions=("auto_accept", "stage_canary"),
     )
     if not readiness.allowed:
         raise HTTPException(
@@ -3517,6 +3518,7 @@ async def _check_topology_activation_gate_for_api(
             workspace_key=request.workspace_id,
             skill_version_id=skill_version_id,
             executor_profile_id=request.executor_profile_id,
+            allowed_autonomy_actions=("auto_accept", "stage_canary"),
         )
         if not readiness.allowed:
             blockers.append(readiness.to_json())

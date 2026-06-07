@@ -197,6 +197,7 @@ class MemoryActivationGateStore:
         context_artifact_id=None,
         compiled_text_hash=None,
         context_output_manifest_hash=None,
+        allowed_autonomy_actions=None,
     ) -> ActivationReadiness:
         self.calls.append(
             {
@@ -208,6 +209,7 @@ class MemoryActivationGateStore:
                 "context_artifact_id": context_artifact_id,
                 "compiled_text_hash": compiled_text_hash,
                 "context_output_manifest_hash": context_output_manifest_hash,
+                "allowed_autonomy_actions": allowed_autonomy_actions,
             }
         )
         proof_missing = require_context_compile_proof and (
@@ -235,6 +237,8 @@ class MemoryActivationGateStore:
             context_equivalence_status="passed" if allowed else "failed",
             context_budget_status="passed" if allowed else "over_budget",
             blockers=blockers,
+            autonomy_action="auto_accept" if allowed_autonomy_actions else None,
+            autonomy_action_required=bool(allowed_autonomy_actions),
         )
 
 
@@ -2024,6 +2028,7 @@ def test_filesystem_worker_applies_staged_manifest_when_policy_approved(tmp_path
             "context_artifact_id": context_artifact_id,
             "compiled_text_hash": sha256_text("WHEN approved\nDO safe behavior\n"),
             "context_output_manifest_hash": context_output_manifest_hash,
+            "allowed_autonomy_actions": ("auto_accept", "stage_canary"),
         }
     ]
 
