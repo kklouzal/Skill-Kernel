@@ -8,10 +8,28 @@ from uuid import UUID
 
 import asyncpg
 
-from autoskill.core.enums import PROPOSAL_GATE_LIFECYCLE_STATES
+from autoskill.core.enums import PROPOSAL_GATE_LIFECYCLE_STATES, LifecycleState
+from autoskill.core.skillir import SkillIR
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.services.contrastive import derive_contrastive_replay
 from autoskill.services.evaluator import evaluate_proposal_gate
+from autoskill.services.probes import plan_candidate_probes
+
+AUTONOMOUS_REMEDIATION_ACTIONS = (
+    "collect_more_evidence",
+    "run_more_probes",
+    "run_re_adjudication",
+    "stage_ephemeral_candidate",
+    "reduce_scope",
+    "auto_reject",
+    "no_op_reschedule",
+)
+
+RESCHEDULED_REMEDIATION_STATUSES = {
+    "rescheduled_for_contrastive_replay",
+    "rescheduled_for_re_adjudication",
+    "rescheduled_for_additional_probes",
+}
 
 
 @dataclass(frozen=True)
@@ -387,6 +405,18 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                 fallback = _json_dict(result.get("autonomy_fallback"))
                 selected_action = str(fallback.get("selected_action") or "")
                 probes = await _load_probes(conn, row)
+                supplemental_probe_hashes: list[str] = []
+                if selected_action == "run_more_probes":
+                    supplemental_probe_hashes = await _upsert_missing_candidate_probes(
+                        conn,
+                        workspace_id=row["workspace_id"],
+                        skill_version_id=row["skill_version_id"],
+                        skill_ir=_json_dict(row["skill_ir"]),
+                        current_probe_hashes=[
+                            str(probe_hash)
+                            for probe_hash in result.get("probe_hashes", [])
+                        ],
+                    )
                 _enriched, contrastive_replays = await _attach_contrastive_replays(
                     conn,
                     workspace_id=row["workspace_id"],
@@ -397,6 +427,7 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                     result,
                     selected_action=selected_action,
                     contrastive_replays=contrastive_replays,
+                    supplemental_probe_hashes=supplemental_probe_hashes,
                     trace_id=trace_id,
                     span_id=span_id,
                     parent_span_id=parent_span_id,
@@ -415,9 +446,60 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                     **result,
                     "autonomy_remediation": remediation,
                 }
+                if supplemental_probe_hashes:
+                    updated_result["probe_hashes"] = _dedupe(
+                        [
+                            *[
+                                str(probe_hash)
+                                for probe_hash in result.get("probe_hashes", [])
+                            ],
+                            *supplemental_probe_hashes,
+                        ]
+                    )
+                if selected_action == "stage_ephemeral_candidate":
+                    await _stage_ephemeral_candidate(
+                        conn,
+                        workspace_id=row["workspace_id"],
+                        skill_id=row["skill_id"],
+                    )
+                if selected_action == "auto_reject":
+                    updated_result.pop("autonomy_fallback", None)
+                    updated_result["status"] = "failed"
+                    updated_result["reason_codes"] = _dedupe(
+                        [
+                            *[
+                                str(code)
+                                for code in result.get("reason_codes", [])
+                            ],
+                            "auto-rejected-by-autonomy-fallback",
+                        ]
+                    )
+                    await _finish_evaluation(
+                        conn,
+                        workspace_id=row["workspace_id"],
+                        evaluation_id=row["evaluation_id"],
+                        skill_version_id=row["skill_version_id"],
+                        executor_profile_id=row["executor_profile_id"],
+                        status="failed",
+                        result=updated_result,
+                        trace_id=trace_id,
+                        span_id=span_id,
+                        parent_span_id=parent_span_id,
+                    )
+                    remediations.append(
+                        {
+                            "evaluation_id": str(row["evaluation_id"]),
+                            "skill_version_id": str(row["skill_version_id"]),
+                            "selected_action": selected_action,
+                            "status": remediation["status"],
+                            "threshold_deadlock_candidate": threshold_deadlock,
+                            "attempt_count": attempt_count,
+                            "contrastive_replays": len(contrastive_replays),
+                        }
+                    )
+                    continue
                 reschedule = not threshold_deadlock and (
-                    bool(contrastive_replays)
-                    or selected_action in {"run_re_adjudication"}
+                    remediation["status"] in RESCHEDULED_REMEDIATION_STATUSES
                 )
                 if reschedule:
                     updated_result.pop("autonomy_fallback", None)
@@ -624,12 +706,79 @@ async def _claim_fallback_remediation_evaluations(
         """,
         workspace_key,
         limit,
-        [
-            "collect_more_evidence",
-            "run_re_adjudication",
-            "no_op_reschedule",
-        ],
+        list(AUTONOMOUS_REMEDIATION_ACTIONS),
         list(PROPOSAL_GATE_LIFECYCLE_STATES),
+    )
+
+
+async def _upsert_missing_candidate_probes(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    skill_version_id: UUID,
+    skill_ir: dict[str, Any],
+    current_probe_hashes: list[str],
+) -> list[str]:
+    try:
+        skill = SkillIR.model_validate(skill_ir)
+    except Exception:
+        return []
+    current = {str(probe_hash) for probe_hash in current_probe_hashes}
+    added: list[str] = []
+    for probe in plan_candidate_probes(skill):
+        if probe.probe_hash in current:
+            continue
+        spec = {
+            **probe.spec,
+            "skill_version_id": str(skill_version_id),
+            "candidate_slug": skill.slug,
+            "source": "evaluations.remediate_fallbacks",
+            "remediation_action": "run_more_probes",
+        }
+        await conn.execute(
+            """
+            INSERT INTO autoskill.probes (
+              probe_id, workspace_id, probe_hash, kind, maturity, spec, expected, active
+            )
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5::jsonb, $6::jsonb, false)
+            ON CONFLICT (workspace_id, probe_hash) DO NOTHING
+            """,
+            workspace_id,
+            probe.probe_hash,
+            probe.kind,
+            probe.maturity,
+            _json(spec),
+            _json(probe.expected),
+        )
+        added.append(probe.probe_hash)
+    return added
+
+
+async def _stage_ephemeral_candidate(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    skill_id: UUID,
+) -> None:
+    await conn.execute(
+        """
+        UPDATE autoskill.skills
+        SET lifecycle_state = $3,
+            updated_at = now()
+        WHERE workspace_id = $1
+          AND skill_id = $2
+          AND lifecycle_state IN (
+            'observed_pattern',
+            'candidate_cluster',
+            'ephemeral_candidate',
+            'trial_candidate',
+            'validated_candidate',
+            'candidate'
+          )
+        """,
+        workspace_id,
+        skill_id,
+        LifecycleState.EPHEMERAL_CANDIDATE.value,
     )
 
 
@@ -883,10 +1032,12 @@ def _remediation_patch(
     *,
     selected_action: str,
     contrastive_replays: list[dict[str, Any]],
+    supplemental_probe_hashes: list[str] | None = None,
     trace_id: UUID | None,
     span_id: UUID | None,
     parent_span_id: UUID | None,
 ) -> tuple[dict[str, Any], int, bool]:
+    supplemental_probe_hashes = supplemental_probe_hashes or []
     previous = _json_dict(result.get("autonomy_remediation"))
     previous_attempts = _json_list(previous.get("attempts"))
     attempt_count = int(previous.get("attempt_count") or 0) + 1
@@ -894,18 +1045,44 @@ def _remediation_patch(
         "inspect_evidence_coverage",
         "derive_contrastive_replay_from_permitted_evidence",
     ]
+    if selected_action == "run_more_probes":
+        attempted.append("generate_additional_probe_plan")
+    if supplemental_probe_hashes:
+        attempted.append("persist_missing_candidate_probes")
     if selected_action == "run_re_adjudication":
         attempted.append("run_llm_re_adjudication")
+    if selected_action == "stage_ephemeral_candidate":
+        attempted.append("stage_ephemeral_candidate")
+    if selected_action == "reduce_scope":
+        attempted.append("record_scope_reduction_required")
+    if selected_action == "auto_reject":
+        attempted.append("auto_reject_with_reason")
+    if selected_action == "no_op_reschedule":
+        attempted.append("no_op_reschedule")
     status = "waiting_for_contrastive_evidence"
     if contrastive_replays:
         status = "rescheduled_for_contrastive_replay"
+    elif supplemental_probe_hashes or (
+        selected_action == "run_more_probes" and attempt_count < 3
+    ):
+        status = "rescheduled_for_additional_probes"
     elif selected_action == "run_re_adjudication" and attempt_count < 3:
         status = "rescheduled_for_re_adjudication"
+    elif selected_action == "stage_ephemeral_candidate":
+        status = "ephemeral_candidate_staged"
+    elif selected_action == "reduce_scope":
+        status = "scope_reduction_recorded"
+    elif selected_action == "auto_reject":
+        status = "auto_rejected"
+    elif selected_action == "no_op_reschedule":
+        status = "no_op_rescheduled"
     hard_failures = _json_dict(result.get("autonomy_assurance")).get(
         "hard_invariant_failures"
     )
     threshold_deadlock = (
-        not contrastive_replays
+        selected_action != "auto_reject"
+        and not contrastive_replays
+        and not supplemental_probe_hashes
         and attempt_count >= 3
         and not hard_failures
     )
@@ -922,6 +1099,7 @@ def _remediation_patch(
         "status": status,
         "attempted_autonomous_remedies": attempted,
         "contrastive_replays": len(contrastive_replays),
+        "supplemental_probe_hashes": supplemental_probe_hashes,
         "updated_at": datetime.now(UTC).isoformat(),
         "trace_id": str(trace_id) if trace_id else None,
         "span_id": str(span_id) if span_id else None,
@@ -936,6 +1114,7 @@ def _remediation_patch(
             "attempt_count": attempt_count,
             "attempted_autonomous_remedies": attempted,
             "contrastive_replays": contrastive_replays,
+            "supplemental_probe_hashes": supplemental_probe_hashes,
             "threshold_deadlock_candidate": threshold_deadlock,
             "recommended_action": recommended_action,
             "attempts": [*previous_attempts[-9:], attempt],
@@ -1271,6 +1450,17 @@ def _json_list(value: object) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _object_keys(objects: list[dict[str, str]]) -> list[tuple[str, UUID]]:

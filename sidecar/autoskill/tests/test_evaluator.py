@@ -16,6 +16,7 @@ from autoskill.db.evaluations import (
     _finish_evaluation,
     _recommended_deadlock_action,
     _remediation_patch,
+    _upsert_missing_candidate_probes,
 )
 from autoskill.db.observability import TraceSpanRecord
 from autoskill.db.profiles import ModelProfileRecord
@@ -971,6 +972,116 @@ def test_fallback_remediation_reschedules_re_adjudication_before_deadlock() -> N
     assert threshold_deadlock is False
     assert remediation["status"] == "rescheduled_for_re_adjudication"
     assert "run_llm_re_adjudication" in remediation["attempted_autonomous_remedies"]
+
+
+def test_fallback_remediation_reschedules_more_probe_action() -> None:
+    remediation, attempt_count, threshold_deadlock = _remediation_patch(
+        {"reason_codes": ["intervention-required"]},
+        selected_action="run_more_probes",
+        contrastive_replays=[],
+        supplemental_probe_hashes=["sha256:probe-extra"],
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
+    )
+
+    assert attempt_count == 1
+    assert threshold_deadlock is False
+    assert remediation["status"] == "rescheduled_for_additional_probes"
+    assert remediation["supplemental_probe_hashes"] == ["sha256:probe-extra"]
+    assert "generate_additional_probe_plan" in remediation[
+        "attempted_autonomous_remedies"
+    ]
+    assert "persist_missing_candidate_probes" in remediation[
+        "attempted_autonomous_remedies"
+    ]
+
+
+def test_fallback_remediation_records_ephemeral_stage_without_activation() -> None:
+    remediation, attempt_count, threshold_deadlock = _remediation_patch(
+        {"reason_codes": ["intervention-required"]},
+        selected_action="stage_ephemeral_candidate",
+        contrastive_replays=[],
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
+    )
+
+    assert attempt_count == 1
+    assert threshold_deadlock is False
+    assert remediation["status"] == "ephemeral_candidate_staged"
+    assert "stage_ephemeral_candidate" in remediation["attempted_autonomous_remedies"]
+
+
+def test_fallback_remediation_auto_reject_is_terminal_autonomous_exit() -> None:
+    remediation, attempt_count, threshold_deadlock = _remediation_patch(
+        {"reason_codes": ["intervention-required"]},
+        selected_action="auto_reject",
+        contrastive_replays=[],
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
+    )
+
+    assert attempt_count == 1
+    assert threshold_deadlock is False
+    assert remediation["status"] == "auto_rejected"
+    assert "auto_reject_with_reason" in remediation["attempted_autonomous_remedies"]
+
+
+def test_fallback_probe_expansion_persists_missing_candidate_probes() -> None:
+    class FakeProbeConnection:
+        def __init__(self) -> None:
+            self.inserts: list[dict[str, object]] = []
+
+        async def execute(self, _query: str, *args: object) -> str:
+            self.inserts.append(
+                {
+                    "workspace_id": args[0],
+                    "probe_hash": args[1],
+                    "kind": args[2],
+                    "maturity": args[3],
+                    "spec": json.loads(str(args[4])),
+                    "expected": json.loads(str(args[5])),
+                }
+            )
+            return "INSERT 1"
+
+    workspace_id = uuid4()
+    skill_version_id = uuid4()
+    conn = FakeProbeConnection()
+
+    async def run() -> list[str]:
+        candidate_skillir = {
+            **skill_ir(),
+            "name": "autoskill-message-received-repair",
+            "description": "Repair repeated message received workflow.",
+            "outputs": ["A repaired message-received workflow proposal."],
+            "effects": ["Records an inactive autoskill candidate only."],
+        }
+        return await _upsert_missing_candidate_probes(
+            conn,
+            workspace_id=workspace_id,
+            skill_version_id=skill_version_id,
+            skill_ir=candidate_skillir,
+            current_probe_hashes=[],
+        )
+
+    added = asyncio.run(run())
+
+    assert len(added) == 4
+    assert {insert["kind"] for insert in conn.inserts} == {
+        "target",
+        "no_skill_control",
+        "regression",
+        "adversarial",
+    }
+    assert {
+        insert["spec"]["source"] for insert in conn.inserts
+    } == {"evaluations.remediate_fallbacks"}
+    assert {
+        insert["spec"]["remediation_action"] for insert in conn.inserts
+    } == {"run_more_probes"}
 
 
 class MemoryEvaluationStore:

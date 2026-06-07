@@ -16,6 +16,27 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Proposal-gate autonomy fallback remediation now covers the
+  full non-canary action set emitted by the Autonomous Decision Orchestrator
+  instead of only `collect_more_evidence`, `run_re_adjudication`, and
+  `no_op_reschedule`. The scheduled `evaluations.remediate_fallbacks` worker
+  now also claims `run_more_probes`, `stage_ephemeral_candidate`,
+  `reduce_scope`, and `auto_reject` fallbacks. `run_more_probes` restores
+  missing deterministic candidate probe fixtures from persisted SkillIR and
+  reschedules evaluation; `stage_ephemeral_candidate` explicitly keeps the
+  candidate in the inactive ephemeral lifecycle without runtime visibility;
+  `reduce_scope` records a bounded scope-reduction requirement for
+  threshold-deadlock handling; and `auto_reject` is a terminal autonomous
+  fail-closed exit that removes the fallback and marks the proposal gate
+  failed with reason evidence. `stage_canary` remains intentionally outside
+  this repair worker because it is already executable through activation gates
+  with `allowed_autonomy_actions=("auto_accept", "stage_canary")`. This
+  advances unified automation directives in Part I Sections 5.1-5.6 and
+  12.8 by making soft-threshold autonomy alternatives executable worker
+  outcomes rather than labels. Focused validation passed with fallback
+  remediation/probe-expansion evaluator tests (`8 passed`), full evaluator
+  tests (`27 passed`), worker dispatch, scheduler-default, Ruff, and
+  compileall; broad gates are pending for this slice.
 - 2026-06-07: Administrative escalation is now an executable hard-boundary
   record path instead of only seeded Observatory fixture state. The autonomy
   control store can persist a canonical `administrative_escalation_events` row
