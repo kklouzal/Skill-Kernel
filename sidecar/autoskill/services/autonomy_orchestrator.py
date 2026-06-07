@@ -13,6 +13,7 @@ from autoskill.services.llm import LLMClient, LLMCompletionRequest, LLMMessage
 DECISION_FAMILY = "skill_plan_semantic_adjudication"
 
 NEEDS_INTERVENTION_ACTIONS = {
+    "auto_accept",
     "collect_more_evidence",
     "run_more_probes",
     "run_re_adjudication",

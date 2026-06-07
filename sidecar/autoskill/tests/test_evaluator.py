@@ -462,6 +462,47 @@ def test_proposal_gate_autonomy_orchestrator_runs_llm_fallback() -> None:
     assert llm.calls[0].purpose == "proposal_gate.needs_intervention_adjudication"
 
 
+def test_proposal_gate_autonomy_downgrades_auto_accept_to_canary() -> None:
+    autonomy = NullAutonomyControlStore()
+    llm = MemoryLLM(
+        json.dumps(
+            {
+                "action": "auto_accept",
+                "confidence": 0.93,
+                "confidence_decomposition": {
+                    "model_confidence": 0.93,
+                    "evidence_coverage": 0.8,
+                    "source_fidelity": 0.84,
+                    "scanner_risk": 0.0,
+                },
+                "evidence_fidelity": "redacted_derivative",
+                "reason_codes": ["high-confidence-soft-threshold-admission"],
+                "uncertainty_notes": [],
+            }
+        )
+    )
+    orchestrator = ProposalGateAutonomyOrchestrator(
+        profiles=MemoryProfileStore(model_profile()),
+        llm=llm,  # type: ignore[arg-type]
+        autonomy=autonomy,
+    )
+
+    async def run() -> EvaluationRunItem:
+        return await orchestrator.resolve_item(
+            needs_intervention_item(),
+            workspace_key="dev-01",
+        )
+
+    item = asyncio.run(run())
+
+    fallback = item.result["autonomy_fallback"]
+    assert fallback["selected_action"] == "stage_canary"
+    assert fallback["decision_band"] == "canary_only"
+    assert fallback["llm_verdict"]["action"] == "auto_accept"
+    assert fallback["runtime_writes_authorized"] is False
+    assert autonomy.records[0].action == "stage_canary"
+
+
 def test_proposal_gate_autonomy_accepts_qualified_profile_with_autonomous_verdict() -> None:
     autonomy = NullAutonomyControlStore()
     llm = MemoryLLM(

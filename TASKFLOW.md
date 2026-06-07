@@ -16,6 +16,29 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Proposal-gate autonomy adjudication now recognizes
+  `auto_accept` as part of the Section 5.2 Autonomous Decision Orchestrator
+  action vocabulary while deterministically downgrading that verdict to
+  canary-only admission for soft-threshold `needs_intervention` stalls. This
+  closes the unreachable `_admissible_action()` branch where `auto_accept` was
+  normalized away before the deterministic downgrade could preserve Section
+  17.6 activation semantics. The resulting fallback records the original LLM
+  verdict, persists `selected_action=stage_canary`, keeps
+  `runtime_writes_authorized=false`, and still requires the existing activation
+  gates before any writer/topology apply path can proceed. This advances Part I
+  Sections 5.2, 12.8, and 17.6 plus production criteria 31.53/31.57/31.60 by
+  keeping high-confidence soft-threshold acceptance on the governed canary
+  ladder rather than silently treating it as more-evidence abstention. Focused
+  validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_evaluator.py -q -k
+  'proposal_gate_autonomy'` (`6 passed, 13 deselected`) and touched-file Ruff.
+  Required gates passed with `uv run ruff check sidecar`, `uv run pytest`
+  (`441 passed`), `uv run python -m compileall -q sidecar`, `git diff
+  --check`, core acceptance (`ready=true`, `70` implemented, `7` context
+  criteria), Observatory acceptance (`ready=true`, `86` satisfied), and
+  conformance (`ready=true`, `23/23`). No compose/Postgres smoke was required
+  because this is an in-process deterministic action-normalization change with
+  no schema, API, worker persistence, or filesystem-write behavior change.
 - 2026-06-07: Proposal-gate `needs_intervention` handling is now LLM
   adjudicated end-to-end for ordinary soft-threshold stalls instead of falling
   back to operator approval, provider-unavailable no-ops, or invalid-JSON

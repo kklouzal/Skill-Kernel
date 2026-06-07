@@ -3,6 +3,23 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: proposal-gate autonomy adjudication now accepts
+`auto_accept` as a valid structured Autonomous Decision Orchestrator verdict
+for soft-threshold stalls, then deterministically maps it to `stage_canary`
+before persistence or activation checks. This aligns the proposal-gate fallback
+vocabulary with Section 5.2 while preserving Section 17.6's deterministic
+activation boundary: the original LLM verdict remains visible in the
+content-safe fallback payload, the selected action is canary-only, runtime
+writes remain unauthorized, and the existing writer/topology activation gates
+still decide whether anything can apply. Focused validation passed with the proposal-gate
+autonomy evaluator regressions (`6 passed, 13 deselected`) and touched-file
+Ruff. Required gates passed with full sidecar Ruff, full pytest (`441
+passed`), compileall, diff-check, core acceptance (`ready=true`, `70`
+implemented, `7` context criteria), Observatory acceptance (`ready=true`, `86`
+satisfied), and conformance (`ready=true`, `23/23`). No compose/Postgres smoke
+was required because the slice changes deterministic in-memory action
+normalization and adds no schema or persistence contract.
+
 2026-06-07 update: proposal-gate `needs_intervention` now stays on the LLM
 autonomy path through provider routing, JSON schema handling, and invalid-output
 recovery. The LLM client supports an optional OpenAI-compatible JSON
