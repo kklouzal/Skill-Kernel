@@ -16,6 +16,35 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Proposal-gate `needs_intervention` handling is now LLM
+  adjudicated end-to-end for ordinary soft-threshold stalls instead of falling
+  back to operator approval, provider-unavailable no-ops, or invalid-JSON
+  dead ends. The LLM client can pass an explicit OpenAI-compatible JSON-object
+  response-format hint, the proposal-gate adjudicator sends compact JSON-mode
+  requests, retries one invalid/truncated JSON response autonomously, and if the
+  retry is still invalid records a governed `run_re_adjudication` fallback tied
+  to the LLM invocation rather than classifying the provider as unavailable.
+  The reference Dev-01 compose/env defaults now point LLM traffic at the shared
+  Docker-network `llama-cpp-compaction:8080` service, matching the documented
+  deployment topology and preventing container-local `127.0.0.1` endpoint
+  stalls. As a one-time Dev-01 operator repair, not permanent migration code,
+  missing autonomy control tables were created from the existing canonical
+  migration DDL, loopback text model profile endpoints were updated to the
+  shared service URL, and 76 stale proposal-gate rows previously stuck at
+  `needs_intervention` were rerun through the current autonomy orchestrator:
+  final current state is 70 `collect_more_evidence`, 6
+  `run_re_adjudication`, 0 missing fallbacks, and 0
+  `llm-adjudication-unavailable` fallbacks, with 84 successful primary LLM
+  adjudication invocations and 2 successful retry invocations recorded after
+  the endpoint repair. This advances Part I Sections 5.1-5.3, 5.10-5.12,
+  12.8, production criteria 31.51/31.53/31.55/31.62, and the Section 33
+  autonomy checklist by keeping soft-threshold intervention on the governed
+  autonomous fallback ladder while preserving deterministic activation gates:
+  `collect_more_evidence` and `run_re_adjudication` remain blocked from
+  runtime activation until real evidence/probe gates pass or a bounded
+  `stage_canary` action is selected. Focused validation passed with evaluator
+  autonomy JSON-retry regressions (`6 passed`), LLM-client JSON-format
+  regressions (`2 passed`), targeted Ruff, and live Dev-01 LLM rerun checks.
 - 2026-06-07: Observatory now has a first-class Gates view that binds
   proposal-gate evaluations to autonomy fallback decisions through existing
   sidecar admin read models instead of leaving soft-threshold intervention

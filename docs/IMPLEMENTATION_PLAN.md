@@ -3,6 +3,21 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: proposal-gate `needs_intervention` now stays on the LLM
+autonomy path through provider routing, JSON schema handling, and invalid-output
+recovery. The LLM client supports an optional OpenAI-compatible JSON
+response-format hint, the proposal-gate autonomy request is compact and
+JSON-mode by default, invalid/truncated adjudicator output gets one autonomous
+retry, and exhausted JSON repair records a governed `run_re_adjudication`
+fallback with the LLM invocation attached instead of degrading to
+`llm-adjudication-unavailable`. The reference compose and `.env.example`
+defaults now point Dev-01 LLM traffic at `http://llama-cpp-compaction:8080/v1`
+on the shared Docker network, matching the documented model-service topology.
+The live stale-row/schema/profile repair was performed directly on Dev-01 as a
+one-time operator action so old rows could be brought up to the current control
+plane; no permanent migration/backfill endpoint or background unstick loop was
+added to the project.
+
 2026-06-07 update: Observatory proposal-gate diagnostics now have a dedicated
 Gates view tied to existing sidecar read models for evaluation reviews and
 autonomy decisions. Evaluation summaries persist a sanitized autonomy-fallback

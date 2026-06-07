@@ -362,14 +362,15 @@ class MemoryProfileStore:
 
 
 class MemoryLLM:
-    def __init__(self, text: str) -> None:
-        self.text = text
+    def __init__(self, text: str | list[str]) -> None:
+        self.texts = [text] if isinstance(text, str) else list(text)
         self.calls: list[object] = []
 
     async def complete(self, completion):
         self.calls.append(completion)
+        index = min(len(self.calls) - 1, len(self.texts) - 1)
         return SimpleNamespace(
-            text=self.text,
+            text=self.texts[index],
             invocation=SimpleNamespace(llm_invocation_id=uuid4()),
         )
 
@@ -502,6 +503,82 @@ def test_proposal_gate_autonomy_accepts_qualified_profile_with_autonomous_verdic
     assert item.result["autonomy_fallback"]["selected_action"] == "stage_canary"
     assert llm.calls
     assert autonomy.records[0].action == "stage_canary"
+
+
+def test_proposal_gate_autonomy_retries_invalid_json_adjudication() -> None:
+    autonomy = NullAutonomyControlStore()
+    llm = MemoryLLM(
+        [
+            "```json\n{\"action\":\"collect_more_evidence\"",
+            json.dumps(
+                {
+                    "action": "run_re_adjudication",
+                    "confidence": 0.62,
+                    "confidence_decomposition": {
+                        "model_confidence": 0.62,
+                        "evidence_coverage": 0.44,
+                        "source_fidelity": 0.7,
+                        "scanner_risk": 0.0,
+                    },
+                    "evidence_fidelity": "redacted_derivative",
+                    "reason_codes": ["retry-json-valid"],
+                    "uncertainty_notes": ["retry selected"],
+                }
+            ),
+        ]
+    )
+    orchestrator = ProposalGateAutonomyOrchestrator(
+        profiles=MemoryProfileStore(model_profile()),
+        llm=llm,  # type: ignore[arg-type]
+        autonomy=autonomy,
+    )
+
+    async def run() -> EvaluationRunItem:
+        return await orchestrator.resolve_item(
+            needs_intervention_item(),
+            workspace_key="dev-01",
+        )
+
+    item = asyncio.run(run())
+
+    fallback = item.result["autonomy_fallback"]
+    assert fallback["selected_action"] == "run_re_adjudication"
+    assert fallback["llm_invocation_id"] is not None
+    assert "llm-adjudication-unavailable" not in fallback["reason_codes"]
+    assert [call.purpose for call in llm.calls] == [
+        "proposal_gate.needs_intervention_adjudication",
+        "proposal_gate.needs_intervention_adjudication.retry",
+    ]
+    assert llm.calls[0].response_format == {"type": "json_object"}
+    assert autonomy.records[0].action == "run_re_adjudication"
+
+
+def test_proposal_gate_autonomy_records_re_adjudication_after_invalid_json_retry() -> None:
+    autonomy = NullAutonomyControlStore()
+    llm = MemoryLLM(["not-json", "{\"action\":"])
+    orchestrator = ProposalGateAutonomyOrchestrator(
+        profiles=MemoryProfileStore(model_profile()),
+        llm=llm,  # type: ignore[arg-type]
+        autonomy=autonomy,
+    )
+
+    async def run() -> EvaluationRunItem:
+        return await orchestrator.resolve_item(
+            needs_intervention_item(),
+            workspace_key="dev-01",
+        )
+
+    item = asyncio.run(run())
+
+    fallback = item.result["autonomy_fallback"]
+    assert fallback["selected_action"] == "run_re_adjudication"
+    assert fallback["model_profile_id"] is not None
+    assert fallback["llm_invocation_id"] is not None
+    assert "llm-json-invalid" in fallback["reason_codes"]
+    assert "llm-adjudication-unavailable" not in fallback["reason_codes"]
+    assert fallback["llm_verdict"]["schema_status"] == "invalid"
+    assert len(llm.calls) == 2
+    assert autonomy.records[0].action == "run_re_adjudication"
 
 
 def test_proposal_gate_autonomy_orchestrator_reschedules_without_profile() -> None:

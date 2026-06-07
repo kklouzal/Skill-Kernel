@@ -49,6 +49,7 @@ class LLMCompletionRequest:
     messages: list[LLMMessage]
     max_output_tokens: int = 1024
     temperature: float = 0.0
+    response_format: dict[str, object] | None = None
     trace_id: UUID | None = None
     span_id: UUID | None = None
 
@@ -422,18 +423,24 @@ def _build_openai_compatible_payload(
     endpoint_kind: str,
 ) -> dict[str, object]:
     if endpoint_kind == "responses":
-        return {
+        payload: dict[str, object] = {
             "model": profile.model,
             "input": [message.to_json() for message in completion.messages],
             "max_output_tokens": completion.max_output_tokens,
             "temperature": completion.temperature,
         }
-    return {
+        if completion.response_format is not None:
+            payload["response_format"] = completion.response_format
+        return payload
+    payload = {
         "model": profile.model,
         "messages": [message.to_json() for message in completion.messages],
         "max_tokens": completion.max_output_tokens,
         "temperature": completion.temperature,
     }
+    if completion.response_format is not None:
+        payload["response_format"] = completion.response_format
+    return payload
 
 
 def _extract_openai_compatible_text(

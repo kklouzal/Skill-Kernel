@@ -182,51 +182,52 @@ class ProposalGateAutonomyOrchestrator:
         profile: ModelProfileRecord,
     ) -> dict[str, Any]:
         completion = await self.llm.complete(
-            LLMCompletionRequest(
+            _adjudication_request(
                 workspace_key=workspace_key,
                 profile_key=profile.profile_key,
+                item=item,
                 purpose="proposal_gate.needs_intervention_adjudication",
-                messages=[
-                    LLMMessage(
-                        role="system",
-                        content=(
-                            "You are the SkillKernel semantic adjudicator. "
-                            "Return one JSON object only. Do not request raw "
-                            "content, do not authorize runtime writes, and do "
-                            "not override scanner, regression, adversarial, "
-                            "rollback, privacy, or path-containment gates."
-                        ),
-                    ),
-                    LLMMessage(
-                        role="user",
-                        content=json.dumps(
-                            {
-                                "task": "choose_autonomous_fallback_for_proposal_gate_stall",
-                                "allowed_actions": sorted(NEEDS_INTERVENTION_ACTIONS),
-                                "required_schema": {
-                                    "action": sorted(NEEDS_INTERVENTION_ACTIONS),
-                                    "confidence": "number between 0 and 1",
-                                    "confidence_decomposition": {
-                                        "model_confidence": "number",
-                                        "evidence_coverage": "number",
-                                        "source_fidelity": "number",
-                                        "scanner_risk": "number",
-                                    },
-                                    "evidence_fidelity": "metadata_only|redacted_derivative|raw_vault_linked",
-                                    "reason_codes": ["short-machine-readable-reasons"],
-                                    "uncertainty_notes": ["content-safe notes"],
-                                },
-                                "evaluation": _evaluation_packet(item),
-                            },
-                            sort_keys=True,
-                        ),
-                    ),
-                ],
-                max_output_tokens=700,
-                temperature=0.0,
             )
         )
-        parsed = _parse_json_object(completion.text)
+        try:
+            parsed = _parse_json_object(completion.text)
+        except json.JSONDecodeError as first_error:
+            retry = await self.llm.complete(
+                _adjudication_request(
+                    workspace_key=workspace_key,
+                    profile_key=profile.profile_key,
+                    item=item,
+                    purpose="proposal_gate.needs_intervention_adjudication.retry",
+                    retry_error=f"{type(first_error).__name__}: {first_error}"[:200],
+                )
+            )
+            try:
+                parsed = _parse_json_object(retry.text)
+            except json.JSONDecodeError as retry_error:
+                return {
+                    "action": "run_re_adjudication",
+                    "confidence": 0.25,
+                    "confidence_decomposition": {
+                        "model_confidence": 0.25,
+                        "evidence_coverage": 0.0,
+                        "source_fidelity": 0.0,
+                        "scanner_risk": 0.0,
+                    },
+                    "evidence_fidelity": "redacted_derivative",
+                    "reason_codes": [
+                        "llm-json-invalid",
+                        "autonomous-re-adjudication-required",
+                    ],
+                    "uncertainty_notes": [
+                        "LLM response was not valid JSON after autonomous retry."
+                    ],
+                    "schema_status": "invalid",
+                    "error": f"{type(retry_error).__name__}: {retry_error}"[:300],
+                    "llm_invocation_id": str(retry.invocation.llm_invocation_id),
+                    "model_profile_id": str(profile.profile_id),
+                    "profile_key": profile.profile_key,
+                }
+            completion = retry
         return {
             **parsed,
             "llm_invocation_id": str(completion.invocation.llm_invocation_id),
@@ -299,6 +300,61 @@ class ProposalGateAutonomyOrchestrator:
                 },
             },
         )
+
+
+def _adjudication_request(
+    *,
+    workspace_key: str,
+    profile_key: str,
+    item: EvaluationRunItem,
+    purpose: str,
+    retry_error: str | None = None,
+) -> LLMCompletionRequest:
+    user_payload: dict[str, Any] = {
+        "task": "choose_autonomous_fallback_for_proposal_gate_stall",
+        "allowed_actions": sorted(NEEDS_INTERVENTION_ACTIONS),
+        "schema": {
+            "action": "one allowed action",
+            "confidence": "0..1",
+            "confidence_decomposition": {
+                "model_confidence": "0..1",
+                "evidence_coverage": "0..1",
+                "source_fidelity": "0..1",
+                "scanner_risk": "0..1",
+            },
+            "evidence_fidelity": "metadata_only|redacted_derivative|raw_vault_linked",
+            "reason_codes": ["short-machine-readable"],
+            "uncertainty_notes": ["content-safe"],
+        },
+        "evaluation": _evaluation_packet(item),
+    }
+    if retry_error:
+        user_payload["retry"] = {
+            "previous_response_problem": retry_error,
+            "instruction": "Return minified JSON only, no markdown fence or prose.",
+        }
+    return LLMCompletionRequest(
+        workspace_key=workspace_key,
+        profile_key=profile_key,
+        purpose=purpose,
+        messages=[
+            LLMMessage(
+                role="system",
+                content=(
+                    "Return exactly one minified JSON object. No markdown, no prose. "
+                    "Do not request raw content, authorize runtime writes, or override "
+                    "scanner, regression, adversarial, rollback, privacy, or path gates."
+                ),
+            ),
+            LLMMessage(
+                role="user",
+                content=json.dumps(user_payload, sort_keys=True, separators=(",", ":")),
+            ),
+        ],
+        max_output_tokens=320,
+        temperature=0.0,
+        response_format={"type": "json_object"},
+    )
 
 
 async def _select_qualified_autonomous_profile(

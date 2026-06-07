@@ -289,6 +289,33 @@ def test_llm_client_posts_openai_compatible_request_and_records_safe_audit() -> 
     ]
 
 
+def test_llm_client_forwards_optional_response_format_hint() -> None:
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(http_request, timeout):
+        captured["payload"] = json.loads(http_request.data.decode())
+        return FakeResponse()
+
+    client = LLMClient(
+        profiles=MemoryProfileStore(_profile()),
+        invocations=MemoryInvocationStore(),
+        settings=SimpleNamespace(llm_api_key="secret-test-key"),
+        urlopen=fake_urlopen,
+    )
+
+    request = LLMCompletionRequest(
+        workspace_key="dev-01",
+        profile_key="default-text",
+        purpose="json_adjudication",
+        messages=[LLMMessage(role="user", content="Return JSON.")],
+        response_format={"type": "json_object"},
+    )
+
+    asyncio.run(client.complete(request))
+
+    assert captured["payload"]["response_format"] == {"type": "json_object"}
+
+
 def test_llm_client_supports_explicit_openai_compatible_responses_endpoint() -> None:
     captured: dict[str, object] = {}
 
