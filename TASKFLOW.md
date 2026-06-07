@@ -16,6 +16,35 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Autonomy calibration persistence now exposes a generic semantic
+  decision-family observation primitive instead of leaving calibration writes
+  coupled to proposal-gate fallback recording. `AutonomyControlStore` and both
+  Null/asyncpg implementations now support `record_calibration_observation`
+  with content-safe family/action/confidence metadata, optional
+  decision/adjudication links, deterministic confidence bounding,
+  outcome-status normalization, and fail-closed validation for blank
+  family/action names or unsupported action risk tiers. The existing
+  proposal-gate fallback path reuses the same insert helper, and delayed
+  outcomes still refresh the affected 30-day reliability metrics. This
+  advances unified autonomy Sections 5.5, 5.9, 5.12, 5.13, and 5.14 plus
+  production criterion 31.58 by making calibration coverage reusable for
+  broker decision adjudication, context-equivalence, topology choice, and other
+  semantic families without adding runtime-write authority, live apply, or a
+  second Observatory control plane. Focused validation passed with the
+  calibration evaluator subset (`4 passed, 29 deselected`) and touched-file
+  Ruff. Required gates passed with `uv run ruff check sidecar`, `uv run
+  pytest` (`456 passed`), `uv run python -m compileall -q sidecar`, and `git
+  diff --check`. Report gates passed with core acceptance (`ready=true`, `63`
+  production criteria, `7` context criteria), Observatory acceptance
+  (`ready=true`, `42` acceptance criteria, `44` developer checklist items),
+  conformance (`ready=true`, `23/23`), readiness (`ready=true`, `17`
+  checklist items), and handoff governance (`35` risks mitigated). A Dev-01
+  Postgres smoke inserted a throwaway `cron-generic-calibration-smoke-*`
+  workspace, recorded a generic `broker_decision_adjudication` calibration
+  observation through `AsyncpgAutonomyControlStore`, listed/detail-read it and
+  its reliability metric through `AsyncpgObservatoryAdminStore`, attached
+  delayed outcome `success`, and deleted the smoke workspace plus calibration
+  rows.
 - 2026-06-07: Observatory now exposes the autonomy calibration corpus as
   content-safe sidecar read models instead of leaving calibration outcomes and
   reliability metrics Core-store-only. The admin store lists/details

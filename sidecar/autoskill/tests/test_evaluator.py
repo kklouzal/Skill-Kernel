@@ -533,6 +533,96 @@ def test_proposal_gate_autonomy_store_records_delayed_calibration_outcome() -> N
     )
 
 
+def test_autonomy_store_records_generic_semantic_calibration_family() -> None:
+    autonomy = NullAutonomyControlStore()
+    decision_id = uuid4()
+    adjudication_id = uuid4()
+
+    async def run() -> object:
+        return await autonomy.record_calibration_observation(
+            workspace_key="dev-01",
+            calibration_family="retrieval_policy_shadowing",
+            selected_action="collect_more_evidence",
+            predicted_confidence=1.4,
+            confidence_components={"semantic_similarity": 0.72},
+            autonomy_decision_id=decision_id,
+            adjudication_id=adjudication_id,
+        )
+
+    record = asyncio.run(run())
+
+    assert record.calibration_family == "retrieval_policy_shadowing"
+    assert record.autonomy_decision_id == decision_id
+    assert record.adjudication_id == adjudication_id
+    assert record.predicted_confidence == 1.0
+    assert record.selected_action == "collect_more_evidence"
+    assert record.outcome_status == "pending"
+    assert autonomy.reliability_metrics[-1].calibration_family == (
+        "retrieval_policy_shadowing"
+    )
+    assert autonomy.reliability_metrics[-1].sample_count == 1
+    assert autonomy.reliability_metrics[-1].coverage_rate == 0.0
+    assert autonomy.reliability_metrics[-1].abstention_rate == 1.0
+
+
+def test_generic_calibration_family_accepts_delayed_outcome() -> None:
+    autonomy = NullAutonomyControlStore()
+    decision_id = uuid4()
+
+    async def run() -> object:
+        await autonomy.record_calibration_observation(
+            workspace_key="dev-01",
+            calibration_family="context_budget_semantic_equivalence",
+            selected_action="stage_ephemeral_candidate",
+            predicted_confidence=0.74,
+            autonomy_decision_id=decision_id,
+            outcome_status="not-a-valid-status",
+        )
+        return await autonomy.record_calibration_outcome(
+            workspace_key="dev-01",
+            autonomy_decision_id=decision_id,
+            outcome_status="failure",
+            false_accept=True,
+        )
+
+    updated = asyncio.run(run())
+
+    assert updated is not None
+    assert autonomy.calibration_observations[0].outcome_status == "failure"
+    assert autonomy.calibration_observations[0].action_risk_tier == (
+        "T2_trial_artifact"
+    )
+    assert autonomy.reliability_metrics[-1].calibration_family == (
+        "context_budget_semantic_equivalence"
+    )
+    assert autonomy.reliability_metrics[-1].sample_count == 1
+    assert autonomy.reliability_metrics[-1].coverage_rate == 1.0
+    assert autonomy.reliability_metrics[-1].abstention_rate == 0.0
+
+
+def test_generic_calibration_family_rejects_invalid_risk_tier() -> None:
+    autonomy = NullAutonomyControlStore()
+
+    async def run() -> None:
+        await autonomy.record_calibration_observation(
+            workspace_key="dev-01",
+            calibration_family="broker_decision_adjudication",
+            selected_action="no_op_reschedule",
+            predicted_confidence=0.42,
+            action_risk_tier="T9_unbounded",
+        )
+
+    try:
+        asyncio.run(run())
+    except ValueError as exc:
+        assert "unsupported action risk tier" in str(exc)
+    else:  # pragma: no cover - makes the fail-closed expectation explicit.
+        raise AssertionError("invalid risk tier should fail before persistence")
+
+    assert autonomy.calibration_observations == []
+    assert autonomy.reliability_metrics == []
+
+
 def test_proposal_gate_autonomy_downgrades_auto_accept_to_canary() -> None:
     autonomy = NullAutonomyControlStore()
     llm = MemoryLLM(

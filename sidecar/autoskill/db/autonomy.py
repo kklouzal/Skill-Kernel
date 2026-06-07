@@ -116,6 +116,22 @@ class AutonomyReliabilityMetricRecord:
 
 
 class AutonomyControlStore(Protocol):
+    async def record_calibration_observation(
+        self,
+        *,
+        workspace_key: str,
+        calibration_family: str,
+        selected_action: str,
+        predicted_confidence: float,
+        confidence_components: dict[str, Any] | None = None,
+        action_risk_tier: str | None = None,
+        model_profile_id: UUID | None = None,
+        autonomy_decision_id: UUID | None = None,
+        adjudication_id: UUID | None = None,
+        outcome_status: str = "pending",
+    ) -> AutonomyCalibrationObservationRecord:
+        """Persist a pending semantic decision-family calibration observation."""
+
     async def record_proposal_gate_fallback(
         self,
         *,
@@ -182,6 +198,39 @@ class NullAutonomyControlStore:
         self.calibration_observations: list[AutonomyCalibrationObservationRecord] = []
         self.reliability_metrics: list[AutonomyReliabilityMetricRecord] = []
 
+    async def record_calibration_observation(
+        self,
+        *,
+        workspace_key: str,
+        calibration_family: str,
+        selected_action: str,
+        predicted_confidence: float,
+        confidence_components: dict[str, Any] | None = None,
+        action_risk_tier: str | None = None,
+        model_profile_id: UUID | None = None,
+        autonomy_decision_id: UUID | None = None,
+        adjudication_id: UUID | None = None,
+        outcome_status: str = "pending",
+    ) -> AutonomyCalibrationObservationRecord:
+        calibration_family = _required_text(calibration_family, "calibration_family")
+        selected_action = _required_text(selected_action, "selected_action")
+        record = AutonomyCalibrationObservationRecord(
+            calibration_observation_id=uuid4(),
+            calibration_family=calibration_family,
+            autonomy_decision_id=autonomy_decision_id,
+            adjudication_id=adjudication_id,
+            action_risk_tier=_canonical_action_risk_tier(
+                selected_action,
+                action_risk_tier,
+            ),
+            predicted_confidence=_bounded_confidence(predicted_confidence),
+            selected_action=selected_action,
+            outcome_status=_outcome_status(outcome_status),
+        )
+        self.calibration_observations.append(record)
+        self._refresh_reliability_metrics(calibration_family)
+        return record
+
     async def record_proposal_gate_fallback(
         self,
         *,
@@ -219,11 +268,13 @@ class NullAutonomyControlStore:
             skill_version_id=skill_version_id,
         )
         self.records.append(record)
-        self._record_pending_calibration(
+        await self.record_calibration_observation(
+            workspace_key=workspace_key,
+            calibration_family="skill_plan_semantic_adjudication",
             autonomy_decision_id=record.autonomy_decision_id,
             adjudication_id=record.adjudication_id,
-            action=action,
-            confidence=confidence,
+            selected_action=action,
+            predicted_confidence=confidence,
         )
         return record
 
@@ -288,28 +339,6 @@ class NullAutonomyControlStore:
                 return updated
         return None
 
-    def _record_pending_calibration(
-        self,
-        *,
-        autonomy_decision_id: UUID,
-        adjudication_id: UUID,
-        action: str,
-        confidence: float,
-    ) -> None:
-        self.calibration_observations.append(
-            AutonomyCalibrationObservationRecord(
-                calibration_observation_id=uuid4(),
-                calibration_family="skill_plan_semantic_adjudication",
-                autonomy_decision_id=autonomy_decision_id,
-                adjudication_id=adjudication_id,
-                action_risk_tier=_action_risk_tier(action),
-                predicted_confidence=_bounded_confidence(confidence),
-                selected_action=action,
-                outcome_status="pending",
-            )
-        )
-        self._refresh_reliability_metrics("skill_plan_semantic_adjudication")
-
     def _refresh_reliability_metrics(self, calibration_family: str) -> None:
         records = [
             record
@@ -355,6 +384,60 @@ class NullAutonomyControlStore:
 
 
 class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
+    async def record_calibration_observation(
+        self,
+        *,
+        workspace_key: str,
+        calibration_family: str,
+        selected_action: str,
+        predicted_confidence: float,
+        confidence_components: dict[str, Any] | None = None,
+        action_risk_tier: str | None = None,
+        model_profile_id: UUID | None = None,
+        autonomy_decision_id: UUID | None = None,
+        adjudication_id: UUID | None = None,
+        outcome_status: str = "pending",
+    ) -> AutonomyCalibrationObservationRecord:
+        calibration_family = _required_text(calibration_family, "calibration_family")
+        selected_action = _required_text(selected_action, "selected_action")
+        bounded_confidence = _bounded_confidence(predicted_confidence)
+        bounded_outcome_status = _outcome_status(outcome_status)
+        bounded_action_risk_tier = _canonical_action_risk_tier(
+            selected_action,
+            action_risk_tier,
+        )
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await self._insert_calibration_observation(
+                conn,
+                workspace_id=workspace_id,
+                calibration_family=calibration_family,
+                autonomy_decision_id=autonomy_decision_id,
+                adjudication_id=adjudication_id,
+                model_profile_id=model_profile_id,
+                action=selected_action,
+                confidence=bounded_confidence,
+                confidence_decomposition=confidence_components or {},
+                action_risk_tier=bounded_action_risk_tier,
+                outcome_status=bounded_outcome_status,
+            )
+            await self._refresh_reliability_metrics(
+                conn,
+                workspace_id=workspace_id,
+                calibration_family=calibration_family,
+            )
+        return AutonomyCalibrationObservationRecord(
+            calibration_observation_id=row["calibration_observation_id"],
+            calibration_family=row["calibration_family"],
+            autonomy_decision_id=row["autonomy_decision_id"],
+            adjudication_id=row["adjudication_id"],
+            action_risk_tier=row["action_risk_tier"],
+            predicted_confidence=float(row["predicted_confidence"]),
+            selected_action=row["selected_action"],
+            outcome_status=row["outcome_status"],
+        )
+
     async def record_proposal_gate_fallback(
         self,
         *,
@@ -559,7 +642,7 @@ class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
                 evaluation_id,
                 _json(persisted_result_patch),
             )
-            await self._record_pending_calibration(
+            await self._insert_calibration_observation(
                 conn,
                 workspace_id=workspace_id,
                 calibration_family="skill_plan_semantic_adjudication",
@@ -569,6 +652,12 @@ class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
                 action=action,
                 confidence=confidence,
                 confidence_decomposition=confidence_decomposition,
+                outcome_status="pending",
+            )
+            await self._refresh_reliability_metrics(
+                conn,
+                workspace_id=workspace_id,
+                calibration_family="skill_plan_semantic_adjudication",
             )
 
         return ProposalGateFallbackRecord(
@@ -760,7 +849,7 @@ class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
             outcome_status=row["outcome_status"],
         )
 
-    async def _record_pending_calibration(
+    async def _insert_calibration_observation(
         self,
         conn: Any,
         *,
@@ -772,8 +861,10 @@ class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
         action: str,
         confidence: float,
         confidence_decomposition: dict[str, Any],
-    ) -> None:
-        await conn.execute(
+        outcome_status: str,
+        action_risk_tier: str | None = None,
+    ) -> Any:
+        return await conn.fetchrow(
             """
             INSERT INTO autoskill.autonomy_calibration_observations (
               calibration_observation_id,
@@ -789,8 +880,17 @@ class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
               outcome_status
             )
             VALUES (
-              $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, 'pending'
+              $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11
             )
+            RETURNING
+              calibration_observation_id,
+              calibration_family,
+              autonomy_decision_id,
+              adjudication_id,
+              action_risk_tier,
+              predicted_confidence,
+              selected_action,
+              outcome_status
             """,
             uuid4(),
             workspace_id,
@@ -798,15 +898,11 @@ class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
             model_profile_id,
             adjudication_id,
             autonomy_decision_id,
-            _action_risk_tier(action),
+            _canonical_action_risk_tier(action, action_risk_tier),
             _bounded_confidence(confidence),
             _json(confidence_decomposition),
             action,
-        )
-        await self._refresh_reliability_metrics(
-            conn,
-            workspace_id=workspace_id,
-            calibration_family=calibration_family,
+            _outcome_status(outcome_status),
         )
 
     async def _refresh_reliability_metrics(
@@ -965,6 +1061,31 @@ def _action_risk_tier(action: str) -> str:
     if action == "escalate_admin":
         return "T4_external_or_irreversible"
     return "T1_internal_record"
+
+
+_ACTION_RISK_TIERS = {
+    "T0_observe",
+    "T1_internal_record",
+    "T2_trial_artifact",
+    "T3_owned_runtime_change",
+    "T4_external_or_irreversible",
+}
+
+
+def _canonical_action_risk_tier(action: str, explicit: str | None = None) -> str:
+    if explicit is None:
+        return _action_risk_tier(action)
+    tier = explicit.strip()
+    if tier not in _ACTION_RISK_TIERS:
+        raise ValueError(f"unsupported action risk tier: {explicit}")
+    return tier
+
+
+def _required_text(value: str, field: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{field} is required")
+    return text
 
 
 def _outcome_status(value: str) -> str:
