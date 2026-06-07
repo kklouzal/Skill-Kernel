@@ -3,6 +3,33 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: context compilation now writes pending calibration
+observations for the `context_budget_semantic_equivalence` semantic family.
+`compile_skill_with_context_governance` accepts an optional autonomy control
+store after persisting the context artifact, compile run, budget event, and
+semantic-compression trial, then records content-safe compile status,
+budget/scanner state, requirement preservation counts, semantic-equivalence
+score, probe-evidence gate state, and IDs for the artifact/compile/trial
+records. Passing compiles record `accept_context_artifact`; failed compiles
+record reversible `compile_more_conservatively` or deterministic `auto_reject`
+evidence. The repair-proposal worker path now passes its existing
+proposal-gate autonomy store through when present, keeping compiler/writer
+authority deterministic and adding no runtime skill writes, activation, or LLM
+file/SQL authority. This advances Sections 5.5, 5.7, 5.9, 5.12, 5.13, 5.14,
+11, and 20; Part IV semantic decision-family coverage for context
+equivalence/compression; and production criteria 31.58/31.63. Focused
+validation passed with `uv run pytest
+sidecar/autoskill/tests/test_skillir_compiler_scanner.py -q -k
+"context_compiler"` (`8 passed, 12 deselected`) and touched-file Ruff.
+Required gates passed with `uv run ruff check sidecar`, `uv run pytest` (`463
+passed`), `uv run python -m compileall -q sidecar`, and `git diff --check`. A
+Dev-01 Postgres smoke compiled a throwaway
+`cron-context-equivalence-calibration-smoke-*` SkillIR through
+`AsyncpgContextGovernanceStore` plus `AsyncpgAutonomyControlStore`, verified
+`status=passed`, `action=accept_context_artifact`, `sample_count=1`,
+`support=empirical_low_support`, then deleted the smoke workspace and verified
+`remaining_workspaces=0`.
+
 2026-06-07 update: topology proposal persistence now records pending
 calibration observations for the `topology_operation_choice` semantic family.
 The propose-only topology persistence path accepts the existing autonomy

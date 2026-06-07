@@ -7,6 +7,7 @@ from uuid import UUID
 
 from autoskill.core.hashing import sha256_json, sha256_text
 from autoskill.core.skillir import SkillIR, SupportArtifact
+from autoskill.db.autonomy import AutonomyControlStore
 from autoskill.db.context import ContextGovernanceStore
 from autoskill.services.scanner import ScannerFinding, has_blocking_findings, scan_text
 
@@ -43,6 +44,7 @@ class ContextCompilationResult:
     compile_run: dict[str, object]
     budget_event: dict[str, object]
     semantic_compression_trial: dict[str, object]
+    calibration_observation: dict[str, object] | None
     status: str
     reject_reason: str | None
     required_requirements: int
@@ -76,6 +78,7 @@ class ContextCompilationResult:
             "compile_run": self.compile_run,
             "budget_event": self.budget_event,
             "semantic_compression_trial": self.semantic_compression_trial,
+            "calibration_observation": self.calibration_observation,
         }
 
 
@@ -210,6 +213,7 @@ async def compile_skill_with_context_governance(
     store: ContextGovernanceStore,
     *,
     workspace_key: str,
+    autonomy: AutonomyControlStore | None = None,
     skill_id: UUID | None = None,
     skill_version_id: UUID | None = None,
     candidate_id: UUID | None = None,
@@ -423,6 +427,27 @@ async def compile_skill_with_context_governance(
             "regression_evidence": _safe_gate_evidence(regression_evidence),
         },
     )
+    calibration_observation = await _record_context_equivalence_calibration(
+        autonomy,
+        workspace_key=workspace_key,
+        skill=skill,
+        compiled=compiled,
+        artifact_id=UUID(str(artifact.context_artifact_id)),
+        compile_run_id=UUID(str(compile_run.context_compile_run_id)),
+        compression_trial_id=UUID(
+            str(compression_trial.semantic_compression_trial_id)
+        ),
+        status=status,
+        reject_reason=reject_reason,
+        lost_requirements=lost_requirements,
+        preserved_requirements=len(preserved),
+        required_requirements=len(requirements),
+        semantic_equivalence_score=semantic_equivalence_score,
+        require_probe_evidence=require_probe_evidence,
+        probe_reject_reason=probe_reject_reason,
+        routing_equivalence_evidence=routing_equivalence_evidence,
+        regression_evidence=regression_evidence,
+    )
     return ContextCompilationResult(
         compiled=compiled,
         context_artifact=artifact.to_json(),
@@ -430,6 +455,9 @@ async def compile_skill_with_context_governance(
         compile_run=compile_run.to_json(),
         budget_event=budget_event.to_json(),
         semantic_compression_trial=compression_trial.to_json(),
+        calibration_observation=(
+            calibration_observation.to_json() if calibration_observation else None
+        ),
         status=status,
         reject_reason=reject_reason,
         required_requirements=len(requirements),
@@ -438,6 +466,75 @@ async def compile_skill_with_context_governance(
         added_unsupported_requirements=added_unsupported_requirements,
         semantic_equivalence_score=semantic_equivalence_score,
     )
+
+
+async def _record_context_equivalence_calibration(
+    autonomy: AutonomyControlStore | None,
+    *,
+    workspace_key: str,
+    skill: SkillIR,
+    compiled: CompiledSkill,
+    artifact_id: UUID,
+    compile_run_id: UUID,
+    compression_trial_id: UUID,
+    status: str,
+    reject_reason: str | None,
+    lost_requirements: int,
+    preserved_requirements: int,
+    required_requirements: int,
+    semantic_equivalence_score: float,
+    require_probe_evidence: bool,
+    probe_reject_reason: str | None,
+    routing_equivalence_evidence: dict[str, object] | None,
+    regression_evidence: dict[str, object] | None,
+):
+    if autonomy is None:
+        return None
+    selected_action = _context_calibration_action(status, reject_reason)
+    confidence_components = {
+        "schema": "autoskill.context-equivalence-calibration-components.v1",
+        "compiler_version": CONTEXT_COMPILER_VERSION,
+        "skill_slug": skill.slug,
+        "artifact_kind": "skill_md",
+        "context_artifact_id": str(artifact_id),
+        "context_compile_run_id": str(compile_run_id),
+        "semantic_compression_trial_id": str(compression_trial_id),
+        "compile_status": status,
+        "reject_reason": reject_reason,
+        "budget_status": "over_budget" if compiled.token_over_budget else "passed",
+        "scanner_blocked": has_blocking_findings(compiled.scanner_findings),
+        "scanner_codes": [finding.code for finding in compiled.scanner_findings],
+        "estimated_tokens": compiled.estimated_tokens,
+        "max_context_tokens": compiled.max_context_tokens,
+        "required_requirements": required_requirements,
+        "preserved_requirements": preserved_requirements,
+        "lost_requirements": lost_requirements,
+        "semantic_equivalence_score": semantic_equivalence_score,
+        "probe_evidence_required": require_probe_evidence,
+        "probe_reject_reason": probe_reject_reason,
+        "routing_equivalence_evidence": _safe_gate_evidence(
+            routing_equivalence_evidence
+        ),
+        "regression_evidence": _safe_gate_evidence(regression_evidence),
+        "llm_authority": "none",
+        "runtime_write_authority": False,
+    }
+    return await autonomy.record_calibration_observation(
+        workspace_key=workspace_key,
+        calibration_family="context_budget_semantic_equivalence",
+        selected_action=selected_action,
+        predicted_confidence=semantic_equivalence_score,
+        confidence_components=confidence_components,
+        action_risk_tier="T1_internal_record",
+    )
+
+
+def _context_calibration_action(status: str, reject_reason: str | None) -> str:
+    if status == "passed":
+        return "accept_context_artifact"
+    if reject_reason in {"scanner_blocked", "semantic_loss"}:
+        return "auto_reject"
+    return "compile_more_conservatively"
 
 
 async def _record_support_context_artifacts(

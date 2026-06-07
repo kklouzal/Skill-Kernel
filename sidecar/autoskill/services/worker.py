@@ -1678,6 +1678,11 @@ async def _materialized_writer_apply_payload_for_repair(
         repair_skill,
         stores.context_governance,
         workspace_key=workspace_key,
+        autonomy=(
+            stores.autonomy_orchestrator.autonomy
+            if stores.autonomy_orchestrator is not None
+            else None
+        ),
         skill_id=source.skill_id,
         skill_version_id=skill_version_id,
         max_context_tokens=max_context_tokens,

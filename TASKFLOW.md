@@ -16,6 +16,33 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Context compilation now records pending calibration observations
+  for the `context_budget_semantic_equivalence` semantic family instead of
+  leaving semantic-compression trials outside the generic autonomy reliability
+  loop. `compile_skill_with_context_governance` accepts an optional autonomy
+  control store and records content-safe compile status, budget/scanner state,
+  requirement preservation counts, semantic-equivalence score, probe-evidence
+  gate state, context artifact ID, compile-run ID, and semantic-compression
+  trial ID. Passing compiles record `accept_context_artifact`; failed compiles
+  record reversible `compile_more_conservatively` or deterministic
+  `auto_reject` evidence. The repair-proposal worker path passes its existing
+  proposal-gate autonomy store through when available, preserving deterministic
+  compiler/writer authority and adding no runtime skill writes, activation, or
+  LLM file/SQL authority. This advances unified autonomy Sections 5.5, 5.7,
+  5.9, 5.12, 5.13, and 5.14; context compiler Section 11; SkillIR compiler
+  Section 20; Part IV semantic decision-family coverage for context
+  equivalence/compression; and production criteria 31.58/31.63. Focused
+  validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_skillir_compiler_scanner.py -q -k
+  "context_compiler"` (`8 passed, 12 deselected`) and touched-file Ruff.
+  Required gates passed with `uv run ruff check sidecar`, `uv run pytest`
+  (`463 passed`), `uv run python -m compileall -q sidecar`, and `git diff
+  --check`. A Dev-01 Postgres smoke compiled a throwaway
+  `cron-context-equivalence-calibration-smoke-*` SkillIR through
+  `AsyncpgContextGovernanceStore` plus `AsyncpgAutonomyControlStore`, verified
+  `status=passed`, `action=accept_context_artifact`, `sample_count=1`,
+  `support=empirical_low_support`, then deleted the smoke workspace and
+  verified `remaining_workspaces=0`.
 - 2026-06-07: Topology proposal persistence now feeds the generic semantic
   calibration corpus for the `topology_operation_choice` decision family
   instead of leaving create/improve/compose/decompose choices outside the

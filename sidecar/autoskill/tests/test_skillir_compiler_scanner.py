@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 from autoskill.core.skillir import RuntimeGuardTemplate, SkillIR, SupportArtifact
+from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.context import NullContextGovernanceStore
 from autoskill.services.compiler import (
     compile_skill,
@@ -141,6 +142,37 @@ def test_context_compiler_records_governance_gate_pass() -> None:
     assert result.semantic_compression_trial["status"] == "passed"
     assert result.lost_requirements == 0
     assert result.semantic_equivalence_score == 1.0
+    assert result.calibration_observation is None
+
+
+def test_context_compiler_records_context_equivalence_calibration_pass() -> None:
+    autonomy = NullAutonomyControlStore()
+
+    result = asyncio.run(
+        compile_skill_with_context_governance(
+            valid_skill(),
+            NullContextGovernanceStore(),
+            workspace_key="dev-01",
+            autonomy=autonomy,
+        )
+    )
+
+    assert result.status == "passed"
+    assert result.calibration_observation is not None
+    assert result.calibration_observation["calibration_family"] == (
+        "context_budget_semantic_equivalence"
+    )
+    assert result.calibration_observation["selected_action"] == (
+        "accept_context_artifact"
+    )
+    assert result.calibration_observation["action_risk_tier"] == "T1_internal_record"
+    assert result.calibration_observation["predicted_confidence"] == 1.0
+    assert len(autonomy.calibration_observations) == 1
+    assert autonomy.reliability_metrics[-1].calibration_family == (
+        "context_budget_semantic_equivalence"
+    )
+    assert autonomy.reliability_metrics[-1].sample_count == 1
+    assert autonomy.reliability_metrics[-1].abstention_rate == 0.0
 
 
 def test_context_compiler_registers_support_artifact_excerpts() -> None:
@@ -310,11 +342,14 @@ def test_context_compiler_manifest_hash_is_deterministic() -> None:
 
 
 def test_context_compiler_rejects_over_budget_artifact() -> None:
+    autonomy = NullAutonomyControlStore()
+
     result = asyncio.run(
         compile_skill_with_context_governance(
             valid_skill(),
             NullContextGovernanceStore(),
             workspace_key="dev-01",
+            autonomy=autonomy,
             max_context_tokens=1,
         )
     )
@@ -325,6 +360,13 @@ def test_context_compiler_rejects_over_budget_artifact() -> None:
     assert result.compile_run["status"] == "failed"
     assert result.budget_event["decision"] == "reject_change"
     assert result.semantic_compression_trial["status"] == "passed"
+    assert result.calibration_observation is not None
+    assert result.calibration_observation["selected_action"] == (
+        "compile_more_conservatively"
+    )
+    assert result.calibration_observation["predicted_confidence"] == 1.0
+    assert autonomy.reliability_metrics[-1].sample_count == 1
+    assert autonomy.reliability_metrics[-1].abstention_rate == 1.0
 
 
 def test_scanner_blocks_hidden_comments_and_fetch_exec() -> None:
