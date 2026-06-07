@@ -9727,6 +9727,11 @@ def create_app(
                     )
                     if isinstance(existing_payload, dict)
                     else None,
+                    administrative_escalation=existing_payload.get(
+                        "administrative_escalation"
+                    )
+                    if isinstance(existing_payload, dict)
+                    else None,
                     idempotency_replay=True,
                     idempotency_collision=idempotency_collision,
                 ),
@@ -9766,6 +9771,53 @@ def create_app(
                 "target_id": target_id,
                 "raw_content_included": False,
             }
+        administrative_escalation_payload: dict[str, object] | None = None
+        if (
+            request.action == "reveal_raw_content"
+            and not accepted
+            and not request.dry_run
+            and reason_codes
+        ):
+            escalation_kind = (
+                "policy_forbids_needed_raw_access"
+                if "raw-content-disabled" in reason_codes
+                else "raw_reveal_requested"
+            )
+            recommended_admin_action = (
+                "Enable raw-content policy only for an approved incident window."
+                if escalation_kind == "policy_forbids_needed_raw_access"
+                else "Retry with an admin role after confirming the raw-reveal reason."
+            )
+            administrative_escalation = await autonomy_control.record_administrative_escalation(
+                workspace_key=request.workspace_id,
+                escalation_kind=escalation_kind,
+                decision_family="raw_vault_reveal",
+                target_kind=target_type,
+                target_id=target_id,
+                dominant_reason_code=reason_codes[0],
+                attempted_autonomous_alternatives=[
+                    {
+                        "action": "redacted_or_declassified_projection",
+                        "status": "insufficient",
+                        "reason_code": reason_codes[0],
+                        "target_type": target_type,
+                        "target_id_hash": sha256_text(target_id),
+                    }
+                ],
+                recommended_admin_action=recommended_admin_action,
+                source_fidelity="raw_vault_linked",
+                hard_invariants={
+                    "raw_content_browser_delivery": "blocked",
+                    "raw_reveal_requires_admin": True,
+                    "raw_reveal_policy_enabled": (
+                        "raw-content-disabled" not in reason_codes
+                    ),
+                },
+            )
+            administrative_escalation_payload = administrative_escalation.to_json()
+            action_request_payload["administrative_escalation"] = (
+                administrative_escalation_payload
+            )
         action_attribution_check = await attribution.record_action_check(
             workspace_key=request.workspace_id,
             session_id=None,
@@ -9878,6 +9930,7 @@ def create_app(
                 action_attribution_check=action_attribution_check_receipt,
                 live_event=live_event.to_json(),
                 raw_reveal_grant=reveal_grant,
+                administrative_escalation=administrative_escalation_payload,
                 idempotency_replay=False,
                 idempotency_collision=False,
             ),

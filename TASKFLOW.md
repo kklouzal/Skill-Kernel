@@ -16,6 +16,26 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Administrative escalation is now an executable hard-boundary
+  record path instead of only seeded Observatory fixture state. The autonomy
+  control store can persist a canonical `administrative_escalation_events` row
+  and matching `admin_administrative_escalation_status` read-model row with
+  hard-boundary kind, decision family, target, attempted autonomous
+  alternatives, source-fidelity context, and recommended admin action. The
+  Observatory guarded-action path now records a non-dry-run raw-vault reveal
+  denial as a hard-boundary escalation when raw reveal policy is disabled or
+  the actor lacks the admin role, while preserving the existing fail-closed
+  audit/action-attribution behavior and avoiding raw browser payloads. This
+  advances unified automation directives in Part I Sections 5.1-5.4 and Part V
+  Sections 0, 1, 2, and 4 by limiting administrative escalation to explicit
+  authority boundaries and making it drillable through the same Core records
+  and Observatory read models as other autonomy states. Focused validation
+  passed with raw-reveal denial/grant tests, broader autonomy/escalation
+  Observatory subsets, touched-file Ruff, compileall, and full Observatory API
+  tests (`65 passed`). Required gates passed with `uv run ruff check sidecar
+  scripts`, `uv run pytest -q` (`446 passed`), `uv run python -m compileall -q
+  sidecar scripts`, `git diff --check`, core acceptance, Observatory
+  acceptance, readiness, handoff governance, and conformance.
 - 2026-06-07: Proposal-gate autonomy fallback remediation now records
   threshold-deadlock recommendations from deterministic stall context instead
   of writing every repeated soft-threshold loop as generic

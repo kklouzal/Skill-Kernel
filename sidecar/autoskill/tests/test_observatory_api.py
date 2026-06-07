@@ -18,6 +18,7 @@ from autoskill.core.events import EventEnvelope
 from autoskill.core.hashing import sha256_text
 from autoskill.db import observability as observability_module
 from autoskill.db.attribution import NullAttributionStore
+from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.broker_policy import NullBrokerPolicyStore
 from autoskill.db.candidates import CandidateReviewRecord, NullCandidateStore
 from autoskill.db.context import NullContextGovernanceStore
@@ -5461,7 +5462,12 @@ def test_observatory_action_requires_audit_reason_before_recording() -> None:
 
 def test_observatory_raw_reveal_action_fails_closed_by_default() -> None:
     observatory_admin = NullObservatoryAdminStore()
-    app = create_app(audit_store=MemoryAuditStore(), observatory_admin_store=observatory_admin)
+    autonomy = NullAutonomyControlStore()
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        autonomy_control_store=autonomy,
+        observatory_admin_store=observatory_admin,
+    )
     route = _routes(app)[("/admin/api/v1/actions", "POST")]
 
     async def run():
@@ -5484,6 +5490,11 @@ def test_observatory_raw_reveal_action_fails_closed_by_default() -> None:
     assert response.receipt["accepted"] is False
     assert response.receipt["policy"]["reason_codes"] == ["raw-content-disabled"]
     assert response.receipt["raw_reveal_grant"] is None
+    assert response.receipt["administrative_escalation"]["escalation_kind"] == (
+        "policy_forbids_needed_raw_access"
+    )
+    assert autonomy.escalations[0].dominant_reason_code == "raw-content-disabled"
+    assert autonomy.escalations[0].target_kind == "captured_event"
     assert observatory_admin.actions[0].request_payload_redacted["confirmation_hash"].startswith(
         "sha256:"
     )
@@ -5494,8 +5505,13 @@ def test_observatory_raw_reveal_grant_is_admin_only_and_hash_audited(monkeypatch
     monkeypatch.setenv("AUTOSKILL_WEB_ADMIN_RAW_CONTENT_ENABLED", "true")
     get_settings.cache_clear()
     audit_store = MemoryAuditStore()
+    autonomy = NullAutonomyControlStore()
     observatory_admin = NullObservatoryAdminStore()
-    app = create_app(audit_store=audit_store, observatory_admin_store=observatory_admin)
+    app = create_app(
+        audit_store=audit_store,
+        autonomy_control_store=autonomy,
+        observatory_admin_store=observatory_admin,
+    )
     route = _routes(app)[("/admin/api/v1/actions", "POST")]
 
     async def operator_attempt():
@@ -5533,6 +5549,9 @@ def test_observatory_raw_reveal_grant_is_admin_only_and_hash_audited(monkeypatch
 
     assert operator_response.receipt["accepted"] is False
     assert operator_response.receipt["policy"]["reason_codes"] == ["admin-role-required"]
+    assert operator_response.receipt["administrative_escalation"]["escalation_kind"] == (
+        "raw_reveal_requested"
+    )
     grant = admin_response.receipt["raw_reveal_grant"]
     assert admin_response.receipt["accepted"] is True
     assert grant["schema_version"] == "skillkernel.observatory.raw-reveal-grant.v1"
@@ -5544,6 +5563,8 @@ def test_observatory_raw_reveal_grant_is_admin_only_and_hash_audited(monkeypatch
     assert "token" not in audited_payload["raw_reveal_grant"]
     assert audit_store.records[-1].details["raw_reveal_grant_hash"] == grant["token_hash"]
     assert audit_store.records[-1].details["raw_content_included"] is False
+    assert len(autonomy.escalations) == 1
+    assert autonomy.escalations[0].dominant_reason_code == "admin-role-required"
 
     get_settings.cache_clear()
 

@@ -36,6 +36,31 @@ class ProposalGateFallbackRecord:
         }
 
 
+@dataclass(frozen=True)
+class AdministrativeEscalationRecord:
+    escalation_event_id: UUID
+    escalation_kind: str
+    decision_family: str
+    target_kind: str
+    target_id: str
+    dominant_reason_code: str
+    attempted_autonomous_alternatives: list[dict[str, Any]]
+    recommended_admin_action: str | None
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "schema": "autoskill.administrative-escalation.v1",
+            "escalation_event_id": str(self.escalation_event_id),
+            "escalation_kind": self.escalation_kind,
+            "decision_family": self.decision_family,
+            "target_kind": self.target_kind,
+            "target_id": self.target_id,
+            "dominant_reason_code": self.dominant_reason_code,
+            "attempted_autonomous_alternatives": self.attempted_autonomous_alternatives,
+            "recommended_admin_action": self.recommended_admin_action,
+        }
+
+
 class AutonomyControlStore(Protocol):
     async def record_proposal_gate_fallback(
         self,
@@ -60,10 +85,30 @@ class AutonomyControlStore(Protocol):
     ) -> ProposalGateFallbackRecord:
         """Persist an autonomous fallback for a stalled proposal-gate evaluation."""
 
+    async def record_administrative_escalation(
+        self,
+        *,
+        workspace_key: str,
+        escalation_kind: str,
+        decision_family: str,
+        target_kind: str,
+        target_id: str,
+        dominant_reason_code: str,
+        attempted_autonomous_alternatives: list[dict[str, Any]],
+        recommended_admin_action: str | None = None,
+        autonomy_decision_id: UUID | None = None,
+        adjudication_id: UUID | None = None,
+        evidence_packet_id: UUID | None = None,
+        source_fidelity: str | None = None,
+        hard_invariants: dict[str, Any] | None = None,
+    ) -> AdministrativeEscalationRecord:
+        """Persist a hard-boundary administrative escalation and read-model row."""
+
 
 class NullAutonomyControlStore:
     def __init__(self) -> None:
         self.records: list[ProposalGateFallbackRecord] = []
+        self.escalations: list[AdministrativeEscalationRecord] = []
 
     async def record_proposal_gate_fallback(
         self,
@@ -102,6 +147,36 @@ class NullAutonomyControlStore:
             skill_version_id=skill_version_id,
         )
         self.records.append(record)
+        return record
+
+    async def record_administrative_escalation(
+        self,
+        *,
+        workspace_key: str,
+        escalation_kind: str,
+        decision_family: str,
+        target_kind: str,
+        target_id: str,
+        dominant_reason_code: str,
+        attempted_autonomous_alternatives: list[dict[str, Any]],
+        recommended_admin_action: str | None = None,
+        autonomy_decision_id: UUID | None = None,
+        adjudication_id: UUID | None = None,
+        evidence_packet_id: UUID | None = None,
+        source_fidelity: str | None = None,
+        hard_invariants: dict[str, Any] | None = None,
+    ) -> AdministrativeEscalationRecord:
+        record = AdministrativeEscalationRecord(
+            escalation_event_id=uuid4(),
+            escalation_kind=escalation_kind,
+            decision_family=decision_family,
+            target_kind=target_kind,
+            target_id=target_id,
+            dominant_reason_code=dominant_reason_code,
+            attempted_autonomous_alternatives=list(attempted_autonomous_alternatives),
+            recommended_admin_action=recommended_admin_action,
+        )
+        self.escalations.append(record)
         return record
 
 
@@ -321,6 +396,112 @@ class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
             reason_codes=list(reason_codes),
             evaluation_id=evaluation_id,
             skill_version_id=skill_version_id,
+        )
+
+    async def record_administrative_escalation(
+        self,
+        *,
+        workspace_key: str,
+        escalation_kind: str,
+        decision_family: str,
+        target_kind: str,
+        target_id: str,
+        dominant_reason_code: str,
+        attempted_autonomous_alternatives: list[dict[str, Any]],
+        recommended_admin_action: str | None = None,
+        autonomy_decision_id: UUID | None = None,
+        adjudication_id: UUID | None = None,
+        evidence_packet_id: UUID | None = None,
+        source_fidelity: str | None = None,
+        hard_invariants: dict[str, Any] | None = None,
+    ) -> AdministrativeEscalationRecord:
+        escalation_event_id = uuid4()
+        attempted_actions = [
+            str(item.get("action"))
+            for item in attempted_autonomous_alternatives
+            if isinstance(item, dict) and str(item.get("action") or "").strip()
+        ]
+        if not attempted_actions:
+            attempted_actions = ["record_policy_block"]
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            await conn.execute(
+                """
+                INSERT INTO autoskill.administrative_escalation_events (
+                  escalation_event_id,
+                  workspace_id,
+                  autonomy_decision_id,
+                  adjudication_id,
+                  escalation_kind,
+                  evidence_packet_id,
+                  decision_family,
+                  source_fidelity,
+                  hard_invariants,
+                  attempted_autonomous_alternatives,
+                  recommended_admin_action,
+                  status
+                )
+                VALUES (
+                  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb,
+                  $10::text[], $11, 'open'
+                )
+                """,
+                escalation_event_id,
+                workspace_id,
+                autonomy_decision_id,
+                adjudication_id,
+                escalation_kind,
+                evidence_packet_id,
+                decision_family,
+                source_fidelity,
+                _json(hard_invariants or {}),
+                attempted_actions,
+                recommended_admin_action,
+            )
+            await conn.execute(
+                """
+                INSERT INTO autoskill.admin_administrative_escalation_status (
+                  event_id,
+                  workspace_key,
+                  hard_boundary_kind,
+                  decision_family,
+                  target_kind,
+                  target_id,
+                  attempted_autonomous_alternatives,
+                  resolution_state,
+                  dominant_reason_code
+                )
+                VALUES (
+                  $1, $2, $3, $4, $5, $6, $7::jsonb, 'open', $8
+                )
+                ON CONFLICT (event_id) DO UPDATE
+                SET hard_boundary_kind = EXCLUDED.hard_boundary_kind,
+                    decision_family = EXCLUDED.decision_family,
+                    target_kind = EXCLUDED.target_kind,
+                    target_id = EXCLUDED.target_id,
+                    attempted_autonomous_alternatives = EXCLUDED.attempted_autonomous_alternatives,
+                    resolution_state = EXCLUDED.resolution_state,
+                    dominant_reason_code = EXCLUDED.dominant_reason_code
+                """,
+                escalation_event_id,
+                workspace_key,
+                escalation_kind,
+                decision_family,
+                target_kind,
+                target_id,
+                _json(attempted_autonomous_alternatives),
+                dominant_reason_code,
+            )
+        return AdministrativeEscalationRecord(
+            escalation_event_id=escalation_event_id,
+            escalation_kind=escalation_kind,
+            decision_family=decision_family,
+            target_kind=target_kind,
+            target_id=target_id,
+            dominant_reason_code=dominant_reason_code,
+            attempted_autonomous_alternatives=list(attempted_autonomous_alternatives),
+            recommended_admin_action=recommended_admin_action,
         )
 
 

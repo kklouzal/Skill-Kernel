@@ -1190,6 +1190,7 @@ def action_receipt(
     action_attribution_check: dict[str, Any] | None = None,
     live_event: dict[str, Any] | None = None,
     raw_reveal_grant: dict[str, Any] | None = None,
+    administrative_escalation: dict[str, Any] | None = None,
     idempotency_replay: bool = False,
     idempotency_collision: bool = False,
 ) -> dict[str, Any]:
@@ -1224,6 +1225,7 @@ def action_receipt(
         "action_attribution_check": action_attribution_check,
         "live_event": live_event,
         "raw_reveal_grant": raw_reveal_grant,
+        "administrative_escalation": administrative_escalation,
     }
 
 
