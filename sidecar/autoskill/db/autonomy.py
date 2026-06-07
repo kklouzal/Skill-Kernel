@@ -61,6 +61,60 @@ class AdministrativeEscalationRecord:
         }
 
 
+@dataclass(frozen=True)
+class AutonomyCalibrationObservationRecord:
+    calibration_observation_id: UUID
+    calibration_family: str
+    autonomy_decision_id: UUID | None
+    adjudication_id: UUID | None
+    action_risk_tier: str
+    predicted_confidence: float
+    selected_action: str
+    outcome_status: str
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "schema": "autoskill.autonomy-calibration-observation.v1",
+            "calibration_observation_id": str(self.calibration_observation_id),
+            "calibration_family": self.calibration_family,
+            "autonomy_decision_id": (
+                str(self.autonomy_decision_id) if self.autonomy_decision_id else None
+            ),
+            "adjudication_id": str(self.adjudication_id) if self.adjudication_id else None,
+            "action_risk_tier": self.action_risk_tier,
+            "predicted_confidence": self.predicted_confidence,
+            "selected_action": self.selected_action,
+            "outcome_status": self.outcome_status,
+        }
+
+
+@dataclass(frozen=True)
+class AutonomyReliabilityMetricRecord:
+    reliability_metric_id: UUID
+    calibration_family: str
+    sample_count: int
+    coverage_rate: float
+    false_accept_rate: float | None
+    false_reject_rate: float | None
+    abstention_rate: float
+    unnecessary_abstention_rate: float | None
+    calibration_support: str
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "schema": "autoskill.autonomy-reliability-metric.v1",
+            "reliability_metric_id": str(self.reliability_metric_id),
+            "calibration_family": self.calibration_family,
+            "sample_count": self.sample_count,
+            "coverage_rate": self.coverage_rate,
+            "false_accept_rate": self.false_accept_rate,
+            "false_reject_rate": self.false_reject_rate,
+            "abstention_rate": self.abstention_rate,
+            "unnecessary_abstention_rate": self.unnecessary_abstention_rate,
+            "calibration_support": self.calibration_support,
+        }
+
+
 class AutonomyControlStore(Protocol):
     async def record_proposal_gate_fallback(
         self,
@@ -104,11 +158,29 @@ class AutonomyControlStore(Protocol):
     ) -> AdministrativeEscalationRecord:
         """Persist a hard-boundary administrative escalation and read-model row."""
 
+    async def record_calibration_outcome(
+        self,
+        *,
+        workspace_key: str,
+        autonomy_decision_id: UUID,
+        outcome_status: str,
+        outcome: dict[str, Any] | None = None,
+        false_accept: bool | None = None,
+        false_reject: bool | None = None,
+        unnecessary_abstention: bool | None = None,
+        harm_finding: bool | None = None,
+        utility_score: float | None = None,
+        context_token_delta: int | None = None,
+    ) -> AutonomyCalibrationObservationRecord | None:
+        """Attach a delayed outcome to a persisted semantic calibration observation."""
+
 
 class NullAutonomyControlStore:
     def __init__(self) -> None:
         self.records: list[ProposalGateFallbackRecord] = []
         self.escalations: list[AdministrativeEscalationRecord] = []
+        self.calibration_observations: list[AutonomyCalibrationObservationRecord] = []
+        self.reliability_metrics: list[AutonomyReliabilityMetricRecord] = []
 
     async def record_proposal_gate_fallback(
         self,
@@ -147,6 +219,12 @@ class NullAutonomyControlStore:
             skill_version_id=skill_version_id,
         )
         self.records.append(record)
+        self._record_pending_calibration(
+            autonomy_decision_id=record.autonomy_decision_id,
+            adjudication_id=record.adjudication_id,
+            action=action,
+            confidence=confidence,
+        )
         return record
 
     async def record_administrative_escalation(
@@ -178,6 +256,102 @@ class NullAutonomyControlStore:
         )
         self.escalations.append(record)
         return record
+
+    async def record_calibration_outcome(
+        self,
+        *,
+        workspace_key: str,
+        autonomy_decision_id: UUID,
+        outcome_status: str,
+        outcome: dict[str, Any] | None = None,
+        false_accept: bool | None = None,
+        false_reject: bool | None = None,
+        unnecessary_abstention: bool | None = None,
+        harm_finding: bool | None = None,
+        utility_score: float | None = None,
+        context_token_delta: int | None = None,
+    ) -> AutonomyCalibrationObservationRecord | None:
+        for index, record in enumerate(self.calibration_observations):
+            if record.autonomy_decision_id == autonomy_decision_id:
+                updated = AutonomyCalibrationObservationRecord(
+                    calibration_observation_id=record.calibration_observation_id,
+                    calibration_family=record.calibration_family,
+                    autonomy_decision_id=record.autonomy_decision_id,
+                    adjudication_id=record.adjudication_id,
+                    action_risk_tier=record.action_risk_tier,
+                    predicted_confidence=record.predicted_confidence,
+                    selected_action=record.selected_action,
+                    outcome_status=_outcome_status(outcome_status),
+                )
+                self.calibration_observations[index] = updated
+                self._refresh_reliability_metrics(record.calibration_family)
+                return updated
+        return None
+
+    def _record_pending_calibration(
+        self,
+        *,
+        autonomy_decision_id: UUID,
+        adjudication_id: UUID,
+        action: str,
+        confidence: float,
+    ) -> None:
+        self.calibration_observations.append(
+            AutonomyCalibrationObservationRecord(
+                calibration_observation_id=uuid4(),
+                calibration_family="skill_plan_semantic_adjudication",
+                autonomy_decision_id=autonomy_decision_id,
+                adjudication_id=adjudication_id,
+                action_risk_tier=_action_risk_tier(action),
+                predicted_confidence=_bounded_confidence(confidence),
+                selected_action=action,
+                outcome_status="pending",
+            )
+        )
+        self._refresh_reliability_metrics("skill_plan_semantic_adjudication")
+
+    def _refresh_reliability_metrics(self, calibration_family: str) -> None:
+        records = [
+            record
+            for record in self.calibration_observations
+            if record.calibration_family == calibration_family
+        ]
+        if not records:
+            return
+        observed = [
+            record
+            for record in records
+            if record.outcome_status not in {"pending", "unknown"}
+        ]
+        abstentions = [
+            record
+            for record in records
+            if record.selected_action
+            in {
+                "collect_more_evidence",
+                "run_more_probes",
+                "run_re_adjudication",
+                "reduce_scope",
+                "no_op_reschedule",
+            }
+        ]
+        self.reliability_metrics.append(
+            AutonomyReliabilityMetricRecord(
+                reliability_metric_id=uuid4(),
+                calibration_family=calibration_family,
+                sample_count=len(records),
+                coverage_rate=len(observed) / len(records),
+                false_accept_rate=None,
+                false_reject_rate=None,
+                abstention_rate=len(abstentions) / len(records),
+                unnecessary_abstention_rate=None,
+                calibration_support=(
+                    "empirical_supported"
+                    if len(observed) >= 30
+                    else "empirical_low_support"
+                ),
+            )
+        )
 
 
 class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
@@ -385,6 +559,17 @@ class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
                 evaluation_id,
                 _json(persisted_result_patch),
             )
+            await self._record_pending_calibration(
+                conn,
+                workspace_id=workspace_id,
+                calibration_family="skill_plan_semantic_adjudication",
+                autonomy_decision_id=autonomy_decision_id,
+                adjudication_id=adjudication_id,
+                model_profile_id=model_profile_id,
+                action=action,
+                confidence=confidence,
+                confidence_decomposition=confidence_decomposition,
+            )
 
         return ProposalGateFallbackRecord(
             autonomy_decision_id=autonomy_decision_id,
@@ -504,6 +689,256 @@ class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
             recommended_admin_action=recommended_admin_action,
         )
 
+    async def record_calibration_outcome(
+        self,
+        *,
+        workspace_key: str,
+        autonomy_decision_id: UUID,
+        outcome_status: str,
+        outcome: dict[str, Any] | None = None,
+        false_accept: bool | None = None,
+        false_reject: bool | None = None,
+        unnecessary_abstention: bool | None = None,
+        harm_finding: bool | None = None,
+        utility_score: float | None = None,
+        context_token_delta: int | None = None,
+    ) -> AutonomyCalibrationObservationRecord | None:
+        bounded_outcome_status = _outcome_status(outcome_status)
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            workspace_id = await ensure_workspace(conn, workspace_key)
+            row = await conn.fetchrow(
+                """
+                UPDATE autoskill.autonomy_calibration_observations
+                SET outcome_status = $3,
+                    outcome_observed_at = now(),
+                    outcome = $4::jsonb,
+                    false_accept = $5,
+                    false_reject = $6,
+                    unnecessary_abstention = $7,
+                    harm_finding = $8,
+                    utility_score = $9,
+                    context_token_delta = $10
+                WHERE workspace_id = $1
+                  AND autonomy_decision_id = $2
+                RETURNING
+                  calibration_observation_id,
+                  calibration_family,
+                  autonomy_decision_id,
+                  adjudication_id,
+                  action_risk_tier,
+                  predicted_confidence,
+                  selected_action,
+                  outcome_status
+                """,
+                workspace_id,
+                autonomy_decision_id,
+                bounded_outcome_status,
+                _json(outcome or {}),
+                false_accept,
+                false_reject,
+                unnecessary_abstention,
+                harm_finding,
+                utility_score,
+                context_token_delta,
+            )
+            if row is None:
+                return None
+            await self._refresh_reliability_metrics(
+                conn,
+                workspace_id=workspace_id,
+                calibration_family=row["calibration_family"],
+            )
+        return AutonomyCalibrationObservationRecord(
+            calibration_observation_id=row["calibration_observation_id"],
+            calibration_family=row["calibration_family"],
+            autonomy_decision_id=row["autonomy_decision_id"],
+            adjudication_id=row["adjudication_id"],
+            action_risk_tier=row["action_risk_tier"],
+            predicted_confidence=float(row["predicted_confidence"]),
+            selected_action=row["selected_action"],
+            outcome_status=row["outcome_status"],
+        )
+
+    async def _record_pending_calibration(
+        self,
+        conn: Any,
+        *,
+        workspace_id: UUID,
+        calibration_family: str,
+        autonomy_decision_id: UUID,
+        adjudication_id: UUID,
+        model_profile_id: UUID | None,
+        action: str,
+        confidence: float,
+        confidence_decomposition: dict[str, Any],
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO autoskill.autonomy_calibration_observations (
+              calibration_observation_id,
+              workspace_id,
+              calibration_family,
+              model_profile_id,
+              adjudication_id,
+              autonomy_decision_id,
+              action_risk_tier,
+              predicted_confidence,
+              confidence_components,
+              selected_action,
+              outcome_status
+            )
+            VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, 'pending'
+            )
+            """,
+            uuid4(),
+            workspace_id,
+            calibration_family,
+            model_profile_id,
+            adjudication_id,
+            autonomy_decision_id,
+            _action_risk_tier(action),
+            _bounded_confidence(confidence),
+            _json(confidence_decomposition),
+            action,
+        )
+        await self._refresh_reliability_metrics(
+            conn,
+            workspace_id=workspace_id,
+            calibration_family=calibration_family,
+        )
+
+    async def _refresh_reliability_metrics(
+        self,
+        conn: Any,
+        *,
+        workspace_id: UUID,
+        calibration_family: str,
+    ) -> None:
+        await conn.execute(
+            """
+            WITH observations AS (
+              SELECT *
+              FROM autoskill.autonomy_calibration_observations
+              WHERE workspace_id = $2
+                AND calibration_family = $3
+                AND created_at >= now() - interval '30 days'
+            ),
+            aggregates AS (
+              SELECT
+                count(*)::integer AS sample_count,
+                min(created_at) AS window_start,
+                now() AS window_end,
+                avg(
+                  CASE
+                    WHEN outcome_status NOT IN ('pending', 'unknown') THEN 1.0
+                    ELSE 0.0
+                  END
+                ) AS coverage_rate,
+                avg(CASE WHEN false_accept IS NULL THEN NULL WHEN false_accept THEN 1.0 ELSE 0.0 END) AS false_accept_rate,
+                avg(CASE WHEN false_reject IS NULL THEN NULL WHEN false_reject THEN 1.0 ELSE 0.0 END) AS false_reject_rate,
+                avg(
+                  CASE
+                    WHEN selected_action IN (
+                      'collect_more_evidence',
+                      'run_more_probes',
+                      'run_re_adjudication',
+                      'reduce_scope',
+                      'no_op_reschedule'
+                    ) THEN 1.0
+                    ELSE 0.0
+                  END
+                ) AS abstention_rate,
+                avg(
+                  CASE
+                    WHEN unnecessary_abstention IS NULL THEN NULL
+                    WHEN unnecessary_abstention THEN 1.0
+                    ELSE 0.0
+                  END
+                ) AS unnecessary_abstention_rate,
+                avg(
+                  CASE
+                    WHEN outcome_status = 'success' THEN abs(predicted_confidence - 1.0)
+                    WHEN outcome_status = 'failure' THEN abs(predicted_confidence - 0.0)
+                    ELSE NULL
+                  END
+                ) AS calibration_error,
+                avg(
+                  CASE
+                    WHEN outcome_status = 'success' THEN power(predicted_confidence - 1.0, 2)
+                    WHEN outcome_status = 'failure' THEN power(predicted_confidence - 0.0, 2)
+                    ELSE NULL
+                  END
+                ) AS brier_like_score,
+                avg(CASE WHEN harm_finding IS NULL THEN NULL WHEN harm_finding THEN 1.0 ELSE 0.0 END) AS harm_finding_rate,
+                sum(utility_score) / NULLIF(sum(abs(context_token_delta)), 0) AS utility_per_context_token,
+                jsonb_build_array(
+                  jsonb_build_object(
+                    'confidence_min', 0.0,
+                    'confidence_max', 0.5,
+                    'sample_count', count(*) FILTER (WHERE predicted_confidence < 0.5)
+                  ),
+                  jsonb_build_object(
+                    'confidence_min', 0.5,
+                    'confidence_max', 0.85,
+                    'sample_count', count(*) FILTER (WHERE predicted_confidence >= 0.5 AND predicted_confidence < 0.85)
+                  ),
+                  jsonb_build_object(
+                    'confidence_min', 0.85,
+                    'confidence_max', 1.0,
+                    'sample_count', count(*) FILTER (WHERE predicted_confidence >= 0.85)
+                  )
+                ) AS reliability_bins
+              FROM observations
+            )
+            INSERT INTO autoskill.autonomy_reliability_metrics (
+              reliability_metric_id,
+              workspace_id,
+              calibration_family,
+              window_start,
+              window_end,
+              sample_count,
+              coverage_rate,
+              false_accept_rate,
+              false_reject_rate,
+              abstention_rate,
+              unnecessary_abstention_rate,
+              calibration_error,
+              brier_like_score,
+              harm_finding_rate,
+              utility_per_context_token,
+              reliability_bins,
+              calibration_support
+            )
+            SELECT
+              $1, $2, $3,
+              coalesce(window_start, now()),
+              window_end,
+              sample_count,
+              coverage_rate,
+              false_accept_rate,
+              false_reject_rate,
+              abstention_rate,
+              unnecessary_abstention_rate,
+              calibration_error,
+              brier_like_score,
+              harm_finding_rate,
+              utility_per_context_token,
+              reliability_bins,
+              CASE
+                WHEN sample_count = 0 THEN 'none'
+                WHEN sample_count < 30 OR coverage_rate < 0.5 THEN 'empirical_low_support'
+                ELSE 'empirical_supported'
+              END
+            FROM aggregates
+            WHERE sample_count > 0
+            """,
+            uuid4(),
+            workspace_id,
+            calibration_family,
+        )
+
 
 def _json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
@@ -530,3 +965,11 @@ def _action_risk_tier(action: str) -> str:
     if action == "escalate_admin":
         return "T4_external_or_irreversible"
     return "T1_internal_record"
+
+
+def _outcome_status(value: str) -> str:
+    status = str(value).strip().lower()
+    allowed = {"pending", "success", "failure", "mixed", "unknown", "revoked"}
+    if status not in allowed:
+        return "unknown"
+    return status

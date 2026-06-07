@@ -3,6 +3,33 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: autonomy calibration persistence now attaches real
+calibration corpus rows to proposal-gate fallback decisions instead of relying
+only on schema/report-level evidence. `record_proposal_gate_fallback` seeds a
+pending `autonomy_calibration_observations` row with calibration family,
+adjudication/decision IDs, action risk tier, predicted confidence, confidence
+components, and selected action, then refreshes a 30-day
+`autonomy_reliability_metrics` snapshot with sample count, coverage,
+abstention rate, reliability bins, calibration error/Brier-style fields when
+delayed outcomes exist, and empirical support status. A new
+`record_calibration_outcome` store method records delayed success/failure
+outcomes plus false-accept/false-reject/unnecessary-abstention/harm and
+utility-per-token inputs, preserving hard-invariant authority and adding no
+runtime-write capability. This advances Sections 5.5, 5.9, 5.12, 5.14, and
+production criteria 31.56/31.58/31.63 by making semantic decision-family
+calibration observations and reliability metrics operational Core state.
+Focused validation passed with the proposal-gate autonomy evaluator subset (`9
+passed, 21 deselected`) and touched-file Ruff. Required gates passed with `uv
+run ruff check sidecar`, `uv run pytest` (`453 passed`), `uv run python -m
+compileall -q sidecar`, `git diff --check`, core acceptance (`ready=true`,
+`70` implemented, `7` context criteria), Observatory acceptance (`ready=true`,
+`86` satisfied), conformance (`ready=true`, `23/23`), readiness (`ready=true`,
+`17` checklist items), and handoff governance (`79` satisfied). A
+compose/Postgres smoke against the Dev-01 local database inserted a throwaway
+proposal-gate fallback, recorded a delayed calibration outcome, verified
+`outcome_status='success'`, and then deleted the smoke workspace plus its
+metrics/observation/decision/adjudication rows.
+
 2026-06-07 update: proposal-gate autonomy adjudication now exposes the
 specification-native soft-exit vocabulary in the LLM request instead of
 advertising only the smaller executable internal action set. Section 5.1,

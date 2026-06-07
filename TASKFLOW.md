@@ -16,6 +16,33 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Autonomy calibration persistence now turns proposal-gate
+  fallback decisions into real calibration corpus state. The autonomy control
+  store seeds a pending `autonomy_calibration_observations` row for each
+  persisted proposal-gate fallback with calibration family,
+  adjudication/decision IDs, action risk tier, predicted confidence,
+  confidence components, and selected action, then refreshes a 30-day
+  `autonomy_reliability_metrics` snapshot with sample count, coverage,
+  abstention rate, reliability bins, empirical support status, and delayed
+  outcome-derived calibration/error fields when available. The new
+  `record_calibration_outcome` method attaches later success/failure/mixed/
+  revoked outcomes plus false-accept, false-reject, unnecessary-abstention,
+  harm, utility, and context-token signals without authorizing runtime writes
+  or relaxing hard invariants. This advances unified autonomy Sections 5.5,
+  5.9, 5.12, and 5.14 plus production criteria 31.56/31.58/31.63 by making
+  calibration observations, delayed outcomes, and reliability metrics
+  operational Core persistence instead of static-report-only evidence.
+  Focused validation passed with the proposal-gate autonomy evaluator subset
+  (`9 passed, 21 deselected`) and touched-file Ruff. Required gates passed with
+  `uv run ruff check sidecar`, `uv run pytest` (`453 passed`), `uv run python
+  -m compileall -q sidecar`, `git diff --check`, core acceptance
+  (`ready=true`, `70` implemented, `7` context criteria), Observatory
+  acceptance (`ready=true`, `86` satisfied), conformance (`ready=true`,
+  `23/23`), readiness (`ready=true`, `17` checklist items), and handoff
+  governance (`79` satisfied). Compose/Postgres smoke used a throwaway
+  `cron-calibration-smoke-*` workspace to insert a fallback, record delayed
+  outcome `success`, then delete the smoke workspace and its metrics,
+  observation, admin read-model, decision, and adjudication rows.
 - 2026-06-07: Proposal-gate autonomy adjudication now advertises the
   specification-native soft-exit vocabulary to the LLM instead of prompting
   only with the smaller executable internal action set. The deterministic

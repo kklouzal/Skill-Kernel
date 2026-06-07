@@ -463,7 +463,74 @@ def test_proposal_gate_autonomy_orchestrator_runs_llm_fallback() -> None:
     assert fallback["llm_invocation_id"] is not None
     assert fallback["confidence_band"] == "high"
     assert autonomy.records[0].action == "stage_canary"
+    assert autonomy.calibration_observations[0].autonomy_decision_id == (
+        autonomy.records[0].autonomy_decision_id
+    )
+    assert autonomy.calibration_observations[0].outcome_status == "pending"
+    assert autonomy.calibration_observations[0].predicted_confidence == 0.91
+    assert autonomy.calibration_observations[0].selected_action == "stage_canary"
+    assert autonomy.calibration_observations[0].action_risk_tier == (
+        "T2_trial_artifact"
+    )
+    assert autonomy.reliability_metrics[-1].sample_count == 1
+    assert autonomy.reliability_metrics[-1].coverage_rate == 0.0
+    assert autonomy.reliability_metrics[-1].abstention_rate == 0.0
+    assert autonomy.reliability_metrics[-1].calibration_support == (
+        "empirical_low_support"
+    )
     assert llm.calls[0].purpose == "proposal_gate.needs_intervention_adjudication"
+
+
+def test_proposal_gate_autonomy_store_records_delayed_calibration_outcome() -> None:
+    autonomy = NullAutonomyControlStore()
+    llm = MemoryLLM(
+        json.dumps(
+            {
+                "action": "run_more_probes",
+                "confidence": 0.67,
+                "confidence_decomposition": {
+                    "model_confidence": 0.67,
+                    "evidence_coverage": 0.48,
+                    "source_fidelity": 0.7,
+                    "scanner_risk": 0.0,
+                },
+                "evidence_fidelity": "redacted_derivative",
+                "reason_codes": ["probe-margin-low"],
+                "uncertainty_notes": ["needs more counterfactual coverage"],
+            }
+        )
+    )
+    orchestrator = ProposalGateAutonomyOrchestrator(
+        profiles=MemoryProfileStore(model_profile()),
+        llm=llm,  # type: ignore[arg-type]
+        autonomy=autonomy,
+    )
+
+    async def run() -> object:
+        await orchestrator.resolve_item(
+            needs_intervention_item(),
+            workspace_key="dev-01",
+        )
+        return await autonomy.record_calibration_outcome(
+            workspace_key="dev-01",
+            autonomy_decision_id=autonomy.records[0].autonomy_decision_id,
+            outcome_status="success",
+            outcome={"source": "canary"},
+            unnecessary_abstention=True,
+            utility_score=0.5,
+            context_token_delta=-40,
+        )
+
+    updated = asyncio.run(run())
+
+    assert updated is not None
+    assert autonomy.calibration_observations[0].outcome_status == "success"
+    assert autonomy.reliability_metrics[-1].sample_count == 1
+    assert autonomy.reliability_metrics[-1].coverage_rate == 1.0
+    assert autonomy.reliability_metrics[-1].abstention_rate == 1.0
+    assert autonomy.reliability_metrics[-1].calibration_support == (
+        "empirical_low_support"
+    )
 
 
 def test_proposal_gate_autonomy_downgrades_auto_accept_to_canary() -> None:
