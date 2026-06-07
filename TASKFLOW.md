@@ -16,6 +16,33 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Proposal-gate autonomy adjudication now consumes the latest
+  calibration reliability metric for `skill_plan_semantic_adjudication` before
+  asking the LLM to choose a soft-threshold fallback. `AutonomyControlStore`
+  exposes a latest-family reliability lookup across both Null and asyncpg
+  implementations; the orchestrator includes that content-safe
+  calibration-support packet in the LLM request and persists it in the
+  `autonomy_fallback` diagnostic payload. First-run decisions explicitly report
+  `status=none`, while existing sparse-family metrics report
+  `empirical_low_support` with sample/coverage/abstention rates, preserving
+  canary/trial-only authority and keeping runtime writes unauthorized. This
+  advances unified autonomy Sections 5.2, 5.5, 5.9, 5.12, 5.13, and 5.14 plus
+  production criteria 31.56, 31.58, and 31.63 by connecting persisted delayed
+  outcome metrics back into semantic fallback adjudication instead of leaving
+  calibration as a read-model-only surface. Focused validation passed with the
+  proposal-gate calibration/orchestrator subset (`14 passed, 21 deselected`) and
+  touched-file Ruff. Required gates passed with `uv run ruff check sidecar`,
+  `uv run pytest` (`458 passed`), `uv run python -m compileall -q sidecar`, and
+  `git diff --check`. Report gates passed with core acceptance (`ready=true`,
+  `63` production criteria, `7` context criteria), Observatory acceptance
+  (`ready=true`, `42` acceptance criteria, `44` developer checklist items),
+  conformance (`ready=true`, `23/23`), readiness (`ready=true`, `17` checklist
+  items), and handoff governance (`35` risks mitigated, `79` satisfied). A
+  Dev-01 Postgres smoke inserted a throwaway
+  `cron-calibration-support-smoke-*` workspace, verified the asyncpg latest
+  reliability lookup returns `sample_count=1`, `coverage_rate=0.0`, and
+  `calibration_support=empirical_low_support`, then deleted the smoke workspace
+  plus calibration rows.
 - 2026-06-07: Autonomy reliability metrics now classify the full
   specification-native soft-exit vocabulary as abstention/calibration support
   evidence instead of counting only a narrow internal fallback subset.

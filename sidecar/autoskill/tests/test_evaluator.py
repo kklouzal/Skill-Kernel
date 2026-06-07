@@ -462,6 +462,14 @@ def test_proposal_gate_autonomy_orchestrator_runs_llm_fallback() -> None:
     assert fallback["administrative_escalation_allowed"] is False
     assert fallback["llm_invocation_id"] is not None
     assert fallback["confidence_band"] == "high"
+    assert fallback["calibration_support"] == {
+        "calibration_family": "skill_plan_semantic_adjudication",
+        "status": "none",
+        "sample_count": 0,
+        "coverage_rate": 0.0,
+    }
+    prompt_payload = json.loads(llm.calls[0].messages[1].content)
+    assert prompt_payload["calibration_support"]["status"] == "none"
     assert autonomy.records[0].action == "stage_canary"
     assert autonomy.calibration_observations[0].autonomy_decision_id == (
         autonomy.records[0].autonomy_decision_id
@@ -479,6 +487,61 @@ def test_proposal_gate_autonomy_orchestrator_runs_llm_fallback() -> None:
         "empirical_low_support"
     )
     assert llm.calls[0].purpose == "proposal_gate.needs_intervention_adjudication"
+
+
+def test_proposal_gate_autonomy_includes_latest_calibration_support() -> None:
+    autonomy = NullAutonomyControlStore()
+    llm = MemoryLLM(
+        json.dumps(
+            {
+                "action": "run_more_probes",
+                "confidence": 0.62,
+                "confidence_decomposition": {
+                    "model_confidence": 0.62,
+                    "evidence_coverage": 0.51,
+                    "source_fidelity": 0.76,
+                    "scanner_risk": 0.0,
+                },
+                "evidence_fidelity": "redacted_derivative",
+                "reason_codes": ["low-family-support"],
+                "uncertainty_notes": ["family has sparse delayed outcomes"],
+            }
+        )
+    )
+    orchestrator = ProposalGateAutonomyOrchestrator(
+        profiles=MemoryProfileStore(model_profile()),
+        llm=llm,  # type: ignore[arg-type]
+        autonomy=autonomy,
+    )
+
+    async def run() -> EvaluationRunItem:
+        await autonomy.record_calibration_observation(
+            workspace_key="dev-01",
+            calibration_family="skill_plan_semantic_adjudication",
+            selected_action="collect_more_evidence",
+            predicted_confidence=0.41,
+        )
+        return await orchestrator.resolve_item(
+            needs_intervention_item(),
+            workspace_key="dev-01",
+        )
+
+    item = asyncio.run(run())
+
+    fallback = item.result["autonomy_fallback"]
+    assert fallback["selected_action"] == "run_more_probes"
+    assert fallback["calibration_support"] == {
+        "calibration_family": "skill_plan_semantic_adjudication",
+        "status": "empirical_low_support",
+        "sample_count": 1,
+        "coverage_rate": 0.0,
+        "abstention_rate": 1.0,
+        "false_accept_rate": None,
+        "false_reject_rate": None,
+        "unnecessary_abstention_rate": None,
+    }
+    prompt_payload = json.loads(llm.calls[0].messages[1].content)
+    assert prompt_payload["calibration_support"] == fallback["calibration_support"]
 
 
 def test_proposal_gate_autonomy_store_records_delayed_calibration_outcome() -> None:

@@ -5,7 +5,7 @@ from dataclasses import replace
 from typing import Any
 from uuid import UUID
 
-from autoskill.db.autonomy import AutonomyControlStore
+from autoskill.db.autonomy import AutonomyControlStore, AutonomyReliabilityMetricRecord
 from autoskill.db.evaluations import EvaluationRunItem, EvaluationRunResult
 from autoskill.db.profiles import ModelProfileRecord, ProfileStore
 from autoskill.services.llm import LLMClient, LLMCompletionRequest, LLMMessage
@@ -104,6 +104,10 @@ class ProposalGateAutonomyOrchestrator:
         if hard_failures:
             return item
 
+        calibration_metric = await self.autonomy.get_latest_reliability_metric(
+            workspace_key=workspace_key,
+            calibration_family=DECISION_FAMILY,
+        )
         profile = await _select_qualified_autonomous_profile(
             self.profiles,
             workspace_key=workspace_key,
@@ -114,6 +118,7 @@ class ProposalGateAutonomyOrchestrator:
                 item,
                 workspace_key=workspace_key,
                 job_id=job_id,
+                calibration_metric=calibration_metric,
                 reason_codes=[
                     *reason_codes,
                     "qualified-autonomous-model-profile-unavailable",
@@ -125,12 +130,14 @@ class ProposalGateAutonomyOrchestrator:
                 item,
                 workspace_key=workspace_key,
                 profile=profile,
+                calibration_metric=calibration_metric,
             )
         except Exception as exc:
             return await self._record_without_llm(
                 item,
                 workspace_key=workspace_key,
                 job_id=job_id,
+                calibration_metric=calibration_metric,
                 reason_codes=[
                     *reason_codes,
                     "llm-adjudication-unavailable",
@@ -158,6 +165,7 @@ class ProposalGateAutonomyOrchestrator:
                 "admissible": True,
             },
             evidence_ids=[str(item_id) for item_id in _evidence_ids(item.result)],
+            calibration_metric=calibration_metric,
         )
         record = await self.autonomy.record_proposal_gate_fallback(
             workspace_key=workspace_key,
@@ -199,6 +207,7 @@ class ProposalGateAutonomyOrchestrator:
         *,
         workspace_key: str,
         profile: ModelProfileRecord,
+        calibration_metric: AutonomyReliabilityMetricRecord | None,
     ) -> dict[str, Any]:
         completion = await self.llm.complete(
             _adjudication_request(
@@ -206,6 +215,7 @@ class ProposalGateAutonomyOrchestrator:
                 profile_key=profile.profile_key,
                 item=item,
                 purpose="proposal_gate.needs_intervention_adjudication",
+                calibration_metric=calibration_metric,
             )
         )
         try:
@@ -217,6 +227,7 @@ class ProposalGateAutonomyOrchestrator:
                     profile_key=profile.profile_key,
                     item=item,
                     purpose="proposal_gate.needs_intervention_adjudication.retry",
+                    calibration_metric=calibration_metric,
                     retry_error=f"{type(first_error).__name__}: {first_error}"[:200],
                 )
             )
@@ -260,6 +271,7 @@ class ProposalGateAutonomyOrchestrator:
         *,
         workspace_key: str,
         job_id: UUID | None,
+        calibration_metric: AutonomyReliabilityMetricRecord | None,
         reason_codes: list[str],
         error: str | None = None,
     ) -> EvaluationRunItem:
@@ -284,6 +296,7 @@ class ProposalGateAutonomyOrchestrator:
                 "admissible": True,
             },
             evidence_ids=[str(item_id) for item_id in _evidence_ids(item.result)],
+            calibration_metric=calibration_metric,
         )
         assurance = _dict(item.result.get("autonomy_assurance"))
         record = await self.autonomy.record_proposal_gate_fallback(
@@ -327,6 +340,7 @@ def _adjudication_request(
     profile_key: str,
     item: EvaluationRunItem,
     purpose: str,
+    calibration_metric: AutonomyReliabilityMetricRecord | None,
     retry_error: str | None = None,
 ) -> LLMCompletionRequest:
     user_payload: dict[str, Any] = {
@@ -346,6 +360,7 @@ def _adjudication_request(
             "uncertainty_notes": ["content-safe"],
         },
         "evaluation": _evaluation_packet(item),
+        "calibration_support": _calibration_support_packet(calibration_metric),
     }
     if retry_error:
         user_payload["retry"] = {
@@ -459,6 +474,7 @@ def _fallback_patch(
     invocation_id: str | None,
     deterministic_checks: dict[str, Any],
     evidence_ids: list[str],
+    calibration_metric: AutonomyReliabilityMetricRecord | None,
 ) -> dict[str, Any]:
     verdict_reasons = [str(code) for code in llm_verdict.get("reason_codes") or []]
     return {
@@ -474,6 +490,7 @@ def _fallback_patch(
         "confidence_decomposition": _confidence_decomposition(llm_verdict, confidence),
         "evidence_fidelity": str(llm_verdict.get("evidence_fidelity") or "redacted_derivative"),
         "evidence_ids": evidence_ids,
+        "calibration_support": _calibration_support_packet(calibration_metric),
         "deterministic_checks": deterministic_checks,
         "llm_verdict": {
             key: llm_verdict.get(key)
@@ -492,6 +509,28 @@ def _fallback_patch(
         },
         "runtime_writes_authorized": False,
         "administrative_escalation_allowed": False,
+    }
+
+
+def _calibration_support_packet(
+    metric: AutonomyReliabilityMetricRecord | None,
+) -> dict[str, Any]:
+    if metric is None:
+        return {
+            "calibration_family": DECISION_FAMILY,
+            "status": "none",
+            "sample_count": 0,
+            "coverage_rate": 0.0,
+        }
+    return {
+        "calibration_family": metric.calibration_family,
+        "status": metric.calibration_support,
+        "sample_count": metric.sample_count,
+        "coverage_rate": metric.coverage_rate,
+        "abstention_rate": metric.abstention_rate,
+        "false_accept_rate": metric.false_accept_rate,
+        "false_reject_rate": metric.false_reject_rate,
+        "unnecessary_abstention_rate": metric.unnecessary_abstention_rate,
     }
 
 

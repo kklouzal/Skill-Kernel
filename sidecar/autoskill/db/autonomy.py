@@ -116,6 +116,14 @@ class AutonomyReliabilityMetricRecord:
 
 
 class AutonomyControlStore(Protocol):
+    async def get_latest_reliability_metric(
+        self,
+        *,
+        workspace_key: str,
+        calibration_family: str,
+    ) -> AutonomyReliabilityMetricRecord | None:
+        """Return the latest semantic reliability metric for a calibration family."""
+
     async def record_calibration_observation(
         self,
         *,
@@ -197,6 +205,17 @@ class NullAutonomyControlStore:
         self.escalations: list[AdministrativeEscalationRecord] = []
         self.calibration_observations: list[AutonomyCalibrationObservationRecord] = []
         self.reliability_metrics: list[AutonomyReliabilityMetricRecord] = []
+
+    async def get_latest_reliability_metric(
+        self,
+        *,
+        workspace_key: str,
+        calibration_family: str,
+    ) -> AutonomyReliabilityMetricRecord | None:
+        for record in reversed(self.reliability_metrics):
+            if record.calibration_family == calibration_family:
+                return record
+        return None
 
     async def record_calibration_observation(
         self,
@@ -377,6 +396,65 @@ class NullAutonomyControlStore:
 
 
 class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
+    async def get_latest_reliability_metric(
+        self,
+        *,
+        workspace_key: str,
+        calibration_family: str,
+    ) -> AutonomyReliabilityMetricRecord | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                  metric.reliability_metric_id,
+                  metric.calibration_family,
+                  metric.sample_count,
+                  metric.coverage_rate,
+                  metric.false_accept_rate,
+                  metric.false_reject_rate,
+                  metric.abstention_rate,
+                  metric.unnecessary_abstention_rate,
+                  metric.calibration_support
+                FROM autoskill.autonomy_reliability_metrics metric
+                JOIN autoskill.workspaces workspace
+                  ON workspace.workspace_id = metric.workspace_id
+                WHERE workspace.external_key = $1
+                  AND metric.calibration_family = $2
+                ORDER BY metric.window_end DESC, metric.reliability_metric_id DESC
+                LIMIT 1
+                """,
+                workspace_key,
+                calibration_family,
+            )
+        return (
+            AutonomyReliabilityMetricRecord(
+                reliability_metric_id=row["reliability_metric_id"],
+                calibration_family=row["calibration_family"],
+                sample_count=row["sample_count"],
+                coverage_rate=float(row["coverage_rate"]),
+                false_accept_rate=(
+                    float(row["false_accept_rate"])
+                    if row["false_accept_rate"] is not None
+                    else None
+                ),
+                false_reject_rate=(
+                    float(row["false_reject_rate"])
+                    if row["false_reject_rate"] is not None
+                    else None
+                ),
+                abstention_rate=float(row["abstention_rate"]),
+                unnecessary_abstention_rate=(
+                    float(row["unnecessary_abstention_rate"])
+                    if row["unnecessary_abstention_rate"] is not None
+                    else None
+                ),
+                calibration_support=row["calibration_support"],
+            )
+            if row
+            else None
+        )
+
     async def record_calibration_observation(
         self,
         *,
