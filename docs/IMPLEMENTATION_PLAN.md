@@ -3,6 +3,36 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: repair execution triage now writes pending calibration
+observations for the `freeze_repair_triage` semantic family. After each
+`repair.execute` source finishes completion bookkeeping, the worker records a
+content-safe observation that maps evaluator probes to `run_more_probes`, drift
+rechecks to `collect_more_evidence`, policy-approved staged writer work to
+`stage_repair_artifact`, blocked executions to `quarantine`, and default
+reschedules to `no_op_reschedule`. The calibration payload includes source
+IDs, proposal schema/key names, memory-influence count, triage status, queued
+job references, repair transaction ID, policy-approval booleans, explicit
+scanner/evaluator/context-gate preservation, and
+`runtime_write_completed=false`; it omits proposal bodies, repair rationale,
+memory content, staged skill text, and raw evidence. This advances Sections
+5.3, 5.5, 5.6, 5.9, 5.11, 5.12, 5.13, and 5.14 plus Part IV lifecycle
+freeze/repair semantic decision-family coverage while preserving trial-only
+writer staging, activation-gate requirements, sidecar-only deterministic
+control, and no runtime skill writes. Focused validation passed with `uv run
+pytest sidecar/autoskill/tests/test_worker.py -q -k "repair_execute"` (`6
+passed, 38 deselected`), `uv run pytest
+sidecar/autoskill/tests/test_redaction.py -q` (`4 passed`), `node --test
+plugin/autoskill/test/hook-smoke.test.js` (`21` tests passed), and
+touched-file Ruff. Required gates passed with `uv run ruff check sidecar`, `uv
+run pytest` (`463 passed`), `uv run python -m compileall -q sidecar`, `docker
+compose config --quiet`, and `git diff --check`. A Dev-01 Postgres smoke
+inserted a throwaway `cron-repair-triage-calibration-smoke-*` workspace
+through `AsyncpgAutonomyControlStore`, verified
+`family=freeze_repair_triage`, `action=run_more_probes`,
+`risk=T1_internal_record`, `sample_count=1`,
+`support=empirical_low_support`, `runtime_write_completed=false`, then cleaned
+up and verified `cleanup_remaining_workspaces=0`.
+
 2026-06-07 update: external-skill review decisions now write pending
 calibration observations for the `external_skill_relationship` semantic
 family. After `/v1/external-skills/review-actions` successfully records a

@@ -16,6 +16,37 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Repair execution triage now feeds the generic semantic
+  calibration corpus for the `freeze_repair_triage` family instead of leaving
+  freeze/repair routing decisions outside autonomy reliability metrics. The
+  `repair.execute` worker path records a content-safe pending observation after
+  each curation, drift, or diagnostic repair source is completed, classifying
+  queued evaluator probes as `run_more_probes`, drift rechecks as
+  `collect_more_evidence`, policy-approved staged writer work as
+  `stage_repair_artifact`, blocked executions as `quarantine`, and default
+  reschedules as `no_op_reschedule`. Confidence components include source IDs,
+  proposal schema/key names, memory-influence count, triage status, queued job
+  references, repair transaction ID, policy-approval booleans, explicit
+  scanner/evaluator/context-gate preservation, and
+  `runtime_write_completed=false` without storing proposal bodies, repair
+  rationale, memory content, staged skill text, or raw evidence. This advances
+  unified autonomy Sections 5.3, 5.5, 5.6, 5.9, 5.11, 5.12, 5.13, and 5.14
+  plus lifecycle/freeze-repair coverage in Part IV while preserving trial-only
+  writer staging, activation-gate requirements, sidecar-only deterministic
+  control, and no runtime skill writes from the cron. Focused validation passed
+  with `uv run pytest sidecar/autoskill/tests/test_worker.py -q -k
+  "repair_execute"` (`6 passed, 38 deselected`), `uv run pytest
+  sidecar/autoskill/tests/test_redaction.py -q` (`4 passed`), `node --test
+  plugin/autoskill/test/hook-smoke.test.js` (`21` tests passed), and
+  touched-file Ruff. Required gates passed with `uv run ruff check sidecar`,
+  `uv run pytest` (`463 passed`), `uv run python -m compileall -q sidecar`,
+  `docker compose config --quiet`, and `git diff --check`. A Dev-01 Postgres
+  smoke inserted a throwaway `cron-repair-triage-calibration-smoke-*`
+  workspace through `AsyncpgAutonomyControlStore`, verified
+  `family=freeze_repair_triage`, `action=run_more_probes`,
+  `risk=T1_internal_record`, `sample_count=1`,
+  `support=empirical_low_support`, `runtime_write_completed=false`, then
+  deleted the smoke workspace and verified `cleanup_remaining_workspaces=0`.
 - 2026-06-07: External-skill review decisions now feed the generic semantic
   calibration corpus for the `external_skill_relationship` family instead of
   leaving external collision/reuse/import decisions outside autonomy

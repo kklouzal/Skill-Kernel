@@ -1331,6 +1331,13 @@ async def _run_repair_execute(stores: WorkerStores, job: JobRecord) -> dict[str,
             status=status,
             execution=execution,
         )
+        await _record_repair_triage_calibration(
+            stores,
+            workspace_key=workspace,
+            source=source,
+            status=status,
+            execution=execution,
+        )
         processed.append(execution)
     return {
         "claimed": len(sources),
@@ -1599,6 +1606,122 @@ async def _execute_repair_source(
         "queued_job_created": queued_job.created,
         "fail_closed": apply_payload is None,
     }
+
+
+async def _record_repair_triage_calibration(
+    stores: WorkerStores,
+    *,
+    workspace_key: str,
+    source: RepairExecutionSource,
+    status: str,
+    execution: dict[str, Any],
+) -> None:
+    autonomy = _repair_autonomy_store(stores)
+    if autonomy is None:
+        return
+    selected_action, action_risk_tier = _repair_triage_calibration_action(
+        status=status,
+        execution=execution,
+    )
+    await autonomy.record_calibration_observation(
+        workspace_key=workspace_key,
+        calibration_family="freeze_repair_triage",
+        selected_action=selected_action,
+        predicted_confidence=_repair_triage_confidence(
+            status=status,
+            execution=execution,
+        ),
+        confidence_components=_repair_triage_calibration_components(
+            source,
+            status=status,
+            execution=execution,
+        ),
+        action_risk_tier=action_risk_tier,
+        outcome_status="pending",
+    )
+
+
+def _repair_autonomy_store(stores: WorkerStores):
+    orchestrator = stores.autonomy_orchestrator
+    if orchestrator is None:
+        return None
+    return getattr(orchestrator, "autonomy", None)
+
+
+def _repair_triage_calibration_action(
+    *,
+    status: str,
+    execution: dict[str, Any],
+) -> tuple[str, str]:
+    if status == "blocked":
+        return "quarantine", "T1_internal_record"
+    queued_kind = str(execution.get("queued_job_kind") or "")
+    if queued_kind == "writer.apply":
+        return "stage_repair_artifact", "T2_trial_artifact"
+    if queued_kind == "evaluations.run":
+        return "run_more_probes", "T1_internal_record"
+    if queued_kind == "drift.check":
+        return "collect_more_evidence", "T1_internal_record"
+    return "no_op_reschedule", "T1_internal_record"
+
+
+def _repair_triage_confidence(
+    *,
+    status: str,
+    execution: dict[str, Any],
+) -> float:
+    if status == "blocked":
+        return 0.34
+    if execution.get("queued_job_kind") == "writer.apply":
+        return 0.78
+    return 0.58
+
+
+def _repair_triage_calibration_components(
+    source: RepairExecutionSource,
+    *,
+    status: str,
+    execution: dict[str, Any],
+) -> dict[str, Any]:
+    proposal_kind = source.proposal.get("proposal_kind") or source.proposal.get("kind")
+    memory_ids = _payload_memory_influence_ids(source.proposal)
+    execution_payload = _json_object(source.proposal.get("execution"))
+    writer_apply_payload = _json_object(source.proposal.get("writer_apply"))
+    materialization = _json_object(source.proposal.get("materialization"))
+    components: dict[str, Any] = {
+        "schema": "autoskill.freeze-repair-triage-calibration-components.v1",
+        "source_kind": source.source_kind,
+        "source_id": str(source.source_id),
+        "skill_id": str(source.skill_id) if source.skill_id else None,
+        "skill_version_id": str(source.skill_version_id) if source.skill_version_id else None,
+        "proposal_kind": str(proposal_kind) if proposal_kind else None,
+        "proposal_schema": str(source.proposal.get("schema") or ""),
+        "proposal_key_names": sorted(
+            str(key) for key in source.proposal if isinstance(key, str)
+        ),
+        "memory_influence_count": len(memory_ids),
+        "has_reason": bool(source.reason),
+        "reason_length": len(source.reason or ""),
+        "triage_status": status,
+        "queued_job_kind": execution.get("queued_job_kind"),
+        "queued_job_id": execution.get("queued_job_id"),
+        "repair_transaction_id": execution.get("repair_transaction_id"),
+        "fail_closed": bool(execution.get("fail_closed")),
+        "has_execution_payload": bool(execution_payload),
+        "has_writer_apply_payload": bool(writer_apply_payload),
+        "has_materialization": bool(materialization),
+        "execution_policy_approved": execution_payload.get("policy_approved") is True,
+        "writer_apply_policy_approved": writer_apply_payload.get("policy_approved") is True,
+        "materialization_policy_approved": materialization.get("policy_approved") is True,
+        "activation_gate_required": True,
+        "scanner_evaluator_context_gates_preserved": True,
+        "runtime_write_queued": execution.get("queued_job_kind") == "writer.apply",
+        "runtime_write_completed": False,
+    }
+    if status == "blocked":
+        error = str(execution.get("error") or "")
+        components["blocked_error_type"] = error.split(":", 1)[0] if error else None
+    return components
 
 
 def _writer_apply_payload_for_repair(

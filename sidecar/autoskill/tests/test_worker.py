@@ -9,6 +9,7 @@ from autoskill import worker_main
 from autoskill.api.app import WorkerRunOnceRequest, create_app
 from autoskill.core.hashing import sha256_text
 from autoskill.db.activation import ActivationReadiness
+from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.context import NullContextGovernanceStore
 from autoskill.db.contracts import (
     ContractExtractResult,
@@ -2753,6 +2754,7 @@ def test_repair_execute_queues_evaluator_when_curation_source_lacks_staged_manif
     jobs = MemoryJobStore()
     utility = MemoryUtilityWorkerStore()
     governance = MemoryGovernanceStore()
+    autonomy = NullAutonomyControlStore()
     action_id = uuid4()
     skill_id = uuid4()
     utility.repair_actions.append(
@@ -2793,6 +2795,7 @@ def test_repair_execute_queues_evaluator_when_curation_source_lacks_staged_manif
             embeddings=MemoryPendingEmbeddingStore(),
             utility=utility,
             governance=governance,
+            autonomy_orchestrator=SimpleNamespace(autonomy=autonomy),
         )
         return await run_worker_once(stores, worker_id="worker-1", pool="llm_generation")
 
@@ -2813,6 +2816,11 @@ def test_repair_execute_queues_evaluator_when_curation_source_lacks_staged_manif
     assert governance.items[0].item_kind == "curation_action_repair_proposal"
     assert governance.items[0].activation_state == "planned"
     assert governance.edges[0].relation == "records_repair_execution_plan"
+    observation = autonomy.calibration_observations[0]
+    assert observation.calibration_family == "freeze_repair_triage"
+    assert observation.selected_action == "run_more_probes"
+    assert observation.action_risk_tier == "T1_internal_record"
+    assert autonomy.reliability_metrics[-1].sample_count == 1
 
 
 def test_repair_execute_consumes_ready_drift_diagnostic_momentum() -> None:
@@ -2890,6 +2898,7 @@ def test_repair_execute_materializes_policy_approved_repair_candidate(tmp_path) 
     utility = MemoryUtilityWorkerStore()
     governance = MemoryGovernanceStore()
     memory = NullMemoryGovernanceStore()
+    autonomy = NullAutonomyControlStore()
     action_id = uuid4()
     skill_id = uuid4()
     skill_version_id = uuid4()
@@ -2968,6 +2977,7 @@ def test_repair_execute_materializes_policy_approved_repair_candidate(tmp_path) 
                 governance=governance,
                 memory_governance=memory,
                 context_governance=NullContextGovernanceStore(),
+                autonomy_orchestrator=SimpleNamespace(autonomy=autonomy),
                 workspace_root=tmp_path,
             ),
             worker_id="llm-generation-worker",
@@ -3008,6 +3018,14 @@ def test_repair_execute_materializes_policy_approved_repair_candidate(tmp_path) 
     assert memory.control_flow_events[0].influence_kind == "mutation"
     assert memory.control_flow_events[0].decision["decision"] == "mutation_queued"
     assert memory.control_flow_events[0].decision["queued_job_kind"] == "writer.apply"
+    observation = next(
+        record
+        for record in autonomy.calibration_observations
+        if record.calibration_family == "freeze_repair_triage"
+    )
+    assert observation.calibration_family == "freeze_repair_triage"
+    assert observation.selected_action == "stage_repair_artifact"
+    assert observation.action_risk_tier == "T2_trial_artifact"
 
 
 def test_repair_execute_blocks_unapproved_memory_influenced_mutation(tmp_path) -> None:
