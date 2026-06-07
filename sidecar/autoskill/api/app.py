@@ -4009,6 +4009,83 @@ def _replay_episode_calibration_confidence(
     return max(0.0, min(1.0, confidence))
 
 
+async def _record_memory_declassification_calibration(
+    autonomy: AutonomyControlStore | None,
+    *,
+    workspace_key: str,
+    record: Any,
+) -> None:
+    if autonomy is None:
+        return
+    await autonomy.record_calibration_observation(
+        workspace_key=workspace_key,
+        calibration_family="memory_declassification",
+        selected_action=_memory_declassification_selected_action(str(record.status)),
+        predicted_confidence=_memory_declassification_confidence(record),
+        confidence_components={
+            "schema": "autoskill.memory-declassification-calibration-components.v1",
+            "memory_quarantine_id": str(record.quarantine_id),
+            "source_object_type": str(record.source_object_type),
+            "status": str(record.status),
+            "proposed_memory_keys": sorted(
+                str(key) for key in dict(record.proposed_memory)
+            ),
+            "taint_keys": sorted(str(key) for key in dict(record.taint)),
+            "scanner_finding_keys": sorted(
+                str(key)
+                for key in dict(record.scanner_findings)
+                if key != "decision"
+            ),
+            "scanner_secret_count": _numeric_component(
+                dict(record.scanner_findings).get("secret_count"),
+            ),
+            "scanner_decision_recorded": "decision" in dict(record.scanner_findings),
+            "runtime_loaded": False,
+        },
+        action_risk_tier="T1_internal_record",
+        outcome_status="pending",
+    )
+
+
+def _memory_declassification_selected_action(status: str) -> str:
+    if status == "approved":
+        return "approve_memory_declassification"
+    if status == "rejected":
+        return "auto_reject"
+    if status == "expired":
+        return "no_op_reschedule"
+    return "quarantine"
+
+
+def _memory_declassification_confidence(record: Any) -> float:
+    confidence = 0.5
+    scanner_findings = dict(record.scanner_findings)
+    taint = dict(record.taint)
+    if record.status in {"approved", "rejected"}:
+        confidence += 0.15
+    if scanner_findings.get("secret_count") in {0, "0", None}:
+        confidence += 0.1
+    if scanner_findings.get("decision"):
+        confidence += 0.1
+    if taint.get("raw_content") is False or taint.get("source") == "derived":
+        confidence += 0.05
+    return max(0.0, min(1.0, confidence))
+
+
+def _numeric_component(value: object) -> float | int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (float, int)):
+        return value
+    if isinstance(value, str):
+        try:
+            number = float(value)
+        except ValueError:
+            return None
+        return int(number) if number.is_integer() else number
+    return None
+
+
 def _replay_intent_source_kind(source: str) -> str:
     source = source.lower()
     if "llm_synthesized_from_content_safe_retrieval" in source:
@@ -4548,6 +4625,11 @@ def create_app(
                 status_code=http_status.HTTP_404_NOT_FOUND,
                 detail="memory quarantine record not found",
             )
+        await _record_memory_declassification_calibration(
+            autonomy_control,
+            workspace_key=request.workspace_id,
+            record=record,
+        )
         return MemoryQuarantineResponse(memory=record.to_json())
 
     @app.post("/v1/control-flow/events", response_model=ControlFlowEventResponse)

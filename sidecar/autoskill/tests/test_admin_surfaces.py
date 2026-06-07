@@ -505,7 +505,8 @@ def test_deployment_readiness_ignores_failed_jobs_from_other_workspaces(
 
 
 def test_memory_quarantine_and_control_flow_surfaces_are_governed() -> None:
-    app = create_app()
+    autonomy = NullAutonomyControlStore()
+    app = create_app(autonomy_control_store=autonomy)
     routes = {
         (route.path, next(iter(route.methods - {"HEAD", "OPTIONS"}))): route
         for route in app.routes
@@ -524,7 +525,7 @@ def test_memory_quarantine_and_control_flow_surfaces_are_governed() -> None:
                     "summary": "Use the retry gate only after redacted evidence recurs.",
                 },
                 taint={"source": "derived", "external_instruction": False},
-                scanner_findings={"imperative_language": False},
+                scanner_findings={"imperative_language": False, "secret_count": 0},
             )
         )
         listed_pending = await routes[("/v1/memory/quarantine", "GET")].endpoint(
@@ -570,6 +571,18 @@ def test_memory_quarantine_and_control_flow_surfaces_are_governed() -> None:
     assert listed_pending.memories[0]["quarantine_id"] == quarantined.memory["quarantine_id"]
     assert decided.memory["status"] == "approved"
     assert decided.memory["decided_at"] is not None
+    assert autonomy.calibration_observations[0].calibration_family == (
+        "memory_declassification"
+    )
+    assert autonomy.calibration_observations[0].selected_action == (
+        "approve_memory_declassification"
+    )
+    assert autonomy.calibration_observations[0].outcome_status == "pending"
+    assert autonomy.reliability_metrics[-1].calibration_family == (
+        "memory_declassification"
+    )
+    assert "Use the retry gate" not in str(autonomy.calibration_observations)
+    assert "Scanner and provenance" not in str(autonomy.calibration_observations)
     assert event.event["source_kind"] == "memory"
     assert event.event["influence_kind"] == "retrieval"
     assert listed_events.events[0]["decision"]["memory_status"] == "approved"

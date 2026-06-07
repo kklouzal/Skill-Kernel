@@ -16,6 +16,32 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Memory quarantine decisions now feed the generic semantic
+  calibration corpus for the `memory_declassification` family instead of
+  leaving governed memory approval/rejection outside autonomy reliability
+  metrics. The Core `/v1/memory/quarantine/{quarantine_id}/decision` path
+  records a content-safe pending observation after a successful quarantine
+  decision, including the quarantine ID, source object type, status, proposed
+  memory key names, taint/scanner key names, scanner secret count, and explicit
+  `runtime_loaded=false` without storing proposed memory content or decision
+  rationale in calibration components. Approved decisions record
+  `approve_memory_declassification`; rejected decisions record `auto_reject`;
+  expired decisions record `no_op_reschedule`. This advances unified autonomy
+  Sections 5.5, 5.12, 5.13, and 5.14 plus Part IV semantic decision-family
+  coverage for memory declassification while preserving quarantine-first
+  memory governance, sidecar-only deterministic control, no browser raw-memory
+  exposure, and no runtime skill writes or memory influence until normal
+  governance approves it. Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_admin_surfaces.py -q -k memory_quarantine` (`1
+  passed, 18 deselected`) and touched-file Ruff. Required gates passed with
+  `uv run ruff check sidecar`, `uv run pytest` (`463 passed`), `uv run python
+  -m compileall -q sidecar`, and `git diff --check`. A Dev-01 Postgres smoke
+  inserted a throwaway `cron-memory-calibration-smoke-*` workspace through the
+  memory quarantine decision API path backed by asyncpg memory/autonomy stores,
+  verified `metric_family=memory_declassification`, `observation_count=1`,
+  `sample_count=1`, `support=empirical_low_support`, no leaked memory/rationale
+  text in confidence components, then deleted the smoke workspace and verified
+  `remaining_workspaces=0`.
 - 2026-06-07: Broker replay episode synthesis now records pending autonomy
   calibration observations for the `replay_episode_promotion` semantic family.
   The `/v1/broker/replay-episodes/synthesize` path records a content-safe

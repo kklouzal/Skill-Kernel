@@ -3,6 +3,31 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: memory quarantine decisions now write pending calibration
+observations for the `memory_declassification` semantic family. After
+`/v1/memory/quarantine/{quarantine_id}/decision` successfully approves,
+rejects, or expires a quarantined memory candidate, Core records a content-safe
+observation with the quarantine ID, source object type, status, proposed-memory
+key names, taint/scanner key names, scanner secret count, and
+`runtime_loaded=false`. Approved decisions record
+`approve_memory_declassification`; rejected decisions record `auto_reject`;
+expired decisions record `no_op_reschedule`. The calibration payload omits the
+proposed memory content and decision rationale, preserving the quarantine-first
+memory governance boundary and adding no runtime memory influence, browser raw
+content exposure, activation, or runtime skill write authority. This advances
+Sections 5.5, 5.12, 5.13, and 5.14 plus Part IV semantic decision-family
+coverage for memory declassification. Focused validation passed with `uv run
+pytest sidecar/autoskill/tests/test_admin_surfaces.py -q -k memory_quarantine`
+(`1 passed, 18 deselected`) and touched-file Ruff. Required gates passed with
+`uv run ruff check sidecar`, `uv run pytest` (`463 passed`), `uv run python -m
+compileall -q sidecar`, and `git diff --check`. A Dev-01 Postgres smoke
+inserted a throwaway `cron-memory-calibration-smoke-*` workspace through the
+memory quarantine decision API path backed by asyncpg memory/autonomy stores,
+verified `metric_family=memory_declassification`, `observation_count=1`,
+`sample_count=1`, `support=empirical_low_support`, no leaked memory/rationale
+text in confidence components, then deleted the smoke workspace and verified
+`remaining_workspaces=0`.
+
 2026-06-07 update: broker replay episode synthesis now writes pending
 calibration observations for the `replay_episode_promotion` semantic family.
 After `/v1/broker/replay-episodes/synthesize` persists a telemetry-derived
