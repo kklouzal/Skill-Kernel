@@ -16,6 +16,33 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Administrative escalation events now feed the generic semantic
+  calibration corpus for the `administrative_escalation` family instead of
+  remaining only as escalation/read-model rows. `record_administrative_escalation`
+  records a pending `escalate_admin` calibration observation in both the null
+  and asyncpg autonomy stores after the hard-boundary escalation is persisted,
+  with T4 risk, deterministic confidence, escalation/event identifiers,
+  decision family, target kind, attempted fallback counts/action names, safe
+  key summaries, hard-invariant key names, source fidelity, and explicit
+  `target_id_returned=false`, `raw_reason_returned=false`,
+  `raw_content_returned=false`, `runtime_write_authorized=false`, and
+  `autonomous_apply_authority=false`. This advances unified Sections 5.5,
+  5.12, 5.13, 5.14, Part IV semantic decision-family coverage for
+  administrative escalation, and Observatory autonomy workcell requirements by
+  making hard-boundary escalation measurable without exposing raw content or
+  adding runtime write/apply authority. Focused validation passed with `uv run
+  pytest sidecar/autoskill/tests/test_observatory_api.py -q -k
+  "raw_reveal"` (`2 passed, 63 deselected`) and touched-file Ruff. Required
+  gates passed with `uv run ruff check sidecar`, `uv run pytest` (`465
+  passed`), `uv run python -m compileall -q sidecar`, `docker compose config
+  --quiet`, `node --test plugin/autoskill/test/hook-smoke.test.js` (`21`
+  passed), and `git diff --check`. A Dev-01 Postgres smoke inserted a
+  throwaway `cron-admin-escalation-calibration-smoke-*` workspace through
+  `AsyncpgAutonomyControlStore`, verified
+  `family=administrative_escalation`, `action=escalate_admin`,
+  `risk=T4_external_or_irreversible`, `confidence=1.0`, `sample_count=1`,
+  `support=empirical_low_support`, no raw target ID in confidence components,
+  then cleaned up and verified `cleanup_remaining_workspaces=0`.
 - 2026-06-07: Model and embedding profile qualification now feeds the generic
   autonomy calibration corpus instead of leaving qualification verdicts only in
   isolated run records. The text and embedding qualification services accept

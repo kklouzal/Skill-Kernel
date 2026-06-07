@@ -325,6 +325,27 @@ class NullAutonomyControlStore:
             recommended_admin_action=recommended_admin_action,
         )
         self.escalations.append(record)
+        await self.record_calibration_observation(
+            workspace_key=workspace_key,
+            calibration_family="administrative_escalation",
+            autonomy_decision_id=autonomy_decision_id,
+            adjudication_id=adjudication_id,
+            selected_action="escalate_admin",
+            predicted_confidence=1.0,
+            confidence_components=_administrative_escalation_calibration_components(
+                escalation_event_id=record.escalation_event_id,
+                escalation_kind=escalation_kind,
+                decision_family=decision_family,
+                target_kind=target_kind,
+                dominant_reason_code=dominant_reason_code,
+                attempted_autonomous_alternatives=attempted_autonomous_alternatives,
+                recommended_admin_action=recommended_admin_action,
+                evidence_packet_id=evidence_packet_id,
+                source_fidelity=source_fidelity,
+                hard_invariants=hard_invariants,
+            ),
+            action_risk_tier="T4_external_or_irreversible",
+        )
         return record
 
     async def record_calibration_outcome(
@@ -838,6 +859,39 @@ class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
                 _json(attempted_autonomous_alternatives),
                 dominant_reason_code,
             )
+            await self._insert_calibration_observation(
+                conn,
+                workspace_id=workspace_id,
+                calibration_family="administrative_escalation",
+                autonomy_decision_id=autonomy_decision_id,
+                adjudication_id=adjudication_id,
+                model_profile_id=None,
+                action="escalate_admin",
+                confidence=1.0,
+                confidence_decomposition=(
+                    _administrative_escalation_calibration_components(
+                        escalation_event_id=escalation_event_id,
+                        escalation_kind=escalation_kind,
+                        decision_family=decision_family,
+                        target_kind=target_kind,
+                        dominant_reason_code=dominant_reason_code,
+                        attempted_autonomous_alternatives=(
+                            attempted_autonomous_alternatives
+                        ),
+                        recommended_admin_action=recommended_admin_action,
+                        evidence_packet_id=evidence_packet_id,
+                        source_fidelity=source_fidelity,
+                        hard_invariants=hard_invariants,
+                    )
+                ),
+                action_risk_tier="T4_external_or_irreversible",
+                outcome_status="pending",
+            )
+            await self._refresh_reliability_metrics(
+                conn,
+                workspace_id=workspace_id,
+                calibration_family="administrative_escalation",
+            )
         return AdministrativeEscalationRecord(
             escalation_event_id=escalation_event_id,
             escalation_kind=escalation_kind,
@@ -1104,6 +1158,58 @@ class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
 
 def _json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _administrative_escalation_calibration_components(
+    *,
+    escalation_event_id: UUID,
+    escalation_kind: str,
+    decision_family: str,
+    target_kind: str,
+    dominant_reason_code: str,
+    attempted_autonomous_alternatives: list[dict[str, Any]],
+    recommended_admin_action: str | None,
+    evidence_packet_id: UUID | None,
+    source_fidelity: str | None,
+    hard_invariants: dict[str, Any] | None,
+) -> dict[str, Any]:
+    attempted_actions = [
+        str(item.get("action")).strip()
+        for item in attempted_autonomous_alternatives
+        if isinstance(item, dict) and str(item.get("action") or "").strip()
+    ]
+    alternative_key_names = sorted(
+        {
+            str(key)
+            for item in attempted_autonomous_alternatives
+            if isinstance(item, dict)
+            for key in item
+        }
+    )
+    invariant_items = hard_invariants or {}
+    return {
+        "schema": "autoskill.administrative-escalation-calibration.v1",
+        "escalation_event_id": str(escalation_event_id),
+        "escalation_kind": escalation_kind,
+        "decision_family": decision_family,
+        "target_kind": target_kind,
+        "target_id_returned": False,
+        "dominant_reason_code": dominant_reason_code,
+        "attempted_autonomous_alternative_count": len(
+            attempted_autonomous_alternatives
+        ),
+        "attempted_autonomous_action_names": attempted_actions[:20],
+        "attempted_alternative_key_names": alternative_key_names[:50],
+        "recommended_admin_action_present": recommended_admin_action is not None,
+        "evidence_packet_id_present": evidence_packet_id is not None,
+        "source_fidelity": source_fidelity or "unknown",
+        "hard_invariant_key_names": sorted(str(key) for key in invariant_items),
+        "hard_boundary_proven": True,
+        "raw_reason_returned": False,
+        "raw_content_returned": False,
+        "runtime_write_authorized": False,
+        "autonomous_apply_authority": False,
+    }
 
 
 def _bounded_confidence(value: float) -> float:

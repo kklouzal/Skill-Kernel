@@ -5647,6 +5647,19 @@ def test_observatory_raw_reveal_action_fails_closed_by_default() -> None:
     )
     assert autonomy.escalations[0].dominant_reason_code == "raw-content-disabled"
     assert autonomy.escalations[0].target_kind == "captured_event"
+    observation = autonomy.calibration_observations[0]
+    assert observation.calibration_family == "administrative_escalation"
+    assert observation.selected_action == "escalate_admin"
+    assert observation.action_risk_tier == "T4_external_or_irreversible"
+    assert observation.predicted_confidence == 1.0
+    assert observation.outcome_status == "pending"
+    assert autonomy.reliability_metrics[-1].calibration_family == (
+        "administrative_escalation"
+    )
+    assert autonomy.reliability_metrics[-1].sample_count == 1
+    assert "operator needs incident diagnostics" not in str(
+        autonomy.calibration_observations
+    )
     assert observatory_admin.actions[0].request_payload_redacted["confirmation_hash"].startswith(
         "sha256:"
     )
@@ -5717,6 +5730,13 @@ def test_observatory_raw_reveal_grant_is_admin_only_and_hash_audited(monkeypatch
     assert audit_store.records[-1].details["raw_content_included"] is False
     assert len(autonomy.escalations) == 1
     assert autonomy.escalations[0].dominant_reason_code == "admin-role-required"
+    observation = autonomy.calibration_observations[0]
+    assert observation.calibration_family == "administrative_escalation"
+    assert observation.selected_action == "escalate_admin"
+    assert observation.action_risk_tier == "T4_external_or_irreversible"
+    assert "operator needs incident diagnostics" not in str(
+        autonomy.calibration_observations
+    )
 
     get_settings.cache_clear()
 
