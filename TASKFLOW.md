@@ -16,6 +16,36 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: External-skill review decisions now feed the generic semantic
+  calibration corpus for the `external_skill_relationship` family instead of
+  leaving external collision/reuse/import decisions outside autonomy
+  reliability metrics. The Core `/v1/external-skills/review-actions` path
+  records a content-safe pending observation after a successful review-action
+  persistence, including the review-action ID, external-skill ID, action,
+  status, collision risk/score, reason-code constants, metadata key names, and
+  explicit `external_body_returned=false`, `raw_root_path_returned=false`, and
+  `external_root_mutated=false`. Reuse decisions record
+  `suppress_skillkernel_duplicate_for_external_skill`; import decisions record
+  `stage_external_skill_import_review`; ignore decisions record
+  `inventory_only`; quarantine/rejected decisions record `quarantine` or
+  `auto_reject`. This advances unified autonomy Sections 5.5, 5.12, 5.13, and
+  5.14 plus Part IV semantic decision-family coverage for external-skill
+  relationships while preserving the external-owned-root immutability boundary,
+  sidecar-only deterministic control, no raw root path/body exposure in
+  calibration components, and no runtime skill writes or autonomous external
+  mutation authority. Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_external_skills.py -q -k "review_action"` (`2
+  passed, 5 deselected`) and touched-file Ruff. Required gates passed with
+  `uv run ruff check sidecar`, `uv run pytest` (`463 passed`), `uv run python
+  -m compileall -q sidecar`, and `git diff --check`. A Dev-01 Postgres smoke
+  inserted a throwaway `cron-external-calibration-smoke-*` workspace through the
+  external-skill inventory/review API path backed by asyncpg external-skill and
+  autonomy stores, verified `metric_family=external_skill_relationship`,
+  `selected_action=suppress_skillkernel_duplicate_for_external_skill`,
+  `action_risk_tier=T1_internal_record`, `sample_count=1`,
+  `support=empirical_low_support`, no leaked private rationale or raw root path
+  in confidence components, then deleted the smoke workspace and verified
+  `cleanup_remaining_workspaces=0`.
 - 2026-06-07: Memory quarantine decisions now feed the generic semantic
   calibration corpus for the `memory_declassification` family instead of
   leaving governed memory approval/rejection outside autonomy reliability

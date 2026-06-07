@@ -9,6 +9,7 @@ from autoskill.api.app import (
     ExternalSkillReviewActionRequest,
     create_app,
 )
+from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.external_skills import (
     ExternalSkillInput,
     ExternalSkillRecord,
@@ -168,6 +169,16 @@ class MemoryExternalSkillStore:
         ]
 
 
+class CaptureAutonomyControlStore(NullAutonomyControlStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.observation_inputs: list[dict[str, object]] = []
+
+    async def record_calibration_observation(self, **kwargs):
+        self.observation_inputs.append(dict(kwargs))
+        return await super().record_calibration_observation(**kwargs)
+
+
 def test_external_skill_inventory_api_uses_store() -> None:
     store = MemoryExternalSkillStore()
     app = create_app(external_skill_store=store)
@@ -204,7 +215,8 @@ def test_external_skill_inventory_api_uses_store() -> None:
 
 def test_external_skill_review_action_api_records_operator_reuse_decision() -> None:
     store = MemoryExternalSkillStore()
-    app = create_app(external_skill_store=store)
+    autonomy = CaptureAutonomyControlStore()
+    app = create_app(external_skill_store=store, autonomy_control_store=autonomy)
     upsert_route = next(route for route in app.routes if route.path == "/v1/external-skills/upsert")
     review_route = next(
         route for route in app.routes if route.path == "/v1/external-skills/review-actions"
@@ -236,7 +248,12 @@ def test_external_skill_review_action_api_records_operator_reuse_decision() -> N
                 status="approved",
                 operator_id="operator-1",
                 rationale="Existing external skill is the correct owner.",
-                metadata={"collision_risk": "high"},
+                metadata={
+                    "collision_risk": "high",
+                    "collision_score": 0.92,
+                    "reason_codes": ["high_similarity", "exact_slug_collision"],
+                    "raw_root_path": "/private/external/skills",
+                },
             )
         )
 
@@ -245,8 +262,33 @@ def test_external_skill_review_action_api_records_operator_reuse_decision() -> N
     assert response.review_action["action"] == "reuse"
     assert response.review_action["status"] == "approved"
     assert response.review_action["operator_id"] == "operator-1"
-    assert response.review_action["metadata"] == {"collision_risk": "high"}
+    assert response.review_action["metadata"]["collision_risk"] == "high"
     assert store.review_actions[0].external_skill_id == store.records[0].external_skill_id
+    assert len(autonomy.calibration_observations) == 1
+    observation = autonomy.calibration_observations[0]
+    assert observation.calibration_family == "external_skill_relationship"
+    assert (
+        observation.selected_action
+        == "suppress_skillkernel_duplicate_for_external_skill"
+    )
+    assert observation.action_risk_tier == "T1_internal_record"
+    assert observation.predicted_confidence > 0.8
+    assert autonomy.reliability_metrics[-1].calibration_family == (
+        "external_skill_relationship"
+    )
+    components = autonomy.observation_inputs[0]["confidence_components"]
+    assert components["external_skill_id"] == str(store.records[0].external_skill_id)
+    assert components["collision_risk"] == "high"
+    assert components["collision_score"] == 0.92
+    assert components["reason_codes"] == [
+        "exact_slug_collision",
+        "high_similarity",
+    ]
+    assert components["external_body_returned"] is False
+    assert components["raw_root_path_returned"] is False
+    assert components["external_root_mutated"] is False
+    assert "Existing external skill is the correct owner." not in str(components)
+    assert "/private/external/skills" not in str(components)
 
 
 def test_external_skill_review_action_api_rejects_invalid_action() -> None:

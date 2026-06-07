@@ -4047,6 +4047,103 @@ async def _record_memory_declassification_calibration(
     )
 
 
+async def _record_external_skill_relationship_calibration(
+    autonomy: AutonomyControlStore | None,
+    *,
+    workspace_key: str,
+    review_action: Any,
+) -> None:
+    if autonomy is None:
+        return
+    metadata = dict(review_action.metadata)
+    reason_codes = _safe_reason_codes(metadata.get("reason_codes"))
+    await autonomy.record_calibration_observation(
+        workspace_key=workspace_key,
+        calibration_family="external_skill_relationship",
+        selected_action=_external_skill_relationship_selected_action(
+            action=str(review_action.action),
+            status=str(review_action.status),
+        ),
+        predicted_confidence=_external_skill_relationship_confidence(
+            status=str(review_action.status),
+            collision_risk=str(metadata.get("collision_risk") or ""),
+            collision_score=_numeric_component(metadata.get("collision_score")),
+            reason_codes=reason_codes,
+            rationale_present=bool(review_action.rationale),
+        ),
+        confidence_components={
+            "schema": "autoskill.external-skill-relationship-calibration-components.v1",
+            "external_skill_review_action_id": str(
+                review_action.external_skill_review_action_id
+            ),
+            "external_skill_id": str(review_action.external_skill_id),
+            "action": str(review_action.action),
+            "status": str(review_action.status),
+            "operator_decision_recorded": bool(review_action.operator_id),
+            "rationale_present": bool(review_action.rationale),
+            "metadata_keys": sorted(str(key) for key in metadata),
+            "collision_risk": str(metadata.get("collision_risk") or "unknown"),
+            "collision_score": _numeric_component(metadata.get("collision_score")),
+            "reason_codes": reason_codes,
+            "external_body_returned": False,
+            "raw_root_path_returned": False,
+            "external_root_mutated": False,
+        },
+        action_risk_tier="T1_internal_record",
+        outcome_status="pending",
+    )
+
+
+def _external_skill_relationship_selected_action(*, action: str, status: str) -> str:
+    if status == "rejected":
+        return "auto_reject"
+    if action == "reuse":
+        return "suppress_skillkernel_duplicate_for_external_skill"
+    if action == "import":
+        return "stage_external_skill_import_review"
+    if action == "quarantine":
+        return "quarantine"
+    if action == "ignore":
+        return "inventory_only"
+    return "record_external_skill_relationship"
+
+
+def _external_skill_relationship_confidence(
+    *,
+    status: str,
+    collision_risk: str,
+    collision_score: float | None,
+    reason_codes: list[str],
+    rationale_present: bool,
+) -> float:
+    confidence = 0.45
+    if status in {"approved", "completed"}:
+        confidence += 0.15
+    elif status == "rejected":
+        confidence += 0.1
+    if isinstance(collision_score, (float, int)):
+        confidence += min(max(float(collision_score), 0.0), 1.0) * 0.15
+    if collision_risk in {"high", "blocked"}:
+        confidence += 0.1
+    elif collision_risk == "medium":
+        confidence += 0.05
+    if reason_codes:
+        confidence += 0.05
+    if rationale_present:
+        confidence += 0.05
+    return max(0.0, min(1.0, confidence))
+
+
+def _safe_reason_codes(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return sorted(
+        str(item)
+        for item in value
+        if isinstance(item, str) and item and len(item) <= 80
+    )
+
+
 def _memory_declassification_selected_action(status: str) -> str:
     if status == "approved":
         return "approve_memory_declassification"
@@ -5521,6 +5618,11 @@ def create_app(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail=str(error),
             ) from error
+        await _record_external_skill_relationship_calibration(
+            autonomy_control,
+            workspace_key=request.workspace_id,
+            review_action=review_action,
+        )
         return ExternalSkillReviewActionResponse(review_action=review_action.to_json())
 
     @app.get("/v1/jobs")

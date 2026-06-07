@@ -3,6 +3,38 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: external-skill review decisions now write pending
+calibration observations for the `external_skill_relationship` semantic
+family. After `/v1/external-skills/review-actions` successfully records a
+reuse/import/ignore/quarantine review decision, Core records a content-safe
+observation with the review-action ID, external-skill ID, action, status,
+collision risk/score, reason-code constants, metadata key names, and explicit
+`external_body_returned=false`, `raw_root_path_returned=false`, and
+`external_root_mutated=false`. Reuse decisions record
+`suppress_skillkernel_duplicate_for_external_skill`; import decisions record
+`stage_external_skill_import_review`; ignore decisions record `inventory_only`;
+quarantine/rejected decisions record `quarantine` or `auto_reject`. The
+calibration payload omits external skill bodies, raw root paths, operator
+rationale, and raw metadata values beyond the bounded collision fields,
+preserving the external-owned-root immutability boundary and adding no runtime
+skill write, autonomous external mutation, activation, or browser raw-content
+authority. This advances Sections 5.5, 5.12, 5.13, and 5.14 plus Part IV
+semantic decision-family coverage for external-skill relationships. Focused
+validation passed with `uv run pytest
+sidecar/autoskill/tests/test_external_skills.py -q -k "review_action"` (`2
+passed, 5 deselected`) and touched-file Ruff. Required gates passed with `uv
+run ruff check sidecar`, `uv run pytest` (`463 passed`), `uv run python -m
+compileall -q sidecar`, and `git diff --check`. A Dev-01 Postgres smoke
+inserted a throwaway `cron-external-calibration-smoke-*` workspace through the
+external-skill inventory/review API path backed by asyncpg external-skill and
+autonomy stores, verified
+`metric_family=external_skill_relationship`,
+`selected_action=suppress_skillkernel_duplicate_for_external_skill`,
+`action_risk_tier=T1_internal_record`, `sample_count=1`, and
+`support=empirical_low_support`, confirmed no private rationale or raw root
+path leaked into confidence components, then cleaned up and verified
+`cleanup_remaining_workspaces=0`.
+
 2026-06-07 update: memory quarantine decisions now write pending calibration
 observations for the `memory_declassification` semantic family. After
 `/v1/memory/quarantine/{quarantine_id}/decision` successfully approves,
