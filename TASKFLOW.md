@@ -53,7 +53,12 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   outcomes rather than labels. Focused validation passed with fallback
   remediation/probe-expansion evaluator tests (`8 passed`), full evaluator
   tests (`27 passed`), worker dispatch, scheduler-default, Ruff, and
-  compileall; broad gates are pending for this slice.
+  compileall. Required gates passed with `uv run ruff check sidecar scripts`,
+  `uv run python -m compileall -q sidecar scripts`, `git diff --check`, full
+  pytest (`450 passed`), acceptance, Observatory acceptance, conformance,
+  readiness, and handoff governance reports. Dev-01 was rebuilt with scoped
+  Core/evaluation-worker images and a one-off `evaluations.remediate_fallbacks`
+  smoke job succeeded.
 - 2026-06-07: Administrative escalation is now an executable hard-boundary
   record path instead of only seeded Observatory fixture state. The autonomy
   control store can persist a canonical `administrative_escalation_events` row
