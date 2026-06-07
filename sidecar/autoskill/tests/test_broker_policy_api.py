@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from autoskill.api.app import (
@@ -12,6 +13,7 @@ from autoskill.api.app import (
     BrokerReplayEpisodeSynthesizeRequest,
     create_app,
 )
+from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.broker_policy import NullBrokerPolicyStore
 from autoskill.db.retrieval import RetrievalCandidate, RetrievalLog
 from autoskill.db.usage import UsageTopologyRecommendation
@@ -94,6 +96,16 @@ class FailingReplayIntentLLM:
         raise ValueError("unknown url type")
 
 
+class SpyAutonomyControlStore(NullAutonomyControlStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calibration_calls: list[dict[str, Any]] = []
+
+    async def record_calibration_observation(self, **kwargs: Any):
+        self.calibration_calls.append(dict(kwargs))
+        return await super().record_calibration_observation(**kwargs)
+
+
 def test_broker_policy_api_activates_policy_and_replay_uses_it() -> None:
     policy_store = NullBrokerPolicyStore()
     skill_id = uuid4()
@@ -170,6 +182,7 @@ def test_broker_policy_api_activates_policy_and_replay_uses_it() -> None:
 
 def test_broker_policy_synthesizes_replay_episodes_from_redacted_telemetry() -> None:
     policy_store = NullBrokerPolicyStore()
+    autonomy = SpyAutonomyControlStore()
     skill_id = uuid4()
     retrieval_log_id = uuid4()
     retrieval = TelemetryReplayRetrievalStore(
@@ -216,6 +229,7 @@ def test_broker_policy_synthesizes_replay_episodes_from_redacted_telemetry() -> 
     app = create_app(
         broker_policy_store=policy_store,
         retrieval_store=retrieval,
+        autonomy_control_store=autonomy,
     )
     synthesize = next(
         route
@@ -261,6 +275,27 @@ def test_broker_policy_synthesizes_replay_episodes_from_redacted_telemetry() -> 
     assert episode["source_retrieval_log_id"] == str(retrieval_log_id)
     assert replayed.replay.total == 1
     assert replayed.replay.matched == 1
+    assert len(autonomy.calibration_observations) == 1
+    observation = autonomy.calibration_observations[0]
+    assert observation.calibration_family == "replay_episode_promotion"
+    assert observation.selected_action == "promote_replay_episode"
+    assert observation.action_risk_tier == "T1_internal_record"
+    assert observation.outcome_status == "pending"
+    assert len(autonomy.reliability_metrics) == 1
+    assert autonomy.reliability_metrics[0].calibration_family == (
+        "replay_episode_promotion"
+    )
+    components = autonomy.calibration_calls[0]["confidence_components"]
+    assert components["schema"] == (
+        "autoskill.replay-episode-calibration-components.v1"
+    )
+    assert components["source_retrieval_log_id"] == str(retrieval_log_id)
+    assert components["redacted_intent_source_kind"] == "llm_synthesized"
+    assert components["expected_decision"] == "skill_hint"
+    assert components["expected_skill_count"] == 1
+    assert components["raw_prompt_stored"] is False
+    assert "redacted_user_intent" not in components
+    assert "repair redacted pdf table" not in str(components)
 
 
 def test_broker_policy_synthesizes_missing_intent_from_safe_retrieval_context() -> None:

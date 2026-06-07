@@ -3,6 +3,31 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: broker replay episode synthesis now writes pending
+calibration observations for the `replay_episode_promotion` semantic family.
+After `/v1/broker/replay-episodes/synthesize` persists a telemetry-derived
+replay row, it records a content-safe `promote_replay_episode` observation with
+the replay episode/log IDs, evidence fidelity, normalized intent-source kind,
+deterministic validation status, expected decision, skill/context counts, and
+raw-prompt/operator-plan flags. The calibration components deliberately omit the
+redacted replay intent and raw evidence, and stale telemetry replay repairs use
+the same observation path. This advances Sections 5.5, 5.12, 5.13, and 5.14;
+Part IV semantic decision-family coverage for replay/canary intent synthesis;
+and production criteria 31.58/31.63 without adding runtime write authority,
+activation, raw-vault reveal, or an Observatory-side mutation path. Focused
+validation passed with `uv run pytest
+sidecar/autoskill/tests/test_broker_policy_api.py -q -k
+"synthesizes_replay_episodes_from_redacted_telemetry or
+synthesis_repairs_stale_telemetry_episode_decision"` (`2 passed, 12
+deselected`) and touched-file Ruff. Required gates passed with `uv run ruff
+check sidecar`, `uv run pytest` (`463 passed`), `uv run python -m compileall -q
+sidecar`, and `git diff --check`. A Dev-01 Postgres smoke inserted a throwaway
+`cron-replay-calibration-smoke-*` workspace and retrieval log, synthesized one
+replay episode through asyncpg retrieval/broker/autonomy stores, verified
+`metric_family=replay_episode_promotion`, `sample_count=1`,
+`support=empirical_low_support`, then cleaned up and verified
+`remaining_workspaces=0`.
+
 2026-06-07 update: context compilation now writes pending calibration
 observations for the `context_budget_semantic_equivalence` semantic family.
 `compile_skill_with_context_governance` accepts an optional autonomy control

@@ -3937,6 +3937,91 @@ def _replay_context_metadata(context: list[Any]) -> dict[str, Any]:
     }
 
 
+async def _record_replay_episode_calibration(
+    autonomy: AutonomyControlStore | None,
+    *,
+    workspace_key: str,
+    episode: Any,
+    candidate: dict[str, object],
+) -> None:
+    if autonomy is None:
+        return
+    metadata = candidate.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    validation = metadata.get("deterministic_validation")
+    validation = validation if isinstance(validation, dict) else {}
+    intent_source = str(metadata.get("redacted_intent_source") or "")
+    evidence_fidelity = str(metadata.get("evidence_fidelity") or "")
+    expected_skill_ids = candidate.get("expected_skill_ids")
+    expected_skill_count = (
+        len(expected_skill_ids) if isinstance(expected_skill_ids, list) else 0
+    )
+    await autonomy.record_calibration_observation(
+        workspace_key=workspace_key,
+        calibration_family="replay_episode_promotion",
+        selected_action="promote_replay_episode",
+        predicted_confidence=_replay_episode_calibration_confidence(
+            metadata=metadata,
+            validation=validation,
+            expected_skill_count=expected_skill_count,
+        ),
+        confidence_components={
+            "schema": "autoskill.replay-episode-calibration-components.v1",
+            "broker_replay_episode_id": str(episode.broker_replay_episode_id),
+            "source_retrieval_log_id": str(candidate["source_retrieval_log_id"]),
+            "evidence_fidelity": evidence_fidelity,
+            "redacted_intent_source_kind": _replay_intent_source_kind(intent_source),
+            "llm_backed_intent": "llm" in intent_source.lower(),
+            "deterministic_validation_status": validation.get("status"),
+            "expected_decision": candidate.get("expected_decision"),
+            "expected_skill_count": expected_skill_count,
+            "candidate_count": metadata.get("candidate_count"),
+            "context_object_type_count": len(metadata.get("context_object_types") or []),
+            "raw_prompt_stored": bool(metadata.get("raw_prompt_stored")),
+            "operator_plan_required": bool(metadata.get("operator_plan_required")),
+        },
+        action_risk_tier="T1_internal_record",
+        outcome_status="pending",
+    )
+
+
+def _replay_episode_calibration_confidence(
+    *,
+    metadata: dict[str, Any],
+    validation: dict[str, Any],
+    expected_skill_count: int,
+) -> float:
+    confidence = 0.45
+    if validation.get("status") == "passed":
+        confidence += 0.2
+    intent_source = str(metadata.get("redacted_intent_source") or "").lower()
+    if "llm" in intent_source:
+        confidence += 0.15
+    fidelity = metadata.get("evidence_fidelity")
+    if fidelity == "raw_vault_linked":
+        confidence += 0.1
+    elif fidelity in {"declassified_summary", "redacted_derivative"}:
+        confidence += 0.05
+    if expected_skill_count > 0 or metadata.get("candidate_count"):
+        confidence += 0.05
+    if metadata.get("raw_prompt_stored") is False:
+        confidence += 0.05
+    return max(0.0, min(1.0, confidence))
+
+
+def _replay_intent_source_kind(source: str) -> str:
+    source = source.lower()
+    if "llm_synthesized_from_content_safe_retrieval" in source:
+        return "llm_synthesized_from_content_safe_retrieval"
+    if "llm" in source:
+        return "llm_synthesized"
+    if "semantic_adjudication" in source:
+        return "semantic_adjudication"
+    if source:
+        return "metadata_pointer"
+    return "missing"
+
+
 def create_app(
     event_store: EventStore | None = None,
     raw_evidence_store: RawEvidenceStore | None = None,
@@ -4721,6 +4806,12 @@ def create_app(
                 metadata=dict(candidate["metadata"]),
                 source_retrieval_log_id=candidate["source_retrieval_log_id"],
             )
+            await _record_replay_episode_calibration(
+                autonomy_control,
+                workspace_key=request.workspace_id,
+                episode=episode,
+                candidate=candidate,
+            )
             episodes.append(episode.to_json())
         if request.repair_existing_telemetry_episodes:
             existing = await broker_policies.list_replay_episodes(
@@ -4782,6 +4873,12 @@ def create_app(
                     tags=tags,
                     metadata=dict(candidate["metadata"]),
                     source_retrieval_log_id=candidate["source_retrieval_log_id"],
+                )
+                await _record_replay_episode_calibration(
+                    autonomy_control,
+                    workspace_key=request.workspace_id,
+                    episode=episode,
+                    candidate=candidate,
                 )
                 episodes.append(episode.to_json())
         return BrokerReplayEpisodeSynthesizeResponse(
