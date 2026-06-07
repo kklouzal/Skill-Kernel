@@ -3,6 +3,34 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: action attribution checks now write pending calibration
+observations for the `action_attribution` semantic family. After
+`/v1/attribution/action-checks` persists a deterministic risky-action check,
+Core records content-safe check/action identifiers, original action risk
+labels, verdict, counterfactual kind, contribution counts, broker-policy and
+user-intent-hash presence flags, metric key names, numeric metric count, and
+explicit `raw_metric_values_returned=false`,
+`user_intent_hash_returned=false`, `raw_user_intent_returned=false`,
+`runtime_write_authority=false`, and `action_execution_authority=false`.
+Blocked or rejected checks record `auto_reject`, allowed checks record
+`accept_action_attribution`, and deferred/unknown checks record
+`no_op_reschedule`. The calibration payload omits arbitrary metric values,
+user-intent hash values, raw user intent, raw evidence, and any action
+execution authority. This advances Sections 5.5, 5.12, 5.13, 5.14, and 27
+plus Part IV semantic decision-family coverage for action attribution while
+preserving deterministic sidecar control and adding no runtime write,
+activation, raw-vault reveal, or Observatory mutation authority. Focused
+validation passed with `uv run pytest sidecar/autoskill/tests/test_shadowing.py
+-q -k "action_attribution_check"` (`2 passed, 4 deselected`) and touched-file
+Ruff. Required gates passed with `uv run ruff check sidecar`, `uv run pytest`
+(`467 passed`), `uv run python -m compileall -q sidecar`, `docker compose
+config --quiet`, and `git diff --check`. A Dev-01 Postgres smoke was attempted
+against the existing `dev01-postgres-pgvector` container on
+`127.0.0.1:55432`, but the idempotent `scripts/migrate.py` validation path
+produced no output within the bounded smoke window and was terminated (`exit
+143`); no schema changed, and deterministic in-memory API coverage exercises
+the added endpoint/store wiring.
+
 2026-06-07 update: LLM-backed replay intent synthesis now writes pending
 calibration observations for the `intent_reconstruction` semantic family. When
 `/v1/broker/replay-episodes/synthesize` reconstructs a missing redacted intent

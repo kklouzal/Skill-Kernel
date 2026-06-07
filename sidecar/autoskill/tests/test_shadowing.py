@@ -12,6 +12,7 @@ from autoskill.db.attribution import (
     ActionAttributionCheckRecord,
     AttributionEventRecord,
 )
+from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.evidence import EvidenceRecord
 from autoskill.services.shadowing import detect_shadowing_events
 
@@ -127,6 +128,16 @@ class MemoryAttributionStore:
         )
         self.action_checks.append(record)
         return record
+
+
+class CapturingAutonomyControlStore(NullAutonomyControlStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.observation_inputs: list[dict[str, object]] = []
+
+    async def record_calibration_observation(self, **kwargs):
+        self.observation_inputs.append(kwargs)
+        return await super().record_calibration_observation(**kwargs)
 
 
 @dataclass(frozen=True)
@@ -273,3 +284,60 @@ def test_action_attribution_check_api_records_boundary_verdict() -> None:
     assert response.check["verdict"] == "blocked"
     assert response.check["counterfactual_kind"] == "runtime_boundary"
     assert response.check["metrics"]["boundary_code"] == "sensitive-file-harvest"
+
+
+def test_action_attribution_check_api_records_calibration_observation() -> None:
+    attribution = MemoryAttributionStore()
+    autonomy = CapturingAutonomyControlStore()
+    contributing_evidence_id = uuid4()
+    app = create_app(
+        attribution_store=attribution,
+        autonomy_control_store=autonomy,
+    )
+    route = next(
+        route for route in app.routes if route.path == "/v1/attribution/action-checks"
+    )
+
+    async def run():
+        return await route.endpoint(
+            request=ActionAttributionCheckRequest(
+                workspace_id="dev-01",
+                session_id="session-1",
+                turn_id="turn-1",
+                tool_call_id="tool-1",
+                action_kind="exec",
+                risk_tier="T3_owned_runtime_change",
+                verdict="blocked",
+                metrics={
+                    "boundary_code": "sensitive-file-harvest",
+                    "evaluator_margin": 0.17,
+                },
+                user_intent_hash="intent-hash-123",
+                contributing_evidence_ids=[contributing_evidence_id],
+                counterfactual_kind="runtime_boundary",
+            ),
+            authorization=None,
+        )
+
+    asyncio.run(run())
+
+    assert len(autonomy.calibration_observations) == 1
+    observation = autonomy.calibration_observations[0]
+    assert observation.calibration_family == "action_attribution"
+    assert observation.selected_action == "auto_reject"
+    assert observation.action_risk_tier == "T1_internal_record"
+    assert observation.outcome_status == "pending"
+    components = autonomy.observation_inputs[0]["confidence_components"]
+    assert components["schema"] == "autoskill.action-attribution-calibration-components.v1"
+    assert components["original_action_risk_label"] == "T3_owned_runtime_change"
+    assert components["verdict"] == "blocked"
+    assert components["contributing_evidence_count"] == 1
+    assert components["metric_keys"] == ["boundary_code", "evaluator_margin"]
+    assert components["numeric_metric_count"] == 1
+    assert components["raw_metric_values_returned"] is False
+    assert components["user_intent_hash_returned"] is False
+    assert components["raw_user_intent_returned"] is False
+    assert components["runtime_write_authority"] is False
+    assert components["action_execution_authority"] is False
+    assert "sensitive-file-harvest" not in str(components)
+    assert "intent-hash-123" not in str(components)

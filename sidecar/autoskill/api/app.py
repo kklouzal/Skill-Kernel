@@ -4171,6 +4171,78 @@ async def _record_external_skill_relationship_calibration(
     )
 
 
+async def _record_action_attribution_calibration(
+    autonomy: AutonomyControlStore | None,
+    *,
+    workspace_key: str,
+    record: Any,
+) -> None:
+    if autonomy is None:
+        return
+    metrics = dict(record.metrics)
+    await autonomy.record_calibration_observation(
+        workspace_key=workspace_key,
+        calibration_family="action_attribution",
+        selected_action=_action_attribution_selected_action(str(record.verdict)),
+        predicted_confidence=_action_attribution_confidence(record),
+        confidence_components={
+            "schema": "autoskill.action-attribution-calibration-components.v1",
+            "action_attribution_check_id": str(record.action_attribution_check_id),
+            "action_kind": str(record.action_kind),
+            "original_action_risk_label": str(record.risk_tier),
+            "verdict": str(record.verdict),
+            "counterfactual_kind": record.counterfactual_kind,
+            "contributing_skill_count": len(record.contributing_skill_ids),
+            "contributing_memory_count": len(record.contributing_memory_ids),
+            "contributing_evidence_count": len(record.contributing_evidence_ids),
+            "broker_policy_version_recorded": record.broker_policy_version_id is not None,
+            "user_intent_hash_recorded": bool(record.user_intent_hash),
+            "metric_keys": sorted(str(key) for key in metrics),
+            "numeric_metric_count": sum(
+                1 for value in metrics.values() if _numeric_component(value) is not None
+            ),
+            "raw_metric_values_returned": False,
+            "user_intent_hash_returned": False,
+            "raw_user_intent_returned": False,
+            "runtime_write_authority": False,
+            "action_execution_authority": False,
+        },
+        action_risk_tier="T1_internal_record",
+        outcome_status="pending",
+    )
+
+
+def _action_attribution_selected_action(verdict: str) -> str:
+    normalized = verdict.strip().lower().replace("-", "_")
+    if normalized in {"allowed", "accepted", "passed", "success", "succeeded"}:
+        return "accept_action_attribution"
+    if normalized in {"blocked", "rejected", "denied", "failed", "failure"}:
+        return "auto_reject"
+    if normalized in {"deferred", "pending", "unknown"}:
+        return "no_op_reschedule"
+    return "record_action_attribution"
+
+
+def _action_attribution_confidence(record: Any) -> float:
+    confidence = 0.45
+    selected_action = _action_attribution_selected_action(str(record.verdict))
+    if selected_action in {"accept_action_attribution", "auto_reject"}:
+        confidence += 0.15
+    if record.contributing_evidence_ids:
+        confidence += 0.1
+    if record.contributing_skill_ids or record.contributing_memory_ids:
+        confidence += 0.05
+    if record.user_intent_hash:
+        confidence += 0.05
+    if record.broker_policy_version_id is not None:
+        confidence += 0.05
+    if record.counterfactual_kind:
+        confidence += 0.05
+    if record.metrics:
+        confidence += 0.05
+    return max(0.0, min(1.0, confidence))
+
+
 def _external_skill_relationship_selected_action(*, action: str, status: str) -> str:
     if status == "rejected":
         return "auto_reject"
@@ -4729,6 +4801,11 @@ def create_app(
             contributing_evidence_ids=request.contributing_evidence_ids,
             broker_policy_version_id=request.broker_policy_version_id,
             counterfactual_kind=request.counterfactual_kind,
+        )
+        await _record_action_attribution_calibration(
+            autonomy_control,
+            workspace_key=request.workspace_id,
+            record=record,
         )
         return ActionAttributionCheckResponse(check=record.to_json())
 

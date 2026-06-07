@@ -16,6 +16,32 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Action attribution checks now feed the generic semantic
+  calibration corpus for the `action_attribution` family instead of leaving
+  Section 27 outcome/credit checks only as attribution rows. After
+  `/v1/attribution/action-checks` persists a deterministic check, Core records
+  a pending observation with the check ID, action kind, original risk label,
+  verdict, counterfactual kind, contribution counts, broker-policy presence,
+  user-intent-hash presence, metric key names, numeric metric count, and
+  explicit `raw_metric_values_returned=false`,
+  `user_intent_hash_returned=false`, `raw_user_intent_returned=false`,
+  `runtime_write_authority=false`, and `action_execution_authority=false`.
+  Blocked/rejected checks map to `auto_reject`, allowed checks map to
+  `accept_action_attribution`, and unresolved checks map to
+  `no_op_reschedule`. This advances unified Sections 5.5, 5.12, 5.13, 5.14,
+  and 27 plus Part IV semantic decision-family coverage for action
+  attribution while adding no action execution, runtime write, activation, raw
+  reveal, or Observatory mutation authority. Focused validation passed with
+  `uv run pytest sidecar/autoskill/tests/test_shadowing.py -q -k
+  "action_attribution_check"` (`2 passed, 4 deselected`) and touched-file
+  Ruff. Required gates passed with `uv run ruff check sidecar`, `uv run
+  pytest` (`467 passed`), `uv run python -m compileall -q sidecar`, `docker
+  compose config --quiet`, and `git diff --check`. A Dev-01 Postgres smoke was
+  attempted against the existing `dev01-postgres-pgvector` container on
+  `127.0.0.1:55432`, but the idempotent `scripts/migrate.py` validation path
+  produced no output within the bounded smoke window and was terminated
+  (`exit 143`); no schema changed, and the API/store behavior remains covered
+  by deterministic in-memory tests.
 - 2026-06-07: LLM-backed replay intent synthesis now records pending
   calibration observations for the `intent_reconstruction` semantic family
   instead of calibrating only the downstream replay episode promotion. When
