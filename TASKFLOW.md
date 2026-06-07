@@ -16,6 +16,29 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Proposal-gate autonomy fallback remediation now records
+  threshold-deadlock recommendations from deterministic stall context instead
+  of writing every repeated soft-threshold loop as generic
+  `collect_more_evidence`. Repeated autonomy fallback waits classify
+  token-cost stalls as `narrow_scope`, low-utility/probe/adjudication stalls as
+  `generate_more_probes`, infrastructure/profile-unavailable stalls as
+  `no_action`, and preserve `collect_more_evidence` for missing contrastive
+  evidence. The remediation payload and persisted
+  `threshold_deadlock_findings.recommended_action` now carry this bounded
+  next-action signal without relaxing hard invariants, widening LLM authority,
+  adding runtime writes, or changing the threshold-policy schema. This advances
+  Part I Sections 5.10-5.14, 12.8.2-12.8.3, and production criteria
+  31.53/31.55/31.62 by making threshold-deadlock prevention more actionable
+  while keeping it sidecar-owned and policy-checked. Focused validation passed
+  with `uv run pytest sidecar/autoskill/tests/test_evaluator.py -q -k
+  "fallback_remediation"` (`4 passed, 19 deselected`) and touched-file Ruff.
+  Required gates passed with `uv run ruff check sidecar`, `uv run pytest`
+  (`446 passed`), `uv run python -m compileall -q sidecar`, `git diff
+  --check`, core acceptance (`ready=true`, `70` implemented, `7` context
+  criteria), Observatory acceptance (`ready=true`, `86` satisfied), and
+  conformance (`ready=true`, `23/23`). No compose/Postgres smoke was required
+  because this slice uses the existing threshold-deadlock enum/schema and is
+  covered by deterministic evaluator/store-unit tests.
 - 2026-06-07: Proposal-gate soft-threshold fallback remediation now has an
   executable Core worker loop instead of only recorded/read-model state.
   `evaluations.remediate_fallbacks` scans stalled proposal-gate evaluations

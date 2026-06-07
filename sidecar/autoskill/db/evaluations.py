@@ -819,6 +819,14 @@ async def _mark_threshold_deadlock_status(
     result: dict[str, Any],
 ) -> None:
     reason_codes = _reason_codes_for_deadlock(result)
+    recommended_action = _recommended_deadlock_action(
+        result,
+        selected_action=str(
+            _json_dict(result.get("autonomy_fallback")).get("selected_action")
+            or _json_dict(result.get("autonomy_remediation")).get("selected_action")
+            or ""
+        ),
+    )
     await conn.execute(
         """
         INSERT INTO autoskill.threshold_deadlock_findings (
@@ -840,7 +848,7 @@ async def _mark_threshold_deadlock_status(
           $3::text[],
           true,
           0,
-          'collect_more_evidence',
+          $4,
           'open'
         WHERE NOT EXISTS (
           SELECT 1
@@ -855,6 +863,7 @@ async def _mark_threshold_deadlock_status(
         workspace_id,
         skill_version_id,
         reason_codes,
+        recommended_action,
     )
     if decision_id is not None:
         await conn.execute(
@@ -902,6 +911,11 @@ def _remediation_patch(
     )
     if threshold_deadlock:
         status = "threshold_deadlock_candidate"
+    recommended_action = (
+        _recommended_deadlock_action(result, selected_action=selected_action)
+        if threshold_deadlock
+        else None
+    )
     attempt = {
         "attempt": attempt_count,
         "selected_action": selected_action,
@@ -923,6 +937,7 @@ def _remediation_patch(
             "attempted_autonomous_remedies": attempted,
             "contrastive_replays": contrastive_replays,
             "threshold_deadlock_candidate": threshold_deadlock,
+            "recommended_action": recommended_action,
             "attempts": [*previous_attempts[-9:], attempt],
             "updated_at": attempt["updated_at"],
         },
@@ -942,6 +957,51 @@ def _reason_codes_for_deadlock(result: dict[str, Any]) -> list[str]:
         )
     ]
     return reason_codes or ["intervention-required"]
+
+
+def _recommended_deadlock_action(
+    result: dict[str, Any],
+    *,
+    selected_action: str,
+) -> str:
+    reason_codes = set(_reason_codes_for_deadlock(result))
+    fallback_reason_codes = {
+        str(code)
+        for code in _json_dict(result.get("autonomy_fallback")).get("reason_codes") or []
+    }
+    all_reason_codes = reason_codes | fallback_reason_codes
+
+    if "token-delta-without-utility-gain" in all_reason_codes:
+        return "narrow_scope"
+    if {
+        "utility-delta-below-threshold",
+        "probe-margin-low",
+        "probe-failed",
+        "llm-json-invalid",
+        "autonomous-re-adjudication-required",
+    } & all_reason_codes:
+        return "generate_more_probes"
+    if {
+        "auto-reject-with-reason",
+        "candidate-utility-negative",
+        "repeated-contradictory-adjudications",
+    } & all_reason_codes:
+        return "reject_cohort"
+    if {
+        "qualified-autonomous-model-profile-unavailable",
+        "llm-adjudication-unavailable",
+        "required-infrastructure-unavailable",
+    } & all_reason_codes:
+        return "no_action"
+    if selected_action == "run_re_adjudication":
+        return "generate_more_probes"
+    if selected_action == "reduce_scope":
+        return "narrow_scope"
+    if selected_action == "auto_reject":
+        return "reject_cohort"
+    if selected_action == "stage_canary":
+        return "increase_canary_budget"
+    return "collect_more_evidence"
 
 
 async def _finish_evaluation(

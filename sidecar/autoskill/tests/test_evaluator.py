@@ -14,6 +14,7 @@ from autoskill.db.evaluations import (
     EvaluationRunResult,
     _attach_contrastive_replays,
     _finish_evaluation,
+    _recommended_deadlock_action,
     _remediation_patch,
 )
 from autoskill.db.observability import TraceSpanRecord
@@ -879,10 +880,59 @@ def test_fallback_remediation_records_threshold_deadlock_after_repeated_waits() 
     assert threshold_deadlock is True
     assert remediation["status"] == "threshold_deadlock_candidate"
     assert remediation["threshold_deadlock_candidate"] is True
+    assert remediation["recommended_action"] == "collect_more_evidence"
     assert "derive_contrastive_replay_from_permitted_evidence" in remediation[
         "attempted_autonomous_remedies"
     ]
     assert remediation["attempts"][-1]["status"] == "threshold_deadlock_candidate"
+
+
+def test_fallback_remediation_classifies_threshold_deadlock_recommendations() -> None:
+    assert (
+        _recommended_deadlock_action(
+            {
+                "autonomy_assurance": {
+                    "soft_threshold_misses": ["token-delta-without-utility-gain"],
+                    "hard_invariant_failures": [],
+                }
+            },
+            selected_action="collect_more_evidence",
+        )
+        == "narrow_scope"
+    )
+    assert (
+        _recommended_deadlock_action(
+            {
+                "autonomy_assurance": {
+                    "soft_threshold_misses": ["utility-delta-below-threshold"],
+                    "hard_invariant_failures": [],
+                }
+            },
+            selected_action="collect_more_evidence",
+        )
+        == "generate_more_probes"
+    )
+    assert (
+        _recommended_deadlock_action(
+            {
+                "reason_codes": ["intervention-required"],
+                "autonomy_fallback": {
+                    "reason_codes": [
+                        "qualified-autonomous-model-profile-unavailable",
+                    ]
+                },
+            },
+            selected_action="no_op_reschedule",
+        )
+        == "no_action"
+    )
+    assert (
+        _recommended_deadlock_action(
+            {"reason_codes": ["intervention-required"]},
+            selected_action="run_re_adjudication",
+        )
+        == "generate_more_probes"
+    )
 
 
 def test_fallback_remediation_reschedules_when_contrastive_replay_arrives() -> None:

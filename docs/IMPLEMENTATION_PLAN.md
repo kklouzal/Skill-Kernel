@@ -3,6 +3,25 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: threshold-deadlock remediation now persists a deterministic
+recommended action derived from the repeated stall context instead of treating
+every soft-threshold loop as a generic evidence-collection problem.
+`evaluations.remediate_fallbacks` maps token-cost stalls to `narrow_scope`,
+low-utility/probe/adjudication stalls to `generate_more_probes`,
+profile/provider-unavailable stalls to `no_action`, and missing contrastive
+proof to `collect_more_evidence`; both the remediation payload and
+`threshold_deadlock_findings.recommended_action` use the existing bounded enum.
+This advances Sections 5.10-5.14 and 12.8.2-12.8.3 by making threshold
+deadlocks actionable without granting LLM write authority, changing hard
+invariants, or adding a policy-schema migration. Focused validation passed
+with the fallback-remediation evaluator subset (`4 passed, 19 deselected`) and
+touched-file Ruff. Required gates passed with full sidecar Ruff, full pytest
+(`446 passed`), compileall, diff-check, core acceptance (`ready=true`, `70`
+implemented, `7` context criteria), Observatory acceptance (`ready=true`, `86`
+satisfied), and conformance (`ready=true`, `23/23`). No compose/Postgres smoke
+was required because the slice uses existing threshold-deadlock persistence
+shape and deterministic evaluator/store-unit coverage.
+
 2026-06-07 update: proposal-gate autonomy adjudication now accepts
 `auto_accept` as a valid structured Autonomous Decision Orchestrator verdict
 for soft-threshold stalls, then deterministically maps it to `stage_canary`
