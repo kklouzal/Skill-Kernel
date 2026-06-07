@@ -355,14 +355,7 @@ class NullAutonomyControlStore:
         abstentions = [
             record
             for record in records
-            if record.selected_action
-            in {
-                "collect_more_evidence",
-                "run_more_probes",
-                "run_re_adjudication",
-                "reduce_scope",
-                "no_op_reschedule",
-            }
+            if _is_calibration_abstention_action(record.selected_action)
         ]
         self.reliability_metrics.append(
             AutonomyReliabilityMetricRecord(
@@ -936,13 +929,7 @@ class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
                 avg(CASE WHEN false_reject IS NULL THEN NULL WHEN false_reject THEN 1.0 ELSE 0.0 END) AS false_reject_rate,
                 avg(
                   CASE
-                    WHEN selected_action IN (
-                      'collect_more_evidence',
-                      'run_more_probes',
-                      'run_re_adjudication',
-                      'reduce_scope',
-                      'no_op_reschedule'
-                    ) THEN 1.0
+                    WHEN selected_action = ANY($4::text[]) THEN 1.0
                     ELSE 0.0
                   END
                 ) AS abstention_rate,
@@ -1033,6 +1020,7 @@ class AsyncpgAutonomyControlStore(AsyncpgPoolOwner):
             uuid4(),
             workspace_id,
             calibration_family,
+            sorted(_CALIBRATION_ABSTENTION_ACTIONS),
         )
 
 
@@ -1070,6 +1058,40 @@ _ACTION_RISK_TIERS = {
     "T3_owned_runtime_change",
     "T4_external_or_irreversible",
 }
+
+
+_CALIBRATION_ABSTENTION_ACTIONS = {
+    "auto_reject",
+    "auto_reject_with_reason",
+    "build_ephemeral_candidate",
+    "canary_only",
+    "canary_with_smaller_exposure",
+    "collect_more_evidence",
+    "compile_more_conservatively",
+    "create_ephemeral_candidate",
+    "decompose_candidate",
+    "generate_more_probes",
+    "no_op_reschedule",
+    "no_op_with_reschedule",
+    "no_skill",
+    "quarantine",
+    "re_adjudicate",
+    "record_pending_candidate",
+    "reduce_scope",
+    "run_additional_retrieval",
+    "run_independent_verifier_adjudication",
+    "run_llm_re_adjudication",
+    "run_more_probes",
+    "run_re_adjudication",
+    "run_verifier_adjudication",
+    "stage_canary",
+    "stage_ephemeral_candidate",
+    "use_raw_vault_context_if_policy_allows",
+}
+
+
+def _is_calibration_abstention_action(action: str) -> bool:
+    return str(action).strip() in _CALIBRATION_ABSTENTION_ACTIONS
 
 
 def _canonical_action_risk_tier(action: str, explicit: str | None = None) -> str:

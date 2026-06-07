@@ -16,6 +16,34 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Autonomy reliability metrics now classify the full
+  specification-native soft-exit vocabulary as abstention/calibration support
+  evidence instead of counting only a narrow internal fallback subset.
+  `NullAutonomyControlStore` and `AsyncpgAutonomyControlStore` share the
+  expanded classifier for `run_additional_retrieval`,
+  `build_ephemeral_candidate`, `canary_with_smaller_exposure`, `no_skill`,
+  verifier/re-adjudication aliases, scope-reduction aliases, pending-candidate
+  exits, and canary/ephemeral paths, so soft-threshold misses, canary-only
+  admissions, no-skill exits, and reversible trial fallbacks contribute to
+  over-deferral/abstention reliability metrics. This advances unified autonomy
+  Sections 5.1, 5.5, 5.6, 5.9, 5.12, and 5.14 plus production criteria
+  31.53, 31.58, and 31.63 by making calibration support reflect the same
+  fallback ladder the Autonomous Decision Orchestrator advertises, without
+  adding runtime-write authority, broadening hard invariants, or creating a
+  second Observatory control plane. Focused validation passed with the
+  calibration/orchestrator evaluator subset (`6 passed, 28 deselected`) and
+  touched-file Ruff. Required gates passed with `uv run ruff check sidecar`,
+  `uv run pytest` (`457 passed`), `uv run python -m compileall -q sidecar`,
+  and `git diff --check`. Report gates passed with core acceptance
+  (`ready=true`, `63` production criteria, `7` context criteria), Observatory
+  acceptance (`ready=true`, `42` acceptance criteria, `44` developer checklist
+  items), conformance (`ready=true`, `23/23`), readiness (`ready=true`, `17`
+  checklist items), and handoff governance (`35` risks mitigated, `79`
+  satisfied). A Dev-01 Postgres smoke inserted a throwaway
+  `cron-calibration-abstention-smoke-*` workspace, recorded four
+  broker-decision soft-exit calibration observations through
+  `AsyncpgAutonomyControlStore`, verified latest `sample_count=4` and
+  `abstention_rate=1.0`, and deleted the smoke workspace plus calibration rows.
 - 2026-06-07: Autonomy calibration persistence now exposes a generic semantic
   decision-family observation primitive instead of leaving calibration writes
   coupled to proposal-gate fallback recording. `AutonomyControlStore` and both

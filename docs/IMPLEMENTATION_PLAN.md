@@ -3,6 +3,33 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: autonomy reliability metrics now count the full
+specification-native soft-exit vocabulary as abstention/calibration support
+evidence instead of treating only a small internal fallback subset as
+abstention. The Core autonomy store uses one shared classifier for the in-memory
+and asyncpg reliability paths, covering Section 5.1/5.6 fallback terms such as
+`run_additional_retrieval`, `build_ephemeral_candidate`,
+`canary_with_smaller_exposure`, `no_skill`, verifier/re-adjudication aliases,
+scope-reduction aliases, pending-candidate exits, and canary/ephemeral paths.
+This advances Sections 5.1, 5.5, 5.6, 5.9, 5.12, and 5.14 plus production
+criteria 31.53, 31.58, and 31.63 by making over-deferral/abstention reliability
+metrics reflect the same fallback ladder the Autonomous Decision Orchestrator
+advertises, without changing hard invariants, runtime-write authority, or
+Observatory mutation boundaries. Focused validation passed with the
+calibration/orchestrator evaluator subset (`6 passed, 28 deselected`) and
+touched-file Ruff. Required gates passed with `uv run ruff check sidecar`,
+`uv run pytest` (`457 passed`), `uv run python -m compileall -q sidecar`, and
+`git diff --check`. Report gates passed with core acceptance (`ready=true`, `63`
+production criteria, `7` context criteria), Observatory acceptance
+(`ready=true`, `42` acceptance criteria, `44` developer checklist items),
+conformance (`ready=true`, `23/23`), readiness (`ready=true`, `17` checklist
+items), and handoff governance (`35` risks mitigated, `79` satisfied). A
+Dev-01 Postgres smoke inserted a throwaway
+`cron-calibration-abstention-smoke-*` workspace, recorded four broker-decision
+soft-exit calibration observations through `AsyncpgAutonomyControlStore`,
+verified latest `sample_count=4` and `abstention_rate=1.0`, and deleted the
+smoke workspace plus calibration rows.
+
 2026-06-07 update: autonomy calibration persistence now has a generic
 semantic decision-family observation primitive instead of being usable only by
 proposal-gate fallback recording. `AutonomyControlStore` exposes

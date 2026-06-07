@@ -474,7 +474,7 @@ def test_proposal_gate_autonomy_orchestrator_runs_llm_fallback() -> None:
     )
     assert autonomy.reliability_metrics[-1].sample_count == 1
     assert autonomy.reliability_metrics[-1].coverage_rate == 0.0
-    assert autonomy.reliability_metrics[-1].abstention_rate == 0.0
+    assert autonomy.reliability_metrics[-1].abstention_rate == 1.0
     assert autonomy.reliability_metrics[-1].calibration_support == (
         "empirical_low_support"
     )
@@ -597,7 +597,30 @@ def test_generic_calibration_family_accepts_delayed_outcome() -> None:
     )
     assert autonomy.reliability_metrics[-1].sample_count == 1
     assert autonomy.reliability_metrics[-1].coverage_rate == 1.0
-    assert autonomy.reliability_metrics[-1].abstention_rate == 0.0
+    assert autonomy.reliability_metrics[-1].abstention_rate == 1.0
+
+
+def test_generic_calibration_counts_spec_soft_exit_aliases_as_abstention() -> None:
+    autonomy = NullAutonomyControlStore()
+
+    async def run() -> None:
+        for action in (
+            "run_additional_retrieval",
+            "build_ephemeral_candidate",
+            "canary_with_smaller_exposure",
+            "no_skill",
+        ):
+            await autonomy.record_calibration_observation(
+                workspace_key="dev-01",
+                calibration_family="broker_decision_adjudication",
+                selected_action=action,
+                predicted_confidence=0.66,
+            )
+
+    asyncio.run(run())
+
+    assert autonomy.reliability_metrics[-1].sample_count == 4
+    assert autonomy.reliability_metrics[-1].abstention_rate == 1.0
 
 
 def test_generic_calibration_family_rejects_invalid_risk_tier() -> None:
