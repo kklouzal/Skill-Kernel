@@ -512,6 +512,14 @@ def test_proposal_gate_autonomy_maps_spec_fallback_aliases() -> None:
         "compile_more_conservatively": "reduce_scope",
         "decompose_candidate": "reduce_scope",
         "run_counterfactual_trial": "run_more_probes",
+        "run_verifier_adjudication": "run_re_adjudication",
+        "run_independent_verifier_adjudication": "run_re_adjudication",
+        "run_additional_retrieval": "collect_more_evidence",
+        "use_raw_vault_context_if_policy_allows": "collect_more_evidence",
+        "build_ephemeral_candidate": "stage_ephemeral_candidate",
+        "record_pending_candidate": "no_op_reschedule",
+        "no_op_with_reschedule": "no_op_reschedule",
+        "no_skill": "no_op_reschedule",
     }
     for spec_action, expected_action in cases.items():
         autonomy = NullAutonomyControlStore()
@@ -551,6 +559,56 @@ def test_proposal_gate_autonomy_maps_spec_fallback_aliases() -> None:
         assert fallback["llm_verdict"]["action"] == expected_action
         assert fallback["llm_verdict"]["requested_action"] == spec_action
         assert autonomy.records[0].action == expected_action
+
+
+def test_proposal_gate_autonomy_prompt_lists_spec_soft_exit_vocabulary() -> None:
+    autonomy = NullAutonomyControlStore()
+    llm = MemoryLLM(
+        json.dumps(
+            {
+                "action": "run_verifier_adjudication",
+                "confidence": 0.74,
+                "confidence_decomposition": {
+                    "model_confidence": 0.74,
+                    "evidence_coverage": 0.6,
+                    "source_fidelity": 0.7,
+                    "scanner_risk": 0.0,
+                },
+                "evidence_fidelity": "redacted_derivative",
+                "reason_codes": ["verifier-needed"],
+                "uncertainty_notes": [],
+            }
+        )
+    )
+    orchestrator = ProposalGateAutonomyOrchestrator(
+        profiles=MemoryProfileStore(model_profile()),
+        llm=llm,  # type: ignore[arg-type]
+        autonomy=autonomy,
+    )
+
+    async def run() -> EvaluationRunItem:
+        return await orchestrator.resolve_item(
+            needs_intervention_item(),
+            workspace_key="dev-01",
+        )
+
+    item = asyncio.run(run())
+
+    prompt_payload = json.loads(llm.calls[0].messages[1].content)
+    allowed_actions = set(prompt_payload["allowed_actions"])
+    assert {
+        "run_verifier_adjudication",
+        "run_independent_verifier_adjudication",
+        "run_additional_retrieval",
+        "use_raw_vault_context_if_policy_allows",
+        "build_ephemeral_candidate",
+        "record_pending_candidate",
+        "no_op_with_reschedule",
+        "no_skill",
+    }.issubset(allowed_actions)
+    fallback = item.result["autonomy_fallback"]
+    assert fallback["selected_action"] == "run_re_adjudication"
+    assert fallback["llm_verdict"]["requested_action"] == "run_verifier_adjudication"
 
 
 def test_proposal_gate_autonomy_accepts_qualified_profile_with_autonomous_verdict() -> None:

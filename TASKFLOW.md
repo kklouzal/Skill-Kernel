@@ -16,6 +16,29 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Proposal-gate autonomy adjudication now advertises the
+  specification-native soft-exit vocabulary to the LLM instead of prompting
+  only with the smaller executable internal action set. The deterministic
+  normalizer maps Section 5.1/5.6/5.10 soft exits such as
+  `run_additional_retrieval`, `use_raw_vault_context_if_policy_allows`,
+  `run_verifier_adjudication`, `run_independent_verifier_adjudication`,
+  `build_ephemeral_candidate`, `record_pending_candidate`,
+  `no_op_with_reschedule`, and `no_skill` onto existing governed worker
+  actions while preserving the requested verdict text in the content-safe
+  fallback payload. This advances unified autonomy Sections 5.1, 5.2, 5.6,
+  5.7, 5.10, and 12.8 by preventing compliant LLM soft-exit wording from
+  collapsing to generic evidence collection without adding runtime-write
+  authority, raw-vault access, quarantine/freeze/rollback bypasses, or a second
+  control plane. Focused validation passed with the proposal-gate autonomy
+  evaluator subset (`8 passed, 21 deselected`) and touched-file Ruff. Required
+  gates passed with `uv run ruff check sidecar`, `uv run pytest` (`452
+  passed`), `uv run python -m compileall -q sidecar`, `git diff --check`,
+  core acceptance (`ready=true`, `70` implemented, `7` context criteria),
+  Observatory acceptance (`ready=true`, `86` satisfied), conformance
+  (`ready=true`, `23/23`), readiness (`ready=true`, `17` checklist items),
+  and handoff governance (`79` satisfied). No compose/Postgres smoke was
+  required because this slice changes in-process adjudication prompt
+  vocabulary and deterministic normalization only.
 - 2026-06-07: The proposal-gate Autonomous Decision Orchestrator now maps the
   remaining specification-native fallback vocabulary into executable internal
   actions instead of letting unknown LLM wording collapse to generic

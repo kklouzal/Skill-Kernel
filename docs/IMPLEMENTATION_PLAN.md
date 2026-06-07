@@ -3,6 +3,27 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: proposal-gate autonomy adjudication now exposes the
+specification-native soft-exit vocabulary in the LLM request instead of
+advertising only the smaller executable internal action set. Section 5.1,
+5.6, and 5.10 terms including `run_additional_retrieval`,
+`use_raw_vault_context_if_policy_allows`, `run_verifier_adjudication`,
+`run_independent_verifier_adjudication`, `build_ephemeral_candidate`,
+`record_pending_candidate`, `no_op_with_reschedule`, and `no_skill` are
+deterministically normalized to existing governed worker actions while the
+requested action remains visible in the content-safe fallback payload. This
+advances Sections 5.1, 5.2, 5.6, 5.7, 5.10, and 12.8 without adding runtime
+write authority, raw-vault access, or a new control plane. Focused validation
+passed with the proposal-gate autonomy evaluator subset (`8 passed, 21
+deselected`) and touched-file Ruff. Required gates passed with `uv run ruff
+check sidecar`, `uv run pytest` (`452 passed`), `uv run python -m compileall
+-q sidecar`, `git diff --check`, core acceptance (`ready=true`, `70`
+implemented, `7` context criteria), Observatory acceptance (`ready=true`, `86`
+satisfied), conformance (`ready=true`, `23/23`), readiness (`ready=true`, `17`
+checklist items), and handoff governance (`79` satisfied). No compose/Postgres
+smoke was required because this slice changes in-process adjudication prompt
+vocabulary and deterministic normalization only.
+
 2026-06-07 update: threshold-deadlock remediation now persists a deterministic
 recommended action derived from the repeated stall context instead of treating
 every soft-threshold loop as a generic evidence-collection problem.

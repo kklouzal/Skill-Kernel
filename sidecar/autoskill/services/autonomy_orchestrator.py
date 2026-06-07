@@ -26,15 +26,30 @@ NEEDS_INTERVENTION_ACTIONS = {
 
 ACTION_ALIASES = {
     "generate_more_probes": "run_more_probes",
+    "run_additional_retrieval": "collect_more_evidence",
     "assemble_richer_permitted_evidence": "collect_more_evidence",
+    "use_raw_vault_context_if_policy_allows": "collect_more_evidence",
     "canary_with_smaller_exposure": "stage_canary",
+    "canary_only": "stage_canary",
+    "build_ephemeral_candidate": "stage_ephemeral_candidate",
     "compile_more_conservatively": "reduce_scope",
     "create_ephemeral_candidate": "stage_ephemeral_candidate",
     "decompose_candidate": "reduce_scope",
     "ephemeral_candidate": "stage_ephemeral_candidate",
     "auto_reject_with_reason": "auto_reject",
+    "re_adjudicate": "run_re_adjudication",
+    "run_llm_re_adjudication": "run_re_adjudication",
+    "run_independent_verifier_adjudication": "run_re_adjudication",
+    "run_verifier_adjudication": "run_re_adjudication",
     "run_counterfactual_trial": "run_more_probes",
+    "record_pending_candidate": "no_op_reschedule",
+    "no_op_with_reschedule": "no_op_reschedule",
+    "no_skill": "no_op_reschedule",
 }
+
+ADJUDICATION_PROMPT_ACTIONS = frozenset(NEEDS_INTERVENTION_ACTIONS) | frozenset(
+    ACTION_ALIASES
+)
 
 
 class ProposalGateAutonomyOrchestrator:
@@ -316,7 +331,7 @@ def _adjudication_request(
 ) -> LLMCompletionRequest:
     user_payload: dict[str, Any] = {
         "task": "choose_autonomous_fallback_for_proposal_gate_stall",
-        "allowed_actions": sorted(NEEDS_INTERVENTION_ACTIONS),
+        "allowed_actions": sorted(ADJUDICATION_PROMPT_ACTIONS),
         "schema": {
             "action": "one allowed action",
             "confidence": "0..1",
