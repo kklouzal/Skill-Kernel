@@ -8,11 +8,13 @@ from uuid import uuid4
 from autoskill.api.app import EvaluationRunRequest, create_app
 from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.evaluations import (
+    EvaluationFallbackRemediationResult,
     EvaluationReviewRecord,
     EvaluationRunItem,
     EvaluationRunResult,
     _attach_contrastive_replays,
     _finish_evaluation,
+    _remediation_patch,
 )
 from autoskill.db.observability import TraceSpanRecord
 from autoskill.db.profiles import ModelProfileRecord
@@ -851,6 +853,76 @@ def test_evaluation_finish_records_executor_profile_compatibility() -> None:
     assert compatibility["evidence"]["trace_id"] == str(trace_id)
 
 
+def test_fallback_remediation_records_threshold_deadlock_after_repeated_waits() -> None:
+    result = {
+        "reason_codes": ["intervention-required"],
+        "autonomy_assurance": {
+            "soft_threshold_misses": ["intervention-required"],
+            "hard_invariant_failures": [],
+        },
+        "autonomy_remediation": {
+            "attempt_count": 2,
+            "attempts": [{"attempt": 1}, {"attempt": 2}],
+        },
+    }
+
+    remediation, attempt_count, threshold_deadlock = _remediation_patch(
+        result,
+        selected_action="collect_more_evidence",
+        contrastive_replays=[],
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
+    )
+
+    assert attempt_count == 3
+    assert threshold_deadlock is True
+    assert remediation["status"] == "threshold_deadlock_candidate"
+    assert remediation["threshold_deadlock_candidate"] is True
+    assert "derive_contrastive_replay_from_permitted_evidence" in remediation[
+        "attempted_autonomous_remedies"
+    ]
+    assert remediation["attempts"][-1]["status"] == "threshold_deadlock_candidate"
+
+
+def test_fallback_remediation_reschedules_when_contrastive_replay_arrives() -> None:
+    remediation, attempt_count, threshold_deadlock = _remediation_patch(
+        {"reason_codes": ["intervention-required"]},
+        selected_action="collect_more_evidence",
+        contrastive_replays=[
+            {
+                "probe_hash": "no-skill-hash",
+                "evidence_ids": [str(uuid4())],
+                "basis": {"schema": "autoskill.contrastive_replay.v1"},
+            }
+        ],
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
+    )
+
+    assert attempt_count == 1
+    assert threshold_deadlock is False
+    assert remediation["status"] == "rescheduled_for_contrastive_replay"
+    assert remediation["contrastive_replays"][0]["probe_hash"] == "no-skill-hash"
+
+
+def test_fallback_remediation_reschedules_re_adjudication_before_deadlock() -> None:
+    remediation, attempt_count, threshold_deadlock = _remediation_patch(
+        {"reason_codes": ["intervention-required"]},
+        selected_action="run_re_adjudication",
+        contrastive_replays=[],
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
+    )
+
+    assert attempt_count == 1
+    assert threshold_deadlock is False
+    assert remediation["status"] == "rescheduled_for_re_adjudication"
+    assert "run_llm_re_adjudication" in remediation["attempted_autonomous_remedies"]
+
+
 class MemoryEvaluationStore:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -888,6 +960,44 @@ class MemoryEvaluationStore:
                     status="needs_intervention",
                     result={"workspace_key": workspace_key, "limit": limit},
                 )
+            ],
+        )
+
+    async def remediate_autonomy_fallbacks(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
+    ) -> EvaluationFallbackRemediationResult:
+        self.calls.append(
+            {
+                "workspace_key": workspace_key,
+                "limit": limit,
+                "trace_id": trace_id,
+                "span_id": span_id,
+                "parent_span_id": parent_span_id,
+                "operation": "remediate_autonomy_fallbacks",
+            }
+        )
+        return EvaluationFallbackRemediationResult(
+            scanned=1,
+            reset_to_planned=1,
+            waiting_for_evidence=0,
+            contrastive_replays=1,
+            threshold_deadlocks=0,
+            remediations=[
+                {
+                    "evaluation_id": str(uuid4()),
+                    "skill_version_id": str(uuid4()),
+                    "selected_action": "collect_more_evidence",
+                    "status": "rescheduled_for_contrastive_replay",
+                    "attempt_count": 1,
+                    "contrastive_replays": 1,
+                    "threshold_deadlock_recorded": False,
+                }
             ],
         )
 

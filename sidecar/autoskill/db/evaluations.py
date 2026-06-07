@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -53,6 +53,26 @@ class EvaluationRunResult:
             "needs_intervention": self.needs_intervention,
             "passed": self.passed,
             "evaluations": [item.to_json() for item in self.evaluations],
+        }
+
+
+@dataclass(frozen=True)
+class EvaluationFallbackRemediationResult:
+    scanned: int
+    reset_to_planned: int
+    waiting_for_evidence: int
+    contrastive_replays: int
+    threshold_deadlocks: int
+    remediations: list[dict[str, Any]]
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "scanned": self.scanned,
+            "reset_to_planned": self.reset_to_planned,
+            "waiting_for_evidence": self.waiting_for_evidence,
+            "contrastive_replays": self.contrastive_replays,
+            "threshold_deadlocks": self.threshold_deadlocks,
+            "remediations": self.remediations,
         }
 
 
@@ -140,6 +160,17 @@ class EvaluationStore(Protocol):
     ) -> list[EvaluationReviewRecord]:
         """List proposal evaluation statuses for operator review."""
 
+    async def remediate_autonomy_fallbacks(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
+    ) -> EvaluationFallbackRemediationResult:
+        """Run autonomous remediation for stalled proposal-gate fallback actions."""
+
     async def invalidate_objects(
         self,
         *,
@@ -185,6 +216,24 @@ class NullEvaluationStore:
         if status is not None:
             reviews = [review for review in reviews if review.status == status]
         return reviews[: max(1, min(limit, 250))]
+
+    async def remediate_autonomy_fallbacks(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
+    ) -> EvaluationFallbackRemediationResult:
+        return EvaluationFallbackRemediationResult(
+            scanned=0,
+            reset_to_planned=0,
+            waiting_for_evidence=0,
+            contrastive_replays=0,
+            threshold_deadlocks=0,
+            remediations=[],
+        )
 
     async def invalidate_objects(
         self,
@@ -312,6 +361,111 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
         )
         return [EvaluationReviewRecord.from_row(row) for row in rows]
 
+    async def remediate_autonomy_fallbacks(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+        trace_id: UUID | None = None,
+        span_id: UUID | None = None,
+        parent_span_id: UUID | None = None,
+    ) -> EvaluationFallbackRemediationResult:
+        pool = await self._get_pool()
+        remediations: list[dict[str, Any]] = []
+        reset_to_planned = 0
+        waiting_for_evidence = 0
+        contrastive_replay_count = 0
+        threshold_deadlocks = 0
+        async with pool.acquire() as conn, conn.transaction():
+            rows = await _claim_fallback_remediation_evaluations(
+                conn,
+                workspace_key=workspace_key,
+                limit=limit,
+            )
+            for row in rows:
+                result = _json_dict(row["result"])
+                fallback = _json_dict(result.get("autonomy_fallback"))
+                selected_action = str(fallback.get("selected_action") or "")
+                probes = await _load_probes(conn, row)
+                _enriched, contrastive_replays = await _attach_contrastive_replays(
+                    conn,
+                    workspace_id=row["workspace_id"],
+                    probes=probes,
+                )
+                contrastive_replay_count += len(contrastive_replays)
+                remediation, attempt_count, threshold_deadlock = _remediation_patch(
+                    result,
+                    selected_action=selected_action,
+                    contrastive_replays=contrastive_replays,
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    parent_span_id=parent_span_id,
+                )
+                if threshold_deadlock:
+                    threshold_deadlocks += 1
+                    await _mark_threshold_deadlock_status(
+                        conn,
+                        workspace_id=row["workspace_id"],
+                        skill_version_id=row["skill_version_id"],
+                        decision_id=_optional_uuid(fallback.get("autonomy_decision_id")),
+                        result=result,
+                    )
+
+                updated_result = {
+                    **result,
+                    "autonomy_remediation": remediation,
+                }
+                reschedule = not threshold_deadlock and (
+                    bool(contrastive_replays)
+                    or selected_action in {"run_re_adjudication"}
+                )
+                if reschedule:
+                    updated_result.pop("autonomy_fallback", None)
+                    await _reset_evaluation_to_planned(
+                        conn,
+                        evaluation_id=row["evaluation_id"],
+                        skill_version_id=row["skill_version_id"],
+                        result=updated_result,
+                    )
+                    reset_to_planned += 1
+                else:
+                    await conn.execute(
+                        """
+                        UPDATE autoskill.evaluations
+                        SET result = $2::jsonb,
+                            trace_id = COALESCE($3, trace_id),
+                            span_id = COALESCE($4, span_id),
+                            parent_span_id = COALESCE($5, parent_span_id)
+                        WHERE evaluation_id = $1
+                        """,
+                        row["evaluation_id"],
+                        _json(updated_result),
+                        trace_id,
+                        span_id,
+                        parent_span_id,
+                    )
+                    waiting_for_evidence += 1
+                remediations.append(
+                    {
+                        "evaluation_id": str(row["evaluation_id"]),
+                        "skill_version_id": str(row["skill_version_id"]),
+                        "selected_action": selected_action,
+                        "status": remediation["status"],
+                        "attempt_count": attempt_count,
+                        "contrastive_replays": len(contrastive_replays),
+                        "threshold_deadlock_recorded": threshold_deadlock,
+                    }
+                )
+
+        return EvaluationFallbackRemediationResult(
+            scanned=len(rows),
+            reset_to_planned=reset_to_planned,
+            waiting_for_evidence=waiting_for_evidence,
+            contrastive_replays=contrastive_replay_count,
+            threshold_deadlocks=threshold_deadlocks,
+            remediations=remediations,
+        )
+
     async def invalidate_objects(
         self,
         *,
@@ -427,6 +581,54 @@ async def _claim_planned_evaluations(
         """,
         workspace_key,
         limit,
+        list(PROPOSAL_GATE_LIFECYCLE_STATES),
+    )
+
+
+async def _claim_fallback_remediation_evaluations(
+    conn: asyncpg.Connection,
+    *,
+    workspace_key: str | None,
+    limit: int,
+) -> list[asyncpg.Record]:
+    return await conn.fetch(
+        """
+        SELECT
+          ev.evaluation_id,
+          ev.workspace_id,
+          ev.skill_version_id,
+          ev.executor_profile_id,
+          ev.result,
+          w.external_key AS workspace_key,
+          s.skill_id,
+          sv.skill_ir,
+          sv.scanner_status
+        FROM autoskill.evaluations ev
+        JOIN autoskill.skill_versions sv USING (skill_version_id)
+        JOIN autoskill.skills s USING (skill_id)
+        JOIN autoskill.workspaces w ON w.workspace_id = ev.workspace_id
+        WHERE ev.category = 'proposal_gate'
+          AND ev.status = 'needs_intervention'
+          AND ev.result ? 'autonomy_fallback'
+          AND ev.result #>> '{autonomy_fallback,selected_action}' = ANY($3::text[])
+          AND s.lifecycle_state = ANY($4::text[])
+          AND ($1::text IS NULL OR w.external_key = $1)
+        ORDER BY
+          COALESCE(
+            (ev.result #>> '{autonomy_remediation,updated_at}')::timestamptz,
+            ev.created_at
+          ) ASC,
+          ev.created_at ASC
+        LIMIT $2
+        FOR UPDATE OF ev SKIP LOCKED
+        """,
+        workspace_key,
+        limit,
+        [
+            "collect_more_evidence",
+            "run_re_adjudication",
+            "no_op_reschedule",
+        ],
         list(PROPOSAL_GATE_LIFECYCLE_STATES),
     )
 
@@ -579,6 +781,167 @@ async def _persist_contrastive_probe(
             evidence_id,
             _json(basis),
         )
+
+
+async def _reset_evaluation_to_planned(
+    conn: asyncpg.Connection,
+    *,
+    evaluation_id: UUID,
+    skill_version_id: UUID,
+    result: dict[str, Any],
+) -> None:
+    await conn.execute(
+        """
+        UPDATE autoskill.evaluations
+        SET status = 'planned',
+            result = $2::jsonb
+        WHERE evaluation_id = $1
+        """,
+        evaluation_id,
+        _json(result),
+    )
+    await conn.execute(
+        """
+        UPDATE autoskill.skill_versions
+        SET evaluator_status = 'pending'
+        WHERE skill_version_id = $1
+        """,
+        skill_version_id,
+    )
+
+
+async def _mark_threshold_deadlock_status(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    skill_version_id: UUID,
+    decision_id: UUID | None,
+    result: dict[str, Any],
+) -> None:
+    reason_codes = _reason_codes_for_deadlock(result)
+    await conn.execute(
+        """
+        INSERT INTO autoskill.threshold_deadlock_findings (
+          threshold_deadlock_id,
+          workspace_id,
+          policy_kind,
+          stalled_candidate_ids,
+          stall_reason_codes,
+          hard_invariants_passed,
+          llm_high_utility_count,
+          recommended_action,
+          status
+        )
+        SELECT
+          gen_random_uuid(),
+          $1,
+          'proposal_gate_acceptance_policy.v1',
+          ARRAY[$2]::uuid[],
+          $3::text[],
+          true,
+          0,
+          'collect_more_evidence',
+          'open'
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM autoskill.threshold_deadlock_findings
+          WHERE workspace_id = $1
+            AND policy_kind = 'proposal_gate_acceptance_policy.v1'
+            AND status = 'open'
+            AND $2 = ANY(stalled_candidate_ids)
+            AND stall_reason_codes = $3::text[]
+        )
+        """,
+        workspace_id,
+        skill_version_id,
+        reason_codes,
+    )
+    if decision_id is not None:
+        await conn.execute(
+            """
+            UPDATE autoskill.admin_autonomy_decision_status
+            SET soft_threshold_state = 'threshold_deadlock_candidate',
+                dominant_reason_code = 'threshold_deadlock',
+                updated_at = now()
+            WHERE decision_id = $1
+            """,
+            decision_id,
+        )
+
+
+def _remediation_patch(
+    result: dict[str, Any],
+    *,
+    selected_action: str,
+    contrastive_replays: list[dict[str, Any]],
+    trace_id: UUID | None,
+    span_id: UUID | None,
+    parent_span_id: UUID | None,
+) -> tuple[dict[str, Any], int, bool]:
+    previous = _json_dict(result.get("autonomy_remediation"))
+    previous_attempts = _json_list(previous.get("attempts"))
+    attempt_count = int(previous.get("attempt_count") or 0) + 1
+    attempted = [
+        "inspect_evidence_coverage",
+        "derive_contrastive_replay_from_permitted_evidence",
+    ]
+    if selected_action == "run_re_adjudication":
+        attempted.append("run_llm_re_adjudication")
+    status = "waiting_for_contrastive_evidence"
+    if contrastive_replays:
+        status = "rescheduled_for_contrastive_replay"
+    elif selected_action == "run_re_adjudication" and attempt_count < 3:
+        status = "rescheduled_for_re_adjudication"
+    hard_failures = _json_dict(result.get("autonomy_assurance")).get(
+        "hard_invariant_failures"
+    )
+    threshold_deadlock = (
+        not contrastive_replays
+        and attempt_count >= 3
+        and not hard_failures
+    )
+    if threshold_deadlock:
+        status = "threshold_deadlock_candidate"
+    attempt = {
+        "attempt": attempt_count,
+        "selected_action": selected_action,
+        "status": status,
+        "attempted_autonomous_remedies": attempted,
+        "contrastive_replays": len(contrastive_replays),
+        "updated_at": datetime.now(UTC).isoformat(),
+        "trace_id": str(trace_id) if trace_id else None,
+        "span_id": str(span_id) if span_id else None,
+        "parent_span_id": str(parent_span_id) if parent_span_id else None,
+    }
+    return (
+        {
+            "schema": "autoskill.proposal-gate-autonomy-remediation.v1",
+            "source": "evaluations.remediate_fallbacks",
+            "selected_action": selected_action,
+            "status": status,
+            "attempt_count": attempt_count,
+            "attempted_autonomous_remedies": attempted,
+            "contrastive_replays": contrastive_replays,
+            "threshold_deadlock_candidate": threshold_deadlock,
+            "attempts": [*previous_attempts[-9:], attempt],
+            "updated_at": attempt["updated_at"],
+        },
+        attempt_count,
+        threshold_deadlock,
+    )
+
+
+def _reason_codes_for_deadlock(result: dict[str, Any]) -> list[str]:
+    assurance = _json_dict(result.get("autonomy_assurance"))
+    reason_codes = [
+        str(code)
+        for code in (
+            assurance.get("soft_threshold_misses")
+            or result.get("reason_codes")
+            or ["intervention-required"]
+        )
+    ]
+    return reason_codes or ["intervention-required"]
 
 
 async def _finish_evaluation(
@@ -833,6 +1196,21 @@ def _uuid_list(value: object) -> list[UUID]:
         except ValueError:
             continue
     return parsed
+
+
+def _optional_uuid(value: object) -> UUID | None:
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except ValueError:
+        return None
+
+
+def _json_list(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _object_keys(objects: list[dict[str, str]]) -> list[tuple[str, UUID]]:

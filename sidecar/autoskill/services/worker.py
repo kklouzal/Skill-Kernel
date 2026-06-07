@@ -681,6 +681,11 @@ _PROGRESS_PHASES_BY_JOB_KIND: dict[str, tuple[str, ...]] = {
         "run_target_no_skill_regression_and_adversarial_probes",
         "record_deterministic_gate_decisions",
     ),
+    "evaluations.remediate_fallbacks": (
+        "load_stalled_autonomy_fallbacks",
+        "derive_permitted_contrastive_replay_evidence",
+        "reschedule_gates_or_record_threshold_deadlock",
+    ),
     "historical_import.parse": (
         "discover_bounded_sources",
         "redact_and_chunk_sources",
@@ -750,6 +755,10 @@ def _job_progress_plan(
         plan["operation_classes"] = ["create", "improve", "compose", "decompose"]
     elif job_kind == "evaluations.run":
         plan["hard_gate_family"] = "scanner_evaluator_regression"
+    elif job_kind == "evaluations.remediate_fallbacks":
+        plan["autonomous_remediation"] = True
+        plan["runtime_file_writes_allowed"] = False
+        plan["hard_invariants_relaxed"] = False
     return plan
 
 
@@ -1019,6 +1028,81 @@ async def _run_evaluation_proposal_gates(
         },
     )
     return result.to_json()
+
+
+async def _run_evaluation_fallback_remediation(
+    stores: WorkerStores,
+    job: JobRecord,
+) -> dict[str, Any]:
+    if stores.evaluations is None:
+        raise ValueError("evaluation store is required for fallback remediation")
+    limit = _payload_int(job.payload, "limit", default=50, minimum=1, maximum=250)
+    workspace = _payload_workspace(job)
+    observed = stores.observability or NullObservabilityStore()
+    span = await observed.start_span(
+        workspace_key=workspace or job.workspace_key or "unknown",
+        trace_id=job.trace_id,
+        parent_span_id=job.span_id or job.parent_span_id,
+        operation_name="evaluations.remediate_fallbacks",
+        operation_kind="evaluator",
+        safe_attributes={
+            "source": "worker",
+            "job_id": str(job.job_id),
+            "job_kind": job.job_kind,
+            "limit": limit,
+        },
+        object_refs=[{"object_type": "job", "object_id": str(job.job_id)}],
+    )
+    try:
+        result = await stores.evaluations.remediate_autonomy_fallbacks(
+            workspace_key=workspace,
+            limit=limit,
+            trace_id=span.trace_id,
+            span_id=span.span_id,
+            parent_span_id=span.parent_span_id,
+        )
+    except Exception as error:
+        await observed.finish_span(
+            span_id=span.span_id,
+            status="error",
+            safe_attributes={"error": f"{type(error).__name__}: {error}"[:500]},
+        )
+        raise
+    payload = result.to_json()
+    queued_evaluation_job_id = None
+    if result.reset_to_planned > 0:
+        queued = await stores.jobs.enqueue_job(
+            workspace_key=workspace or job.workspace_key,
+            job_kind="evaluations.run",
+            idempotency_key=f"fallback-remediation:{job.job_id}:evaluations.run",
+            payload={
+                "workspace_id": workspace or job.workspace_key,
+                "limit": min(max(result.reset_to_planned, 1), 250),
+                "source": "evaluations.remediate_fallbacks",
+            },
+            trace_id=span.trace_id,
+            parent_span_id=span.span_id,
+            priority=25,
+            max_attempts=1,
+        )
+        queued_evaluation_job_id = str(queued.job.job_id)
+        payload["queued_evaluation_job_id"] = queued_evaluation_job_id
+        payload["queued_evaluation_job_created"] = queued.created
+    await observed.finish_span(
+        span_id=span.span_id,
+        status="ok",
+        safe_attributes={
+            "source": "worker",
+            "scanned": result.scanned,
+            "reset_to_planned": result.reset_to_planned,
+            "waiting_for_evidence": result.waiting_for_evidence,
+            "contrastive_replays": result.contrastive_replays,
+            "threshold_deadlocks": result.threshold_deadlocks,
+            "queued_evaluation_job_id": queued_evaluation_job_id,
+        },
+        object_refs=[{"object_type": "job", "object_id": str(job.job_id)}],
+    )
+    return payload
 
 
 async def _run_utility_rollup(stores: WorkerStores, job: JobRecord) -> dict[str, Any]:
@@ -3157,6 +3241,11 @@ JOB_DEFINITIONS: dict[str, JobDefinition] = {
         "evaluations.run",
         "evaluation",
         _run_evaluation_proposal_gates,
+    ),
+    "evaluations.remediate_fallbacks": JobDefinition(
+        "evaluations.remediate_fallbacks",
+        "evaluation",
+        _run_evaluation_fallback_remediation,
     ),
     "utility.rollup": JobDefinition(
         "utility.rollup",

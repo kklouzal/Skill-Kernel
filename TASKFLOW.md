@@ -16,6 +16,26 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Proposal-gate soft-threshold fallback remediation now has an
+  executable Core worker loop instead of only recorded/read-model state.
+  `evaluations.remediate_fallbacks` scans stalled proposal-gate evaluations
+  whose governed fallback selected `collect_more_evidence`, `run_re_adjudication`,
+  or `no_op_reschedule`; attempts permitted contrastive replay derivation from
+  linked evidence; resets remediated gates to `planned` and queues
+  `evaluations.run` when new proof or re-adjudication work is available; and
+  records repeated no-new-evidence stalls as threshold-deadlock candidates
+  without relaxing hard invariants or authorizing runtime writes. The default
+  scheduler now runs this remediation loop every 15 minutes, making
+  evidence-insufficient autonomy states an automated repair/wait path rather
+  than a hidden administrative queue or permanently parked evaluation row. This
+  advances unified automation directives in Part I Sections 5.1-5.6,
+  Section 12.8, and final assurance Sections 1 and 4 by connecting
+  `collect_more_evidence` to concrete evidence repair, re-evaluation, and
+  threshold-deadlock recording. Validation passed with focused fallback
+  remediation, contrastive replay, worker dispatch, scheduler-default, and
+  Observatory autonomy subsets; full touched-file suites; Ruff; compileall;
+  diff hygiene; handoff governance; core acceptance; Observatory acceptance;
+  readiness; conformance; and full pytest (`445 passed`).
 - 2026-06-07: Proposal-gate autonomy adjudication now recognizes
   `auto_accept` as part of the Section 5.2 Autonomous Decision Orchestrator
   action vocabulary while deterministically downgrading that verdict to

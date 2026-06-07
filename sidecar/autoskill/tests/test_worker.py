@@ -17,7 +17,10 @@ from autoskill.db.contracts import (
 )
 from autoskill.db.diagnostics import DiagnosticMomentumRecord
 from autoskill.db.embeddings import EmbeddingSourceText
-from autoskill.db.evaluations import EvaluationRunResult
+from autoskill.db.evaluations import (
+    EvaluationFallbackRemediationResult,
+    EvaluationRunResult,
+)
 from autoskill.db.evidence import EvidenceDeriveResult
 from autoskill.db.external_skills import ExternalSkillInput
 from autoskill.db.memory import NullMemoryGovernanceStore
@@ -101,9 +104,15 @@ class MemorySchedulerWorkerStore:
 
 
 class MemoryEvaluationWorkerStore:
-    def __init__(self, *, delay_seconds: float = 0.0) -> None:
+    def __init__(
+        self,
+        *,
+        delay_seconds: float = 0.0,
+        remediation_result: EvaluationFallbackRemediationResult | None = None,
+    ) -> None:
         self.calls: list[dict[str, object]] = []
         self.delay_seconds = delay_seconds
+        self.remediation_result = remediation_result
 
     async def run_pending_proposal_gates(
         self,
@@ -133,6 +142,48 @@ class MemoryEvaluationWorkerStore:
             needs_intervention=1,
             passed=0,
             evaluations=[],
+        )
+
+    async def remediate_autonomy_fallbacks(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
+    ) -> EvaluationFallbackRemediationResult:
+        if self.delay_seconds:
+            await asyncio.sleep(self.delay_seconds)
+        self.calls.append(
+            {
+                "workspace_key": workspace_key,
+                "limit": limit,
+                "trace_id": trace_id,
+                "span_id": span_id,
+                "parent_span_id": parent_span_id,
+                "operation": "remediate_autonomy_fallbacks",
+            }
+        )
+        if self.remediation_result is not None:
+            return self.remediation_result
+        return EvaluationFallbackRemediationResult(
+            scanned=1,
+            reset_to_planned=0,
+            waiting_for_evidence=1,
+            contrastive_replays=0,
+            threshold_deadlocks=1,
+            remediations=[
+                {
+                    "evaluation_id": str(uuid4()),
+                    "skill_version_id": str(uuid4()),
+                    "selected_action": "collect_more_evidence",
+                    "status": "threshold_deadlock_candidate",
+                    "attempt_count": 3,
+                    "contrastive_replays": 0,
+                    "threshold_deadlock_recorded": True,
+                }
+            ],
         )
 
     async def invalidate_objects(
@@ -2316,6 +2367,93 @@ def test_worker_run_once_dispatches_evaluation_job() -> None:
     assert observability.started[1].safe_attributes["job_kind"] == "evaluations.run"
     assert observability.finished[0]["status"] == "ok"
     assert observability.finished[0]["safe_attributes"]["needs_intervention"] == 1
+
+
+def test_worker_run_once_remediates_fallbacks_and_queues_evaluation() -> None:
+    evaluations = MemoryEvaluationWorkerStore(
+        remediation_result=EvaluationFallbackRemediationResult(
+            scanned=2,
+            reset_to_planned=1,
+            waiting_for_evidence=1,
+            contrastive_replays=1,
+            threshold_deadlocks=1,
+            remediations=[
+                {
+                    "evaluation_id": str(uuid4()),
+                    "skill_version_id": str(uuid4()),
+                    "selected_action": "collect_more_evidence",
+                    "status": "rescheduled_for_contrastive_replay",
+                    "attempt_count": 1,
+                    "contrastive_replays": 1,
+                    "threshold_deadlock_recorded": False,
+                },
+                {
+                    "evaluation_id": str(uuid4()),
+                    "skill_version_id": str(uuid4()),
+                    "selected_action": "collect_more_evidence",
+                    "status": "threshold_deadlock_candidate",
+                    "attempt_count": 3,
+                    "contrastive_replays": 0,
+                    "threshold_deadlock_recorded": True,
+                },
+            ],
+        )
+    )
+    observability = MemoryObservabilityStore()
+    jobs = MemoryJobStore()
+    stores = WorkerTestStores(
+        jobs=jobs,
+        scheduler=MemorySchedulerWorkerStore(),
+        evidence=MemoryEvidenceWorkerStore(),
+        embeddings=MemoryPendingEmbeddingStore(),
+        evaluations=evaluations,
+        observability=observability,
+    )
+    trace_id = uuid4()
+    span_id = uuid4()
+
+    async def run():
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="evaluations.remediate_fallbacks",
+            idempotency_key="eval:fallback-remediation",
+            payload={"workspace_id": "dev-01", "limit": 9},
+            trace_id=trace_id,
+            span_id=span_id,
+        )
+        return await run_worker_once(
+            stores.as_worker_stores(),
+            worker_id="worker-1",
+            pool="evaluation",
+        )
+
+    result = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["scanned"] == 2
+    assert result.output["reset_to_planned"] == 1
+    assert result.output["queued_evaluation_job_created"] is True
+    assert evaluations.calls == [
+        {
+            "workspace_key": "dev-01",
+            "limit": 9,
+            "trace_id": trace_id,
+            "span_id": observability.started[1].span_id,
+            "parent_span_id": span_id,
+            "operation": "remediate_autonomy_fallbacks",
+        }
+    ]
+    queued = jobs.jobs[f"fallback-remediation:{result.job.job_id}:evaluations.run"]
+    assert queued.job_kind == "evaluations.run"
+    assert queued.payload == {
+        "workspace_id": "dev-01",
+        "limit": 1,
+        "source": "evaluations.remediate_fallbacks",
+    }
+    assert observability.started[1].safe_attributes["job_kind"] == (
+        "evaluations.remediate_fallbacks"
+    )
+    assert observability.finished[0]["safe_attributes"]["threshold_deadlocks"] == 1
 
 
 def test_worker_run_once_dispatches_external_skill_scan(tmp_path) -> None:

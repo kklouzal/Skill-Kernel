@@ -102,6 +102,13 @@ CORE_DEFAULT_SCHEDULES = (
         payload={"limit": 100},
     ),
     DefaultSchedule(
+        name="evaluations.remediate_fallbacks",
+        job_kind="evaluations.remediate_fallbacks",
+        interval_seconds=15 * 60,
+        misfire_policy="coalesce",
+        payload={"limit": 100},
+    ),
+    DefaultSchedule(
         name="repair.execute",
         job_kind="repair.execute",
         interval_seconds=60 * 60,

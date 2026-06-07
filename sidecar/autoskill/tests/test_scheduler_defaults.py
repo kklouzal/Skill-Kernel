@@ -104,6 +104,11 @@ def test_core_schedule_defaults_register_handler_backed_jobs() -> None:
         "limit": 1000,
         "min_support": 2,
     }
+    assert upserts_by_name["evaluations.remediate_fallbacks"]["interval_seconds"] == 15 * 60
+    assert upserts_by_name["evaluations.remediate_fallbacks"]["payload"] == {
+        "workspace_id": "dev-01",
+        "limit": 100,
+    }
     assert all(entry["next_run_at"] == now for entry in scheduler.upserts)
 
 
