@@ -507,6 +507,52 @@ def test_proposal_gate_autonomy_downgrades_auto_accept_to_canary() -> None:
     assert autonomy.records[0].action == "stage_canary"
 
 
+def test_proposal_gate_autonomy_maps_spec_fallback_aliases() -> None:
+    cases = {
+        "compile_more_conservatively": "reduce_scope",
+        "decompose_candidate": "reduce_scope",
+        "run_counterfactual_trial": "run_more_probes",
+    }
+    for spec_action, expected_action in cases.items():
+        autonomy = NullAutonomyControlStore()
+        llm = MemoryLLM(
+            json.dumps(
+                {
+                    "action": spec_action,
+                    "confidence": 0.76,
+                    "confidence_decomposition": {
+                        "model_confidence": 0.76,
+                        "evidence_coverage": 0.62,
+                        "source_fidelity": 0.7,
+                        "scanner_risk": 0.0,
+                    },
+                    "evidence_fidelity": "redacted_derivative",
+                    "reason_codes": ["spec-native-fallback"],
+                    "uncertainty_notes": [],
+                }
+            )
+        )
+        orchestrator = ProposalGateAutonomyOrchestrator(
+            profiles=MemoryProfileStore(model_profile()),
+            llm=llm,  # type: ignore[arg-type]
+            autonomy=autonomy,
+        )
+
+        async def run() -> EvaluationRunItem:
+            return await orchestrator.resolve_item(
+                needs_intervention_item(),
+                workspace_key="dev-01",
+            )
+
+        item = asyncio.run(run())
+
+        fallback = item.result["autonomy_fallback"]
+        assert fallback["selected_action"] == expected_action
+        assert fallback["llm_verdict"]["action"] == expected_action
+        assert fallback["llm_verdict"]["requested_action"] == spec_action
+        assert autonomy.records[0].action == expected_action
+
+
 def test_proposal_gate_autonomy_accepts_qualified_profile_with_autonomous_verdict() -> None:
     autonomy = NullAutonomyControlStore()
     llm = MemoryLLM(

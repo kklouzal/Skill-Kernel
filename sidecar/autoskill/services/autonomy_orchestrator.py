@@ -28,9 +28,12 @@ ACTION_ALIASES = {
     "generate_more_probes": "run_more_probes",
     "assemble_richer_permitted_evidence": "collect_more_evidence",
     "canary_with_smaller_exposure": "stage_canary",
+    "compile_more_conservatively": "reduce_scope",
     "create_ephemeral_candidate": "stage_ephemeral_candidate",
+    "decompose_candidate": "reduce_scope",
     "ephemeral_candidate": "stage_ephemeral_candidate",
     "auto_reject_with_reason": "auto_reject",
+    "run_counterfactual_trial": "run_more_probes",
 }
 
 
@@ -461,6 +464,7 @@ def _fallback_patch(
             key: llm_verdict.get(key)
             for key in (
                 "action",
+                "requested_action",
                 "confidence",
                 "confidence_decomposition",
                 "evidence_fidelity",
@@ -477,9 +481,11 @@ def _fallback_patch(
 
 
 def _normalize_verdict(value: dict[str, Any]) -> dict[str, Any]:
-    action = ACTION_ALIASES.get(str(value.get("action") or ""), str(value.get("action") or ""))
+    requested_action = str(value.get("action") or "")
+    action = ACTION_ALIASES.get(requested_action, requested_action)
     return {
         **value,
+        "requested_action": requested_action,
         "action": action if action in NEEDS_INTERVENTION_ACTIONS else "collect_more_evidence",
     }
 

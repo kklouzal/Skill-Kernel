@@ -16,6 +16,23 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: The proposal-gate Autonomous Decision Orchestrator now maps the
+  remaining specification-native fallback vocabulary into executable internal
+  actions instead of letting unknown LLM wording collapse to generic
+  `collect_more_evidence`. `compile_more_conservatively` and
+  `decompose_candidate` route to `reduce_scope`; `run_counterfactual_trial`
+  routes to `run_more_probes`; existing mappings continue to route
+  `generate_more_probes`, `assemble_richer_permitted_evidence`,
+  `canary_with_smaller_exposure`, and `auto_reject_with_reason` into the
+  bounded worker/activation actions. This closes a vocabulary compliance gap
+  between the evaluator's soft-threshold fallback list and the orchestrator's
+  allowed-action surface, preserving the LLM's original verdict text while
+  selecting deterministic executable actions. Focused validation passed with
+  orchestrator alias/remediation tests (`9 passed`), touched-file Ruff, and
+  compileall. Required gates passed with `uv run ruff check sidecar scripts`,
+  `uv run python -m compileall -q sidecar scripts`, `git diff --check`, full
+  pytest (`451 passed`), acceptance, Observatory acceptance, conformance,
+  readiness, and handoff governance reports.
 - 2026-06-07: Proposal-gate autonomy fallback remediation now covers the
   full non-canary action set emitted by the Autonomous Decision Orchestrator
   instead of only `collect_more_evidence`, `run_re_adjudication`, and
