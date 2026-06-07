@@ -3,6 +3,31 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: LLM-backed replay intent synthesis now writes pending
+calibration observations for the `intent_reconstruction` semantic family. When
+`/v1/broker/replay-episodes/synthesize` reconstructs a missing redacted intent
+from content-safe retrieval context and deterministic validation passes, Core
+records `accept_intent_reconstruction` with T1 risk, source retrieval log ID,
+broker decision, profile key, evidence-fidelity tier, redacted-intent source
+kind, validation status/check count, context object type counts,
+candidate/rendered skill counts, and explicit `raw_prompt_returned=false`,
+`redacted_intent_returned=false`, and `runtime_write_authority=false`. The
+calibration payload omits the reconstructed intent text and raw prompt content.
+This advances Sections 5.5, 5.12, 5.13, and 5.14 plus Part IV semantic
+decision-family coverage for intent reconstruction while preserving
+sidecar-only deterministic control and adding no runtime write, activation,
+raw-vault reveal, or Observatory mutation authority. Focused validation passed
+with `uv run pytest sidecar/autoskill/tests/test_broker_policy_api.py -q -k
+"synthesizes_missing_intent_from_safe_retrieval_context or
+synthesizes_replay_episodes_from_redacted_telemetry"` (`2 passed, 12
+deselected`) and touched-file Ruff. Required gates passed with `uv run ruff
+check sidecar`, `uv run pytest` (`466 passed`), `uv run python -m compileall -q
+sidecar`, `node --test plugin/autoskill/test/hook-smoke.test.js` (`21`
+passed), `docker compose config --quiet`, and `git diff --check`. No Postgres
+smoke was required because the slice reuses the existing autonomy observation
+primitive and is covered through the in-memory broker replay API path without
+schema changes.
+
 2026-06-07 update: lifecycle curation actions now write pending calibration
 observations for the `lifecycle_curation` semantic family. After `curation.run`
 finishes, the worker records one content-safe observation per curation action

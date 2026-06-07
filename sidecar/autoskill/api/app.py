@@ -3775,6 +3775,7 @@ async def _synthesize_redacted_replay_intent(
     text_llm: LLMClient,
     profile_key: str,
     min_intent_chars: int,
+    autonomy: AutonomyControlStore | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     safe_context = [
         candidate
@@ -3853,14 +3854,22 @@ async def _synthesize_redacted_replay_intent(
     if validation["status"] != "passed":
         return None, f"deterministic-validation-not-passed:{validation['reason']}"
     context_metadata = _replay_context_metadata(safe_context)
+    metadata_overlay = {
+        "redacted_user_intent": intent,
+        "redacted_intent_source": "llm_synthesized_from_content_safe_retrieval",
+        "evidence_fidelity": "redacted_derivative",
+        "deterministic_validation": validation,
+        **context_metadata,
+    }
+    await _record_intent_reconstruction_calibration(
+        autonomy,
+        workspace_key=workspace_key,
+        log=log,
+        profile_key=profile_key,
+        metadata=metadata_overlay,
+    )
     return (
-        {
-            "redacted_user_intent": intent,
-            "redacted_intent_source": "llm_synthesized_from_content_safe_retrieval",
-            "evidence_fidelity": "redacted_derivative",
-            "deterministic_validation": validation,
-            **context_metadata,
-        },
+        metadata_overlay,
         "eligible",
     )
 
@@ -3935,6 +3944,74 @@ def _replay_context_metadata(context: list[Any]) -> dict[str, Any]:
         "candidate_count": len(object_types),
         "context_object_types": sorted(set(object_types)),
     }
+
+
+async def _record_intent_reconstruction_calibration(
+    autonomy: AutonomyControlStore | None,
+    *,
+    workspace_key: str,
+    log: Any,
+    profile_key: str,
+    metadata: dict[str, Any],
+) -> None:
+    if autonomy is None:
+        return
+    validation = metadata.get("deterministic_validation")
+    validation = validation if isinstance(validation, dict) else {}
+    context_object_types = metadata.get("context_object_types")
+    context_object_types = (
+        context_object_types if isinstance(context_object_types, list) else []
+    )
+    await autonomy.record_calibration_observation(
+        workspace_key=workspace_key,
+        calibration_family="intent_reconstruction",
+        selected_action="accept_intent_reconstruction",
+        predicted_confidence=_intent_reconstruction_calibration_confidence(
+            validation=validation,
+            context_count=_numeric_component(metadata.get("candidate_count")),
+            context_object_type_count=len(context_object_types),
+        ),
+        confidence_components={
+            "schema": "autoskill.intent-reconstruction-calibration-components.v1",
+            "source_retrieval_log_id": str(getattr(log, "retrieval_log_id", "")),
+            "broker_decision": str(getattr(log, "decision", "")),
+            "profile_key": profile_key,
+            "evidence_fidelity": str(metadata.get("evidence_fidelity") or ""),
+            "redacted_intent_source_kind": _replay_intent_source_kind(
+                str(metadata.get("redacted_intent_source") or "")
+            ),
+            "deterministic_validation_status": validation.get("status"),
+            "validation_check_count": len(validation.get("checks") or []),
+            "candidate_count": _numeric_component(metadata.get("candidate_count")),
+            "context_object_type_count": len(context_object_types),
+            "context_object_types": sorted(str(item) for item in context_object_types),
+            "rendered_skill_count": len(getattr(log, "rendered_skill_ids", []) or []),
+            "candidate_skill_count": len(getattr(log, "candidate_skill_ids", []) or []),
+            "raw_prompt_returned": False,
+            "redacted_intent_returned": False,
+            "runtime_write_authority": False,
+        },
+        action_risk_tier="T1_internal_record",
+        outcome_status="pending",
+    )
+
+
+def _intent_reconstruction_calibration_confidence(
+    *,
+    validation: dict[str, Any],
+    context_count: float | None,
+    context_object_type_count: int,
+) -> float:
+    confidence = 0.5
+    if validation.get("status") == "passed":
+        confidence += 0.2
+    if context_count and context_count > 0:
+        confidence += 0.1
+    if context_object_type_count > 0:
+        confidence += 0.05
+    if "content_safe_context_only" in set(validation.get("checks") or []):
+        confidence += 0.05
+    return max(0.0, min(1.0, confidence))
 
 
 async def _record_replay_episode_calibration(
@@ -4958,6 +5035,7 @@ def create_app(
                     text_llm=text_llm,
                     profile_key=request.synthesis_profile_key,
                     min_intent_chars=max(1, request.min_intent_chars),
+                    autonomy=autonomy_control,
                 )
                 if metadata_overlay is not None:
                     candidate, reason = _broker_replay_synthesis_candidate(

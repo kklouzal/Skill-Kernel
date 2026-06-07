@@ -337,10 +337,12 @@ def test_broker_policy_synthesizes_missing_intent_from_safe_retrieval_context() 
     llm = FakeReplayIntentLLM(
         '{"redacted_user_intent":"repair redacted pdf table export"}'
     )
+    autonomy = SpyAutonomyControlStore()
     app = create_app(
         broker_policy_store=policy_store,
         retrieval_store=retrieval,
         llm_client=llm,
+        autonomy_control_store=autonomy,
     )
     synthesize = next(
         route
@@ -368,6 +370,26 @@ def test_broker_policy_synthesizes_missing_intent_from_safe_retrieval_context() 
     assert episode["metadata"]["raw_prompt_stored"] is False
     assert llm.calls[0].purpose == "broker_replay.redacted_intent_synthesis"
     assert retrieval.replay_context_calls[0]["retrieval_log_id"] == retrieval_log_id
+    assert [
+        observation.calibration_family
+        for observation in autonomy.calibration_observations
+    ] == ["intent_reconstruction", "replay_episode_promotion"]
+    intent_components = autonomy.calibration_calls[0]["confidence_components"]
+    assert intent_components["schema"] == (
+        "autoskill.intent-reconstruction-calibration-components.v1"
+    )
+    assert intent_components["source_retrieval_log_id"] == str(retrieval_log_id)
+    assert intent_components["broker_decision"] == "candidates_found"
+    assert intent_components["profile_key"] == "default-text"
+    assert intent_components["evidence_fidelity"] == "redacted_derivative"
+    assert intent_components["deterministic_validation_status"] == "passed"
+    assert intent_components["candidate_count"] == 1
+    assert intent_components["context_object_types"] == ["body_index_document"]
+    assert intent_components["raw_prompt_returned"] is False
+    assert intent_components["redacted_intent_returned"] is False
+    assert intent_components["runtime_write_authority"] is False
+    assert "redacted_user_intent" not in intent_components
+    assert "repair redacted pdf table export" not in str(intent_components)
 
 
 def test_broker_policy_synthesis_fails_closed_without_safe_context() -> None:
