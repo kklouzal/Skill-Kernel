@@ -1,5 +1,6 @@
 import asyncio
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -7,6 +8,7 @@ from uuid import uuid4
 from autoskill.api.app import EvaluationRunRequest, create_app
 from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.evaluations import (
+    EvaluationReviewRecord,
     EvaluationRunItem,
     EvaluationRunResult,
     _attach_contrastive_replays,
@@ -459,6 +461,49 @@ def test_proposal_gate_autonomy_orchestrator_runs_llm_fallback() -> None:
     assert llm.calls[0].purpose == "proposal_gate.needs_intervention_adjudication"
 
 
+def test_proposal_gate_autonomy_accepts_qualified_profile_with_autonomous_verdict() -> None:
+    autonomy = NullAutonomyControlStore()
+    llm = MemoryLLM(
+        json.dumps(
+            {
+                "action": "stage_canary",
+                "confidence": 0.88,
+                "confidence_decomposition": {
+                    "model_confidence": 0.88,
+                    "evidence_coverage": 0.7,
+                    "source_fidelity": 0.8,
+                    "scanner_risk": 0.0,
+                },
+                "evidence_fidelity": "redacted_derivative",
+                "reason_codes": ["qualified-verdict-used"],
+                "uncertainty_notes": [],
+            }
+        )
+    )
+    profile = model_profile(status="qualified")
+    profile = replace(
+        profile,
+        qualification={"latest_qualification_verdict": "qualified_autonomous"},
+    )
+    orchestrator = ProposalGateAutonomyOrchestrator(
+        profiles=MemoryProfileStore(profile),
+        llm=llm,  # type: ignore[arg-type]
+        autonomy=autonomy,
+    )
+
+    async def run() -> EvaluationRunItem:
+        return await orchestrator.resolve_item(
+            needs_intervention_item(),
+            workspace_key="dev-01",
+        )
+
+    item = asyncio.run(run())
+
+    assert item.result["autonomy_fallback"]["selected_action"] == "stage_canary"
+    assert llm.calls
+    assert autonomy.records[0].action == "stage_canary"
+
+
 def test_proposal_gate_autonomy_orchestrator_reschedules_without_profile() -> None:
     autonomy = NullAutonomyControlStore()
     llm = MemoryLLM("{}")
@@ -483,6 +528,64 @@ def test_proposal_gate_autonomy_orchestrator_reschedules_without_profile() -> No
     assert fallback["llm_invocation_id"] is None
     assert llm.calls == []
     assert autonomy.records[0].action == "no_op_reschedule"
+
+
+def test_evaluation_review_summary_includes_safe_autonomy_fallback() -> None:
+    evaluation_id = uuid4()
+    skill_version_id = uuid4()
+    decision_id = uuid4()
+    adjudication_id = uuid4()
+
+    record = EvaluationReviewRecord.from_row(
+        {
+            "workspace_id": uuid4(),
+            "workspace_key": "dev-01",
+            "evaluation_id": evaluation_id,
+            "skill_version_id": skill_version_id,
+            "skill_slug": "context-repair",
+            "skill_version": 1,
+            "executor_profile_id": None,
+            "category": "proposal_gate",
+            "status": "needs_intervention",
+            "created_at": datetime.now(UTC),
+            "result": {
+                "candidate_slug": "context-repair",
+                "status": "needs_intervention",
+                "reason_codes": ["no-skill-control-missing"],
+                "autonomy_fallback": {
+                    "schema": "autoskill.proposal-gate-autonomy-fallback.v1",
+                    "decision_family": "skill_plan_semantic_adjudication",
+                    "selected_action": "stage_canary",
+                    "decision_band": "canary",
+                    "reason_codes": ["semantic-utility-likely"],
+                    "model_profile_id": str(uuid4()),
+                    "llm_invocation_id": str(uuid4()),
+                    "autonomy_decision_id": str(decision_id),
+                    "adjudication_id": str(adjudication_id),
+                    "confidence_band": "high",
+                    "evidence_fidelity": "redacted_derivative",
+                    "runtime_writes_authorized": False,
+                    "administrative_escalation_allowed": False,
+                    "llm_verdict": {"raw_semantic_payload": "must not surface"},
+                    "deterministic_checks": {
+                        "schema_valid": True,
+                        "hard_invariants_passed": True,
+                        "scanner_override": False,
+                        "runtime_write_authorized": False,
+                        "admissible": True,
+                    },
+                },
+            },
+        }
+    )
+
+    fallback = record.to_json()["result_summary"]["autonomy_fallback"]  # type: ignore[index]
+
+    assert fallback["selected_action"] == "stage_canary"
+    assert fallback["autonomy_decision_id"] == str(decision_id)
+    assert fallback["adjudication_id"] == str(adjudication_id)
+    assert fallback["deterministic_checks"]["hard_invariants_passed"] is True
+    assert "llm_verdict" not in fallback
 
 
 def test_proposal_gate_attaches_contrastive_replay_from_evidence() -> None:

@@ -16,6 +16,35 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Observatory now has a first-class Gates view that binds
+  proposal-gate evaluations to autonomy fallback decisions through existing
+  sidecar admin read models instead of leaving soft-threshold intervention
+  states visible only through generic object microscopes. Evaluation review
+  summaries now carry a content-safe `autonomy_fallback` projection with raw
+  model verdicts withheld, evaluation microscopes expose selected fallback
+  action, admissibility, decision/adjudication IDs, and downstream provenance,
+  and the frontend can drill from proposal gate rows to the linked autonomy
+  decision detail without adding UI-local control authority. Qualified text
+  model profiles whose latest qualification verdict is `qualified_autonomous`
+  are accepted for the proposal-gate fallback path even when the profile row
+  status is the generic `qualified` state. This advances Part I Sections 5.1,
+  5.10-5.12, production criteria 31.51/31.53/31.55/31.62, and Observatory
+  Sections 21.16/21.22/21.23 plus 24.auto.1/24.auto.3 by making autonomous
+  soft-threshold remedies inspectable from the quality-gate surface while
+  preserving deterministic admissibility and raw-content withholding. Focused
+  validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_evaluator.py
+  sidecar/autoskill/tests/test_observatory_api.py -q` (`81 passed`) and
+  `npm run build` in `sidecar/autoskill/observatory`. Required gates passed
+  with `uv run ruff check sidecar`, `uv run pytest` (`437 passed`), `uv run
+  python -m compileall -q sidecar`, `git diff --check`, core acceptance
+  (`ready=true`, `70` implemented, `7` context criteria), Observatory
+  acceptance (`ready=true`, `86` satisfied), and conformance (`ready=true`,
+  `23/23`). No compose/Postgres smoke was required because no schema changed
+  and the slice uses existing admin read-model APIs and in-memory route/store
+  tests. Next strongest gate after push is CI/GHCR for the pushed head, then
+  scoped Dev-01 redeploy of `skillkernel-core` and `skillkernel-observatory`
+  only if CI is green.
 - 2026-06-06: Activation readiness now consumes the Autonomy Decision
   Orchestrator action required by the unified specification before writer or
   topology activation can proceed. API and worker activation checks require a

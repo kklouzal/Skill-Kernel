@@ -92,6 +92,9 @@ class EvaluationReviewRecord:
                 "autonomy_assurance": _safe_autonomy_assurance(
                     _json_dict(result.get("autonomy_assurance"))
                 ),
+                "autonomy_fallback": _safe_autonomy_fallback(
+                    _json_dict(result.get("autonomy_fallback"))
+                ),
             },
             created_at=row["created_at"],
         )
@@ -765,6 +768,40 @@ def _safe_autonomy_assurance(value: dict[str, Any]) -> dict[str, Any]:
         ),
         "calibration_support_status": value.get("calibration_support_status"),
         "evidence_mode": value.get("evidence_mode"),
+    }
+
+
+def _safe_autonomy_fallback(value: dict[str, Any]) -> dict[str, Any]:
+    if not value:
+        return {}
+    deterministic_checks = _json_dict(value.get("deterministic_checks"))
+    return {
+        "schema": value.get("schema"),
+        "decision_family": value.get("decision_family"),
+        "selected_action": value.get("selected_action"),
+        "decision_band": value.get("decision_band"),
+        "reason_codes": list(value.get("reason_codes") or []),
+        "model_profile_id": value.get("model_profile_id"),
+        "llm_invocation_id": value.get("llm_invocation_id"),
+        "autonomy_decision_id": value.get("autonomy_decision_id"),
+        "adjudication_id": value.get("adjudication_id"),
+        "confidence_band": value.get("confidence_band"),
+        "evidence_fidelity": value.get("evidence_fidelity"),
+        "runtime_writes_authorized": bool(value.get("runtime_writes_authorized")),
+        "administrative_escalation_allowed": bool(
+            value.get("administrative_escalation_allowed")
+        ),
+        "deterministic_checks": {
+            "schema_valid": bool(deterministic_checks.get("schema_valid")),
+            "hard_invariants_passed": bool(
+                deterministic_checks.get("hard_invariants_passed")
+            ),
+            "scanner_override": bool(deterministic_checks.get("scanner_override")),
+            "runtime_write_authorized": bool(
+                deterministic_checks.get("runtime_write_authorized")
+            ),
+            "admissible": bool(deterministic_checks.get("admissible")),
+        },
     }
 
 

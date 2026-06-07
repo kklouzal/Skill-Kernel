@@ -150,6 +150,57 @@ export function fetchTraceReplay(
   );
 }
 
+export function fetchEvaluations(
+  session: ApiSession,
+  workspaceId: string,
+  status = "",
+  limit = 100
+) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  if (status) params.set("status", status);
+  return fetchJson<CollectionResponse>(`${adminApiPath("/evaluations")}?${params}`, session);
+}
+
+export function fetchEvaluationDetail(
+  session: ApiSession,
+  evaluationId: string,
+  workspaceId: string
+) {
+  const params = new URLSearchParams();
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  return fetchJson<ObjectResponse>(
+    `${adminApiPath("/evaluations/{evaluation_id}", {
+      evaluation_id: evaluationId
+    })}?${params}`,
+    session
+  );
+}
+
+export function fetchAutonomyDecisions(session: ApiSession, workspaceId: string, limit = 100) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  return fetchJson<CollectionResponse>(
+    `${adminApiPath("/autonomy/decisions")}?${params}`,
+    session
+  );
+}
+
+export function fetchAutonomyDecisionDetail(
+  session: ApiSession,
+  decisionId: string,
+  workspaceId: string
+) {
+  const params = new URLSearchParams();
+  if (workspaceId) params.set("workspace_id", workspaceId);
+  return fetchJson<ObjectResponse>(
+    `${adminApiPath("/autonomy/decisions/{decision_id}", {
+      decision_id: decisionId
+    })}?${params}`,
+    session
+  );
+}
+
 export function fetchBrokerReplayEpisodes(
   session: ApiSession,
   workspaceId: string,

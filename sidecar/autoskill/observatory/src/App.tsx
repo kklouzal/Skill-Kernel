@@ -7,6 +7,7 @@ import {
   Bug,
   FileJson,
   Gauge,
+  ListChecks,
   KeyRound,
   Layers,
   Network,
@@ -19,9 +20,13 @@ import {
 import type { EChartsOption } from "echarts";
 import {
   fetchActionAudits,
+  fetchAutonomyDecisionDetail,
+  fetchAutonomyDecisions,
   fetchBrokerReplayEpisodeDetail,
   fetchBrokerReplayEpisodes,
   fetchContextArtifacts,
+  fetchEvaluationDetail,
+  fetchEvaluations,
   fetchObject,
   fetchSkillDetail,
   fetchSkills,
@@ -56,7 +61,15 @@ import { EChartPanel } from "./components/EChartPanel";
 import { Inspector } from "./components/Inspector";
 import { ParticleLayer } from "./components/ParticleLayer";
 
-type View = "overview" | "workcells" | "cockpit" | "skills" | "trace" | "replay" | "admin";
+type View =
+  | "overview"
+  | "workcells"
+  | "cockpit"
+  | "skills"
+  | "gates"
+  | "trace"
+  | "replay"
+  | "admin";
 type CockpitTab = "records" | "metrics" | "traces" | "artifacts" | "config" | "audit" | "help";
 type FrontendDiagnostics = {
   app_render_count: number;
@@ -74,7 +87,8 @@ const storedToken = (sessionStorage.getItem("skillkernel.admin.token") ?? "").tr
 const initialParams = new URLSearchParams(window.location.search);
 const initialView = ((): View => {
   const value = initialParams.get("view");
-  return value && ["overview", "workcells", "cockpit", "skills", "trace", "replay", "admin"].includes(value)
+  return value &&
+    ["overview", "workcells", "cockpit", "skills", "gates", "trace", "replay", "admin"].includes(value)
     ? (value as View)
     : "overview";
 })();
@@ -119,6 +133,15 @@ function App() {
   );
   const [selectedTopologyOperationId, setSelectedTopologyOperationId] = useState<string | undefined>(
     initialParams.get("topology_operation") ?? undefined
+  );
+  const [selectedEvaluationId, setSelectedEvaluationId] = useState<string | undefined>(
+    initialParams.get("evaluation") ?? undefined
+  );
+  const [selectedAutonomyDecisionId, setSelectedAutonomyDecisionId] = useState<string | undefined>(
+    initialParams.get("autonomy_decision") ?? undefined
+  );
+  const [gateStatusFilter, setGateStatusFilter] = useState(
+    initialParams.get("gate_status") ?? "needs_intervention"
   );
   const [selectedSubsystemId, setSelectedSubsystemId] = useState<string | undefined>(
     initialParams.get("subsystem") ?? undefined
@@ -253,6 +276,51 @@ function App() {
     queryFn: () => fetchContextArtifacts(session, workspaceId, 75),
     retry: false
   });
+  const evaluationsQuery = useQuery({
+    queryKey: ["evaluations", session.token, session.roles, workspaceId, gateStatusFilter],
+    enabled: hasAdminToken && view === "gates",
+    queryFn: () => fetchEvaluations(session, workspaceId, gateStatusFilter, 150),
+    retry: false
+  });
+  const evaluationItems = evaluationsQuery.data?.collection.items ?? [];
+  const effectiveEvaluationId =
+    selectedEvaluationId ?? evaluationIdentifier(evaluationItems[0]);
+  const evaluationDetailQuery = useQuery({
+    queryKey: [
+      "evaluation-detail",
+      session.token,
+      session.roles,
+      workspaceId,
+      effectiveEvaluationId
+    ],
+    enabled: hasAdminToken && view === "gates" && Boolean(effectiveEvaluationId),
+    queryFn: () => fetchEvaluationDetail(session, effectiveEvaluationId!, workspaceId),
+    retry: false
+  });
+  const autonomyDecisionsQuery = useQuery({
+    queryKey: ["autonomy-decisions", session.token, session.roles, workspaceId],
+    enabled: hasAdminToken && view === "gates",
+    queryFn: () => fetchAutonomyDecisions(session, workspaceId, 150),
+    retry: false
+  });
+  const autonomyDecisionItems = autonomyDecisionsQuery.data?.collection.items ?? [];
+  const effectiveAutonomyDecisionId =
+    selectedAutonomyDecisionId ??
+    fallbackDecisionId(evaluationDetailQuery.data?.object) ??
+    fallbackDecisionId(evaluationItems.find((item) => evaluationIdentifier(item) === effectiveEvaluationId)) ??
+    autonomyDecisionIdentifier(autonomyDecisionItems[0]);
+  const autonomyDecisionDetailQuery = useQuery({
+    queryKey: [
+      "autonomy-decision-detail",
+      session.token,
+      session.roles,
+      workspaceId,
+      effectiveAutonomyDecisionId
+    ],
+    enabled: hasAdminToken && view === "gates" && Boolean(effectiveAutonomyDecisionId),
+    queryFn: () => fetchAutonomyDecisionDetail(session, effectiveAutonomyDecisionId!, workspaceId),
+    retry: false
+  });
   const actionAuditsQuery = useQuery({
     queryKey: ["action-audits", session.token, session.roles, workspaceId],
     enabled: hasAdminToken && view === "admin",
@@ -319,10 +387,18 @@ function App() {
     if (replayTag.trim()) params.set("replay_tag", replayTag.trim());
     if (selectedSkillId) params.set("skill", selectedSkillId);
     if (selectedTopologyOperationId) params.set("topology_operation", selectedTopologyOperationId);
+    if (selectedEvaluationId) params.set("evaluation", selectedEvaluationId);
+    if (selectedAutonomyDecisionId) {
+      params.set("autonomy_decision", selectedAutonomyDecisionId);
+    }
+    if (gateStatusFilter) params.set("gate_status", gateStatusFilter);
     if (query.trim()) params.set("q", query.trim());
     window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
   }, [
+    gateStatusFilter,
     query,
+    selectedAutonomyDecisionId,
+    selectedEvaluationId,
     selectedStationId,
     selectedSubsystemId,
     selectedTraceId,
@@ -364,6 +440,29 @@ function App() {
       setSelectedTopologyOperationId(firstOperationId);
     }
   }, [selectedTopologyOperationId, topologyOperationItems]);
+
+  useEffect(() => {
+    const firstEvaluationId = evaluationIdentifier(evaluationItems[0]);
+    if (!selectedEvaluationId && firstEvaluationId) {
+      setSelectedEvaluationId(firstEvaluationId);
+    }
+  }, [selectedEvaluationId, evaluationItems]);
+
+  useEffect(() => {
+    const preferredDecisionId =
+      fallbackDecisionId(evaluationDetailQuery.data?.object) ??
+      fallbackDecisionId(evaluationItems.find((item) => evaluationIdentifier(item) === effectiveEvaluationId)) ??
+      autonomyDecisionIdentifier(autonomyDecisionItems[0]);
+    if (!selectedAutonomyDecisionId && preferredDecisionId) {
+      setSelectedAutonomyDecisionId(preferredDecisionId);
+    }
+  }, [
+    autonomyDecisionItems,
+    effectiveEvaluationId,
+    evaluationDetailQuery.data?.object,
+    evaluationItems,
+    selectedAutonomyDecisionId
+  ]);
 
   useEffect(() => {
     if (!hasAdminToken) {
@@ -555,6 +654,7 @@ function App() {
         <Tab active={view === "workcells"} label="Workcells" icon={<Layers />} onClick={() => setView("workcells")} />
         <Tab active={view === "cockpit"} label="Cockpit" icon={<Activity />} onClick={() => setView("cockpit")} />
         <Tab active={view === "skills"} label="Skills" icon={<Network />} onClick={() => setView("skills")} />
+        <Tab active={view === "gates"} label="Gates" icon={<ListChecks />} onClick={() => setView("gates")} />
         <Tab active={view === "trace"} label="Trace" icon={<FileJson />} onClick={() => setView("trace")} />
         <Tab active={view === "replay"} label="Replay" icon={<Boxes />} onClick={() => setView("replay")} />
         <Tab active={view === "admin"} label="Admin" icon={<ShieldCheck />} onClick={() => setView("admin")} />
@@ -601,6 +701,12 @@ function App() {
                       } else if (result.object_type === "skill") {
                         setSelectedSkillId(result.object_id);
                         setView("skills");
+                      } else if (result.object_type === "evaluation") {
+                        setSelectedEvaluationId(result.object_id);
+                        setView("gates");
+                      } else if (result.object_type === "autonomy_decision") {
+                        setSelectedAutonomyDecisionId(result.object_id);
+                        setView("gates");
                       }
                     }}
                   >
@@ -663,6 +769,35 @@ function App() {
               }
               onSelectSkill={setSelectedSkillId}
               onSelectTopologyOperation={setSelectedTopologyOperationId}
+            />
+          )}
+          {view === "gates" && (
+            <GatesAndAutonomy
+              evaluations={evaluationItems}
+              selectedEvaluationId={effectiveEvaluationId}
+              evaluationDetail={evaluationDetailQuery.data?.object}
+              autonomyDecisions={autonomyDecisionItems}
+              selectedAutonomyDecisionId={effectiveAutonomyDecisionId}
+              autonomyDecisionDetail={autonomyDecisionDetailQuery.data?.object}
+              statusFilter={gateStatusFilter}
+              loading={
+                evaluationsQuery.isLoading ||
+                evaluationDetailQuery.isLoading ||
+                autonomyDecisionsQuery.isLoading ||
+                autonomyDecisionDetailQuery.isLoading
+              }
+              error={
+                evaluationsQuery.error ??
+                evaluationDetailQuery.error ??
+                autonomyDecisionsQuery.error ??
+                autonomyDecisionDetailQuery.error
+              }
+              onStatusFilterChange={(status) => {
+                setSelectedEvaluationId(undefined);
+                setGateStatusFilter(status);
+              }}
+              onSelectEvaluation={setSelectedEvaluationId}
+              onSelectAutonomyDecision={setSelectedAutonomyDecisionId}
             />
           )}
           {view === "trace" && (
@@ -1131,6 +1266,212 @@ function SkillsAndTopology({
   );
 }
 
+function GatesAndAutonomy({
+  evaluations,
+  selectedEvaluationId,
+  evaluationDetail,
+  autonomyDecisions,
+  selectedAutonomyDecisionId,
+  autonomyDecisionDetail,
+  statusFilter,
+  loading,
+  error,
+  onStatusFilterChange,
+  onSelectEvaluation,
+  onSelectAutonomyDecision
+}: {
+  evaluations: Array<Record<string, unknown>>;
+  selectedEvaluationId?: string;
+  evaluationDetail?: Record<string, unknown>;
+  autonomyDecisions: Array<Record<string, unknown>>;
+  selectedAutonomyDecisionId?: string;
+  autonomyDecisionDetail?: Record<string, unknown>;
+  statusFilter: string;
+  loading: boolean;
+  error: unknown;
+  onStatusFilterChange: (status: string) => void;
+  onSelectEvaluation: (evaluationId: string) => void;
+  onSelectAutonomyDecision: (decisionId: string) => void;
+}) {
+  const selectedEvaluation =
+    evaluations.find((evaluation) => evaluationIdentifier(evaluation) === selectedEvaluationId) ??
+    evaluations[0];
+  const evaluationDiagnostics =
+    (evaluationDetail?.diagnostics as Record<string, unknown> | undefined) ?? {};
+  const evaluationSummary = evaluationResultSummary(selectedEvaluation);
+  const detailFallback = recordValue(
+    evaluationDiagnostics.autonomy_fallback,
+  ) as Record<string, unknown> | undefined;
+  const fallback = detailFallback ?? evaluationFallback(selectedEvaluation);
+  const decisionState = String(
+    recordValue(evaluationDiagnostics.autonomy_decision)?.state ??
+      evaluationDecisionState(selectedEvaluation)
+  );
+  const hardFailures =
+    stringList(evaluationDiagnostics.hard_invariant_failures) ??
+    stringList(recordValue(evaluationSummary.autonomy_assurance)?.hard_invariant_failures) ??
+    [];
+  const softMisses =
+    stringList(evaluationDiagnostics.soft_threshold_misses) ??
+    stringList(recordValue(evaluationSummary.autonomy_assurance)?.soft_threshold_misses) ??
+    [];
+  const fallbackReasonCodes = stringList(fallback?.reason_codes) ?? [];
+  const selectedDecision =
+    autonomyDecisions.find(
+      (decision) => autonomyDecisionIdentifier(decision) === selectedAutonomyDecisionId
+    ) ?? autonomyDecisions[0];
+
+  return (
+    <section className="gates-page">
+      <aside className="gate-list" aria-label="Proposal gate evaluations">
+        <div className="gate-list__header">
+          <h2>Proposal Gates</h2>
+          <select
+            value={statusFilter}
+            onChange={(event) => onStatusFilterChange(event.target.value)}
+          >
+            <option value="needs_intervention">needs_intervention</option>
+            <option value="planned">planned</option>
+            <option value="passed">passed</option>
+            <option value="failed">failed</option>
+            <option value="">all</option>
+          </select>
+        </div>
+        {loading ? <p>Loading gate state.</p> : null}
+        {error ? <p>{error instanceof Error ? error.message : "Gate state unavailable."}</p> : null}
+        {evaluations.length ? (
+          evaluations.map((evaluation) => {
+            const id = evaluationIdentifier(evaluation);
+            const rowFallback = evaluationFallback(evaluation);
+            const selected = id === selectedEvaluationId;
+            return (
+              <button
+                key={stableRecordKey("evaluation", evaluation, ["evaluation_id", "skill_version_id"])}
+                className={selected ? "gate-row is-selected" : "gate-row"}
+                disabled={!id}
+                type="button"
+                onClick={() => id && onSelectEvaluation(id)}
+              >
+                <span className={`status-dot health-${gateHealth(evaluation)}`} />
+                <strong>{evaluationLabel(evaluation)}</strong>
+                <small>
+                  {String(evaluation.status ?? "unknown")} /{" "}
+                  {String(rowFallback?.selected_action ?? "llm-unhandled")}
+                </small>
+                <span>{shortId(id)}</span>
+              </button>
+            );
+          })
+        ) : (
+          <p>No proposal gate rows match the selected status.</p>
+        )}
+      </aside>
+
+      <section className="gate-detail">
+        <div className="trace-replay__header">
+          <div>
+            <h2>{evaluationLabel(selectedEvaluation)}</h2>
+            <p>{String(selectedEvaluation?.status ?? "no-selection")}</p>
+          </div>
+          <div className="trace-badges">
+            <span>{decisionState}</span>
+            <span>{String(fallback?.selected_action ?? "llm-unhandled")}</span>
+            <span>{String(fallback?.confidence_band ?? "confidence-unknown")}</span>
+          </div>
+        </div>
+
+        <div className="gate-evidence-grid">
+          <section>
+            <h3>Blockers</h3>
+            <div className="reason-chip-list">
+              {hardFailures.length ? (
+                hardFailures.map((code) => <code key={`hard-${code}`}>{code}</code>)
+              ) : (
+                <code>hard-invariants-clear-or-unreported</code>
+              )}
+              {softMisses.length ? (
+                softMisses.map((code) => <code key={`soft-${code}`}>{code}</code>)
+              ) : (
+                <code>no-soft-threshold-misses-reported</code>
+              )}
+            </div>
+          </section>
+          <section>
+            <h3>LLM Fallback</h3>
+            <div className="gate-state-strip">
+              <span>{String(fallback?.selected_action ?? "not-run")}</span>
+              <span>{String(fallback?.decision_band ?? "band-unknown")}</span>
+              <span>
+                admissible {String(recordValue(fallback?.deterministic_checks)?.admissible ?? false)}
+              </span>
+            </div>
+            <div className="reason-chip-list">
+              {fallbackReasonCodes.length ? (
+                fallbackReasonCodes.map((code) => <code key={code}>{code}</code>)
+              ) : (
+                <code>no-fallback-reason-codes</code>
+              )}
+            </div>
+          </section>
+        </div>
+
+        <div className="gate-evidence-grid">
+          <section>
+            <h3>Evaluation Detail</h3>
+            <Inspector
+              value={
+                evaluationDetail ?? selectedEvaluation ?? { state: "evaluation-read-model-empty" }
+              }
+            />
+          </section>
+          <section>
+            <h3>Autonomy Detail</h3>
+            <Inspector
+              value={
+                autonomyDecisionDetail ??
+                selectedDecision ?? {
+                  state: "autonomy-decision-read-model-empty",
+                  selected_autonomy_decision_id: selectedAutonomyDecisionId
+                }
+              }
+            />
+          </section>
+        </div>
+      </section>
+
+      <aside className="gate-list" aria-label="Autonomy decisions">
+        <div className="gate-list__header">
+          <h2>Autonomy</h2>
+        </div>
+        {autonomyDecisions.length ? (
+          autonomyDecisions.map((decision) => {
+            const id = autonomyDecisionIdentifier(decision);
+            return (
+              <button
+                key={stableRecordKey("autonomy", decision, ["decision_id", "target_id"])}
+                className={id === selectedAutonomyDecisionId ? "gate-row is-selected" : "gate-row"}
+                disabled={!id}
+                type="button"
+                onClick={() => id && onSelectAutonomyDecision(id)}
+              >
+                <span className={`status-dot health-${autonomyDecisionHealth(decision)}`} />
+                <strong>{String(decision.selected_action ?? "unknown-action")}</strong>
+                <small>
+                  {String(decision.hard_invariant_state ?? "hard-unknown")} /{" "}
+                  {String(decision.soft_threshold_state ?? "soft-unknown")}
+                </small>
+                <span>{shortId(id)}</span>
+              </button>
+            );
+          })
+        ) : (
+          <p>No autonomy decision rows are visible yet.</p>
+        )}
+      </aside>
+    </section>
+  );
+}
+
 function topologyOperationRows(topology?: Record<string, unknown>) {
   const metrics = topology?.operation_metrics as Record<string, unknown> | undefined;
   const operationsByKind = metrics?.operations_by_kind as
@@ -1575,6 +1916,106 @@ function stableRecordKey(
     })
     .map((value) => String(value).trim());
   return [prefix, ...parts].join(":");
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.map((item) => String(item)).filter((item) => item.trim().length > 0);
+}
+
+function evaluationResultSummary(evaluation?: Record<string, unknown>) {
+  return recordValue(evaluation?.result_summary) ?? {};
+}
+
+function evaluationFallback(evaluation?: Record<string, unknown>) {
+  return recordValue(evaluationResultSummary(evaluation).autonomy_fallback);
+}
+
+function fallbackDecisionId(source?: Record<string, unknown>) {
+  const diagnostics = recordValue(source?.diagnostics);
+  const directFallback = recordValue(diagnostics?.autonomy_fallback);
+  const diagnosticDecision = recordValue(diagnostics?.autonomy_decision);
+  const summaryFallback = evaluationFallback(source);
+  return stringOrUndefined(
+    directFallback?.autonomy_decision_id ??
+      diagnosticDecision?.fallback_autonomy_decision_id ??
+      summaryFallback?.autonomy_decision_id
+  );
+}
+
+function evaluationIdentifier(evaluation?: Record<string, unknown>) {
+  return stringOrUndefined(evaluation?.evaluation_id ?? evaluation?.object_id);
+}
+
+function autonomyDecisionIdentifier(decision?: Record<string, unknown>) {
+  return stringOrUndefined(decision?.decision_id ?? decision?.object_id);
+}
+
+function stringOrUndefined(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : undefined;
+}
+
+function evaluationLabel(evaluation?: Record<string, unknown>) {
+  if (!evaluation) return "No Evaluation Selected";
+  const summary = evaluationResultSummary(evaluation);
+  return String(
+    evaluation.skill_slug ??
+      summary.candidate_slug ??
+      evaluation.category ??
+      evaluationIdentifier(evaluation) ??
+      "evaluation"
+  );
+}
+
+function evaluationDecisionState(evaluation?: Record<string, unknown>) {
+  if (!evaluation) return "no-selection";
+  const summary = evaluationResultSummary(evaluation);
+  const assurance = recordValue(summary.autonomy_assurance);
+  const fallback = recordValue(summary.autonomy_fallback);
+  if (stringList(assurance?.hard_invariant_failures)?.length) {
+    return "hard_invariant_blocked";
+  }
+  if (fallback?.selected_action) {
+    return "autonomy_fallback_selected";
+  }
+  if (String(evaluation.status) === "needs_intervention") {
+    return "needs_intervention_unhandled";
+  }
+  return String(evaluation.status ?? "unknown");
+}
+
+function gateHealth(evaluation?: Record<string, unknown>): HealthState {
+  const status = String(evaluation?.status ?? "unknown");
+  const fallback = evaluationFallback(evaluation);
+  if (status === "passed") return "healthy";
+  if (status === "failed" || status === "blocked") return "blocked";
+  if (status === "needs_intervention" && fallback?.selected_action) return "degraded";
+  if (status === "needs_intervention") return "blocked";
+  return "unknown";
+}
+
+function autonomyDecisionHealth(decision?: Record<string, unknown>): HealthState {
+  const action = String(decision?.selected_action ?? "");
+  const hardState = String(decision?.hard_invariant_state ?? "");
+  if (hardState && hardState !== "passed") return "blocked";
+  if (action === "auto_accept" || action === "stage_canary") return "healthy";
+  if (action === "no_op_reschedule" || action === "collect_more_evidence") {
+    return "degraded";
+  }
+  return "unknown";
+}
+
+function shortId(value?: string) {
+  return value ? value.slice(0, 8) : "no-id";
 }
 
 function traceTitle(trace: TraceSummary) {

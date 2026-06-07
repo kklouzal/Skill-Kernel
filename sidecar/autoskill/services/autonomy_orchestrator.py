@@ -329,9 +329,13 @@ async def _select_qualified_autonomous_profile(
 
 
 def _is_qualified_autonomous(profile: ModelProfileRecord) -> bool:
+    verdict = str(profile.qualification.get("latest_qualification_verdict") or "")
     return (
         profile.kind == "model"
-        and profile.status == "qualified_autonomous"
+        and (
+            profile.status == "qualified_autonomous"
+            or (profile.status == "qualified" and verdict == "qualified_autonomous")
+        )
         and profile.route_kind == "openai_compatible"
     )
 

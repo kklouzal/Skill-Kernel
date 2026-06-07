@@ -4889,6 +4889,8 @@ def test_observatory_scanner_finding_microscope_exposes_gate_signal_without_raw_
 def test_observatory_evaluation_detail_exposes_autonomy_assurance() -> None:
     evaluation_id = uuid4()
     skill_version_id = uuid4()
+    autonomy_decision_id = uuid4()
+    adjudication_id = uuid4()
     evaluation_store = NullEvaluationStore()
     evaluation_store.reviews = [
         EvaluationReviewRecord(
@@ -4918,6 +4920,28 @@ def test_observatory_evaluation_detail_exposes_autonomy_assurance() -> None:
                     "administrative_escalation_allowed": False,
                     "calibration_support_status": "fixed_policy_pending_replay_calibration",
                     "evidence_mode": "semantic_derivative_only",
+                },
+                "autonomy_fallback": {
+                    "schema": "autoskill.proposal-gate-autonomy-fallback.v1",
+                    "decision_family": "skill_plan_semantic_adjudication",
+                    "selected_action": "stage_canary",
+                    "decision_band": "canary",
+                    "reason_codes": ["semantic-utility-likely"],
+                    "model_profile_id": str(uuid4()),
+                    "llm_invocation_id": str(uuid4()),
+                    "autonomy_decision_id": str(autonomy_decision_id),
+                    "adjudication_id": str(adjudication_id),
+                    "confidence_band": "high",
+                    "evidence_fidelity": "redacted_derivative",
+                    "runtime_writes_authorized": False,
+                    "administrative_escalation_allowed": False,
+                    "deterministic_checks": {
+                        "schema_valid": True,
+                        "hard_invariants_passed": True,
+                        "scanner_override": False,
+                        "runtime_write_authorized": False,
+                        "admissible": True,
+                    },
                 },
             },
             created_at=datetime.now(UTC),
@@ -4952,14 +4976,19 @@ def test_observatory_evaluation_detail_exposes_autonomy_assurance() -> None:
         "autonomy_decision"
     ]
     assert microscope["content_policy"]["raw_available"] is False
-    assert diagnostics["autonomy_decision"]["state"] == "soft_threshold_stalled"
+    assert diagnostics["autonomy_decision"]["state"] == "autonomy_fallback_selected"
+    assert diagnostics["autonomy_decision"]["fallback_selected_action"] == "stage_canary"
+    assert diagnostics["autonomy_decision"]["fallback_autonomy_decision_id"] == str(
+        autonomy_decision_id
+    )
+    assert diagnostics["autonomy_decision"]["fallback_adjudication_id"] == str(
+        adjudication_id
+    )
+    assert diagnostics["autonomy_decision"]["fallback_admissible"] is True
     assert diagnostics["autonomy_decision"]["threshold_deadlock_candidate"] is True
     assert diagnostics["soft_threshold_misses"] == ["intervention-required"]
     assert diagnostics["hard_invariant_failures"] == []
-    assert diagnostics["operator_next_actions"] == [
-        "assemble_richer_permitted_evidence",
-        "generate_more_probes",
-    ]
+    assert diagnostics["operator_next_actions"] == ["stage_canary"]
     assert diagnostics["policy_blocked_actions"] == [
         "raw_content_reveal_without_policy_reason",
         "manual_override_of_hard_invariants",
@@ -4974,6 +5003,11 @@ def test_observatory_evaluation_detail_exposes_autonomy_assurance() -> None:
         "object_id": str(skill_version_id),
         "relationship": "evaluated_artifact",
     } in detail["provenance"]["upstream"]
+    assert {
+        "object_type": "autonomy_decision",
+        "object_id": str(autonomy_decision_id),
+        "relationship": "selected_autonomous_fallback",
+    } in detail["provenance"]["downstream"]
 
 
 def test_observatory_action_records_audited_policy_receipt() -> None:

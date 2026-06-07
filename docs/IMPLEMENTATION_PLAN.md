@@ -3,6 +3,28 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: Observatory proposal-gate diagnostics now have a dedicated
+Gates view tied to existing sidecar read models for evaluation reviews and
+autonomy decisions. Evaluation summaries persist a sanitized autonomy-fallback
+projection, the evaluation microscope links selected fallback action,
+admissibility, autonomy decision ID, semantic adjudication ID, and downstream
+provenance, and the frontend can navigate from a stalled proposal gate to the
+linked autonomy decision detail without giving Observatory independent mutation
+authority. The proposal-gate autonomy path also accepts model profiles with a
+generic `qualified` status when their latest qualification verdict is
+`qualified_autonomous`, matching the profile qualification read model used by
+operators. This advances Core Sections 5.1 and 5.10-5.12 plus Observatory
+Sections 21.16, 21.22, 21.23, 24.auto.1, and 24.auto.3 by making
+soft-threshold remedies visible as deterministic, content-safe control-plane
+state. Focused validation passed with the evaluator/Observatory API regression
+set (`81 passed`) and the Observatory frontend production build. Required
+gates passed with full sidecar Ruff, full pytest (`437 passed`), compileall,
+diff-check, core acceptance (`ready=true`, `70` implemented, `7` context
+criteria), Observatory acceptance (`ready=true`, `86` satisfied), and
+conformance (`ready=true`, `23/23`). No compose/Postgres smoke was required
+because this slice uses existing admin read-model APIs and adds no schema
+change.
+
 2026-06-06 update: activation readiness now requires the selected Autonomous
 Decision Orchestrator action for writer and topology activation checks. The
 deterministic gate accepts only `auto_accept` or `stage_canary`; `stage_canary`

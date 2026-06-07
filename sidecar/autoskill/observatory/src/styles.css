@@ -433,6 +433,7 @@ input:focus-visible {
 .cockpit-main,
 .cockpit-side,
 .topology-page,
+.gates-page,
 .trace-page,
 .replay-page,
 .admin-page,
@@ -726,6 +727,7 @@ h3 {
 .cockpit-main,
 .cockpit-side,
 .topology-page,
+.gates-page,
 .trace-page,
 .replay-page,
 .admin-page {
@@ -856,11 +858,112 @@ h3 {
 }
 
 .topology-page,
+.gates-page,
 .trace-page,
 .replay-page,
 .admin-page {
   display: grid;
   gap: 14px;
+}
+
+.gates-page {
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr) minmax(280px, 360px);
+  align-items: start;
+}
+
+.gate-list,
+.gate-detail {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.gate-list__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gate-list__header select {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 8px;
+  color: var(--text);
+  background: #0d1114;
+}
+
+.gate-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 76px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  color: var(--text);
+  background: var(--panel-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.gate-row.is-selected {
+  border-color: var(--focus);
+}
+
+.gate-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.gate-row strong,
+.gate-row small,
+.gate-row span:last-child {
+  grid-column: 2;
+  overflow-wrap: anywhere;
+}
+
+.gate-row small,
+.gate-row span:last-child {
+  color: var(--muted);
+}
+
+.gate-evidence-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.85fr);
+  gap: 12px;
+}
+
+.gate-evidence-grid section {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  background: var(--panel-2);
+}
+
+.gate-state-strip,
+.reason-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gate-state-strip span,
+.reason-chip-list code {
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 7px;
+  background: #10161b;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.reason-chip-list code {
+  color: var(--amber);
 }
 
 .skill-layout {
@@ -1387,6 +1490,8 @@ h3 {
   .admin-columns,
   .skill-layout,
   .skill-evidence-grid,
+  .gates-page,
+  .gate-evidence-grid,
   .topology-metrics-grid,
   .topology-trial-matrix,
   .trace-layout,

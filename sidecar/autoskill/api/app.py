@@ -6500,6 +6500,15 @@ def create_app(
         assurance = result_summary.get("autonomy_assurance")
         if not isinstance(assurance, dict):
             assurance = {}
+        fallback = result_summary.get("autonomy_fallback")
+        if not isinstance(fallback, dict):
+            fallback = {}
+        fallback_action = fallback.get("selected_action")
+        fallback_decision_id = fallback.get("autonomy_decision_id")
+        fallback_adjudication_id = fallback.get("adjudication_id")
+        fallback_checks = fallback.get("deterministic_checks")
+        if not isinstance(fallback_checks, dict):
+            fallback_checks = {}
         hard_failures = [str(item) for item in assurance.get("hard_invariant_failures") or []]
         soft_misses = [str(item) for item in assurance.get("soft_threshold_misses") or []]
         fallback_actions = [
@@ -6537,11 +6546,32 @@ def create_app(
             }
             for code in soft_misses
         )
+        downstream_refs: list[dict[str, Any]] = []
+        if fallback_decision_id:
+            downstream_refs.append(
+                {
+                    "object_type": "autonomy_decision",
+                    "object_id": str(fallback_decision_id),
+                    "relationship": "selected_autonomous_fallback",
+                }
+            )
+        if fallback_adjudication_id:
+            downstream_refs.append(
+                {
+                    "object_type": "semantic_adjudication",
+                    "object_id": str(fallback_adjudication_id),
+                    "relationship": "semantic_fallback_adjudication",
+                }
+            )
         decision_state = "passed"
         if hard_failures:
             decision_state = "hard_invariant_blocked"
+        elif fallback_action:
+            decision_state = "autonomy_fallback_selected"
         elif soft_misses:
             decision_state = "soft_threshold_stalled"
+        elif evaluation.get("status") == "needs_intervention":
+            decision_state = "needs_intervention_unhandled"
         elif evaluation.get("status") not in {"passed", "succeeded"}:
             decision_state = "pending_or_unknown"
         diagnostics = {
@@ -6565,11 +6595,24 @@ def create_app(
                 "administrative_escalation_allowed": bool(
                     assurance.get("administrative_escalation_allowed")
                 ),
+                "fallback_selected_action": fallback_action,
+                "fallback_decision_band": fallback.get("decision_band"),
+                "fallback_confidence_band": fallback.get("confidence_band"),
+                "fallback_reason_codes": list(fallback.get("reason_codes") or []),
+                "fallback_admissible": bool(fallback_checks.get("admissible")),
+                "fallback_llm_invocation_id": fallback.get("llm_invocation_id"),
+                "fallback_autonomy_decision_id": fallback_decision_id,
+                "fallback_adjudication_id": fallback_adjudication_id,
             },
+            "autonomy_fallback": fallback,
             "hard_invariant_failures": hard_failures,
             "soft_threshold_misses": soft_misses,
-            "operator_next_actions": fallback_actions
-            or ["inspect_probe_results", "collect_more_evidence"],
+            "operator_next_actions": (
+                [str(fallback_action)]
+                if fallback_action
+                else fallback_actions
+                or ["rerun_evaluation_for_autonomy_fallback", "collect_more_evidence"]
+            ),
             "policy_blocked_actions": (
                 []
                 if assurance.get("administrative_escalation_allowed")
@@ -6586,7 +6629,7 @@ def create_app(
             "title": f"Evaluation {evaluation_id}",
             "summary": "Evaluation/probe review state and autonomy assurance.",
             "diagnostics": diagnostics,
-            "provenance": {"upstream": evidence_refs, "downstream": []},
+            "provenance": {"upstream": evidence_refs, "downstream": downstream_refs},
             "content_policy": {
                 "raw_available": False,
                 "raw_reason": "raw-content-disabled",
