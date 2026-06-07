@@ -3,6 +3,35 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-07 update: topology proposal persistence now records pending
+calibration observations for the `topology_operation_choice` semantic family.
+The propose-only topology persistence path accepts the existing autonomy
+control store after staging the operation, transaction, provenance, and planned
+trial records, then records content-safe selected action, deterministic
+confidence, evidence/trial counts, graph counts, blocker codes, and explicit
+propose-only/no-runtime-write flags. Candidate topology choices record
+`propose_create`/`propose_improve`/`propose_compose`/`propose_decompose`;
+blocked proposals record deterministic `auto_reject` evidence. Core
+`/v1/topology/propose` and usage-derived topology proposal routes pass their
+existing autonomy store through, keeping scanner/evaluator/trial/rollback
+authority unchanged and adding no runtime skill writes or apply-path authority.
+This advances Sections 5.5, 5.9, 5.12, 5.13, and 5.14; topology Sections
+1.3/13/17; and production criteria 31.29, 31.53, 31.58, and 31.63 by making
+topology operation choice part of the calibrated semantic decision-family
+surface. Focused validation passed with `uv run pytest
+sidecar/autoskill/tests/test_topology_services.py -q -k "calibration or
+topology_proposal_persistence_records_operation"` (`3 passed, 17 deselected`),
+`uv run pytest sidecar/autoskill/tests/test_admin_surfaces.py -q -k
+"topology_proposal_endpoint"` (`4 passed, 15 deselected`), and touched-file
+Ruff. Required gates passed with `uv run ruff check sidecar`, `uv run pytest`
+(`462 passed`), `uv run python -m compileall -q sidecar`, and `git diff
+--check`. A Dev-01 Postgres smoke inserted a throwaway
+`cron-topology-calibration-smoke-*` workspace through the topology proposal API
+path backed by asyncpg topology/governance/autonomy stores, verified
+`status=candidate`, `operation_kind=compose`, `trial_count=5`,
+`metric_sample_count=1`, and `metric_support=empirical_low_support`, then
+deleted the smoke workspace and verified zero remaining smoke workspaces.
+
 2026-06-07 update: runtime broker decisions now write pending calibration
 observations for the `broker_decision_adjudication` semantic family. The broker
 context-hint path accepts the existing autonomy control store and records

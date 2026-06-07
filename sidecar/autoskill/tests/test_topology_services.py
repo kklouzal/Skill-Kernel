@@ -9,6 +9,7 @@ from autoskill.api.app import (
 )
 from autoskill.core.skillir import EffectSignature
 from autoskill.db.activation import ActivationReadiness
+from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.governance import NullGovernanceStore
 from autoskill.db.topology import NullTopologyStore
 from autoskill.db.usage import UsageTopologyRecommendation
@@ -500,6 +501,79 @@ def test_topology_proposal_persistence_records_operation_trials_and_transaction(
         for trial in persisted.trials
     ]
     assert "inspect-and-repair" not in str(trace)
+
+
+def test_topology_proposal_persistence_records_calibration_observation() -> None:
+    topology = NullTopologyStore()
+    governance = RecordingGovernanceStore()
+    autonomy = NullAutonomyControlStore()
+    result = propose_creation(
+        CreateTopologyRequest(
+            proposed=TopologySkill(
+                slug="pytest-import-repair",
+                effects=EffectSignature(outputs=["repair-python-import-error"]),
+            ),
+            evidence_ids=[str(uuid4())],
+            creation_reasons=["recurring missing workflow evidence"],
+        )
+    )
+
+    persisted = asyncio.run(
+        persist_topology_proposal(
+            topology,
+            governance,
+            workspace_key="dev-01",
+            proposal=result,
+            autonomy=autonomy,
+        )
+    )
+
+    assert len(autonomy.calibration_observations) == 1
+    observation = autonomy.calibration_observations[0]
+    assert observation.calibration_family == "topology_operation_choice"
+    assert observation.selected_action == "propose_create"
+    assert observation.action_risk_tier == "T1_internal_record"
+    assert observation.outcome_status == "pending"
+    assert observation.predicted_confidence > 0.7
+    assert autonomy.reliability_metrics[-1].calibration_family == (
+        "topology_operation_choice"
+    )
+    assert autonomy.reliability_metrics[-1].sample_count == 1
+    assert persisted.operation.status == "candidate"
+
+
+def test_topology_blocked_proposal_records_reject_calibration_observation() -> None:
+    topology = NullTopologyStore()
+    governance = RecordingGovernanceStore()
+    autonomy = NullAutonomyControlStore()
+    result = propose_creation(
+        CreateTopologyRequest(
+            proposed=TopologySkill(
+                slug="empty-effect-skill",
+                effects=EffectSignature(),
+            ),
+            evidence_ids=[],
+            creation_reasons=[],
+        )
+    )
+
+    persisted = asyncio.run(
+        persist_topology_proposal(
+            topology,
+            governance,
+            workspace_key="dev-01",
+            proposal=result,
+            autonomy=autonomy,
+        )
+    )
+
+    assert persisted.operation.status == "blocked"
+    assert len(autonomy.calibration_observations) == 1
+    observation = autonomy.calibration_observations[0]
+    assert observation.calibration_family == "topology_operation_choice"
+    assert observation.selected_action == "auto_reject"
+    assert observation.predicted_confidence > 0.8
+    assert autonomy.reliability_metrics[-1].abstention_rate == 1.0
 
 
 def test_topology_apply_requires_passed_trials() -> None:

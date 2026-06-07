@@ -16,6 +16,37 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-07: Topology proposal persistence now feeds the generic semantic
+  calibration corpus for the `topology_operation_choice` decision family
+  instead of leaving create/improve/compose/decompose choices outside the
+  autonomy reliability loop. `persist_topology_proposal` accepts the existing
+  autonomy control store and records a pending, content-safe calibration
+  observation after the propose-only operation, evolution transaction,
+  provenance edges, and planned trials are staged. Candidate proposals record
+  selected actions such as `propose_create`/`propose_decompose`; blocked
+  proposals record deterministic `auto_reject` evidence. The confidence
+  components include operation kind, proposal status, evidence/trial counts,
+  graph counts, blocker codes, and explicit propose-only/no-runtime-write
+  flags, without raw skill text, raw evidence, runtime skill writes, or
+  apply-path authority. Core topology proposal routes now pass their existing
+  autonomy store through for both direct and usage-derived proposals. This
+  advances unified autonomy Sections 5.5, 5.9, 5.12, 5.13, and 5.14; topology
+  Sections 1.3/13/17; and production criteria 31.29, 31.53, 31.58, and 31.63
+  by making topology-operation choices part of the calibrated semantic
+  decision-family surface while preserving scanner/evaluator/trial/rollback
+  safety ordering. Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_topology_services.py -q -k "calibration or
+  topology_proposal_persistence_records_operation"` (`3 passed, 17
+  deselected`), `uv run pytest sidecar/autoskill/tests/test_admin_surfaces.py
+  -q -k "topology_proposal_endpoint"` (`4 passed, 15 deselected`), and
+  touched-file Ruff. Required gates passed with `uv run ruff check sidecar`,
+  `uv run pytest` (`462 passed`), `uv run python -m compileall -q sidecar`,
+  and `git diff --check`. A Dev-01 Postgres smoke inserted a throwaway
+  `cron-topology-calibration-smoke-*` workspace through the `/v1/topology/propose`
+  API path backed by asyncpg topology/governance/autonomy stores, verified
+  `status=candidate`, `operation_kind=compose`, `trial_count=5`,
+  `metric_sample_count=1`, and `metric_support=empirical_low_support`, then
+  deleted the smoke workspace and verified zero remaining smoke workspaces.
 - 2026-06-07: Runtime broker decisions now feed the generic semantic
   calibration corpus instead of leaving `broker_decision_adjudication` as a
   read-model-only family. `build_context_hint` accepts the existing

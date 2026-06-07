@@ -14637,6 +14637,7 @@ def create_app(
                 governance,
                 workspace_key=request.workspace_id,
                 proposal=proposal,
+                autonomy=autonomy_control,
             )
             persistence = persisted.to_json()
             await audit.append_record(
@@ -14713,6 +14714,7 @@ def create_app(
                     governance,
                     workspace_key=request.workspace_id,
                     proposal=proposal,
+                    autonomy=autonomy_control,
                 )
                 persistence = persisted.to_json()
             proposals.append(

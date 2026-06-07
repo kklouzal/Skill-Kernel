@@ -7,6 +7,7 @@ from uuid import UUID
 from autoskill.core.hashing import sha256_json
 from autoskill.core.skillgraph import SkillGraphEdge, SkillGraphIR, SkillGraphNode
 from autoskill.core.skillir import EffectSignature
+from autoskill.db.autonomy import AutonomyControlStore
 from autoskill.db.governance import GovernanceStore
 from autoskill.db.topology import TopologyPersistenceRecord, TopologyStore
 
@@ -148,6 +149,7 @@ async def persist_topology_proposal(
     *,
     workspace_key: str,
     proposal: TopologyProposalResult,
+    autonomy: AutonomyControlStore | None = None,
 ) -> TopologyPersistenceRecord:
     evidence_ids = _uuid_values(proposal.evidence_ids)
     transaction = await governance.start_transaction(
@@ -266,6 +268,19 @@ async def persist_topology_proposal(
             ],
         ),
     )
+    if autonomy is not None:
+        await autonomy.record_calibration_observation(
+            workspace_key=workspace_key,
+            calibration_family="topology_operation_choice",
+            selected_action=_topology_calibration_action(proposal),
+            predicted_confidence=_topology_calibration_confidence(proposal),
+            confidence_components=_topology_calibration_components(
+                proposal,
+                skill_graph_operation_id=operation.skill_graph_operation_id,
+            ),
+            action_risk_tier="T1_internal_record",
+            outcome_status="pending",
+        )
     return TopologyPersistenceRecord(operation=operation, trials=trials)
 
 
@@ -407,6 +422,43 @@ def _topology_transaction_metrics(
             skill_graph_operation_id=skill_graph_operation_id,
             planned_topology_trial_ids=planned_topology_trial_ids,
         ),
+    }
+
+
+def _topology_calibration_action(proposal: TopologyProposalResult) -> str:
+    if proposal.status == "candidate":
+        return f"propose_{proposal.operation_kind}"
+    return "auto_reject"
+
+
+def _topology_calibration_confidence(proposal: TopologyProposalResult) -> float:
+    if proposal.status == "blocked":
+        return min(0.95, 0.70 + (0.04 * min(len(proposal.blockers), 5)))
+    evidence_boost = 0.04 * min(len(proposal.evidence_ids), 5)
+    trial_boost = 0.025 * min(len(proposal.trial_plan), 6)
+    graph_boost = 0.05 if proposal.skill_graph_ir is not None else 0.0
+    return min(0.95, 0.62 + evidence_boost + trial_boost + graph_boost)
+
+
+def _topology_calibration_components(
+    proposal: TopologyProposalResult,
+    *,
+    skill_graph_operation_id: UUID,
+) -> dict[str, Any]:
+    graph = proposal.skill_graph_ir
+    return {
+        "schema": "autoskill.topology-operation-choice-calibration.v1",
+        "operation_kind": proposal.operation_kind,
+        "proposal_status": proposal.status,
+        "skill_graph_operation_id": str(skill_graph_operation_id),
+        "evidence_count": len(proposal.evidence_ids),
+        "trial_count": len(proposal.trial_plan),
+        "blocker_codes": _topology_blocker_codes(proposal.blockers),
+        "graph_node_count": len(graph.nodes) if graph else 0,
+        "graph_edge_count": len(graph.edges) if graph else 0,
+        "effect_coverage_count": len(graph.effect_coverage) if graph else 0,
+        "requires_trial_before_apply": True,
+        "propose_only_no_runtime_write": True,
     }
 
 

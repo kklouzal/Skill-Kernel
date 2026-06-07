@@ -25,6 +25,7 @@ from autoskill.api.app import (
 from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.core.config import get_settings
 from autoskill.core.skillir import SkillIR
+from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.broker_policy import NullBrokerPolicyStore
 from autoskill.db.candidates import CandidateReviewRecord, NullCandidateStore
 from autoskill.db.evaluations import EvaluationReviewRecord, NullEvaluationStore
@@ -1057,6 +1058,48 @@ def test_topology_proposal_endpoint_persists_create_operation() -> None:
     assert audit.records[-1].subject_type == "skill_graph_operation"
     assert audit.records[-1].details["operation_kind"] == "create"
     assert audit.records[-1].details["trial_count"] == 6
+
+
+def test_topology_proposal_endpoint_records_calibration_observation() -> None:
+    topology = NullTopologyStore()
+    autonomy = NullAutonomyControlStore()
+    app = create_app(topology_store=topology, autonomy_control_store=autonomy)
+    route = next(route for route in app.routes if route.path == "/v1/topology/propose")
+
+    async def run():
+        return await route.endpoint(
+            request=TopologyProposalRequest(
+                workspace_id="dev-01",
+                operation_kind="decompose",
+                subject=TopologySkillPayload(
+                    skill_id=uuid4(),
+                    slug="large-debugging-skill",
+                    effects={"outputs": ["triage", "repair"]},
+                ),
+                successors=[
+                    TopologySkillPayload(
+                        slug="triage-debugging",
+                        effects={"outputs": ["triage"]},
+                    ),
+                    TopologySkillPayload(
+                        slug="repair-debugging",
+                        effects={"outputs": ["repair"]},
+                    ),
+                ],
+                evidence_ids=[str(uuid4())],
+                decomposition_reasons=["partial-use evidence supports narrower skills"],
+            )
+        )
+
+    response = asyncio.run(run())
+
+    assert response.proposal["status"] == "candidate"
+    assert response.persistence is not None
+    assert len(autonomy.calibration_observations) == 1
+    observation = autonomy.calibration_observations[0]
+    assert observation.calibration_family == "topology_operation_choice"
+    assert observation.selected_action == "propose_decompose"
+    assert autonomy.reliability_metrics[-1].sample_count == 1
 
 
 def test_topology_metrics_endpoint_reports_operation_kinds_separately() -> None:
