@@ -16,6 +16,25 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+
+- 2026-06-08: Scanner policy now includes deterministic harmful-capability
+  classification in addition to prompt-injection/text-risk checks. The scanner
+  blocks hazardous cyber/credential-harvesting workflows, privacy-violating data
+  collection, fraud/forged-document workflows, and coercive surveillance even
+  when no hidden prompt-injection or policy-override text is present, while
+  preserving explicit negative safety boundaries such as "do not harvest
+  credentials" and blocking boundary inversions such as "never refuse" unsafe
+  capability requests. This advances unified Sections 2.22, 3.1 scanner/capability
+  boundary requirements, 5.1 hard-invariant separation, 14.5 taint/privacy
+  rules, 17.1 topology-operation safety invariants, and Part IV scanner/security
+  capability-surface completeness without adding LLM authority, runtime writes,
+  activation, or external mutation. Focused validation passed with `uv run
+  pytest sidecar/autoskill/tests/test_skillir_compiler_scanner.py -q -k scanner`
+  (`24 passed`) and touched-file Ruff. Required gates passed with `uv run ruff
+  check sidecar`, `uv run pytest` (`471 passed`), `uv run python -m compileall
+  -q sidecar`, `docker compose config --quiet`, and `git diff --check`. No
+  migration or Postgres smoke is required because the slice is deterministic
+  scanner policy/test coverage only.
 - 2026-06-08: Context-governance compilation now records spec-native
   calibration observations for both `context_equivalence` and
   `semantic_compression_preservation` instead of collapsing them into the

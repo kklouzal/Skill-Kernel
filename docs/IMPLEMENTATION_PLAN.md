@@ -3,6 +3,21 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+
+2026-06-08 update: scanner policy now performs deterministic harmful-capability
+classification in addition to static prompt-injection/text-risk checks. It blocks
+hazardous cyber and credential-harvesting workflows, privacy-violating data
+collection, fraud/forged-document workflows, and coercive surveillance as
+capability risks even when the artifact contains no hidden instructions or
+policy-override phrasing. Explicit negative safety boundaries remain allowed,
+while boundary inversions that tell the agent not to refuse harmful workflows are
+blocked. This advances Sections 2.22, 3.1 scanner/capability boundaries, 5.1,
+14.5, 17.1, and Part IV scanner/security capability coverage while preserving
+deterministic scanner authority and adding no runtime write, activation, LLM
+policy authority, or external mutation path. Focused and required validation
+passed as recorded in `TASKFLOW.md`; no migration or Postgres smoke is required
+for this scanner-only slice.
+
 2026-06-08 update: context-governance compilation now writes separate
 spec-native calibration observations for `context_equivalence` and
 `semantic_compression_preservation` instead of recording the combined

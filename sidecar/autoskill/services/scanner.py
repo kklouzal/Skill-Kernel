@@ -49,6 +49,75 @@ SENSITIVE_FILE_HARVEST = re.compile(
     r"(?is)\b(read|cat|open|scan|index|embed|upload|copy)\b.{0,100}"
     r"(~?/\.ssh\b|/etc/shadow\b|/etc/passwd\b|\.env\b|credentials?\.(json|yaml|yml)\b)"
 )
+HARMFUL_CAPABILITY_RULES: tuple[tuple[FindingSeverity, str, str, re.Pattern[str]], ...] = (
+    (
+        FindingSeverity.CRITICAL,
+        "harmful-cyber-capability",
+        "hazardous cyber or malware workflow capability is forbidden",
+        re.compile(
+            r"(?is)\b("
+            r"phish(?:ing)?|credential\s+(?:stuffing|spraying|theft|harvest(?:ing)?)|"
+            r"steal\s+(?:session\s+)?cookies?|clone\s+login\s+pages?|"
+            r"malware|ransomware|keylogger|reverse\s+shell|privilege\s+escalation|"
+            r"exploit\s+(?:chain|kit|payload)|bypass\s+(?:auth(?:entication)?|2fa|mfa)"
+            r")\b"
+        ),
+    ),
+    (
+        FindingSeverity.CRITICAL,
+        "privacy-violating-capability",
+        "privacy-violating data collection or credential-harvesting capability is forbidden",
+        re.compile(
+            r"(?is)\b("
+            r"scrape|harvest|dump|exfiltrate|collect|deanonymi[sz]e|reidentify"
+            r")\b.{0,80}\b("
+            r"pii|personal\s+data|private\s+messages?|browser\s+(?:cookies?|history)|"
+            r"contacts?|location\s+history|credentials?|passwords?|tokens?"
+            r")\b"
+        ),
+    ),
+    (
+        FindingSeverity.ERROR,
+        "fraud-capability",
+        "fraud, impersonation, or forged-document workflow capability is forbidden",
+        re.compile(
+            r"(?is)\b("
+            r"forge|fake|fabricate|counterfeit|impersonate|spoof|evade"
+            r")\b.{0,80}\b("
+            r"invoices?|receipts?|identity|kyc|passport|driver'?s?\s+license|"
+            r"bank\s+statement|chargeback|tax\s+document|signature"
+            r")\b"
+        ),
+    ),
+    (
+        FindingSeverity.CRITICAL,
+        "coercive-surveillance-capability",
+        "coercive surveillance, stalking, blackmail, or harassment capability is forbidden",
+        re.compile(
+            r"(?is)\b("
+            r"stalk|doxx?|blackmail|harass|coerce|covertly\s+(?:track|monitor|record)|"
+            r"track\s+location\s+without\s+consent|intercept\s+(?:messages?|calls?)"
+            r")\b"
+        ),
+    ),
+)
+HARMFUL_CAPABILITY_BOUNDARY = re.compile(
+    r"(?is)\b("
+    r"never|do\s+not|don't|must\s+not|not\s+for|forbid(?:den)?|avoid|"
+    r"reject|block|fail\s+(?:closed|when)|stop\s+(?:if|when)"
+    r")\b.{0,120}\b("
+    r"phish|credential\s+(?:stuffing|spraying|theft|harvest)|malware|ransomware|"
+    r"keylogger|reverse\s+shell|privilege\s+escalation|exploit|bypass\s+(?:auth|2fa|mfa)|"
+    r"pii|personal\s+data|private\s+messages?|browser\s+(?:cookies?|history)|"
+    r"forge|fake|fabricate|counterfeit|impersonate|spoof|invoice|receipt|identity|"
+    r"kyc|passport|driver'?s?\s+license|bank\s+statement|chargeback|tax\s+document|"
+    r"stalk|doxx?|blackmail|harass|coerce|covertly\s+(?:track|monitor|record)|"
+    r"track\s+location\s+without\s+consent|intercept\s+(?:messages?|calls?)"
+    r")\b"
+)
+UNSAFE_BOUNDARY_INVERSION = re.compile(
+    r"(?is)\b(?:never|do\s+not|don't|must\s+not)\b.{0,40}\b(refuse|block|reject|stop)\b"
+)
 BUNDLE_SAFETY_BOUNDARY = re.compile(
     r"(?is)\b(never|do\s+not|don't|must\s+not|forbid(?:den)?|avoid)\b.{0,100}"
     r"\b(secret|token|password|api[_ -]?key|credential|authorization|ssh[_ -]?key)s?\b"
@@ -63,6 +132,7 @@ BUNDLE_EXFIL_ACTION = re.compile(
 
 def scan_text(text: str) -> list[ScannerFinding]:
     findings: list[ScannerFinding] = []
+    normalized_text = _capability_scan_text(text)
     if HTML_COMMENT.search(text):
         findings.append(
             ScannerFinding(
@@ -135,7 +205,10 @@ def scan_text(text: str) -> list[ScannerFinding]:
                 "sensitive file harvesting instructions are forbidden",
             )
         )
-    return findings
+    for severity, code, message, pattern in HARMFUL_CAPABILITY_RULES:
+        if pattern.search(normalized_text):
+            findings.append(ScannerFinding(severity, code, message))
+    return _dedupe_findings(findings)
 
 
 def scan_text_bundle(parts: list[str]) -> list[ScannerFinding]:
@@ -164,6 +237,14 @@ def scan_text_bundle(parts: list[str]) -> list[ScannerFinding]:
 
 def has_blocking_findings(findings: list[ScannerFinding]) -> bool:
     return any(f.severity in {FindingSeverity.ERROR, FindingSeverity.CRITICAL} for f in findings)
+
+
+def _capability_scan_text(text: str) -> str:
+    boundary_stripped = HARMFUL_CAPABILITY_BOUNDARY.sub("", text)
+    return UNSAFE_BOUNDARY_INVERSION.sub(
+        "unsafe_boundary_inversion",
+        boundary_stripped,
+    )
 
 
 def _dedupe_findings(findings: list[ScannerFinding]) -> list[ScannerFinding]:
