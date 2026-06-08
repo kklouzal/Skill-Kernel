@@ -401,6 +401,14 @@ class GovernanceStore(Protocol):
     ) -> int:
         """Revoke governance-owned derived state for impacted objects."""
 
+    async def expand_writer_item_impacts(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """Map writer transaction items to revocable compiled artifact objects."""
+
 
 class NullGovernanceStore:
     async def start_transaction(
@@ -636,6 +644,14 @@ class NullGovernanceStore:
         objects: list[dict[str, str]],
     ) -> int:
         return 0
+
+    async def expand_writer_item_impacts(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        return []
 
 
 class AsyncpgGovernanceStore(AsyncpgPoolOwner):
@@ -1156,6 +1172,52 @@ class AsyncpgGovernanceStore(AsyncpgPoolOwner):
             )
             return RevocationRequestRecord.from_row(row) if row else None
 
+    async def expand_writer_item_impacts(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        object_keys = _object_keys(objects)
+        transaction_item_ids = [
+            object_id
+            for object_type, object_id in object_keys
+            if object_type == "transaction_item"
+        ]
+        if not transaction_item_ids:
+            return []
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT
+                  item.transaction_item_id,
+                  item.item_id
+                FROM autoskill.evolution_transaction_items item
+                JOIN autoskill.evolution_transactions tx
+                  ON tx.evolution_transaction_id = item.evolution_transaction_id
+                JOIN autoskill.workspaces w
+                  ON w.workspace_id = tx.workspace_id
+                WHERE w.external_key = $1
+                  AND item.transaction_item_id = ANY($2::uuid[])
+                  AND item.item_kind IN (
+                    'compiled_skill_file',
+                    'support_artifact',
+                    'artifact_manifest',
+                    'archive_snapshot'
+                  )
+                ORDER BY item.transaction_item_id
+                """,
+                workspace_key,
+                transaction_item_ids,
+            )
+        expanded: list[dict[str, str]] = []
+        for row in rows:
+            item_id = row["item_id"]
+            if item_id is not None:
+                expanded.append({"object_type": "skill_version", "object_id": str(item_id)})
+        return _objects_to_json(_object_keys(expanded))
+
     async def invalidate_objects(
         self,
         *,
@@ -1326,3 +1388,15 @@ def _object_keys(objects: list[dict[str, str]]) -> list[tuple[str, UUID]]:
         except ValueError:
             continue
     return keys
+
+
+def _objects_to_json(objects: list[tuple[str, UUID]]) -> list[dict[str, str]]:
+    seen: set[tuple[str, UUID]] = set()
+    output: list[dict[str, str]] = []
+    for object_type, object_id in objects:
+        key = (object_type, object_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append({"object_type": object_type, "object_id": str(object_id)})
+    return output

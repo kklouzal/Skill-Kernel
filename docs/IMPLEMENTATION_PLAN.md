@@ -1,5 +1,23 @@
 # SkillKernel Implementation Plan
 
+2026-06-08 update: revocation invalidation now follows writer-item source
+provenance into compiled artifact invalidation. Governance can expand impacted
+`transaction_item` nodes reached through `source_for_writer_item` edges into the
+affected `skill_version` objects, and writer apply/rollback item rows now carry
+that skill-version UUID for compiled files, support artifacts, manifests,
+archive snapshots, and restored rollback artifacts. The filesystem revocation
+worker deduplicates the expanded object set before handing it to retrieval,
+embedding, context, topology, evaluator, attribution, and governance
+invalidators. This closes the immediate Section 1.2 / 2.26 gap between
+source-root provenance edges and derived-state invalidation while remaining
+content-safe and activation-neutral. Validation: focused worker/governance/writer
+tests passed (`3 passed` and `34 passed`), touched-file Ruff passed, and full
+required gates passed with `uv run ruff check sidecar`, `uv run pytest` (`475
+passed`), `uv run python -m compileall -q sidecar`, and `git diff --check`.
+Next: run SQL-backed revocation traversal/invalidation smoke when a bounded
+Postgres lane is practical and add any remaining first-class artifact IDs not
+covered by skill-version expansion.
+
 2026-06-08 update: writer apply/rollback governance now links transaction source
 roots to generated writer transaction items. When a transaction carries
 `source_evidence_ids` or `source_memory_ids`, deterministic writer governance

@@ -3181,7 +3181,7 @@ async def _invalidate_revoked_objects(
     stores: WorkerStores,
     request: RevocationRequestRecord,
 ) -> dict[str, int]:
-    objects = _revocation_impacted_objects(request)
+    objects = await _expanded_revocation_impacted_objects(stores, request)
     body_index_deleted = 0
     embeddings_deleted = 0
     retrieval_logs_invalidated = 0
@@ -3268,6 +3268,29 @@ async def _invalidate_revoked_objects(
     }
 
 
+async def _expanded_revocation_impacted_objects(
+    stores: WorkerStores,
+    request: RevocationRequestRecord,
+) -> list[dict[str, str]]:
+    objects = _revocation_impacted_objects(request)
+    if request.workspace_key is None or stores.governance is None:
+        return objects
+    expand_writer_items = getattr(
+        stores.governance,
+        "expand_writer_item_impacts",
+        None,
+    )
+    if expand_writer_items is None:
+        return objects
+    extra = await expand_writer_items(
+        workspace_key=request.workspace_key,
+        objects=objects,
+    )
+    if not isinstance(extra, list):
+        return objects
+    return _dedupe_revocation_objects([*objects, *extra])
+
+
 def _revocation_impacted_objects(request: RevocationRequestRecord) -> list[dict[str, str]]:
     objects = request.traversal_summary.get("impacted_objects")
     if not isinstance(objects, list):
@@ -3286,7 +3309,23 @@ def _revocation_impacted_objects(request: RevocationRequestRecord) -> list[dict[
         if object_type is None or object_id is None:
             continue
         valid.append({"object_type": str(object_type), "object_id": str(object_id)})
-    return valid
+    return _dedupe_revocation_objects(valid)
+
+
+def _dedupe_revocation_objects(objects: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen: set[tuple[str, str]] = set()
+    deduped: list[dict[str, str]] = []
+    for item in objects:
+        object_type = item.get("object_type")
+        object_id = item.get("object_id")
+        if not object_type or not object_id:
+            continue
+        key = (str(object_type), str(object_id))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append({"object_type": key[0], "object_id": key[1]})
+    return deduped
 
 
 def _job_kinds_for_pool(pool: WorkerPool | str) -> list[str]:

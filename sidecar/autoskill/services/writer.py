@@ -891,9 +891,11 @@ async def rollback_active_skill_with_governance(
         archive_root,
         archive_manifest_relative_path=archive_manifest_relative_path,
     )
+    skill_version_id = _applied_skill_version_id(rolled_back)
     item = await governance.record_transaction_item(
         evolution_transaction_id=evolution_transaction_id,
         item_kind="compiled_skill_file",
+        item_id=skill_version_id,
         activation_state="rolled_back",
         relative_path=rolled_back.active_relative_path,
         before_hash=None,
@@ -920,6 +922,7 @@ async def rollback_active_skill_with_governance(
             await governance.record_transaction_item(
                 evolution_transaction_id=evolution_transaction_id,
                 item_kind=item_kind,
+                item_id=skill_version_id,
                 activation_state="rolled_back",
                 relative_path=file.target_relative_path,
                 before_hash=None,
@@ -1375,6 +1378,16 @@ def _estimate_tokens(text: str) -> int:
     return max(1, ceil(len(text) / 4))
 
 
+def _applied_skill_version_id(applied: AppliedSkillArtifact) -> UUID | None:
+    value = _skill_version_id_from_files(applied.files)
+    if value is None:
+        return None
+    try:
+        return UUID(value)
+    except ValueError:
+        return None
+
+
 def _target_path_inside_skill(slug: str, target_relative_path: str) -> str:
     prefix = f"skills/autoskill/{slug}/"
     if not target_relative_path.startswith(prefix):
@@ -1406,9 +1419,11 @@ async def _record_apply_transaction_items(
     applied: AppliedSkillArtifact,
 ) -> list[Any]:
     items: list[Any] = []
+    skill_version_id = _applied_skill_version_id(applied)
     active_item = await governance.record_transaction_item(
         evolution_transaction_id=evolution_transaction_id,
         item_kind="compiled_skill_file",
+        item_id=skill_version_id,
         activation_state="active",
         relative_path=applied.active_relative_path,
         before_hash=(
@@ -1423,6 +1438,7 @@ async def _record_apply_transaction_items(
             manifest_item = await governance.record_transaction_item(
                 evolution_transaction_id=evolution_transaction_id,
                 item_kind="artifact_manifest",
+                item_id=skill_version_id,
                 activation_state="active",
                 relative_path=file.target_relative_path,
                 before_hash=None,
@@ -1437,6 +1453,7 @@ async def _record_apply_transaction_items(
         support_item = await governance.record_transaction_item(
             evolution_transaction_id=evolution_transaction_id,
             item_kind="support_artifact",
+            item_id=skill_version_id,
             activation_state="active",
             relative_path=file.target_relative_path,
             before_hash=None,
@@ -1448,6 +1465,7 @@ async def _record_apply_transaction_items(
         archive_item = await governance.record_transaction_item(
             evolution_transaction_id=evolution_transaction_id,
             item_kind="archive_snapshot",
+            item_id=skill_version_id,
             activation_state="archived",
             relative_path=(
                 f".autoskill/archive/{applied.previous_snapshot.manifest_relative_path}"

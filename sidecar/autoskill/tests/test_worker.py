@@ -1419,6 +1419,7 @@ def test_filesystem_worker_rolls_back_queued_revocation_request(tmp_path) -> Non
     active_root = workspace_root / "skills" / "autoskill" / "canary-skill"
     active_root.mkdir(parents=True)
     (active_root / "SKILL.md").write_text("WHEN old\nDO stable behavior\n", encoding="utf-8")
+    skill_version_id = uuid4()
 
     async def run():
         apply_transaction = await governance.start_transaction(
@@ -1430,7 +1431,7 @@ def test_filesystem_worker_rolls_back_queued_revocation_request(tmp_path) -> Non
         staged = stage_compiled_skill(
             staging_root,
             staging_id=uuid4(),
-            skill_version_id=uuid4(),
+            skill_version_id=skill_version_id,
             slug="canary-skill",
             compiled_skill_md="WHEN new\nDO regressed behavior\n",
         )
@@ -1510,6 +1511,14 @@ def test_filesystem_worker_rolls_back_queued_revocation_request(tmp_path) -> Non
     }
     assert retrieval.calls == embeddings.calls
     assert retrieval.calls[0]["workspace_key"] == "dev-01"
+    assert {
+        item["object_type"] for item in retrieval.calls[0]["objects"]
+    } == {"skill_version"}
+    assert {
+        item["object_id"]
+        for item in retrieval.calls[0]["objects"]
+        if item["object_type"] == "skill_version"
+    } == {str(skill_version_id)}
     assert [span.operation_kind for span in observability.started] == ["job", "rollback"]
     revocation_span = observability.started[1]
     assert revocation_span.trace_id == trace_id
@@ -1533,6 +1542,101 @@ def test_filesystem_worker_rolls_back_queued_revocation_request(tmp_path) -> Non
             "object_id": str(revocation.revocation_request_id),
         }
     ]
+
+
+def test_filesystem_worker_expands_writer_item_revocation_impacts(tmp_path) -> None:
+    jobs = MemoryJobStore()
+    governance = MemoryGovernanceStore()
+    retrieval = MemoryRetrievalInvalidationStore()
+    embeddings = MemoryInvalidationStore()
+    evidence_id = uuid4()
+    workspace_root = tmp_path / "workspace"
+    staging_root = workspace_root / ".autoskill" / "staging"
+    archive_root = workspace_root / ".autoskill" / "archive"
+
+    async def run():
+        apply_transaction = await governance.start_transaction(
+            workspace_key="dev-01",
+            transaction_kind="compile",
+            idempotency_key="apply:source-linked",
+            plan_hash="apply-plan",
+            source_evidence_ids=[evidence_id],
+        )
+        staged = stage_compiled_skill(
+            staging_root,
+            staging_id=uuid4(),
+            skill_version_id=uuid4(),
+            slug="source-linked-skill",
+            compiled_skill_md="WHEN new\nDO useful behavior\n",
+        )
+        await apply_staged_manifest_with_governance(
+            governance,
+            evolution_transaction_id=apply_transaction.transaction.evolution_transaction_id,
+            staging_root=staging_root,
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            manifest_relative_path=staged.manifest_relative_path,
+        )
+        traversal = await governance.preview_revocation_traversal(
+            workspace_key="dev-01",
+            root_object_type="evidence_item",
+            root_object_id=evidence_id,
+        )
+        revocation = await governance.request_revocation(
+            workspace_key="dev-01",
+            request_kind="operator_revoke",
+            root_object_type="evidence_item",
+            root_object_id=evidence_id,
+            traversal_summary=traversal.to_json(),
+        )
+        await jobs.enqueue_job(
+            workspace_key="dev-01",
+            job_kind="revocations.invalidate",
+            idempotency_key="invalidate:source-linked",
+            payload={"workspace_id": "dev-01", "request_kind": "operator_revoke"},
+        )
+        result = await run_worker_once(
+            WorkerStores(
+                jobs=jobs,
+                scheduler=MemorySchedulerWorkerStore(),
+                evidence=MemoryEvidenceWorkerStore(),
+                embeddings=embeddings,
+                retrieval=retrieval,
+                governance=governance,
+            ),
+            worker_id="filesystem-worker",
+            pool="filesystem",
+        )
+        return result, revocation, staged
+
+    result, revocation, staged = asyncio.run(run())
+
+    assert result.status == "succeeded"
+    assert result.output["completed"] == 1
+    assert result.output["revocations"][0]["revocation_request_id"] == str(
+        revocation.revocation_request_id
+    )
+    assert result.output["revocations"][0]["invalidation"] == {
+        "objects": 4,
+        "body_index_documents_deleted": 4,
+        "embeddings_deleted": 4,
+        "retrieval_logs_invalidated": 4,
+        "context_records_invalidated": 0,
+        "topology_records_invalidated": 0,
+        "evaluation_records_invalidated": 0,
+        "attribution_records_invalidated": 0,
+        "governance_records_invalidated": 4,
+    }
+    assert {item["object_type"] for item in retrieval.calls[0]["objects"]} == {
+        "evidence_item",
+        "skill_version",
+        "transaction_item",
+    }
+    assert {
+        item["object_id"]
+        for item in retrieval.calls[0]["objects"]
+        if item["object_type"] == "skill_version"
+    } == {str(staged.skill_version_id)}
 
 
 def test_filesystem_worker_deletes_initial_create_on_rollback(tmp_path) -> None:

@@ -16,6 +16,28 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-08: Revocation invalidation now consumes writer-item source
+  provenance recorded from evidence or memory roots. Writer transaction items for
+  compiled skill files, support artifacts, manifests, archive snapshots, and
+  rollback restores now carry the affected `skill_version_id` as their
+  content-safe `item_id`; the governance store can expand impacted
+  `transaction_item` nodes reached through `source_for_writer_item` edges back
+  into revocable `skill_version` objects before worker invalidation fans out to
+  retrieval/body-index, embedding, context, topology, evaluator, attribution,
+  and governance stores. This advances unified Sections 1.2 and 2.26
+  rollback-complete derived-data revocation without exposing raw evidence,
+  mutating live OpenClaw roots, or granting new activation authority. Focused
+  validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_worker.py -q -k 'revocation or
+  invalidates_retrieval_logs'` (`3 passed`), `uv run pytest
+  sidecar/autoskill/tests/test_governance.py
+  sidecar/autoskill/tests/test_audit_writer_events.py -q` (`34 passed`), and
+  touched-file Ruff. Required gates passed with `uv run ruff check sidecar`,
+  `uv run pytest` (`475 passed`), `uv run python -m compileall -q sidecar`, and
+  `git diff --check`. Next gate: add SQL-backed smoke coverage for evidence-root
+  revocation traversals once a bounded Postgres lane is available, and extend
+  first-class artifact IDs beyond skill-version expansion where useful.
+
 - 2026-06-08: Deterministic writer governance now records source-root
   provenance from an evolution transaction's `source_evidence_ids` and
   `source_memory_ids` to every writer transaction item it creates during apply,
@@ -30,9 +52,9 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   authority. Focused validation passed with `uv run pytest
   sidecar/autoskill/tests/test_audit_writer_events.py::test_writer_records_source_provenance_for_apply_and_rollback_items
   -q` (`1 passed`) and `uv run pytest
-  sidecar/autoskill/tests/test_audit_writer_events.py -q` (`33 passed`). Next
-  gate: extend revocation preview/worker handling to consume these writer-item
-  source edges when invalidating derived compiled artifacts and retrieval state.
+  sidecar/autoskill/tests/test_audit_writer_events.py -q` (`33 passed`). Next gate: add SQL-backed smoke coverage for evidence-root
+  revocation traversals and continue first-class artifact-ID expansion beyond
+  skill-version invalidation where useful.
 
 - 2026-06-08: Observatory evidence-fidelity read models now refresh from
   governed evidence inputs before serving `/admin/api/v1/evidence/fidelity`, raw

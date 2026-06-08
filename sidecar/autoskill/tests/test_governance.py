@@ -295,6 +295,27 @@ class MemoryGovernanceStore:
             return updated
         return None
 
+    async def expand_writer_item_impacts(
+        self,
+        *,
+        workspace_key: str,
+        objects: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        transaction_item_ids = {
+            item["object_id"]
+            for item in objects
+            if item.get("object_type") == "transaction_item"
+        }
+        impacts: list[dict[str, str]] = []
+        for item in self.items:
+            if str(item.transaction_item_id) not in transaction_item_ids:
+                continue
+            if item.item_id is not None:
+                impacts.append(
+                    {"object_type": "skill_version", "object_id": str(item.item_id)}
+                )
+        return impacts
+
     async def invalidate_objects(
         self,
         *,
