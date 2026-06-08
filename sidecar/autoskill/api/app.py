@@ -2879,7 +2879,15 @@ def _topology_skill(payload: TopologySkillPayload) -> TopologySkill:
     )
 
 
-def _build_topology_proposal(request: TopologyProposalRequest):
+async def _build_topology_proposal(
+    request: TopologyProposalRequest,
+    evidence_store: EvidenceStore,
+):
+    evidence_fidelity_by_id = await _topology_evidence_fidelity_by_id(
+        evidence_store,
+        workspace_id=request.workspace_id,
+        evidence_ids=request.evidence_ids,
+    )
     if request.operation_kind == "create":
         if request.proposed is None:
             raise HTTPException(
@@ -2891,6 +2899,7 @@ def _build_topology_proposal(request: TopologyProposalRequest):
                 proposed=_topology_skill(request.proposed),
                 evidence_ids=request.evidence_ids,
                 creation_reasons=request.creation_reasons or request.improvement_reasons,
+                evidence_fidelity_by_id=evidence_fidelity_by_id,
             )
         )
     if request.operation_kind == "improve":
@@ -2905,6 +2914,7 @@ def _build_topology_proposal(request: TopologyProposalRequest):
                 proposed=_topology_skill(request.proposed),
                 evidence_ids=request.evidence_ids,
                 improvement_reasons=request.improvement_reasons,
+                evidence_fidelity_by_id=evidence_fidelity_by_id,
             )
         )
     if request.operation_kind == "compose":
@@ -2918,6 +2928,7 @@ def _build_topology_proposal(request: TopologyProposalRequest):
                 components=[_topology_skill(component) for component in request.components],
                 composed_output=_topology_skill(request.composed_output),
                 evidence_ids=request.evidence_ids,
+                evidence_fidelity_by_id=evidence_fidelity_by_id,
                 required_effects_by_component=request.required_effects_by_component,
             )
         )
@@ -2932,6 +2943,7 @@ def _build_topology_proposal(request: TopologyProposalRequest):
                 subject=_topology_skill(request.subject),
                 successors=[_topology_skill(successor) for successor in request.successors],
                 evidence_ids=request.evidence_ids,
+                evidence_fidelity_by_id=evidence_fidelity_by_id,
                 decomposition_reasons=request.improvement_reasons,
                 coverage_requirements=request.coverage_requirements,
             )
@@ -2940,6 +2952,32 @@ def _build_topology_proposal(request: TopologyProposalRequest):
         status_code=http_status.HTTP_400_BAD_REQUEST,
         detail="operation_kind must be create, improve, compose, or decompose",
     )
+
+
+async def _topology_evidence_fidelity_by_id(
+    evidence_store: EvidenceStore,
+    *,
+    workspace_id: str,
+    evidence_ids: list[str],
+) -> dict[str, str]:
+    parsed_ids = _uuid_values_for_topology(evidence_ids)
+    if not parsed_ids:
+        return {}
+    fetched = await evidence_store.get_evidence_fidelity_by_id(
+        workspace_key=workspace_id,
+        evidence_ids=parsed_ids,
+    )
+    return {str(evidence_id): fetched.get(str(evidence_id), "unavailable") for evidence_id in parsed_ids}
+
+
+def _uuid_values_for_topology(values: list[str]) -> list[UUID]:
+    parsed: list[UUID] = []
+    for value in values:
+        try:
+            parsed.append(UUID(str(value)))
+        except ValueError:
+            continue
+    return parsed
 
 
 def _topology_skill_from_usage_id(
@@ -15096,7 +15134,7 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
     ) -> TopologyProposalResponse:
         _require_control_auth(authorization)
-        proposal = _build_topology_proposal(request)
+        proposal = await _build_topology_proposal(request, evidence)
         persistence = None
         if request.persist:
             persisted = await persist_topology_proposal(
@@ -15166,13 +15204,14 @@ def create_app(
                     )
                 )
                 continue
-            proposal = _build_topology_proposal(
+            proposal = await _build_topology_proposal(
                 proposal_request.model_copy(
                     update={
                         "workspace_id": request.workspace_id,
                         "persist": request.persist,
                     }
-                )
+                ),
+                evidence,
             )
             persistence = None
             if request.persist:

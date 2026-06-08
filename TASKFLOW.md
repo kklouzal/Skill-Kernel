@@ -16,6 +16,30 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-08: Topology proposal admission now enforces evidence-fidelity
+  authority before semantic topology candidates can become propose-only
+  SkillGraphIR operations. Core resolves cited evidence IDs through the
+  governed evidence store for `/v1/topology/propose` and
+  `/v1/topology/propose-from-usage`, carries the content-safe fidelity map in
+  proposal JSON, transaction metrics, data-to-skill traces, and topology
+  calibration components, and deterministically blocks `metadata_only`,
+  `hash_only`, or unavailable evidence with
+  `low_fidelity_topology_authority=false` instead of silently producing a
+  topology operation from correlation-only signals. Redacted derivatives remain
+  degraded-but-admissible for existing propose-only candidates; no raw evidence,
+  activation, or runtime write authority was added. This advances unified
+  Sections 5.12, 5.13, 12.1.1, 13.6, 13.8, and 17.1 evidence-completeness and
+  topology-operation safety ordering. Focused validation passed with `uv run
+  pytest sidecar/autoskill/tests/test_topology_services.py -q` (`22 passed`)
+  and touched-file Ruff. Required gates passed with `uv run ruff check
+  sidecar`, `uv run pytest` (`477 passed`), `uv run python -m compileall -q
+  sidecar`, and `git diff --check`. No Postgres smoke was run; SQL behavior is
+  a bounded read-only fidelity lookup over existing evidence/raw-event tables
+  and the API/service path is covered by deterministic tests. Next gate: add a
+  SQL-backed topology admission smoke when a bounded Postgres lane is practical
+  and extend fidelity-aware admission to any remaining semantic topology
+  candidate sources before activation paths are broadened.
+
 - 2026-06-08: Revocation invalidation now consumes writer-item source
   provenance recorded from evidence or memory roots. Writer transaction items for
   compiled skill files, support artifacts, manifests, archive snapshots, and

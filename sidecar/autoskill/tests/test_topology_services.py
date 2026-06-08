@@ -4,6 +4,8 @@ from uuid import uuid4
 
 from autoskill.api.app import (
     TopologyApplyRequest,
+    TopologyProposalRequest,
+    TopologySkillPayload,
     TopologyUsageProposalRequest,
     create_app,
 )
@@ -25,6 +27,35 @@ from autoskill.services.topology import (
     propose_decomposition,
     propose_improvement,
 )
+
+
+class MemoryEvidenceStore:
+    def __init__(self, evidence_fidelity_by_id: dict[str, str] | None = None) -> None:
+        self.evidence_fidelity_by_id = evidence_fidelity_by_id or {}
+        self.calls: list[dict[str, object]] = []
+
+    async def derive_from_raw_events(self, *, workspace_key=None, limit=100):
+        raise NotImplementedError
+
+    async def list_evidence(self, *, workspace_key=None, limit=50):
+        return []
+
+    async def get_evidence_fidelity_by_id(
+        self,
+        *,
+        workspace_key=None,
+        evidence_ids,
+    ):
+        self.calls.append(
+            {
+                "workspace_key": workspace_key,
+                "evidence_ids": [str(evidence_id) for evidence_id in evidence_ids],
+            }
+        )
+        return {
+            str(evidence_id): self.evidence_fidelity_by_id.get(str(evidence_id), "unavailable")
+            for evidence_id in evidence_ids
+        }
 
 
 class MemoryTopologyUsageStore:
@@ -542,6 +573,31 @@ def test_topology_proposal_persistence_records_calibration_observation() -> None
     assert persisted.operation.status == "candidate"
 
 
+def test_topology_blocks_low_fidelity_evidence_for_semantic_topology_choice() -> None:
+    evidence_id = str(uuid4())
+    result = propose_creation(
+        CreateTopologyRequest(
+            proposed=TopologySkill(
+                slug="metadata-only-skill",
+                effects=EffectSignature(outputs=["metadata-only-output"]),
+            ),
+            evidence_ids=[evidence_id],
+            creation_reasons=["metadata correlation only"],
+            evidence_fidelity_by_id={evidence_id: "hash_only"},
+        )
+    )
+
+    assert result.status == "blocked"
+    assert result.skill_graph_ir is None
+    assert result.evidence_fidelity_by_id == {evidence_id: "hash_only"}
+    assert result.blockers == [
+        (
+            f"topology evidence {evidence_id} has insufficient fidelity "
+            "for topology_operation_choice: hash_only"
+        )
+    ]
+
+
 def test_topology_blocked_proposal_records_reject_calibration_observation() -> None:
     topology = NullTopologyStore()
     governance = RecordingGovernanceStore()
@@ -791,6 +847,7 @@ def test_topology_usage_recommendations_can_persist_compose_proposals() -> None:
         usage_store=usage,
         topology_store=topology,
         governance_store=NullGovernanceStore(),
+        evidence_store=MemoryEvidenceStore({str(evidence_id): "redacted_derivative"}),
     )
     route = next(
         route for route in app.routes if route.path == "/v1/topology/propose-from-usage"
@@ -827,6 +884,39 @@ def test_topology_usage_recommendations_can_persist_compose_proposals() -> None:
             "min_sequence_count": 1,
         }
     ]
+
+
+def test_topology_propose_api_blocks_hash_only_evidence() -> None:
+    evidence_id = uuid4()
+    app = create_app(
+        topology_store=NullTopologyStore(),
+        governance_store=NullGovernanceStore(),
+        evidence_store=MemoryEvidenceStore({str(evidence_id): "hash_only"}),
+    )
+    route = next(route for route in app.routes if route.path == "/v1/topology/propose")
+
+    async def run():
+        return await route.endpoint(
+            request=TopologyProposalRequest(
+                workspace_id="dev-01",
+                operation_kind="create",
+                proposed=TopologySkillPayload(
+                    slug="hash-only-topology",
+                    effects={"outputs": ["hash-only-correlation"]},
+                ),
+                evidence_ids=[str(evidence_id)],
+                creation_reasons=["hash-only recurrence"],
+            )
+        )
+
+    response = asyncio.run(run())
+
+    assert response.proposal["status"] == "blocked"
+    assert response.proposal["evidence_fidelity_by_id"] == {
+        str(evidence_id): "hash_only"
+    }
+    assert response.proposal["skill_graph_ir"] is None
+    assert "insufficient fidelity" in response.proposal["blockers"][0]
 
 
 def test_topology_usage_recommendations_can_persist_improve_and_decompose_proposals() -> None:
@@ -912,6 +1002,12 @@ def test_topology_usage_recommendations_can_persist_improve_and_decompose_propos
         usage_store=usage,
         topology_store=topology,
         governance_store=NullGovernanceStore(),
+        evidence_store=MemoryEvidenceStore(
+            {
+                str(improve_evidence): "redacted_derivative",
+                str(decompose_evidence): "redacted_derivative",
+            }
+        ),
     )
     route = next(
         route for route in app.routes if route.path == "/v1/topology/propose-from-usage"

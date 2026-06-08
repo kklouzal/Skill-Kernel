@@ -1,5 +1,22 @@
 # SkillKernel Implementation Plan
 
+2026-06-08 update: topology proposal admission now consumes governed
+ evidence-fidelity state before creating propose-only SkillGraphIR candidates.
+ Core resolves cited evidence IDs through the evidence store for direct and
+ usage-derived topology proposal APIs, includes the content-safe fidelity map in
+ proposal output, transaction metrics, data-to-skill trace content policy, and
+ topology calibration components, and blocks `metadata_only`, `hash_only`, or
+ unavailable evidence from authorizing `topology_operation_choice`. This closes
+ the immediate gap between Observatory evidence-fidelity diagnostics and Core
+ topology admission while preserving propose-only state, deterministic authority,
+ no raw-evidence reveal, no runtime write, and no activation authority.
+ Validation: `uv run pytest sidecar/autoskill/tests/test_topology_services.py
+ -q` (`22 passed`), touched-file Ruff, full `uv run ruff check sidecar`, full
+ `uv run pytest` (`477 passed`), `uv run python -m compileall -q sidecar`, and
+ `git diff --check`. No Postgres smoke was run for this read-only fidelity
+ lookup slice. Next: run SQL-backed topology admission smoke when practical and
+ continue fidelity-aware admission for remaining semantic candidate sources.
+
 2026-06-08 update: revocation invalidation now follows writer-item source
 provenance into compiled artifact invalidation. Governance can expand impacted
 `transaction_item` nodes reached through `source_for_writer_item` edges into the

@@ -96,6 +96,14 @@ class EvidenceStore(Protocol):
     ) -> list[EvidenceRecord]:
         """List recent non-revoked evidence."""
 
+    async def get_evidence_fidelity_by_id(
+        self,
+        *,
+        workspace_key: str | None = None,
+        evidence_ids: list[UUID],
+    ) -> dict[str, str]:
+        """Return canonical evidence-fidelity tiers for non-revoked evidence IDs."""
+
 
 class NullEvidenceStore:
     async def derive_from_raw_events(
@@ -113,6 +121,14 @@ class NullEvidenceStore:
         limit: int = 50,
     ) -> list[EvidenceRecord]:
         return []
+
+    async def get_evidence_fidelity_by_id(
+        self,
+        *,
+        workspace_key: str | None = None,
+        evidence_ids: list[UUID],
+    ) -> dict[str, str]:
+        return {}
 
 
 class AsyncpgEvidenceStore(AsyncpgPoolOwner):
@@ -221,6 +237,47 @@ class AsyncpgEvidenceStore(AsyncpgPoolOwner):
                 limit,
             )
             return [EvidenceRecord.from_row(row) for row in rows]
+
+    async def get_evidence_fidelity_by_id(
+        self,
+        *,
+        workspace_key: str | None = None,
+        evidence_ids: list[UUID],
+    ) -> dict[str, str]:
+        if not evidence_ids:
+            return {}
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                  i.evidence_id,
+                  COALESCE(
+                    e.evidence_fidelity,
+                    CASE
+                      WHEN i.kind IN (
+                        'historical_chunk_observation',
+                        'recurring_evidence_cluster'
+                      ) THEN 'redacted_derivative'
+                      ELSE 'metadata_only'
+                    END
+                  ) AS evidence_fidelity
+                FROM autoskill.evidence_items i
+                JOIN autoskill.workspaces w USING (workspace_id)
+                LEFT JOIN autoskill.raw_events e ON e.event_id = i.source_event_id
+                WHERE i.revoked_at IS NULL
+                  AND i.evidence_id = ANY($1::uuid[])
+                  AND ($2::text IS NULL OR w.external_key = $2)
+                """,
+                evidence_ids,
+                workspace_key,
+            )
+        return {
+            str(row["evidence_id"]): _canonical_evidence_fidelity(
+                row["evidence_fidelity"]
+            )
+            for row in rows
+        }
 
 
 async def _insert_event_evidence(
@@ -668,6 +725,22 @@ def _historical_chunk_taint(chunk: asyncpg.Record) -> list[str]:
         raw = json.loads(raw)
     keys = [f"historical:{key}" for key, value in sorted(raw.items()) if value]
     return sorted({"historical", "redacted", *keys})
+
+
+EVIDENCE_FIDELITY_TIERS = {
+    "metadata_only",
+    "hash_only",
+    "redacted_derivative",
+    "declassified_summary",
+    "raw_vault_linked",
+}
+
+
+def _canonical_evidence_fidelity(value: Any) -> str:
+    fidelity = str(value or "unavailable")
+    if fidelity in EVIDENCE_FIDELITY_TIERS:
+        return fidelity
+    return "unavailable"
 
 
 def _json(payload: dict[str, Any]) -> str:

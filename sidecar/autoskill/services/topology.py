@@ -15,6 +15,9 @@ TopologyOperationKind = Literal["create", "improve", "compose", "decompose"]
 
 MAX_COMPONENTS = 8
 MAX_SUCCESSORS = 8
+LOW_TOPOLOGY_EVIDENCE_FIDELITY = {"metadata_only", "hash_only", "unavailable"}
+FULL_TOPOLOGY_EVIDENCE_FIDELITY = {"raw_vault_linked", "declassified_summary"}
+DEGRADED_TOPOLOGY_EVIDENCE_FIDELITY = {"redacted_derivative"}
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,7 @@ class ImproveTopologyRequest:
     proposed: TopologySkill
     evidence_ids: list[str]
     improvement_reasons: list[str]
+    evidence_fidelity_by_id: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,7 @@ class CreateTopologyRequest:
     proposed: TopologySkill
     evidence_ids: list[str]
     creation_reasons: list[str]
+    evidence_fidelity_by_id: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -62,6 +67,7 @@ class ComposeTopologyRequest:
     components: list[TopologySkill]
     composed_output: TopologySkill
     evidence_ids: list[str]
+    evidence_fidelity_by_id: dict[str, str] | None = None
     required_effects_by_component: dict[str, list[str]] | None = None
     max_components: int = MAX_COMPONENTS
 
@@ -71,6 +77,7 @@ class DecomposeTopologyRequest:
     subject: TopologySkill
     successors: list[TopologySkill]
     evidence_ids: list[str]
+    evidence_fidelity_by_id: dict[str, str] | None = None
     decomposition_reasons: list[str] | None = None
     coverage_requirements: list[str] | None = None
     max_successors: int = MAX_SUCCESSORS
@@ -117,6 +124,7 @@ class TopologyProposalResult:
     plan_hash: str
     blockers: list[str]
     evidence_ids: list[str]
+    evidence_fidelity_by_id: dict[str, str]
     skill_graph_ir: SkillGraphIR | None
     trial_plan: list[TopologyTrialPlan]
     transaction: TopologyTransactionPlan
@@ -137,6 +145,7 @@ class TopologyProposalResult:
             "plan_hash": self.plan_hash,
             "blockers": self.blockers,
             "evidence_ids": self.evidence_ids,
+            "evidence_fidelity_by_id": self.evidence_fidelity_by_id,
             "skill_graph_ir": graph,
             "trial_plan": [trial.to_json() for trial in self.trial_plan],
             "transaction": self.transaction.to_json(),
@@ -291,6 +300,9 @@ def propose_creation(request: CreateTopologyRequest) -> TopologyProposalResult:
         blockers.append("create proposal requires at least one declared effect")
     if not request.evidence_ids:
         blockers.append("create proposal requires cited evidence")
+    blockers.extend(
+        _evidence_fidelity_blockers(request.evidence_ids, request.evidence_fidelity_by_id)
+    )
     if not request.creation_reasons:
         blockers.append("create proposal requires at least one deterministic reason")
 
@@ -308,6 +320,9 @@ def propose_creation(request: CreateTopologyRequest) -> TopologyProposalResult:
         "operation_kind": "create",
         "proposed": request.proposed.to_json(),
         "evidence_ids": sorted(request.evidence_ids),
+        "evidence_fidelity_by_id": _canonical_evidence_fidelity_map(
+            request.evidence_fidelity_by_id
+        ),
         "creation_reasons": sorted(request.creation_reasons),
         "blockers": blockers,
         "graph": _graph_json(graph),
@@ -317,6 +332,7 @@ def propose_creation(request: CreateTopologyRequest) -> TopologyProposalResult:
         payload=payload,
         blockers=blockers,
         evidence_ids=request.evidence_ids,
+        evidence_fidelity_by_id=request.evidence_fidelity_by_id,
         graph=graph,
         trial_plan=[
             TopologyTrialPlan(
@@ -403,6 +419,12 @@ def _topology_transaction_metrics(
         "topology_status": proposal.status,
         "plan_hash": proposal.plan_hash,
         "evidence_count": len(proposal.evidence_ids),
+        "evidence_fidelity_counts": _evidence_fidelity_counts(
+            proposal.evidence_fidelity_by_id
+        ),
+        "low_fidelity_evidence_count": _low_fidelity_evidence_count(
+            proposal.evidence_fidelity_by_id
+        ),
         "planned_trials": len(proposal.trial_plan),
         "trial_kinds": [trial.kind for trial in proposal.trial_plan],
         "blockers": len(proposal.blockers),
@@ -452,6 +474,14 @@ def _topology_calibration_components(
         "proposal_status": proposal.status,
         "skill_graph_operation_id": str(skill_graph_operation_id),
         "evidence_count": len(proposal.evidence_ids),
+        "evidence_fidelity_counts": _evidence_fidelity_counts(
+            proposal.evidence_fidelity_by_id
+        ),
+        "low_fidelity_evidence_count": _low_fidelity_evidence_count(
+            proposal.evidence_fidelity_by_id
+        ),
+        "low_fidelity_topology_authority": False,
+        "raw_evidence_returned": False,
         "trial_count": len(proposal.trial_plan),
         "blocker_codes": _topology_blocker_codes(proposal.blockers),
         "graph_node_count": len(graph.nodes) if graph else 0,
@@ -491,7 +521,11 @@ def _topology_data_to_skill_trace(
             {
                 "name": "evidence_packet",
                 "status": "present" if proposal.evidence_ids else "missing",
-                "reason_codes": ["cited-evidence"] if proposal.evidence_ids else blocker_codes,
+                "reason_codes": (
+                    ["cited-evidence", "evidence-fidelity-checked"]
+                    if proposal.evidence_ids
+                    else blocker_codes
+                ),
                 "input_refs": _object_refs("evidence_item", proposal.evidence_ids),
                 "output_refs": [
                     {"object_type": "topology_evidence_packet", "object_id": proposal.plan_hash}
@@ -619,6 +653,13 @@ def _topology_data_to_skill_trace(
         "content_policy": {
             "raw_available": False,
             "redaction_state": "content_safe_trace_refs_only",
+            "evidence_fidelity_counts": _evidence_fidelity_counts(
+                proposal.evidence_fidelity_by_id
+            ),
+            "low_fidelity_evidence_count": _low_fidelity_evidence_count(
+                proposal.evidence_fidelity_by_id
+            ),
+            "low_fidelity_topology_authority": False,
         },
     }
 
@@ -670,6 +711,11 @@ def propose_improvement(request: ImproveTopologyRequest) -> TopologyProposalResu
         f"proposed skill does not preserve subject effect: {term}"
         for term in missing
     ]
+    if not request.evidence_ids:
+        blockers.append("improvement proposal requires cited evidence")
+    blockers.extend(
+        _evidence_fidelity_blockers(request.evidence_ids, request.evidence_fidelity_by_id)
+    )
     if not request.improvement_reasons:
         blockers.append("improvement proposal requires at least one deterministic reason")
 
@@ -704,6 +750,9 @@ def propose_improvement(request: ImproveTopologyRequest) -> TopologyProposalResu
         "subject": request.subject.to_json(),
         "proposed": request.proposed.to_json(),
         "evidence_ids": sorted(request.evidence_ids),
+        "evidence_fidelity_by_id": _canonical_evidence_fidelity_map(
+            request.evidence_fidelity_by_id
+        ),
         "improvement_reasons": sorted(request.improvement_reasons),
         "blockers": blockers,
         "graph": _graph_json(graph),
@@ -713,6 +762,7 @@ def propose_improvement(request: ImproveTopologyRequest) -> TopologyProposalResu
         payload=payload,
         blockers=blockers,
         evidence_ids=request.evidence_ids,
+        evidence_fidelity_by_id=request.evidence_fidelity_by_id,
         graph=graph,
         trial_plan=[
             TopologyTrialPlan(
@@ -782,6 +832,11 @@ def propose_improvement(request: ImproveTopologyRequest) -> TopologyProposalResu
 
 def propose_composition(request: ComposeTopologyRequest) -> TopologyProposalResult:
     blockers = _bounded_component_blockers(request.components, request.max_components)
+    if not request.evidence_ids:
+        blockers.append("composition proposal requires cited evidence")
+    blockers.extend(
+        _evidence_fidelity_blockers(request.evidence_ids, request.evidence_fidelity_by_id)
+    )
     required_by_slug = request.required_effects_by_component or {}
     previous_components: list[TopologySkill] = []
     edges: list[SkillGraphEdge] = []
@@ -847,6 +902,9 @@ def propose_composition(request: ComposeTopologyRequest) -> TopologyProposalResu
         "components": [component.to_json() for component in request.components],
         "composed_output": request.composed_output.to_json(),
         "evidence_ids": sorted(request.evidence_ids),
+        "evidence_fidelity_by_id": _canonical_evidence_fidelity_map(
+            request.evidence_fidelity_by_id
+        ),
         "required_effects_by_component": {
             key: sorted(value) for key, value in sorted(required_by_slug.items())
         },
@@ -858,6 +916,7 @@ def propose_composition(request: ComposeTopologyRequest) -> TopologyProposalResu
         payload=payload,
         blockers=blockers,
         evidence_ids=request.evidence_ids,
+        evidence_fidelity_by_id=request.evidence_fidelity_by_id,
         graph=graph,
         trial_plan=[
             TopologyTrialPlan(
@@ -921,6 +980,11 @@ def propose_composition(request: ComposeTopologyRequest) -> TopologyProposalResu
 
 def propose_decomposition(request: DecomposeTopologyRequest) -> TopologyProposalResult:
     blockers = _bounded_component_blockers(request.successors, request.max_successors)
+    if not request.evidence_ids:
+        blockers.append("decomposition proposal requires cited evidence")
+    blockers.extend(
+        _evidence_fidelity_blockers(request.evidence_ids, request.evidence_fidelity_by_id)
+    )
     required = set(request.coverage_requirements or sorted(_effect_terms(request.subject.effects)))
     coverage = {
         term: [
@@ -963,6 +1027,9 @@ def propose_decomposition(request: DecomposeTopologyRequest) -> TopologyProposal
         "subject": request.subject.to_json(),
         "successors": [successor.to_json() for successor in request.successors],
         "evidence_ids": sorted(request.evidence_ids),
+        "evidence_fidelity_by_id": _canonical_evidence_fidelity_map(
+            request.evidence_fidelity_by_id
+        ),
         "coverage_requirements": sorted(required),
         "decomposition_reasons": sorted(request.decomposition_reasons or []),
         "blockers": blockers,
@@ -973,6 +1040,7 @@ def propose_decomposition(request: DecomposeTopologyRequest) -> TopologyProposal
         payload=payload,
         blockers=blockers,
         evidence_ids=request.evidence_ids,
+        evidence_fidelity_by_id=request.evidence_fidelity_by_id,
         graph=graph,
         trial_plan=[
             TopologyTrialPlan(
@@ -1048,6 +1116,7 @@ def _result(
     payload: dict[str, Any],
     blockers: list[str],
     evidence_ids: list[str],
+    evidence_fidelity_by_id: dict[str, str] | None,
     graph: SkillGraphIR | None,
     trial_plan: list[TopologyTrialPlan],
     rollback_actions: list[dict[str, Any]],
@@ -1079,10 +1148,67 @@ def _result(
         plan_hash=plan_hash,
         blockers=blockers,
         evidence_ids=evidence_ids,
+        evidence_fidelity_by_id=_canonical_evidence_fidelity_map(evidence_fidelity_by_id),
         skill_graph_ir=graph,
         trial_plan=trial_plan,
         transaction=transaction,
     )
+
+
+def _canonical_evidence_fidelity(value: object) -> str:
+    fidelity = str(value or "unavailable")
+    if fidelity in (
+        LOW_TOPOLOGY_EVIDENCE_FIDELITY
+        | FULL_TOPOLOGY_EVIDENCE_FIDELITY
+        | DEGRADED_TOPOLOGY_EVIDENCE_FIDELITY
+    ):
+        return fidelity
+    return "unavailable"
+
+
+def _canonical_evidence_fidelity_map(
+    evidence_fidelity_by_id: dict[str, str] | None,
+) -> dict[str, str]:
+    return {
+        str(evidence_id): _canonical_evidence_fidelity(fidelity)
+        for evidence_id, fidelity in sorted((evidence_fidelity_by_id or {}).items())
+    }
+
+
+def _evidence_fidelity_counts(evidence_fidelity_by_id: dict[str, str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for fidelity in evidence_fidelity_by_id.values():
+        canonical = _canonical_evidence_fidelity(fidelity)
+        counts[canonical] = counts.get(canonical, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _low_fidelity_evidence_count(evidence_fidelity_by_id: dict[str, str]) -> int:
+    return sum(
+        1
+        for fidelity in evidence_fidelity_by_id.values()
+        if _canonical_evidence_fidelity(fidelity) in LOW_TOPOLOGY_EVIDENCE_FIDELITY
+    )
+
+
+def _evidence_fidelity_blockers(
+    evidence_ids: list[str],
+    evidence_fidelity_by_id: dict[str, str] | None,
+) -> list[str]:
+    if evidence_fidelity_by_id is None:
+        return []
+    fidelity_by_id = _canonical_evidence_fidelity_map(evidence_fidelity_by_id)
+    blockers: list[str] = []
+    for evidence_id in evidence_ids:
+        fidelity = fidelity_by_id.get(str(evidence_id), "unavailable")
+        if fidelity not in LOW_TOPOLOGY_EVIDENCE_FIDELITY:
+            continue
+        blockers.append(
+            "topology evidence "
+            f"{evidence_id} has insufficient fidelity for topology_operation_choice: "
+            f"{fidelity}"
+        )
+    return blockers
 
 
 def _bounded_component_blockers(skills: list[TopologySkill], max_count: int) -> list[str]:

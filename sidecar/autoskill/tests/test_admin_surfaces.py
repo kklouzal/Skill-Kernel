@@ -29,10 +29,21 @@ from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.broker_policy import NullBrokerPolicyStore
 from autoskill.db.candidates import CandidateReviewRecord, NullCandidateStore
 from autoskill.db.evaluations import EvaluationReviewRecord, NullEvaluationStore
+from autoskill.db.evidence import NullEvidenceStore
 from autoskill.db.jobs import JobQueueSummary, NullJobStore
 from autoskill.db.profiles import ExecutorProfileRecord, ModelProfileRecord
 from autoskill.db.skills import SkillRecord
 from autoskill.db.topology import NullTopologyStore
+
+
+class PermissiveEvidenceStore(NullEvidenceStore):
+    async def get_evidence_fidelity_by_id(
+        self,
+        *,
+        workspace_key: str | None = None,
+        evidence_ids: list[UUID],
+    ) -> dict[str, str]:
+        return {str(evidence_id): "redacted_derivative" for evidence_id in evidence_ids}
 
 
 class MemorySkillStore:
@@ -990,7 +1001,7 @@ def test_context_compile_skillir_endpoint_records_deterministic_gate() -> None:
 
 def test_topology_proposal_endpoint_persists_propose_only_operation() -> None:
     topology = NullTopologyStore()
-    app = create_app(topology_store=topology)
+    app = create_app(topology_store=topology, evidence_store=PermissiveEvidenceStore())
     route = next(route for route in app.routes if route.path == "/v1/topology/propose")
 
     async def run():
@@ -1036,7 +1047,11 @@ def test_topology_proposal_endpoint_persists_propose_only_operation() -> None:
 def test_topology_proposal_endpoint_persists_create_operation() -> None:
     topology = NullTopologyStore()
     audit = MemoryAuditStore()
-    app = create_app(topology_store=topology, audit_store=audit)
+    app = create_app(
+        topology_store=topology,
+        audit_store=audit,
+        evidence_store=PermissiveEvidenceStore(),
+    )
     route = next(route for route in app.routes if route.path == "/v1/topology/propose")
 
     async def run():
@@ -1076,7 +1091,11 @@ def test_topology_proposal_endpoint_persists_create_operation() -> None:
 def test_topology_proposal_endpoint_records_calibration_observation() -> None:
     topology = NullTopologyStore()
     autonomy = NullAutonomyControlStore()
-    app = create_app(topology_store=topology, autonomy_control_store=autonomy)
+    app = create_app(
+        topology_store=topology,
+        autonomy_control_store=autonomy,
+        evidence_store=PermissiveEvidenceStore(),
+    )
     route = next(route for route in app.routes if route.path == "/v1/topology/propose")
 
     async def run():
@@ -1117,7 +1136,7 @@ def test_topology_proposal_endpoint_records_calibration_observation() -> None:
 
 def test_topology_metrics_endpoint_reports_operation_kinds_separately() -> None:
     topology = NullTopologyStore()
-    app = create_app(topology_store=topology)
+    app = create_app(topology_store=topology, evidence_store=PermissiveEvidenceStore())
     propose_route = next(
         route for route in app.routes if route.path == "/v1/topology/propose"
     )
