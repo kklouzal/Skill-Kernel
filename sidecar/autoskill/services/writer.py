@@ -598,6 +598,12 @@ async def apply_staged_manifest_with_governance(
             items=items,
             relation="derived_from",
         )
+        await _record_writer_source_provenance(
+            governance,
+            workspace_key=workspace_key,
+            transaction=applying_transaction,
+            items=items,
+        )
         await governance.update_transaction_status(
             evolution_transaction_id=evolution_transaction_id,
             status="applied",
@@ -924,12 +930,19 @@ async def rollback_active_skill_with_governance(
                 },
             )
         )
+    rollback_items = [item, *support_items]
     await _record_writer_item_provenance(
         governance,
         workspace_key=workspace_key,
         evolution_transaction_id=evolution_transaction_id,
-        items=[item, *support_items],
+        items=rollback_items,
         relation="rolled_back_by",
+    )
+    await _record_writer_source_provenance(
+        governance,
+        workspace_key=workspace_key,
+        transaction=rolling_back_transaction,
+        items=rollback_items,
     )
     await governance.update_transaction_status(
         evolution_transaction_id=evolution_transaction_id,
@@ -975,6 +988,12 @@ async def delete_active_skill_with_governance(
         evolution_transaction_id=evolution_transaction_id,
         items=[item],
         relation="rolled_back_by",
+    )
+    await _record_writer_source_provenance(
+        governance,
+        workspace_key=workspace_key,
+        transaction=rolling_back_transaction,
+        items=[item],
     )
     await governance.update_transaction_status(
         evolution_transaction_id=evolution_transaction_id,
@@ -1471,6 +1490,41 @@ async def _record_writer_item_provenance(
         )
 
 
+async def _record_writer_source_provenance(
+    governance: Any,
+    *,
+    workspace_key: str | None,
+    transaction: Any,
+    items: list[Any],
+) -> None:
+    """Link transaction source evidence/memory roots to writer items.
+
+    Evolution transactions already store source IDs, but revocation traversal is
+    edge-based. Recording these edges makes compiled files, support artifacts,
+    archive snapshots, and rollback/delete items reachable from evidence or
+    memory roots without exposing raw content.
+    """
+
+    if workspace_key is None:
+        return
+    record_edge = getattr(governance, "record_provenance_edge", None)
+    if record_edge is None:
+        return
+    item_ids = [item_id for item in items if (item_id := _transaction_item_id(item))]
+    if not item_ids:
+        return
+    for source_kind, source_id in _transaction_source_roots(transaction):
+        for item_id in item_ids:
+            await record_edge(
+                workspace_key=workspace_key,
+                source_kind=source_kind,
+                source_id=source_id,
+                derived_kind="transaction_item",
+                derived_id=item_id,
+                relation="source_for_writer_item",
+            )
+
+
 def _transaction_workspace_key(transaction: Any) -> str | None:
     if transaction is None:
         return None
@@ -1489,6 +1543,44 @@ def _transaction_item_id(item: Any) -> UUID | None:
     else:
         value = getattr(item, "transaction_item_id", None)
     return value if isinstance(value, UUID) else None
+
+
+def _transaction_source_roots(transaction: Any) -> list[tuple[str, UUID]]:
+    seen: set[tuple[str, UUID]] = set()
+    roots: list[tuple[str, UUID]] = []
+    for source_kind, key in (
+        ("evidence_item", "source_evidence_ids"),
+        ("memory", "source_memory_ids"),
+    ):
+        for source_id in _transaction_uuid_list(transaction, key):
+            root = (source_kind, source_id)
+            if root in seen:
+                continue
+            seen.add(root)
+            roots.append(root)
+    return roots
+
+
+def _transaction_uuid_list(transaction: Any, key: str) -> list[UUID]:
+    if transaction is None:
+        return []
+    if isinstance(transaction, dict):
+        value = transaction.get(key)
+    else:
+        value = getattr(transaction, key, None)
+    if not isinstance(value, list):
+        return []
+    parsed: list[UUID] = []
+    for item in value:
+        if isinstance(item, UUID):
+            parsed.append(item)
+            continue
+        if isinstance(item, str):
+            try:
+                parsed.append(UUID(item))
+            except ValueError:
+                continue
+    return parsed
 
 
 def _apply_rollback_action(applied: AppliedSkillArtifact) -> dict[str, object]:

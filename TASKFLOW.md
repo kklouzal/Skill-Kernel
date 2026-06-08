@@ -16,6 +16,23 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-08: Deterministic writer governance now records source-root
+  provenance from an evolution transaction's `source_evidence_ids` and
+  `source_memory_ids` to every writer transaction item it creates during apply,
+  archive-snapshot retention, rollback restore, or delete-active-path rollback.
+  The new `source_for_writer_item` edges are content-safe UUID links, reuse the
+  existing governance edge store, and make writer-generated compiled skill
+  files, support artifacts, manifests, archives, and rollback/delete records
+  reachable from evidence or memory roots for revocation traversal without
+  exposing raw evidence or granting new activation authority. This advances the
+  unified specification Sections 1.2, 2.19, 2.26, and 2.42 rollback-complete
+  transaction/provenance requirements while preserving deterministic writer
+  authority. Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_audit_writer_events.py::test_writer_records_source_provenance_for_apply_and_rollback_items
+  -q` (`1 passed`) and `uv run pytest
+  sidecar/autoskill/tests/test_audit_writer_events.py -q` (`33 passed`). Next
+  gate: extend revocation preview/worker handling to consume these writer-item
+  source edges when invalidating derived compiled artifacts and retrieval state.
 
 - 2026-06-08: Observatory evidence-fidelity read models now refresh from
   governed evidence inputs before serving `/admin/api/v1/evidence/fidelity`, raw

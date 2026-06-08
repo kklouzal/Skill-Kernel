@@ -483,6 +483,79 @@ def test_writer_archives_active_skill_and_removes_runtime_root(tmp_path: Path) -
     assert (active_path / "SKILL.md").read_text(encoding="utf-8").startswith("# Old")
 
 
+def test_writer_records_source_provenance_for_apply_and_rollback_items(
+    tmp_path: Path,
+) -> None:
+    staging_root = tmp_path / "staging"
+    workspace_root = tmp_path / "workspace"
+    archive_root = workspace_root / ".autoskill" / "archive"
+    active_path = workspace_root / "skills" / "autoskill" / "autoskill-example"
+    active_path.mkdir(parents=True)
+    (active_path / "SKILL.md").write_text("# Old\n\n## WHEN\n- Old.\n", encoding="utf-8")
+    evidence_id = uuid4()
+    memory_id = uuid4()
+    staged = stage_compiled_skill(
+        staging_root,
+        staging_id=uuid4(),
+        skill_version_id=uuid4(),
+        slug="autoskill-example",
+        compiled_skill_md="# New\n\n## WHEN\n- New.\n",
+        support_artifacts=[
+            SupportArtifactContent(
+                relative_path="references/procedure.md",
+                content="# New procedure\n",
+                kind="reference",
+                load_policy="broker_excerpt_only",
+            )
+        ],
+    )
+    governance = MemoryWriterGovernance(
+        source_evidence_ids=[evidence_id],
+        source_memory_ids=[memory_id],
+    )
+
+    async def run():
+        applied = await apply_staged_manifest_with_governance(
+            governance,
+            evolution_transaction_id=uuid4(),
+            staging_root=staging_root,
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            manifest_relative_path=staged.manifest_relative_path,
+        )
+        await rollback_active_skill_with_governance(
+            governance,
+            evolution_transaction_id=uuid4(),
+            workspace_root=workspace_root,
+            archive_root=archive_root,
+            archive_manifest_relative_path=applied.previous_snapshot.manifest_relative_path,
+        )
+        return applied
+
+    asyncio.run(run())
+
+    writer_items = governance.items
+    source_edges = [
+        edge
+        for edge in governance.edges
+        if edge["relation"] == "source_for_writer_item"
+    ]
+    assert [item["item_kind"] for item in writer_items] == [
+        "compiled_skill_file",
+        "support_artifact",
+        "artifact_manifest",
+        "archive_snapshot",
+        "compiled_skill_file",
+    ]
+    assert len(source_edges) == len(writer_items) * 2
+    assert {edge["source_kind"] for edge in source_edges} == {"evidence_item", "memory"}
+    assert {edge["source_id"] for edge in source_edges} == {evidence_id, memory_id}
+    assert {edge["derived_kind"] for edge in source_edges} == {"transaction_item"}
+    assert {edge["derived_id"] for edge in source_edges} == {
+        item["transaction_item_id"] for item in writer_items
+    }
+
+
 def test_writer_applies_and_rolls_back_support_artifacts_with_governance(
     tmp_path: Path,
 ) -> None:
@@ -1076,8 +1149,16 @@ def test_writer_rejects_active_snapshot_symlink(tmp_path: Path) -> None:
 
 
 class MemoryWriterGovernance:
-    def __init__(self, *, fail_record_item: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_record_item: bool = False,
+        source_evidence_ids: list | None = None,
+        source_memory_ids: list | None = None,
+    ) -> None:
         self.fail_record_item = fail_record_item
+        self.source_evidence_ids = source_evidence_ids or []
+        self.source_memory_ids = source_memory_ids or []
         self.statuses: list[dict[str, object]] = []
         self.items: list[dict[str, object]] = []
         self.edges: list[dict[str, object]] = []
@@ -1096,7 +1177,11 @@ class MemoryWriterGovernance:
                 "metrics": metrics or {},
             }
         )
-        return {"workspace_key": "dev-01"}
+        return {
+            "workspace_key": "dev-01",
+            "source_evidence_ids": self.source_evidence_ids,
+            "source_memory_ids": self.source_memory_ids,
+        }
 
     async def record_transaction_item(
         self,
@@ -1146,6 +1231,42 @@ class MemoryWriterGovernance:
         }
         self.edges.append(edge)
         return {"created": True, "edge": edge}
+
+
+def test_delete_active_skill_records_source_provenance(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    active_path = workspace_root / "skills" / "autoskill" / "autoskill-example"
+    active_path.mkdir(parents=True)
+    (active_path / "SKILL.md").write_text("# Temporary\n", encoding="utf-8")
+    evidence_id = uuid4()
+    memory_id = uuid4()
+    governance = MemoryWriterGovernance(
+        source_evidence_ids=[evidence_id],
+        source_memory_ids=[memory_id],
+    )
+
+    async def run() -> None:
+        await delete_active_skill_with_governance(
+            governance,
+            evolution_transaction_id=uuid4(),
+            workspace_root=workspace_root,
+            active_relative_path="skills/autoskill/autoskill-example",
+        )
+
+    asyncio.run(run())
+
+    assert not active_path.exists()
+    assert [item["item_kind"] for item in governance.items] == ["compiled_skill_file"]
+    source_edges = [
+        edge
+        for edge in governance.edges
+        if edge["relation"] == "source_for_writer_item"
+    ]
+    assert {edge["source_kind"] for edge in source_edges} == {"evidence_item", "memory"}
+    assert {edge["source_id"] for edge in source_edges} == {evidence_id, memory_id}
+    assert {edge["derived_id"] for edge in source_edges} == {
+        governance.items[0]["transaction_item_id"]
+    }
 
 
 def test_delete_active_skill_rejects_non_autoskill_root(tmp_path: Path) -> None:

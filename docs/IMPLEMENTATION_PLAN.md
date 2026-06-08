@@ -1,5 +1,20 @@
 # SkillKernel Implementation Plan
 
+2026-06-08 update: writer apply/rollback governance now links transaction source
+roots to generated writer transaction items. When a transaction carries
+`source_evidence_ids` or `source_memory_ids`, deterministic writer governance
+records content-safe `source_for_writer_item` provenance edges from those roots
+to compiled-skill, support-artifact, artifact-manifest, archive-snapshot, and
+rollback/delete transaction items. This closes part of the provenance-graph gap
+for rollback/deletion traversal without exposing raw evidence or adding any
+Observatory/live activation authority. Validation: `uv run pytest
+sidecar/autoskill/tests/test_audit_writer_events.py::test_writer_records_source_provenance_for_apply_and_rollback_items
+-q` (`1 passed`) and `uv run pytest
+sidecar/autoskill/tests/test_audit_writer_events.py -q` (`33 passed`). Next
+implementation gate: use these writer-item edges in revocation traversal/workers
+when revoking evidence or memory-derived compiled artifacts, embeddings,
+retrieval records, and broker hints.
+
 2026-06-08 update: Observatory evidence-fidelity status now refreshes from
 governed evidence before admin reads. `/admin/api/v1/evidence/fidelity`, raw
 vault summary, and evidence-fidelity object microscope paths invoke a
