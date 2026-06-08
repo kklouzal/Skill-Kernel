@@ -493,6 +493,7 @@ async def _record_context_equivalence_calibration(
     selected_action = _context_calibration_action(status, reject_reason)
     confidence_components = {
         "schema": "autoskill.context-equivalence-calibration-components.v1",
+        "calibration_family": "context_equivalence",
         "compiler_version": CONTEXT_COMPILER_VERSION,
         "skill_slug": skill.slug,
         "artifact_kind": "skill_md",
@@ -519,14 +520,39 @@ async def _record_context_equivalence_calibration(
         "llm_authority": "none",
         "runtime_write_authority": False,
     }
-    return await autonomy.record_calibration_observation(
+    context_observation = await autonomy.record_calibration_observation(
         workspace_key=workspace_key,
-        calibration_family="context_budget_semantic_equivalence",
+        calibration_family="context_equivalence",
         selected_action=selected_action,
         predicted_confidence=semantic_equivalence_score,
         confidence_components=confidence_components,
         action_risk_tier="T1_internal_record",
     )
+    await autonomy.record_calibration_observation(
+        workspace_key=workspace_key,
+        calibration_family="semantic_compression_preservation",
+        selected_action=_semantic_compression_calibration_action(
+            status,
+            reject_reason,
+        ),
+        predicted_confidence=semantic_equivalence_score,
+        confidence_components={
+            **confidence_components,
+            "schema": "autoskill.semantic-compression-calibration-components.v1",
+            "calibration_family": "semantic_compression_preservation",
+            "source_tokens": _estimate_tokens(skill.model_dump_json(by_alias=True)),
+            "candidate_tokens": compiled.estimated_tokens,
+            "compression_trial_status": (
+                "passed" if lost_requirements == 0 and probe_reject_reason is None else "failed"
+            ),
+            "semantic_density_metric": _semantic_density(
+                preserved_requirements=preserved_requirements,
+                candidate_tokens=compiled.estimated_tokens,
+            ),
+        },
+        action_risk_tier="T1_internal_record",
+    )
+    return context_observation
 
 
 def _context_calibration_action(status: str, reject_reason: str | None) -> str:
@@ -535,6 +561,23 @@ def _context_calibration_action(status: str, reject_reason: str | None) -> str:
     if reject_reason in {"scanner_blocked", "semantic_loss"}:
         return "auto_reject"
     return "compile_more_conservatively"
+
+
+def _semantic_compression_calibration_action(
+    status: str,
+    reject_reason: str | None,
+) -> str:
+    if status == "passed":
+        return "accept_semantic_compression"
+    if reject_reason in {"scanner_blocked", "semantic_loss"}:
+        return "auto_reject"
+    return "compile_more_conservatively"
+
+
+def _semantic_density(*, preserved_requirements: int, candidate_tokens: int) -> float:
+    if candidate_tokens <= 0:
+        return 0.0
+    return round(preserved_requirements / candidate_tokens, 6)
 
 
 async def _record_support_context_artifacts(

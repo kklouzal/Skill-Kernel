@@ -3,6 +3,26 @@
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 
+2026-06-08 update: context-governance compilation now writes separate
+spec-native calibration observations for `context_equivalence` and
+`semantic_compression_preservation` instead of recording the combined
+`context_budget_semantic_equivalence` family. The deterministic compiler still
+owns context artifact, compile-run, budget-event, and semantic-compression
+trial persistence, but the autonomy calibration corpus now receives one
+content-safe context-equivalence observation and one content-safe
+semantic-compression preservation observation per governed compile. Components
+include artifact/compile/trial IDs, token budget status, scanner codes,
+requirement preservation counts, semantic-equivalence score, probe evidence
+state, safe routing/regression summaries, semantic density, and explicit
+`llm_authority=none` plus `runtime_write_authority=false`; they omit compiled
+skill text, raw SkillIR, prompts, raw evidence, runtime write authority, and
+activation authority. This advances Sections 5.5, 5.12, 5.13, 5.14, and
+11.12-11.15 plus Part IV semantic decision-family coverage for both context
+equivalence and semantic compression preservation. Focused validation passed
+with the context compiler/evaluator calibration subsets, touched-file Ruff, and
+the required gates recorded in `TASKFLOW.md`; no migration or Postgres smoke is
+required because the slice reuses the generic autonomy calibration primitive.
+
 2026-06-07 update: action attribution checks now write pending calibration
 observations for the `action_attribution` semantic family. After
 `/v1/attribution/action-checks` persists a deterministic risky-action check,

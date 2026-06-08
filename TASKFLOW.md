@@ -16,6 +16,32 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-08: Context-governance compilation now records spec-native
+  calibration observations for both `context_equivalence` and
+  `semantic_compression_preservation` instead of collapsing them into the
+  earlier `context_budget_semantic_equivalence` family name. A single compile
+  still persists the deterministic context artifact, compile run, budget event,
+  and semantic-compression trial, but the autonomy calibration corpus now gets
+  one content-safe context-equivalence observation for artifact admissibility
+  and one content-safe semantic-compression observation for preservation
+  quality. The payloads include artifact/compile/trial IDs, token budget
+  status, scanner codes, requirement preservation counts, semantic-equivalence
+  score, probe-evidence status, safe routing/regression evidence summaries,
+  semantic density, and explicit `llm_authority=none` plus
+  `runtime_write_authority=false`; they omit compiled skill text, raw SkillIR,
+  prompts, raw evidence, and runtime write or activation authority. This
+  advances unified Sections 5.5, 5.12, 5.13, 5.14, and 11.12-11.15 plus Part
+  IV semantic decision-family coverage for context equivalence and semantic
+  compression preservation. Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_skillir_compiler_scanner.py -q -k
+  "context_compiler or generic_calibration"` (`8 passed, 12 deselected`),
+  `uv run pytest sidecar/autoskill/tests/test_evaluator.py -q -k
+  "generic_calibration_family_accepts_delayed_outcome"` (`1 passed, 34
+  deselected`), and touched-file Ruff. Required gates passed with `uv run ruff
+  check sidecar`, `uv run pytest` (`467 passed`), `uv run python -m compileall
+  -q sidecar`, `docker compose config --quiet`, and `git diff --check`. No
+  schema migration or Postgres smoke is required because the slice reuses the
+  existing generic autonomy calibration primitive.
 - 2026-06-07: Action attribution checks now feed the generic semantic
   calibration corpus for the `action_attribution` family instead of leaving
   Section 27 outcome/credit checks only as attribution rows. After

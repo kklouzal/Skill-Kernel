@@ -159,20 +159,25 @@ def test_context_compiler_records_context_equivalence_calibration_pass() -> None
 
     assert result.status == "passed"
     assert result.calibration_observation is not None
-    assert result.calibration_observation["calibration_family"] == (
-        "context_budget_semantic_equivalence"
-    )
+    assert result.calibration_observation["calibration_family"] == "context_equivalence"
     assert result.calibration_observation["selected_action"] == (
         "accept_context_artifact"
     )
     assert result.calibration_observation["action_risk_tier"] == "T1_internal_record"
     assert result.calibration_observation["predicted_confidence"] == 1.0
-    assert len(autonomy.calibration_observations) == 1
-    assert autonomy.reliability_metrics[-1].calibration_family == (
-        "context_budget_semantic_equivalence"
+    assert [
+        record.calibration_family for record in autonomy.calibration_observations
+    ] == ["context_equivalence", "semantic_compression_preservation"]
+    metrics_by_family = {
+        metric.calibration_family: metric
+        for metric in autonomy.reliability_metrics
+    }
+    assert metrics_by_family["context_equivalence"].sample_count == 1
+    assert metrics_by_family["context_equivalence"].abstention_rate == 0.0
+    assert metrics_by_family["semantic_compression_preservation"].sample_count == 1
+    assert (
+        metrics_by_family["semantic_compression_preservation"].abstention_rate == 0.0
     )
-    assert autonomy.reliability_metrics[-1].sample_count == 1
-    assert autonomy.reliability_metrics[-1].abstention_rate == 0.0
 
 
 def test_context_compiler_registers_support_artifact_excerpts() -> None:
@@ -365,8 +370,16 @@ def test_context_compiler_rejects_over_budget_artifact() -> None:
         "compile_more_conservatively"
     )
     assert result.calibration_observation["predicted_confidence"] == 1.0
-    assert autonomy.reliability_metrics[-1].sample_count == 1
-    assert autonomy.reliability_metrics[-1].abstention_rate == 1.0
+    metrics_by_family = {
+        metric.calibration_family: metric
+        for metric in autonomy.reliability_metrics
+    }
+    assert metrics_by_family["context_equivalence"].sample_count == 1
+    assert metrics_by_family["context_equivalence"].abstention_rate == 1.0
+    assert metrics_by_family["semantic_compression_preservation"].sample_count == 1
+    assert (
+        metrics_by_family["semantic_compression_preservation"].abstention_rate == 1.0
+    )
 
 
 def test_scanner_blocks_hidden_comments_and_fetch_exec() -> None:

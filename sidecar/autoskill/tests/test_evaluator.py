@@ -635,7 +635,7 @@ def test_generic_calibration_family_accepts_delayed_outcome() -> None:
     async def run() -> object:
         await autonomy.record_calibration_observation(
             workspace_key="dev-01",
-            calibration_family="context_budget_semantic_equivalence",
+            calibration_family="context_equivalence",
             selected_action="stage_ephemeral_candidate",
             predicted_confidence=0.74,
             autonomy_decision_id=decision_id,
@@ -656,7 +656,7 @@ def test_generic_calibration_family_accepts_delayed_outcome() -> None:
         "T2_trial_artifact"
     )
     assert autonomy.reliability_metrics[-1].calibration_family == (
-        "context_budget_semantic_equivalence"
+        "context_equivalence"
     )
     assert autonomy.reliability_metrics[-1].sample_count == 1
     assert autonomy.reliability_metrics[-1].coverage_rate == 1.0
