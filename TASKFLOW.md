@@ -17,6 +17,28 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 ## Current State
 
 
+- 2026-06-08: Observatory evidence-fidelity read models now refresh from
+  governed evidence inputs before serving `/admin/api/v1/evidence/fidelity`, raw
+  vault summaries, or object microscope lookups. The refresh aggregates evidence
+  item source kind, decision family, and canonical fidelity tier into
+  `admin_evidence_fidelity_status`, marks metadata/hash-only tiers
+  `evidence_insufficient_for_autonomy`, marks redacted derivatives degraded, and
+  emits explicit no-evidence fallback rows rather than fail-open empty status.
+  The API still returns only content-safe status rows/microscope diagnostics and
+  no raw evidence. This advances the unified specification evidence-fidelity,
+  semantic-decision, and Observatory diagnostic/read-model gates (Sections 5.5,
+  5.12-5.14, 17.1; Observatory read-only boundary). Focused validation passed
+  with `uv run ruff check sidecar/autoskill/db/observatory_admin.py
+  sidecar/autoskill/api/app.py sidecar/autoskill/tests/test_observatory_api.py`,
+  `uv run pytest sidecar/autoskill/tests/test_observatory_api.py -q` (`66
+  passed`), full `uv run pytest` (`472 passed`), `uv run python -m
+  compileall -q sidecar`, and `git diff --check`. No Postgres smoke was run;
+  the SQL-backed refresh is deterministic aggregation over existing read-model
+  tables and is covered by API/in-memory parity tests. Next gate: wire the
+  refreshed fidelity status into autonomy/topology admission
+  so semantic operations cannot advance beyond degraded/blocked states when
+  only metadata/hash correlation evidence exists.
+
 - 2026-06-08: Scanner policy now includes deterministic harmful-capability
   classification in addition to prompt-injection/text-risk checks. The scanner
   blocks hazardous cyber/credential-harvesting workflows, privacy-violating data

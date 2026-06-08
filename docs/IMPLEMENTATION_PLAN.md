@@ -1,5 +1,27 @@
 # SkillKernel Implementation Plan
 
+2026-06-08 update: Observatory evidence-fidelity status now refreshes from
+governed evidence before admin reads. `/admin/api/v1/evidence/fidelity`, raw
+vault summary, and evidence-fidelity object microscope paths invoke a
+content-safe refresh that aggregates evidence item source kind, decision family,
+and canonical fidelity tier, writes/updates `admin_evidence_fidelity_status` for
+Postgres-backed stores, and uses deterministic in-memory parity for tests/dev.
+`metadata_only` and `hash_only` rows are marked
+`evidence_insufficient_for_autonomy`, `redacted_derivative` rows are degraded,
+full-fidelity rows are sufficient, and no-evidence workspaces receive explicit
+blocked fallback rows rather than an empty/fail-open read model. This advances
+Sections 5.5, 5.12-5.14, 17.1, and the Observatory read-only diagnostic
+contract without exposing raw evidence or adding operator mutation authority.
+Validation: touched-file Ruff; `uv run ruff check sidecar`; `uv run pytest
+sidecar/autoskill/tests/test_observatory_api.py -q` (`66 passed`); targeted
+evidence-fidelity tests (`2 passed, 64 deselected`); full `uv run pytest` (`472
+passed`); `uv run python -m compileall -q sidecar`; `git diff --check`. No
+Postgres smoke was run; the SQL-backed refresh is deterministic aggregation over
+existing read-model tables and is covered by API/in-memory parity tests. Next
+gate: enforce the refreshed fidelity state in autonomy/topology admission and
+semantic decision calibration gates so metadata/hash-only evidence can inform
+diagnostics but not full autonomous semantic choices.
+
 This plan tracks the unified implementation specification and turns it into
 repo-level gates.
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -8,6 +9,7 @@ from uuid import UUID, uuid4
 
 import asyncpg
 
+from autoskill.core.events import EVIDENCE_FIDELITY_TIERS
 from autoskill.core.hashing import sha256_text
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
@@ -781,6 +783,14 @@ class ObservatoryAdminStore(Protocol):
     ) -> AdminDiagnosticBundleRecord | None:
         """Fetch one diagnostic bundle descriptor."""
 
+    async def refresh_evidence_fidelity_status(
+        self,
+        *,
+        workspace_key: str | None = None,
+        evidence_records: list[object] | None = None,
+    ) -> list[AdminEvidenceFidelityStatusRecord]:
+        """Refresh aggregate evidence-fidelity rows from governed evidence inputs."""
+
     async def list_evidence_fidelity_status(
         self,
         *,
@@ -1120,6 +1130,18 @@ class NullObservatoryAdminStore:
                 return record
         return None
 
+    async def refresh_evidence_fidelity_status(
+        self,
+        *,
+        workspace_key: str | None = None,
+        evidence_records: list[object] | None = None,
+    ) -> list[AdminEvidenceFidelityStatusRecord]:
+        records = self._refresh_memory_evidence_fidelity_status(
+            workspace_key=workspace_key,
+            evidence_records=evidence_records,
+        )
+        return records
+
     async def list_evidence_fidelity_status(
         self,
         *,
@@ -1146,6 +1168,41 @@ class NullObservatoryAdminStore:
             if record.object_id == object_id:
                 return record
         return None
+
+    def _refresh_memory_evidence_fidelity_status(
+        self,
+        *,
+        workspace_key: str | None = None,
+        evidence_records: list[object] | None = None,
+    ) -> list[AdminEvidenceFidelityStatusRecord]:
+        if evidence_records is not None:
+            existing = [
+                record
+                for record in self.evidence_fidelity
+                if workspace_key is not None and record.workspace_key != workspace_key
+            ]
+            refreshed = _evidence_fidelity_status_records_from_evidence(
+                evidence_records,
+                workspace_key=workspace_key,
+            )
+            self.evidence_fidelity = [*existing, *refreshed]
+            return refreshed
+        target_records = [
+            record
+            for record in self.evidence_fidelity
+            if workspace_key is None or record.workspace_key == workspace_key
+        ]
+        if target_records:
+            target_records.sort(key=lambda record: record.updated_at, reverse=True)
+            return target_records
+        existing = [
+            record
+            for record in self.evidence_fidelity
+            if workspace_key is not None and record.workspace_key != workspace_key
+        ]
+        refreshed = _fallback_evidence_fidelity_status_records(workspace_key=workspace_key)
+        self.evidence_fidelity = [*existing, *refreshed]
+        return refreshed
 
     async def list_autonomy_decisions(
         self,
@@ -1658,6 +1715,29 @@ class AsyncpgObservatoryAdminStore(AsyncpgPoolOwner):
             )
         return AdminDiagnosticBundleRecord.from_row(row) if row else None
 
+    async def refresh_evidence_fidelity_status(
+        self,
+        *,
+        workspace_key: str | None = None,
+        evidence_records: list[object] | None = None,
+    ) -> list[AdminEvidenceFidelityStatusRecord]:
+        # Asyncpg refreshes the durable read model from governed DB evidence inputs;
+        # injected records are only used by the in-memory test/dev store.
+        _ = evidence_records
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            await _refresh_asyncpg_evidence_fidelity_status(
+                conn,
+                workspace_key=workspace_key,
+            )
+            rows = await _fetch_asyncpg_evidence_fidelity_status(
+                conn,
+                workspace_key=workspace_key,
+                decision_family=None,
+                limit=500,
+            )
+        return [AdminEvidenceFidelityStatusRecord.from_row(row) for row in rows]
+
     async def list_evidence_fidelity_status(
         self,
         *,
@@ -1668,18 +1748,11 @@ class AsyncpgObservatoryAdminStore(AsyncpgPoolOwner):
         bounded_limit = max(1, min(limit, 500))
         pool = await self._get_pool()
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT *
-                FROM autoskill.admin_evidence_fidelity_status
-                WHERE ($1::text IS NULL OR workspace_key = $1)
-                  AND ($2::text IS NULL OR decision_family = $2)
-                ORDER BY updated_at DESC, source_kind, decision_family, evidence_fidelity
-                LIMIT $3
-                """,
-                workspace_key,
-                decision_family,
-                bounded_limit,
+            rows = await _fetch_asyncpg_evidence_fidelity_status(
+                conn,
+                workspace_key=workspace_key,
+                decision_family=decision_family,
+                limit=bounded_limit,
             )
         return [AdminEvidenceFidelityStatusRecord.from_row(row) for row in rows]
 
@@ -1954,6 +2027,277 @@ def _json_sha256(value: object) -> str:
 
 def _optional_float(value: object | None) -> float | None:
     return float(value) if value is not None else None
+
+
+MEANING_REQUIRED_DECISION_FAMILIES = {
+    "intent_reconstruction",
+    "replay_episode_promotion",
+    "memory_declassification",
+    "external_skill_relationship",
+    "topology_operation_choice",
+    "context_equivalence",
+    "semantic_compression_preservation",
+    "broker_decision_adjudication",
+}
+
+FULL_AUTONOMY_FIDELITY = {"raw_vault_linked", "declassified_summary"}
+DEGRADED_AUTONOMY_FIDELITY = {"redacted_derivative"}
+LOW_AUTONOMY_FIDELITY = {"metadata_only", "hash_only"}
+
+
+def _fallback_evidence_fidelity_status_records(
+    *,
+    workspace_key: str | None,
+) -> list[AdminEvidenceFidelityStatusRecord]:
+    now = datetime.now(UTC)
+    workspace = workspace_key or "default"
+    return [
+        AdminEvidenceFidelityStatusRecord(
+            workspace_key=workspace,
+            source_kind="no_evidence_observed",
+            decision_family=family,
+            evidence_fidelity="unavailable",
+            item_count=0,
+            autonomy_support_state="evidence_insufficient_for_autonomy",
+            dominant_reason_code="no-governed-evidence-observed",
+            updated_at=now,
+        )
+        for family in sorted(MEANING_REQUIRED_DECISION_FAMILIES)
+    ]
+
+
+def _evidence_fidelity_status_records_from_evidence(
+    evidence_records: list[object],
+    *,
+    workspace_key: str | None,
+) -> list[AdminEvidenceFidelityStatusRecord]:
+    counts: Counter[tuple[str, str, str]] = Counter()
+    for record in evidence_records:
+        workspace = str(getattr(record, "workspace_key", None) or workspace_key or "default")
+        source_kind = str(getattr(record, "kind", None) or "evidence_item")
+        fidelity = _evidence_record_fidelity(record)
+        counts[(workspace, source_kind, fidelity)] += 1
+    if not counts:
+        return _fallback_evidence_fidelity_status_records(workspace_key=workspace_key)
+    now = datetime.now(UTC)
+    rows: list[AdminEvidenceFidelityStatusRecord] = []
+    for (workspace, source_kind, fidelity), item_count in sorted(counts.items()):
+        for family in sorted(MEANING_REQUIRED_DECISION_FAMILIES):
+            state, reason = _evidence_fidelity_support_state(fidelity=fidelity)
+            rows.append(
+                AdminEvidenceFidelityStatusRecord(
+                    workspace_key=workspace,
+                    source_kind=source_kind,
+                    decision_family=family,
+                    evidence_fidelity=fidelity,
+                    item_count=item_count,
+                    autonomy_support_state=state,
+                    dominant_reason_code=reason,
+                    updated_at=now,
+                )
+            )
+    return rows
+
+
+def _evidence_record_fidelity(record: object) -> str:
+    payload = getattr(record, "payload", {})
+    if not isinstance(payload, dict):
+        return "metadata_only"
+    source_event = payload.get("source_event")
+    if isinstance(source_event, dict):
+        fidelity = _canonical_evidence_fidelity(source_event.get("evidence_fidelity"))
+        if fidelity != "unavailable":
+            return fidelity
+    redacted_payload = payload.get("redacted_payload")
+    if isinstance(redacted_payload, dict):
+        metadata = redacted_payload.get("metadata")
+        if isinstance(metadata, dict):
+            fidelity = _canonical_evidence_fidelity(metadata.get("evidence_fidelity"))
+            if fidelity != "unavailable":
+                return fidelity
+    kind = str(getattr(record, "kind", ""))
+    if kind in {"historical_chunk_observation", "recurring_evidence_cluster"}:
+        return "redacted_derivative"
+    return "metadata_only"
+
+
+async def _refresh_asyncpg_evidence_fidelity_status(
+    conn: asyncpg.Connection,
+    *,
+    workspace_key: str | None,
+) -> None:
+    workspaces = await conn.fetch(
+        """
+        SELECT external_key
+        FROM autoskill.workspaces
+        WHERE ($1::text IS NULL OR external_key = $1)
+        ORDER BY external_key
+        """,
+        workspace_key,
+    )
+    if not workspaces:
+        return
+
+    evidence_rows = await conn.fetch(
+        """
+        SELECT
+          w.external_key AS workspace_key,
+          i.kind AS source_kind,
+          COALESCE(
+            e.evidence_fidelity,
+            CASE
+              WHEN i.kind = 'historical_chunk_observation' THEN 'redacted_derivative'
+              WHEN i.kind = 'recurring_evidence_cluster' THEN 'redacted_derivative'
+              ELSE 'metadata_only'
+            END
+          ) AS evidence_fidelity,
+          COUNT(*)::bigint AS item_count
+        FROM autoskill.evidence_items i
+        JOIN autoskill.workspaces w USING (workspace_id)
+        LEFT JOIN autoskill.raw_events e ON e.event_id = i.source_event_id
+        WHERE i.revoked_at IS NULL
+          AND ($1::text IS NULL OR w.external_key = $1)
+        GROUP BY
+          w.external_key,
+          i.kind,
+          COALESCE(
+            e.evidence_fidelity,
+            CASE
+              WHEN i.kind = 'historical_chunk_observation' THEN 'redacted_derivative'
+              WHEN i.kind = 'recurring_evidence_cluster' THEN 'redacted_derivative'
+              ELSE 'metadata_only'
+            END
+          )
+        """,
+        workspace_key,
+    )
+    counts: Counter[tuple[str, str, str]] = Counter()
+    for row in evidence_rows:
+        fidelity = _canonical_evidence_fidelity(row["evidence_fidelity"])
+        counts[(row["workspace_key"], row["source_kind"], fidelity)] += int(
+            row["item_count"] or 0
+        )
+
+    now = datetime.now(UTC)
+    records: list[AdminEvidenceFidelityStatusRecord] = []
+    for workspace in [str(row["external_key"]) for row in workspaces]:
+        workspace_counts = {
+            key: count for key, count in counts.items() if key[0] == workspace and count > 0
+        }
+        if not workspace_counts:
+            for family in sorted(MEANING_REQUIRED_DECISION_FAMILIES):
+                records.append(
+                    AdminEvidenceFidelityStatusRecord(
+                        workspace_key=workspace,
+                        source_kind="no_evidence_observed",
+                        decision_family=family,
+                        evidence_fidelity="unavailable",
+                        item_count=0,
+                        autonomy_support_state="evidence_insufficient_for_autonomy",
+                        dominant_reason_code="no-governed-evidence-observed",
+                        updated_at=now,
+                    )
+                )
+            continue
+        for family in sorted(MEANING_REQUIRED_DECISION_FAMILIES):
+            for (_workspace, source_kind, fidelity), item_count in sorted(
+                workspace_counts.items()
+            ):
+                state, reason = _evidence_fidelity_support_state(fidelity=fidelity)
+                records.append(
+                    AdminEvidenceFidelityStatusRecord(
+                        workspace_key=workspace,
+                        source_kind=source_kind,
+                        decision_family=family,
+                        evidence_fidelity=fidelity,
+                        item_count=item_count,
+                        autonomy_support_state=state,
+                        dominant_reason_code=reason,
+                        updated_at=now,
+                    )
+                )
+    await conn.execute(
+        """
+        DELETE FROM autoskill.admin_evidence_fidelity_status
+        WHERE ($1::text IS NULL OR workspace_key = $1)
+        """,
+        workspace_key,
+    )
+    if not records:
+        return
+    await conn.executemany(
+        """
+        INSERT INTO autoskill.admin_evidence_fidelity_status (
+          workspace_key,
+          source_kind,
+          decision_family,
+          evidence_fidelity,
+          item_count,
+          autonomy_support_state,
+          dominant_reason_code,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (workspace_key, source_kind, decision_family, evidence_fidelity)
+        DO UPDATE SET
+          item_count = EXCLUDED.item_count,
+          autonomy_support_state = EXCLUDED.autonomy_support_state,
+          dominant_reason_code = EXCLUDED.dominant_reason_code,
+          updated_at = EXCLUDED.updated_at
+        """,
+        [
+            (
+                record.workspace_key,
+                record.source_kind,
+                record.decision_family,
+                record.evidence_fidelity,
+                record.item_count,
+                record.autonomy_support_state,
+                record.dominant_reason_code,
+                record.updated_at,
+            )
+            for record in records
+        ],
+    )
+
+
+async def _fetch_asyncpg_evidence_fidelity_status(
+    conn: asyncpg.Connection,
+    *,
+    workspace_key: str | None,
+    decision_family: str | None,
+    limit: int,
+) -> list[asyncpg.Record]:
+    return await conn.fetch(
+        """
+        SELECT *
+        FROM autoskill.admin_evidence_fidelity_status
+        WHERE ($1::text IS NULL OR workspace_key = $1)
+          AND ($2::text IS NULL OR decision_family = $2)
+        ORDER BY updated_at DESC, source_kind, decision_family, evidence_fidelity
+        LIMIT $3
+        """,
+        workspace_key,
+        decision_family,
+        limit,
+    )
+
+
+def _canonical_evidence_fidelity(value: Any) -> str:
+    fidelity = str(value or "unavailable")
+    if fidelity in EVIDENCE_FIDELITY_TIERS or fidelity == "unavailable":
+        return fidelity
+    return "unavailable"
+
+
+def _evidence_fidelity_support_state(*, fidelity: str) -> tuple[str, str | None]:
+    if fidelity in FULL_AUTONOMY_FIDELITY:
+        return "sufficient", None
+    if fidelity in DEGRADED_AUTONOMY_FIDELITY:
+        return "degraded", "semantic-derivative-only"
+    if fidelity in LOW_AUTONOMY_FIDELITY:
+        return "evidence_insufficient_for_autonomy", f"{fidelity}-correlation-only"
+    return "evidence_insufficient_for_autonomy", "no-governed-evidence-observed"
 
 
 def _safe_live_event_payload(

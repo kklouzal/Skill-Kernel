@@ -11463,6 +11463,14 @@ def create_app(
         cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
+        evidence_records = await evidence.list_evidence(
+            workspace_key=workspace_id,
+            limit=500,
+        )
+        await observatory_admin.refresh_evidence_fidelity_status(
+            workspace_key=workspace_id,
+            evidence_records=evidence_records or None,
+        )
         records = await observatory_admin.list_evidence_fidelity_status(
             workspace_key=workspace_id,
             decision_family=decision_family,
@@ -11493,6 +11501,11 @@ def create_app(
         x_skillkernel_roles: Annotated[str | None, Header(alias="X-SkillKernel-Roles")] = None,
     ) -> ObservatoryObjectResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
+        evidence_records = await evidence.list_evidence(workspace_key=None, limit=500)
+        await observatory_admin.refresh_evidence_fidelity_status(
+            workspace_key=None,
+            evidence_records=evidence_records or None,
+        )
         record = await observatory_admin.get_evidence_fidelity_status(object_id=fidelity_id)
         if record is None:
             raise HTTPException(
@@ -11513,6 +11526,14 @@ def create_app(
         cursor: str | None = None,
     ) -> ObservatoryCollectionResponse:
         _require_admin_auth(authorization, x_skillkernel_roles)
+        evidence_records = await evidence.list_evidence(
+            workspace_key=workspace_id,
+            limit=500,
+        )
+        await observatory_admin.refresh_evidence_fidelity_status(
+            workspace_key=workspace_id,
+            evidence_records=evidence_records or None,
+        )
         records = await observatory_admin.list_evidence_fidelity_status(
             workspace_key=workspace_id,
             limit=500,
@@ -12080,6 +12101,14 @@ def create_app(
                     object=_action_attribution_check_microscope(check)
                 )
         if object_type in {"evidence_fidelity_status", "evidence_fidelity"}:
+            evidence_records = await evidence.list_evidence(
+                workspace_key=workspace_id,
+                limit=500,
+            )
+            await observatory_admin.refresh_evidence_fidelity_status(
+                workspace_key=workspace_id,
+                evidence_records=evidence_records or None,
+            )
             fidelity = await observatory_admin.get_evidence_fidelity_status(
                 object_id=object_id
             )

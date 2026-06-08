@@ -34,6 +34,7 @@ from autoskill.db.embeddings import (
 )
 from autoskill.db.evaluations import EvaluationReviewRecord, NullEvaluationStore
 from autoskill.db.events import NullEventStore
+from autoskill.db.evidence import EvidenceDeriveResult, EvidenceRecord
 from autoskill.db.governance import (
     EvolutionTransactionItemRecord,
     EvolutionTransactionRecord,
@@ -446,6 +447,30 @@ class MemoryTraceStore:
             "metrics": {},
             "dashboards": {},
         }
+
+
+class MemoryEvidenceStore:
+    def __init__(self, records: list[EvidenceRecord]) -> None:
+        self.records = records
+
+    async def derive_from_raw_events(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 100,
+    ) -> EvidenceDeriveResult:
+        return EvidenceDeriveResult(scanned=0, created=0, duplicate=0, evidence=[])
+
+    async def list_evidence(
+        self,
+        *,
+        workspace_key: str | None = None,
+        limit: int = 50,
+    ) -> list[EvidenceRecord]:
+        records = self.records
+        if workspace_key is not None:
+            records = [record for record in records if record.workspace_key == workspace_key]
+        return records[:limit]
 
 
 class MemorySummaryJobStore:
@@ -2761,6 +2786,66 @@ def test_observatory_llm_invocation_read_models_are_content_safe() -> None:
     assert "Return a JSON proposal." not in serialized
     assert "sensitive model output" not in serialized
     assert "req-secret-provider-id" not in serialized
+
+
+def test_observatory_evidence_fidelity_refresh_records_insufficient_autonomy() -> None:
+    observatory_admin = NullObservatoryAdminStore()
+    now = datetime.now(UTC)
+    metadata_evidence = EvidenceRecord(
+        evidence_id=uuid4(),
+        workspace_id=uuid4(),
+        workspace_key="dev-01",
+        source_event_id=uuid4(),
+        evidence_hash="metadata-only-hash",
+        kind="event_observation",
+        maturity="observed",
+        trust="system_owned",
+        taint=[],
+        summary="Observed metadata-only event.",
+        payload={
+            "source_event": {
+                "event_type": "tool_call_end",
+                "evidence_fidelity": "metadata_only",
+            },
+            "redacted_payload": {"content": "status-only"},
+        },
+        created_at=now,
+    )
+    app = create_app(
+        audit_store=MemoryAuditStore(),
+        observatory_admin_store=observatory_admin,
+        evidence_store=MemoryEvidenceStore([metadata_evidence]),
+    )
+    routes = _routes(app)
+
+    async def run():
+        collection = await routes["/admin/api/v1/evidence/fidelity", "GET"].endpoint(
+            workspace_id="dev-01",
+            decision_family="topology_operation_choice",
+            limit=10,
+        )
+        detail = await routes[
+            "/admin/api/v1/objects/{object_type}/{object_id}", "GET"
+        ].endpoint(
+            object_type="evidence_fidelity_status",
+            object_id="dev-01:event_observation:topology_operation_choice:metadata_only",
+            workspace_id="dev-01",
+        )
+        return collection, detail
+
+    collection, detail = asyncio.run(run())
+
+    item = collection.collection["items"][0]
+    assert item["object_id"] == (
+        "dev-01:event_observation:topology_operation_choice:metadata_only"
+    )
+    assert item["item_count"] == 1
+    assert item["autonomy_support_state"] == "evidence_insufficient_for_autonomy"
+    assert item["dominant_reason_code"] == "metadata_only-correlation-only"
+    assert item["diagnostics"]["semantic_autonomy_blocked"] is True
+    assert item["content_policy"]["raw_evidence_returned"] is False
+    assert detail.object["effects"]["supports_full_autonomy"] is False
+    assert detail.object["effects"]["hash_only_semantic_authority"] is False
 
 
 def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
