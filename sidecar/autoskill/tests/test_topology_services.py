@@ -58,6 +58,10 @@ class MemoryEvidenceStore:
         }
 
 
+def _redacted_fidelity_by_id(evidence_ids: list[object]) -> dict[str, str]:
+    return {str(evidence_id): "redacted_derivative" for evidence_id in evidence_ids}
+
+
 class MemoryTopologyUsageStore:
     def __init__(self, recommendations: list[UsageTopologyRecommendation]) -> None:
         self.recommendations = recommendations
@@ -143,6 +147,7 @@ class RecordingGovernanceStore(NullGovernanceStore):
 
 
 def test_create_topology_proposal_is_first_class_operation() -> None:
+    evidence_ids = [str(uuid4())]
     proposal = propose_creation(
         CreateTopologyRequest(
             proposed=TopologySkill(
@@ -153,8 +158,9 @@ def test_create_topology_proposal_is_first_class_operation() -> None:
                     effects=["inspect-traceback"],
                 ),
             ),
-            evidence_ids=[str(uuid4())],
+            evidence_ids=evidence_ids,
             creation_reasons=["recurring missing workflow evidence"],
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(evidence_ids),
         )
     )
 
@@ -198,6 +204,7 @@ def test_improvement_proposal_preserves_effects_and_plans_rollback() -> None:
             proposed=proposed,
             evidence_ids=["evidence-a"],
             improvement_reasons=["repeated flaky import failures"],
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(["evidence-a"]),
         )
     )
 
@@ -238,6 +245,7 @@ def test_improvement_blocks_when_proposed_effects_regress_subject() -> None:
             ),
             evidence_ids=["evidence-a"],
             improvement_reasons=["faster diagnosis"],
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(["evidence-a"]),
         )
     )
 
@@ -268,6 +276,7 @@ def test_composition_proposal_builds_skillgraph_and_is_deterministic() -> None:
         components=[inspect, repair],
         composed_output=composed,
         evidence_ids=["evidence-a", "evidence-b"],
+        evidence_fidelity_by_id=_redacted_fidelity_by_id(["evidence-a", "evidence-b"]),
         required_effects_by_component={"repair-failure": ["diagnostic"]},
     )
 
@@ -311,6 +320,7 @@ def test_composition_required_edges_point_to_actual_effect_producers() -> None:
                 effects=EffectSignature(outputs=["diagnostic", "patch"]),
             ),
             evidence_ids=["evidence-a"],
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(["evidence-a"]),
             required_effects_by_component={
                 "diagnose-failure": ["logs"],
                 "repair-failure": ["diagnostic"],
@@ -352,6 +362,7 @@ def test_composition_blocks_unresolved_required_effects() -> None:
                 effects=EffectSignature(outputs=["patch"]),
             ),
             evidence_ids=["evidence-a"],
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(["evidence-a"]),
             required_effects_by_component={"repair-failure": ["root cause isolated"]},
         )
     )
@@ -381,6 +392,7 @@ def test_decomposition_requires_successor_effect_coverage() -> None:
                 ),
             ],
             evidence_ids=["evidence-a"],
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(["evidence-a"]),
         )
     )
 
@@ -411,6 +423,7 @@ def test_decomposition_proposal_records_coverage_and_rollback_metadata() -> None
                 ),
             ],
             evidence_ids=["evidence-a", "evidence-b"],
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(["evidence-a", "evidence-b"]),
         )
     )
 
@@ -432,6 +445,7 @@ def test_decomposition_proposal_records_coverage_and_rollback_metadata() -> None
 
 def test_topology_proposal_persistence_records_operation_trials_and_transaction() -> None:
     evidence_id = uuid4()
+    evidence_ids = [str(evidence_id)]
     topology = NullTopologyStore()
     governance = RecordingGovernanceStore()
     result = propose_composition(
@@ -452,7 +466,8 @@ def test_topology_proposal_persistence_records_operation_trials_and_transaction(
                 slug="inspect-and-repair",
                 effects=EffectSignature(outputs=["diagnostic", "patch"]),
             ),
-            evidence_ids=[str(evidence_id)],
+            evidence_ids=evidence_ids,
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(evidence_ids),
         )
     )
 
@@ -538,14 +553,16 @@ def test_topology_proposal_persistence_records_calibration_observation() -> None
     topology = NullTopologyStore()
     governance = RecordingGovernanceStore()
     autonomy = NullAutonomyControlStore()
+    evidence_ids = [str(uuid4())]
     result = propose_creation(
         CreateTopologyRequest(
             proposed=TopologySkill(
                 slug="pytest-import-repair",
                 effects=EffectSignature(outputs=["repair-python-import-error"]),
             ),
-            evidence_ids=[str(uuid4())],
+            evidence_ids=evidence_ids,
             creation_reasons=["recurring missing workflow evidence"],
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(evidence_ids),
         )
     )
 
@@ -598,6 +615,30 @@ def test_topology_blocks_low_fidelity_evidence_for_semantic_topology_choice() ->
     ]
 
 
+def test_topology_blocks_missing_evidence_fidelity_map() -> None:
+    evidence_id = str(uuid4())
+    result = propose_creation(
+        CreateTopologyRequest(
+            proposed=TopologySkill(
+                slug="unknown-fidelity-skill",
+                effects=EffectSignature(outputs=["unknown-fidelity-output"]),
+            ),
+            evidence_ids=[evidence_id],
+            creation_reasons=["semantic topology evidence without resolved fidelity"],
+        )
+    )
+
+    assert result.status == "blocked"
+    assert result.skill_graph_ir is None
+    assert result.evidence_fidelity_by_id == {}
+    assert result.blockers == [
+        (
+            f"topology evidence {evidence_id} has insufficient fidelity "
+            "for topology_operation_choice: unavailable"
+        )
+    ]
+
+
 def test_topology_blocked_proposal_records_reject_calibration_observation() -> None:
     topology = NullTopologyStore()
     governance = RecordingGovernanceStore()
@@ -635,6 +676,7 @@ def test_topology_blocked_proposal_records_reject_calibration_observation() -> N
 def test_topology_apply_requires_passed_trials() -> None:
     topology = NullTopologyStore()
     governance = NullGovernanceStore()
+    evidence_ids = [str(uuid4())]
     result = propose_composition(
         ComposeTopologyRequest(
             components=[
@@ -654,7 +696,8 @@ def test_topology_apply_requires_passed_trials() -> None:
                 slug="inspect-and-repair",
                 effects=EffectSignature(outputs=["diagnostic", "patch"]),
             ),
-            evidence_ids=[str(uuid4())],
+            evidence_ids=evidence_ids,
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(evidence_ids),
         )
     )
     persisted = asyncio.run(
@@ -708,6 +751,7 @@ def test_topology_downstream_apply_records_lifecycle_and_edge_execution() -> Non
     component_a = uuid4()
     component_b = uuid4()
     composed_id = uuid4()
+    evidence_ids = [str(uuid4())]
     result = propose_composition(
         ComposeTopologyRequest(
             components=[
@@ -727,7 +771,8 @@ def test_topology_downstream_apply_records_lifecycle_and_edge_execution() -> Non
                 slug="inspect-and-repair",
                 effects=EffectSignature(outputs=["diagnostic", "patch"]),
             ),
-            evidence_ids=[str(uuid4())],
+            evidence_ids=evidence_ids,
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(evidence_ids),
         )
     )
     persisted = asyncio.run(

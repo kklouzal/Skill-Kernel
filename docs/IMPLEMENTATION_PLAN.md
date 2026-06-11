@@ -1,5 +1,20 @@
 # SkillKernel Implementation Plan
 
+2026-06-11 update: topology proposal services now enforce evidence-fidelity
+authority even when called below the FastAPI wrapper. The shared service-level
+`create`, `improve`, `compose`, and `decompose` paths treat a missing
+evidence-fidelity map as `unavailable` and block
+`topology_operation_choice`, preventing non-API callers from admitting semantic
+topology operations on unresolved evidence authority. This extends the
+2026-06-08 API/store-backed evidence-fidelity admission work into the common
+proposal primitive while preserving propose-only state, no runtime writes, no
+activation authority, and no raw-evidence exposure. Validation: focused
+topology tests (`23 passed`), `uv run ruff check sidecar`, `uv run pytest`
+(`478 passed`), `uv run python -m compileall -q sidecar`, and `git diff
+--check`. No Postgres smoke was run because this is deterministic
+service-level admission behavior. Next: add SQL-backed topology admission smoke
+when practical and keep closing remaining fidelity-aware candidate-source gaps.
+
 2026-06-08 update: topology proposal admission now consumes governed
  evidence-fidelity state before creating propose-only SkillGraphIR candidates.
  Core resolves cited evidence IDs through the evidence store for direct and

@@ -1195,9 +1195,7 @@ def _evidence_fidelity_blockers(
     evidence_ids: list[str],
     evidence_fidelity_by_id: dict[str, str] | None,
 ) -> list[str]:
-    if evidence_fidelity_by_id is None:
-        return []
-    fidelity_by_id = _canonical_evidence_fidelity_map(evidence_fidelity_by_id)
+    fidelity_by_id = _canonical_evidence_fidelity_map(evidence_fidelity_by_id or {})
     blockers: list[str] = []
     for evidence_id in evidence_ids:
         fidelity = fidelity_by_id.get(str(evidence_id), "unavailable")

@@ -16,6 +16,26 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-11: Topology proposal services now fail closed when semantic
+  topology evidence is present but no governed evidence-fidelity map is
+  supplied. The shared `create`, `improve`, `compose`, and `decompose`
+  proposal path treats missing fidelity as `unavailable`, blocking
+  `topology_operation_choice` instead of letting service-level callers bypass
+  the API's evidence-store lookup. Existing graph-semantics tests now supply
+  explicit redacted-derivative fidelity fixtures, and a new regression locks
+  missing-fidelity behavior to blocked/unavailable. This advances unified
+  Sections 5.12, 13.6, 17.1, and Part V evidence-sufficiency assurance while
+  preserving propose-only state, deterministic authority, no runtime writes,
+  and no activation authority. Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_topology_services.py -q` (`23 passed`).
+  Required gates passed with `uv run ruff check sidecar`, `uv run pytest`
+  (`478 passed`), `uv run python -m compileall -q sidecar`, and `git diff
+  --check`. No Postgres smoke was run; the slice is deterministic
+  service-level admission behavior already covered by in-memory topology and
+  API tests. Next gate: add SQL-backed topology admission smoke when a bounded
+  Postgres lane is practical and continue broadening fidelity-aware admission
+  to any remaining topology candidate sources before activation paths expand.
+
 - 2026-06-08: Topology proposal admission now enforces evidence-fidelity
   authority before semantic topology candidates can become propose-only
   SkillGraphIR operations. Core resolves cited evidence IDs through the
