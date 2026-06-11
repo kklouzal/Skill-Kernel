@@ -30,7 +30,7 @@ from autoskill.db.broker_policy import NullBrokerPolicyStore
 from autoskill.db.candidates import CandidateReviewRecord, NullCandidateStore
 from autoskill.db.evaluations import EvaluationReviewRecord, NullEvaluationStore
 from autoskill.db.evidence import NullEvidenceStore
-from autoskill.db.jobs import JobQueueSummary, NullJobStore
+from autoskill.db.jobs import JobQueueSummary, NullJobStore, WorkerHeartbeatRecord
 from autoskill.db.profiles import ExecutorProfileRecord, ModelProfileRecord
 from autoskill.db.skills import SkillRecord
 from autoskill.db.topology import NullTopologyStore
@@ -240,13 +240,43 @@ class MemoryReadinessProfileStore:
 
 
 class MemoryReadinessJobStore(NullJobStore):
-    def __init__(self, summaries: dict[str | None, JobQueueSummary]) -> None:
+    def __init__(
+        self,
+        summaries: dict[str | None, JobQueueSummary],
+        *,
+        scheduler_status: str = "running",
+        scheduler_concurrency: int = 1,
+        scheduler_heartbeat: bool = True,
+    ) -> None:
         self.summaries = summaries
         self.summary_calls: list[str | None] = []
+        now = datetime.now(UTC)
+        self.heartbeats = []
+        if scheduler_heartbeat:
+            self.heartbeats.append(
+                WorkerHeartbeatRecord(
+                    worker_id="scheduler-ready-1",
+                    pool="scheduler",
+                    concurrency=scheduler_concurrency,
+                    status=scheduler_status,
+                    current_job_id=None,
+                    summary={"scheduler_ticks": 1},
+                    first_seen_at=now,
+                    last_seen_at=now,
+                )
+            )
 
     async def summary(self, *, workspace_key: str | None = None) -> JobQueueSummary:
         self.summary_calls.append(workspace_key)
         return self.summaries.get(workspace_key, JobQueueSummary(counts={}, by_kind={}))
+
+    async def list_worker_heartbeats(
+        self,
+        *,
+        active_within_seconds: int = 600,
+        limit: int = 50,
+    ) -> list[WorkerHeartbeatRecord]:
+        return self.heartbeats[:limit]
 
 
 def test_skills_endpoint_lists_persisted_skill_metadata() -> None:
@@ -369,7 +399,7 @@ def test_deployment_readiness_passes_when_required_gates_are_present(
     asyncio.run(seed_broker_policy())
 
     app = create_app(
-        job_store=NullJobStore(),
+        job_store=MemoryReadinessJobStore({}),
         profile_store=MemoryReadinessProfileStore(),
         broker_policy_store=broker_policies,
     )
@@ -394,6 +424,15 @@ def test_deployment_readiness_passes_when_required_gates_are_present(
     assert response.checks["telemetry_linked_broker_replay_corpus"]["status"] == (
         "passed"
     )
+    assert response.checks["scheduler_worker_heartbeat"]["status"] == "passed"
+    scheduler_worker = response.checks["scheduler_worker_heartbeat"]["workers"][0]
+    assert scheduler_worker["worker_id"] == "scheduler-ready-1"
+    assert scheduler_worker["pool"] == "scheduler"
+    assert scheduler_worker["status"] == "running"
+    assert scheduler_worker["concurrency"] == 1
+    assert response.checks["scheduler_worker_heartbeat"]["ready_worker_ids"] == [
+        "scheduler-ready-1"
+    ]
 
     get_settings.cache_clear()
 
@@ -430,7 +469,7 @@ def test_core_health_ready_uses_deployment_readiness_gates(monkeypatch) -> None:
     asyncio.run(seed_broker_policy())
 
     app = create_app(
-        job_store=NullJobStore(),
+        job_store=MemoryReadinessJobStore({}),
         profile_store=MemoryReadinessProfileStore(),
         broker_policy_store=broker_policies,
     )
@@ -451,6 +490,138 @@ def test_core_health_ready_uses_deployment_readiness_gates(monkeypatch) -> None:
     assert response.checks["deployment_readiness"]["checks"]["broker_replay_corpus"][
         "sampled"
     ] == 1
+    assert response.checks["deployment_readiness"]["checks"][
+        "scheduler_worker_heartbeat"
+    ]["status"] == "passed"
+
+    get_settings.cache_clear()
+
+
+def test_deployment_readiness_blocks_without_scheduler_worker_heartbeat(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    monkeypatch.setenv("AUTOSKILL_LLM_API_BASE_URL", "http://llm.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_BASE_URL", "http://embed.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
+    monkeypatch.setenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", "true")
+    get_settings.cache_clear()
+
+    broker_policies = NullBrokerPolicyStore()
+
+    async def seed_broker_policy() -> None:
+        await broker_policies.upsert_policy_version(
+            workspace_key="dev-01",
+            version="prod.v1",
+            policy={"max_tokens": 800},
+            status="active",
+        )
+        await broker_policies.record_replay_episode(
+            workspace_key="dev-01",
+            episode_key="prod-episode-1",
+            redacted_user_intent="Diagnose a bounded OpenClaw failure.",
+            expected_decision="skill_hint",
+            tags=["production", "operator-reviewed", "telemetry-derived"],
+            source_retrieval_log_id=uuid4(),
+        )
+
+    asyncio.run(seed_broker_policy())
+
+    app = create_app(
+        job_store=MemoryReadinessJobStore({}, scheduler_heartbeat=False),
+        profile_store=MemoryReadinessProfileStore(),
+        broker_policy_store=broker_policies,
+    )
+    route = next(route for route in app.routes if route.path == "/v1/deployment/readiness")
+
+    async def run():
+        return await route.endpoint(
+            authorization="Bearer control-token",
+            workspace_id="dev-01",
+            replay_tag="production",
+        )
+
+    response = asyncio.run(run())
+
+    assert response.ready is False
+    assert "scheduler_worker_heartbeat" in response.blockers
+    assert response.checks["scheduler_worker_heartbeat"] == {
+        "status": "blocked",
+        "observed": 0,
+        "acceptable_statuses": ["idle", "running"],
+        "workers": [],
+        "ready_worker_ids": [],
+    }
+
+    get_settings.cache_clear()
+
+
+def test_deployment_readiness_blocks_unhealthy_scheduler_worker_heartbeat(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    monkeypatch.setenv("AUTOSKILL_LLM_API_BASE_URL", "http://llm.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_BASE_URL", "http://embed.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
+    monkeypatch.setenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", "true")
+    get_settings.cache_clear()
+
+    broker_policies = NullBrokerPolicyStore()
+
+    async def seed_broker_policy() -> None:
+        await broker_policies.upsert_policy_version(
+            workspace_key="dev-01",
+            version="prod.v1",
+            policy={"max_tokens": 800},
+            status="active",
+        )
+        await broker_policies.record_replay_episode(
+            workspace_key="dev-01",
+            episode_key="prod-episode-1",
+            redacted_user_intent="Diagnose a bounded OpenClaw failure.",
+            expected_decision="skill_hint",
+            tags=["production", "operator-reviewed", "telemetry-derived"],
+            source_retrieval_log_id=uuid4(),
+        )
+
+    asyncio.run(seed_broker_policy())
+
+    app = create_app(
+        job_store=MemoryReadinessJobStore(
+            {},
+            scheduler_status="stopped",
+            scheduler_concurrency=0,
+        ),
+        profile_store=MemoryReadinessProfileStore(),
+        broker_policy_store=broker_policies,
+    )
+    route = next(route for route in app.routes if route.path == "/v1/deployment/readiness")
+
+    async def run():
+        return await route.endpoint(
+            authorization="Bearer control-token",
+            workspace_id="dev-01",
+            replay_tag="production",
+        )
+
+    response = asyncio.run(run())
+
+    assert response.ready is False
+    assert "scheduler_worker_heartbeat" in response.blockers
+    assert response.checks["scheduler_worker_heartbeat"]["observed"] == 1
+    assert response.checks["scheduler_worker_heartbeat"]["ready_worker_ids"] == []
+    assert response.checks["scheduler_worker_heartbeat"]["workers"][0][
+        "status"
+    ] == "stopped"
+    assert response.checks["scheduler_worker_heartbeat"]["workers"][0][
+        "concurrency"
+    ] == 0
 
     get_settings.cache_clear()
 

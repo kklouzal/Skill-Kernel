@@ -2504,6 +2504,32 @@ def _worker_concurrency_by_pool(settings: object) -> dict[str, int]:
     }
 
 
+def _scheduler_worker_heartbeat_detail(heartbeats: list[Any]) -> dict[str, object]:
+    scheduler_heartbeats = [
+        heartbeat for heartbeat in heartbeats if heartbeat.pool == "scheduler"
+    ]
+    usable = [
+        heartbeat
+        for heartbeat in scheduler_heartbeats
+        if heartbeat.concurrency > 0 and heartbeat.status in {"running", "idle"}
+    ]
+    return {
+        "observed": len(scheduler_heartbeats),
+        "acceptable_statuses": ["idle", "running"],
+        "workers": [
+            {
+                "worker_id": heartbeat.worker_id,
+                "pool": heartbeat.pool,
+                "status": heartbeat.status,
+                "concurrency": heartbeat.concurrency,
+                "last_seen_at": heartbeat.last_seen_at.isoformat(),
+            }
+            for heartbeat in scheduler_heartbeats[:10]
+        ],
+        "ready_worker_ids": [heartbeat.worker_id for heartbeat in usable[:10]],
+    }
+
+
 def _broker_replay_corpus_detail(
     episodes: list[Any],
     *,
@@ -2764,6 +2790,19 @@ async def _deployment_readiness_report(
         "worker_concurrency_configured",
         passed=all(value > 0 for value in _worker_concurrency_by_pool(settings).values()),
         detail=_worker_concurrency_by_pool(settings),
+    )
+    worker_heartbeats = await jobs.list_worker_heartbeats(
+        active_within_seconds=600,
+        limit=50,
+    )
+    scheduler_worker_detail = _scheduler_worker_heartbeat_detail(worker_heartbeats)
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "scheduler_worker_heartbeat",
+        passed=bool(scheduler_worker_detail["ready_worker_ids"]),
+        detail=scheduler_worker_detail,
     )
 
     return DeploymentReadinessResponse(

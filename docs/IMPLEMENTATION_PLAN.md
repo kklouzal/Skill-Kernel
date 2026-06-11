@@ -1,5 +1,19 @@
 # SkillKernel Implementation Plan
 
+2026-06-11 update: deployment readiness now requires a visible scheduler worker
+heartbeat before reporting ready. The new `scheduler_worker_heartbeat` check
+uses the existing job-store heartbeat listing, accepts only recent scheduler
+workers with positive concurrency and `running`/`idle` status, and reports only
+content-safe worker id, pool, status, concurrency, and last-seen metadata.
+Because Core readiness passes through deployment readiness, `/v1/health/ready`
+now fails closed when the scheduler lease/worker signal is absent or unhealthy.
+Validation: focused readiness tests passed (`8 passed, 20 deselected`) with
+`uv run pytest sidecar/autoskill/tests/test_admin_surfaces.py
+sidecar/autoskill/tests/test_compatibility.py -q -k 'readiness or ready'`, and
+touched-file Ruff passed with `uv run ruff check sidecar/autoskill/api/app.py
+sidecar/autoskill/tests/test_admin_surfaces.py`. No migration was required; the
+slice reuses existing worker-heartbeat read models.
+
 2026-06-11 update: Core `/v1/health/ready` now gates its protocol-level ready
 bit through the existing deployment readiness report for the default `dev-01`
 workspace instead of relying on config booleans alone. The response keeps the

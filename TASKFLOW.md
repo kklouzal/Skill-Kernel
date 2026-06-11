@@ -16,6 +16,21 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-11: Deployment readiness now includes a deterministic
+  `scheduler_worker_heartbeat` gate backed by the existing worker-heartbeat
+  read model. The check fails closed when no recent scheduler worker is visible
+  or when the observed scheduler worker has zero concurrency or a non-ready
+  status, and it returns only content-safe worker id, pool, status,
+  concurrency, and last-seen summaries. Because `/v1/health/ready` already
+  consumes deployment readiness, Core container readiness now also depends on
+  a visible scheduler lease/worker signal. Focused validation passed with
+  `uv run pytest sidecar/autoskill/tests/test_admin_surfaces.py
+  sidecar/autoskill/tests/test_compatibility.py -q -k 'readiness or ready'`
+  (`8 passed, 20 deselected`) and touched-file Ruff
+  (`uv run ruff check sidecar/autoskill/api/app.py
+  sidecar/autoskill/tests/test_admin_surfaces.py`). No DB migration was needed;
+  the slice reuses existing heartbeat storage/listing contracts.
+
 - 2026-06-11: Core `/v1/health/ready` now reuses the deterministic deployment
   readiness substrate for the default `dev-01` workspace before reporting the
   Core container ready. The endpoint preserves the `CoreReadyResponse` protocol
