@@ -2048,7 +2048,11 @@ def test_observatory_storage_microscope_exposes_bounded_db_summary() -> None:
     }
     assert storage["diagnostics"]["largest_relations"][0]["table_name"] == "embeddings"
     assert storage["diagnostics"]["index_health"]["indexed_relation_count"] == 2
-    assert storage["diagnostics"]["migration_state"]["version_available"] is False
+    assert storage["diagnostics"]["migration_state"] == {
+        "version_available": True,
+        "state": "reported_by_deployment_readiness",
+        "reason": "bootstrap migrations persist an autoskill.schema_migrations marker; deployment readiness verifies the expected marker before reporting ready",
+    }
     assert storage["diagnostics"]["content_policy"]["connection_details_returned"] is False
     assert storage["content_policy"]["raw_available"] is False
     assert {"object_type": "pipeline_invariant", "object_id": "read-models-fresh"} in storage[

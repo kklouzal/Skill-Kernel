@@ -17,6 +17,27 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 ## Current State
 
 - 2026-06-11: Deployment readiness now includes a deterministic
+  `storage_plane_schema_ready` gate in the shared readiness substrate. The gate
+  uses the job-store storage connection to verify live Postgres reachability,
+  installed pgvector extension visibility, the `autoskill` schema, required Core
+  and Observatory readiness tables, and a persisted
+  `autoskill.schema_migrations` marker seeded with `0001_autoskill_schema`.
+  Missing or mismatched markers fail closed with content-safe unavailable
+  details instead of inferring readiness from table presence. Because
+  `/v1/health/ready` already consumes deployment readiness, Core container
+  readiness now also depends on observable storage/schema/pgvector state.
+  Validation: `uv run ruff check sidecar/autoskill/db/jobs.py
+  sidecar/autoskill/api/app.py sidecar/autoskill/services/observatory.py
+  sidecar/autoskill/tests/test_admin_surfaces.py` passed, `uv run python -m
+  compileall -q sidecar` passed, and a direct import check confirmed the marker
+  fields. Parent-side reconciliation validation passed with `uv run pytest`
+  (`483 passed`) and `git diff --check`. Disposable pgvector smoke validation
+  passed by applying `scripts/migrate.py` against a fresh `pgvector/pgvector:pg17`
+  container and confirming the readiness probe returned ready with no missing
+  tables. Next gate: deploy after green CI and verify the same readiness check
+  against the Dev-01 SkillKernel application containers.
+
+- 2026-06-11: Deployment readiness now includes a deterministic
   `scheduler_worker_heartbeat` gate backed by the existing worker-heartbeat
   read model. The check fails closed when no recent scheduler worker is visible
   or when the observed scheduler worker has zero concurrency or a non-ready

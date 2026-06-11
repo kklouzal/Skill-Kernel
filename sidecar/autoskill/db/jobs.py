@@ -13,6 +13,17 @@ from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 
 JobStatus = Literal["queued", "leased", "succeeded", "failed"]
+_STORAGE_READINESS_TABLES = [
+    "autoskill.schema_migrations",
+    "autoskill.workspaces",
+    "autoskill.jobs",
+    "autoskill.worker_heartbeats",
+    "autoskill.model_profiles",
+    "autoskill.broker_policy_versions",
+    "autoskill.broker_replay_episodes",
+    "autoskill.admin_component_catalog",
+    "autoskill.admin_subsystem_catalog",
+]
 
 
 @dataclass(frozen=True)
@@ -95,6 +106,43 @@ class JobEnqueueResult:
 class JobQueueSummary:
     counts: dict[str, int]
     by_kind: dict[str, dict[str, int]]
+
+
+@dataclass(frozen=True)
+class StoragePlaneReadiness:
+    reachable: bool
+    pgvector_available: bool
+    schema_present: bool
+    required_tables_present: bool
+    migration_marker_present: bool
+    migration_version: str | None
+    schema_contract: str
+    missing_tables: list[str]
+    error_type: str | None = None
+
+    @property
+    def ready(self) -> bool:
+        return (
+            self.reachable
+            and self.pgvector_available
+            and self.schema_present
+            and self.required_tables_present
+            and self.migration_marker_present
+            and self.migration_version == self.schema_contract
+        )
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "reachable": self.reachable,
+            "pgvector_available": self.pgvector_available,
+            "schema_present": self.schema_present,
+            "required_tables_present": self.required_tables_present,
+            "migration_marker_present": self.migration_marker_present,
+            "migration_version": self.migration_version,
+            "schema_contract": self.schema_contract,
+            "missing_tables": self.missing_tables,
+            "error_type": self.error_type,
+        }
 
 
 @dataclass(frozen=True)
@@ -214,6 +262,13 @@ class JobStore(Protocol):
     ) -> list[WorkerHeartbeatRecord]:
         """List recently observed workers."""
 
+    async def storage_plane_readiness(
+        self,
+        *,
+        schema_contract: str,
+    ) -> StoragePlaneReadiness:
+        """Return content-safe live storage/schema-contract readiness."""
+
 
 class NullJobStore:
     async def enqueue_job(
@@ -322,6 +377,23 @@ class NullJobStore:
         limit: int = 50,
     ) -> list[WorkerHeartbeatRecord]:
         return []
+
+    async def storage_plane_readiness(
+        self,
+        *,
+        schema_contract: str,
+    ) -> StoragePlaneReadiness:
+        return StoragePlaneReadiness(
+            reachable=False,
+            pgvector_available=False,
+            schema_present=False,
+            required_tables_present=False,
+            migration_marker_present=False,
+            migration_version=None,
+            schema_contract=schema_contract,
+            missing_tables=_STORAGE_READINESS_TABLES.copy(),
+            error_type="storage_store_unavailable",
+        )
 
 
 class AsyncpgJobStore(AsyncpgPoolOwner):
@@ -676,6 +748,89 @@ class AsyncpgJobStore(AsyncpgPoolOwner):
                 max(1, min(limit, 500)),
             )
             return [WorkerHeartbeatRecord.from_row(row) for row in rows]
+
+    async def storage_plane_readiness(
+        self,
+        *,
+        schema_contract: str,
+    ) -> StoragePlaneReadiness:
+        try:
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                pgvector_available = bool(
+                    await conn.fetchval(
+                        "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')"
+                    )
+                )
+                schema_present = bool(
+                    await conn.fetchval(
+                        "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'autoskill')"
+                    )
+                )
+                rows = await conn.fetch(
+                    """
+                    SELECT table_name, to_regclass(table_name::text) AS relation_name
+                    FROM unnest($1::text[]) AS table_name
+                    ORDER BY table_name
+                    """,
+                    _STORAGE_READINESS_TABLES,
+                )
+                table_status = {
+                    str(row["table_name"]): row["relation_name"] is not None
+                    for row in rows
+                }
+                missing_tables = [
+                    table
+                    for table in _STORAGE_READINESS_TABLES
+                    if not table_status.get(table)
+                ]
+                required_tables_present = not missing_tables
+                migration_marker_present = table_status.get(
+                    "autoskill.schema_migrations", False
+                )
+                migration_version = None
+                if migration_marker_present:
+                    migration_version = await conn.fetchval(
+                        """
+                        SELECT version
+                        FROM autoskill.schema_migrations
+                        WHERE version = $1
+                        ORDER BY applied_at DESC, version DESC
+                        LIMIT 1
+                        """,
+                        schema_contract,
+                    )
+                    if migration_version is None:
+                        migration_version = await conn.fetchval(
+                            """
+                            SELECT version
+                            FROM autoskill.schema_migrations
+                            ORDER BY applied_at DESC, version DESC
+                            LIMIT 1
+                            """
+                        )
+                return StoragePlaneReadiness(
+                    reachable=True,
+                    pgvector_available=pgvector_available,
+                    schema_present=schema_present,
+                    required_tables_present=required_tables_present,
+                    migration_marker_present=migration_marker_present,
+                    migration_version=migration_version,
+                    schema_contract=schema_contract,
+                    missing_tables=missing_tables,
+                )
+        except Exception as error:
+            return StoragePlaneReadiness(
+                reachable=False,
+                pgvector_available=False,
+                schema_present=False,
+                required_tables_present=False,
+                migration_marker_present=False,
+                migration_version=None,
+                schema_contract=schema_contract,
+                missing_tables=_STORAGE_READINESS_TABLES.copy(),
+                error_type=type(error).__name__,
+            )
 
 
 async def _recover_expired_leases(conn: asyncpg.Connection) -> None:

@@ -990,9 +990,9 @@ def storage_microscope(snapshot: dict[str, Any]) -> dict[str, Any]:
             "missing_signal_keys": data_quality.get("missing_signal_keys", []),
         },
         "migration_state": {
-            "version_available": False,
-            "state": "not_reported_by_operator_metrics",
-            "reason": "static migrations are deterministic; runtime migration version telemetry is not yet persisted",
+            "version_available": True,
+            "state": "reported_by_deployment_readiness",
+            "reason": "bootstrap migrations persist an autoskill.schema_migrations marker; deployment readiness verifies the expected marker before reporting ready",
         },
         "relation_count": len(relations),
         "relation_totals": {

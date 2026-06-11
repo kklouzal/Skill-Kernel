@@ -2658,6 +2658,18 @@ async def _deployment_readiness_report(
             detail={"error": str(error.detail)},
         )
 
+    storage_readiness = await jobs.storage_plane_readiness(
+        schema_contract=SCHEMA_MIGRATION_VERSION,
+    )
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "storage_plane_schema_ready",
+        passed=storage_readiness.ready,
+        detail=storage_readiness.to_json(),
+    )
+
     executor_profiles = await profiles.list_executor_profiles(
         workspace_key=workspace_id,
         status="active",

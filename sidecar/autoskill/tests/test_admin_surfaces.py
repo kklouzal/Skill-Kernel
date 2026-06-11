@@ -30,7 +30,12 @@ from autoskill.db.broker_policy import NullBrokerPolicyStore
 from autoskill.db.candidates import CandidateReviewRecord, NullCandidateStore
 from autoskill.db.evaluations import EvaluationReviewRecord, NullEvaluationStore
 from autoskill.db.evidence import NullEvidenceStore
-from autoskill.db.jobs import JobQueueSummary, NullJobStore, WorkerHeartbeatRecord
+from autoskill.db.jobs import (
+    JobQueueSummary,
+    NullJobStore,
+    StoragePlaneReadiness,
+    WorkerHeartbeatRecord,
+)
 from autoskill.db.profiles import ExecutorProfileRecord, ModelProfileRecord
 from autoskill.db.skills import SkillRecord
 from autoskill.db.topology import NullTopologyStore
@@ -247,9 +252,13 @@ class MemoryReadinessJobStore(NullJobStore):
         scheduler_status: str = "running",
         scheduler_concurrency: int = 1,
         scheduler_heartbeat: bool = True,
+        storage_ready: bool = True,
+        missing_storage_tables: list[str] | None = None,
     ) -> None:
         self.summaries = summaries
         self.summary_calls: list[str | None] = []
+        self.storage_ready = storage_ready
+        self.missing_storage_tables = missing_storage_tables or []
         now = datetime.now(UTC)
         self.heartbeats = []
         if scheduler_heartbeat:
@@ -277,6 +286,24 @@ class MemoryReadinessJobStore(NullJobStore):
         limit: int = 50,
     ) -> list[WorkerHeartbeatRecord]:
         return self.heartbeats[:limit]
+
+    async def storage_plane_readiness(
+        self,
+        *,
+        schema_contract: str,
+    ) -> StoragePlaneReadiness:
+        return StoragePlaneReadiness(
+            reachable=self.storage_ready,
+            pgvector_available=self.storage_ready,
+            schema_present=self.storage_ready,
+            required_tables_present=self.storage_ready
+            and not self.missing_storage_tables,
+            migration_marker_present=self.storage_ready,
+            migration_version=schema_contract if self.storage_ready else None,
+            schema_contract=schema_contract,
+            missing_tables=self.missing_storage_tables,
+            error_type=None if self.storage_ready else "storage_probe_unavailable",
+        )
 
 
 def test_skills_endpoint_lists_persisted_skill_metadata() -> None:
@@ -424,6 +451,18 @@ def test_deployment_readiness_passes_when_required_gates_are_present(
     assert response.checks["telemetry_linked_broker_replay_corpus"]["status"] == (
         "passed"
     )
+    assert response.checks["storage_plane_schema_ready"] == {
+        "status": "passed",
+        "reachable": True,
+        "pgvector_available": True,
+        "schema_present": True,
+        "required_tables_present": True,
+        "migration_marker_present": True,
+        "migration_version": "0001_autoskill_schema",
+        "schema_contract": "0001_autoskill_schema",
+        "missing_tables": [],
+        "error_type": None,
+    }
     assert response.checks["scheduler_worker_heartbeat"]["status"] == "passed"
     scheduler_worker = response.checks["scheduler_worker_heartbeat"]["workers"][0]
     assert scheduler_worker["worker_id"] == "scheduler-ready-1"
@@ -491,10 +530,115 @@ def test_core_health_ready_uses_deployment_readiness_gates(monkeypatch) -> None:
         "sampled"
     ] == 1
     assert response.checks["deployment_readiness"]["checks"][
+        "storage_plane_schema_ready"
+    ]["status"] == "passed"
+    assert response.checks["deployment_readiness"]["checks"][
         "scheduler_worker_heartbeat"
     ]["status"] == "passed"
 
     get_settings.cache_clear()
+
+
+def test_deployment_readiness_blocks_when_storage_plane_schema_not_observable(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    monkeypatch.setenv("AUTOSKILL_LLM_API_BASE_URL", "http://llm.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_BASE_URL", "http://embed.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
+    monkeypatch.setenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", "true")
+    get_settings.cache_clear()
+
+    broker_policies = NullBrokerPolicyStore()
+
+    async def seed_broker_policy() -> None:
+        await broker_policies.upsert_policy_version(
+            workspace_key="dev-01",
+            version="prod.v1",
+            policy={"max_tokens": 800},
+            status="active",
+        )
+        await broker_policies.record_replay_episode(
+            workspace_key="dev-01",
+            episode_key="prod-episode-1",
+            redacted_user_intent="Diagnose a bounded OpenClaw failure.",
+            expected_decision="skill_hint",
+            tags=["production", "operator-reviewed", "telemetry-derived"],
+            source_retrieval_log_id=uuid4(),
+        )
+
+    asyncio.run(seed_broker_policy())
+
+    app = create_app(
+        job_store=MemoryReadinessJobStore(
+            {},
+            storage_ready=False,
+            missing_storage_tables=["autoskill.worker_heartbeats"],
+        ),
+        profile_store=MemoryReadinessProfileStore(),
+        broker_policy_store=broker_policies,
+    )
+    route = next(route for route in app.routes if route.path == "/v1/deployment/readiness")
+
+    async def run():
+        return await route.endpoint(
+            authorization="Bearer control-token",
+            workspace_id="dev-01",
+            replay_tag="production",
+        )
+
+    response = asyncio.run(run())
+
+    assert response.ready is False
+    assert "storage_plane_schema_ready" in response.blockers
+    assert response.checks["storage_plane_schema_ready"] == {
+        "status": "blocked",
+        "reachable": False,
+        "pgvector_available": False,
+        "schema_present": False,
+        "required_tables_present": False,
+        "migration_marker_present": False,
+        "migration_version": None,
+        "schema_contract": "0001_autoskill_schema",
+        "missing_tables": ["autoskill.worker_heartbeats"],
+        "error_type": "storage_probe_unavailable",
+    }
+
+    get_settings.cache_clear()
+
+
+def test_null_job_store_storage_plane_readiness_fails_closed() -> None:
+    readiness = asyncio.run(
+        NullJobStore().storage_plane_readiness(
+            schema_contract="0001_autoskill_schema",
+        )
+    )
+
+    assert readiness.ready is False
+    assert readiness.to_json() == {
+        "reachable": False,
+        "pgvector_available": False,
+        "schema_present": False,
+        "required_tables_present": False,
+        "migration_marker_present": False,
+        "migration_version": None,
+        "schema_contract": "0001_autoskill_schema",
+        "missing_tables": [
+            "autoskill.schema_migrations",
+            "autoskill.workspaces",
+            "autoskill.jobs",
+            "autoskill.worker_heartbeats",
+            "autoskill.model_profiles",
+            "autoskill.broker_policy_versions",
+            "autoskill.broker_replay_episodes",
+            "autoskill.admin_component_catalog",
+            "autoskill.admin_subsystem_catalog",
+        ],
+        "error_type": "storage_store_unavailable",
+    }
 
 
 def test_deployment_readiness_blocks_without_scheduler_worker_heartbeat(

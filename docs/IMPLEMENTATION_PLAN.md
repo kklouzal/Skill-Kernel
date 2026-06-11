@@ -1,5 +1,28 @@
 # SkillKernel Implementation Plan
 
+2026-06-11 update: deployment readiness now requires observable storage-plane
+schema readiness before reporting ready. The new `storage_plane_schema_ready`
+check lives in the shared deployment readiness substrate and uses the job-store
+storage connection to verify live Postgres reachability, installed pgvector
+extension visibility, the `autoskill` schema, required Core/Observatory tables,
+and a persisted `autoskill.schema_migrations` marker seeded with
+`0001_autoskill_schema`. Missing or mismatched markers fail closed instead of
+inferring readiness from table presence. Null and in-memory stores fail closed
+with content-safe unavailable details unless tests explicitly provide a ready
+storage probe. Because `/v1/health/ready` consumes deployment readiness, Core
+readiness now also depends on observable storage/schema/pgvector state.
+Validation: touched-file Ruff passed with `uv run ruff check
+sidecar/autoskill/db/jobs.py sidecar/autoskill/api/app.py
+sidecar/autoskill/services/observatory.py
+sidecar/autoskill/tests/test_admin_surfaces.py`, `uv run python -m compileall
+-q sidecar` passed, a direct import check confirmed the marker fields, and
+parent-side reconciliation validation passed with `uv run pytest` (`483
+passed`) plus `git diff --check`. Disposable pgvector smoke validation passed by
+applying `scripts/migrate.py` against a fresh `pgvector/pgvector:pg17` container
+and confirming the readiness probe returned ready with no missing tables. Next:
+deploy after green CI and verify the same readiness check against the Dev-01
+SkillKernel application containers.
+
 2026-06-11 update: deployment readiness now requires a visible scheduler worker
 heartbeat before reporting ready. The new `scheduler_worker_heartbeat` check
 uses the existing job-store heartbeat listing, accepts only recent scheduler

@@ -5,6 +5,16 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE SCHEMA IF NOT EXISTS autoskill;
 
+CREATE TABLE IF NOT EXISTS autoskill.schema_migrations (
+  version text PRIMARY KEY,
+  description text NOT NULL,
+  applied_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO autoskill.schema_migrations (version, description)
+VALUES ('0001_autoskill_schema', 'SkillKernel autoskill bootstrap schema')
+ON CONFLICT (version) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS autoskill.workspaces (
   workspace_id uuid PRIMARY KEY,
   external_key text UNIQUE NOT NULL,
