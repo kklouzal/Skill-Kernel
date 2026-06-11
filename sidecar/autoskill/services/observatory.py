@@ -562,6 +562,9 @@ REASON_CODES: dict[str, str] = {
     "frontend-serving-unavailable": (
         "The Observatory frontend is not available through the configured serving mode."
     ),
+    "core_unreachable": (
+        "Core reachability is unavailable or no acceptable Core scheduler heartbeat is visible."
+    ),
 }
 
 
@@ -581,6 +584,7 @@ def build_observatory_snapshot(
     metrics = _dict(operator_metrics.get("metrics"))
     dashboards = _dict(operator_metrics.get("dashboards"))
     read_model_age_seconds = _read_model_age_seconds(operator_metrics, captured_at)
+    core_reachability = _core_reachability(status)
     components = [
         _component_snapshot(
             station,
@@ -607,6 +611,7 @@ def build_observatory_snapshot(
         components=components,
         audit_chain_valid=audit_chain_valid,
         static_available=static_available,
+        core_reachability=core_reachability,
     )
     subsystems = [
         _subsystem_snapshot(subsystem, component_by_id=component_by_id, edges=edges, issues=issues)
@@ -633,6 +638,7 @@ def build_observatory_snapshot(
             "raw_content_enabled": settings.web_admin_raw_content_enabled,
         },
         "global_health": global_health,
+        "core_reachability": core_reachability,
         "fitness": _system_fitness(components=components, issues=issues, metrics=metrics),
         "kpis": _kpis(metrics=metrics, status=status, components=components),
         "data_quality": _global_data_quality(
@@ -640,6 +646,7 @@ def build_observatory_snapshot(
             metrics=metrics,
             static_available=static_available,
             read_model_age_seconds=read_model_age_seconds,
+            core_reachability=core_reachability,
         ),
         "pipeline": {
             "stations": components,
@@ -1380,6 +1387,10 @@ def _component_snapshot(
         if not settings.web_admin_token and not settings.control_token:
             health = _worse(health, "degraded")
             reason_codes.append("admin-token-not-configured")
+        core_reachability = _core_reachability(status)
+        if not core_reachability.get("reachable"):
+            health = _worse(health, "blocked")
+            reason_codes.append("core_unreachable")
 
     if read_model_age_seconds > settings.web_admin_telemetry_staleness_warning_seconds:
         reason_codes.append("telemetry-stale")
@@ -1554,6 +1565,7 @@ def _issue_board(
     components: list[dict[str, Any]],
     audit_chain_valid: bool,
     static_available: bool,
+    core_reachability: dict[str, Any],
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     if not status.get("database_configured"):
@@ -1590,6 +1602,24 @@ def _issue_board(
         issues.append(_issue("audit-chain-unverified", "critical", "audit_trace"))
     if not static_available:
         issues.append(_issue("frontend-serving-unavailable", "medium", "observatory_admin"))
+    if not core_reachability.get("reachable"):
+        issues.append(
+            _issue(
+                "core_unreachable",
+                "critical",
+                "observatory_admin",
+                diagnostics={
+                    "known": bool(core_reachability.get("known")),
+                    "source": core_reachability.get("source"),
+                    "last_core_heartbeat_at": core_reachability.get(
+                        "last_core_heartbeat_at"
+                    ),
+                    "ready_worker_ids": list(
+                        core_reachability.get("ready_worker_ids") or []
+                    ),
+                },
+            )
+        )
     for component in components:
         if "missing-required-signal" in component.get("reason_codes", []):
             issues.append(_missing_required_signal_issue(component))
@@ -1840,22 +1870,56 @@ def _global_data_quality(
     metrics: dict[str, Any],
     static_available: bool,
     read_model_age_seconds: int,
+    core_reachability: dict[str, Any],
 ) -> dict[str, Any]:
     missing = []
+    issues = []
     if not settings.database_url:
         missing.append("database_read_models")
     if not static_available:
         missing.append("frontend_serving")
+    if not core_reachability.get("known"):
+        missing.append("core_reachability")
+        issues.append("core_unreachable")
+    elif not core_reachability.get("reachable"):
+        issues.append("core_unreachable")
     stale = read_model_age_seconds > settings.web_admin_telemetry_staleness_warning_seconds
     return {
         "telemetry_freshness_seconds": read_model_age_seconds,
         "read_model_age_seconds": read_model_age_seconds,
-        "coverage_state": "partial" if missing or stale else "complete",
+        "coverage_state": "partial" if missing or issues or stale else "complete",
         "missing_signals": missing,
+        "issues": sorted(set(issues)),
+        "reason_codes": sorted(set(issues)),
         "raw_content_available": False,
         "raw_content_reason": "raw-content-disabled",
         "sampling_rate": 1.0,
         "stale": stale,
+    }
+
+
+def _core_reachability(status: dict[str, Any]) -> dict[str, Any]:
+    core = _dict(status.get("core_reachability"))
+    known = bool(core.get("known"))
+    reachable = bool(core.get("reachable")) if known else False
+    reason_code = None if reachable else "core_unreachable"
+    disabled_action_reasons = list(core.get("disabled_action_reasons") or [])
+    if reason_code and reason_code not in disabled_action_reasons:
+        disabled_action_reasons.append(reason_code)
+    return {
+        "known": known,
+        "reachable": reachable,
+        "health": "reachable" if reachable else ("unreachable" if known else "unknown"),
+        "reason_code": reason_code,
+        "source": str(core.get("source") or "worker_health.scheduler_worker_heartbeat"),
+        "last_core_heartbeat_at": core.get("last_core_heartbeat_at"),
+        "scheduler_worker_count": int(core.get("scheduler_worker_count") or 0),
+        "ready_worker_ids": [
+            str(worker_id) for worker_id in list(core.get("ready_worker_ids") or [])[:10]
+        ],
+        "disabled_action_reasons": sorted(
+            {str(item) for item in disabled_action_reasons}
+        ),
     }
 
 

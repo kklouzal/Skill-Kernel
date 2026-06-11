@@ -16,6 +16,27 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-11: Observatory readiness now exposes a first-class, content-safe
+  `core_reachability` primitive on the snapshot and
+  `/admin/api/v1/health/ready` response. The signal is derived from the
+  existing worker-health scheduler heartbeat read model, reports whether Core
+  reachability is known and reachable, the last Core heartbeat timestamp,
+  ready scheduler worker ids, and disabled-action reason codes, and never
+  performs outbound Core control calls or grants Observatory mutation
+  authority. Missing or unhealthy scheduler heartbeat state fails/degrades
+  Observatory readiness with `core_unreachable` in data quality and the issue
+  board while preserving stored read-model visibility. This advances the
+  unified Container health/readiness contract item requiring Core reachability
+  to be known, not assumed. Validation: focused readiness coverage passed with
+  `uv run pytest sidecar/autoskill/tests/test_observatory_api.py -q -k 'ready
+  or core'` (`3 passed, 66 deselected`), touched-file Ruff passed with
+  `uv run ruff check sidecar/autoskill/api/app.py
+  sidecar/autoskill/services/observatory.py
+  sidecar/autoskill/tests/test_observatory_api.py`, `uv run python -m
+  compileall -q sidecar` passed, and `git diff --check` passed. Next gate:
+  parent-side full gates and real Dev-01 container verification after the
+  current dirty-work reconciliation state is reviewed.
+
 - 2026-06-11: Deployment readiness now includes a deterministic
   `read_model_contract_compatible` gate. The gate maps the live storage/schema
   probe into the expected read-model contract for `0001_autoskill_schema`,

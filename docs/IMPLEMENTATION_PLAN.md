@@ -1,5 +1,24 @@
 # SkillKernel Implementation Plan
 
+2026-06-11 update: Observatory readiness now reports Core reachability as a
+known/not-assumed readiness primitive. `/admin/api/v1/health/ready` and the
+shared Observatory snapshot include a content-safe `core_reachability` object
+derived from the existing worker-health scheduler heartbeat signal, including
+known/reachable state, source, scheduler worker count, ready worker ids, last
+Core heartbeat, and disabled-action reasons. Missing or unhealthy scheduler
+heartbeat state produces `core_unreachable` in data quality and the issue board
+and makes the ready response fail closed without adding outbound Core probes,
+guarded action execution, migrations, runtime skill writes, plugin installs, or
+new Observatory control-plane authority. This advances the Container
+health/readiness contract item requiring Core reachability to be known, not
+assumed. Validation: focused readiness tests passed (`3 passed, 66 deselected`)
+with `uv run pytest sidecar/autoskill/tests/test_observatory_api.py -q -k
+'ready or core'`, touched-file Ruff passed with `uv run ruff check
+sidecar/autoskill/api/app.py sidecar/autoskill/services/observatory.py
+sidecar/autoskill/tests/test_observatory_api.py`, `uv run python -m compileall
+-q sidecar` passed, and `git diff --check` passed. Next: parent-side full gates
+and real Dev-01 container verification after dirty-work reconciliation.
+
 2026-06-11 update: deployment readiness now includes an explicit
 `read_model_contract_compatible` check. The check derives a content-safe
 compatibility state from the live storage/schema probe and the read-model

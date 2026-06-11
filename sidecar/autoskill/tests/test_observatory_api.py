@@ -42,7 +42,12 @@ from autoskill.db.governance import (
     RevocationRequestRecord,
 )
 from autoskill.db.historical import HistoricalSourceRecord, NullHistoricalImportStore
-from autoskill.db.jobs import JobQueueSummary, JobRecord, NullJobStore
+from autoskill.db.jobs import (
+    JobQueueSummary,
+    JobRecord,
+    NullJobStore,
+    WorkerHeartbeatRecord,
+)
 from autoskill.db.lifecycle import CanaryResultRecord, NullLifecycleStore
 from autoskill.db.llm_invocations import NullLLMInvocationStore
 from autoskill.db.memory import NullMemoryGovernanceStore
@@ -485,6 +490,37 @@ class MemorySummaryJobStore:
     async def list_worker_heartbeats(self, **_kwargs):
         self.heartbeat_calls += 1
         return []
+
+
+class MemoryCoreReachabilityJobStore(NullJobStore):
+    def __init__(
+        self,
+        *,
+        scheduler_heartbeat: bool = True,
+        scheduler_status: str = "running",
+        scheduler_concurrency: int = 1,
+    ) -> None:
+        now = datetime.now(UTC)
+        self.heartbeats = []
+        if scheduler_heartbeat:
+            self.heartbeats.append(
+                WorkerHeartbeatRecord(
+                    worker_id="scheduler-ready-1",
+                    pool="scheduler",
+                    concurrency=scheduler_concurrency,
+                    status=scheduler_status,
+                    current_job_id=None,
+                    summary={"scheduler_ticks": 1},
+                    first_seen_at=now,
+                    last_seen_at=now,
+                )
+            )
+
+    async def summary(self, *, workspace_key: str | None = None) -> JobQueueSummary:
+        return JobQueueSummary(counts={}, by_kind={})
+
+    async def list_worker_heartbeats(self, **_kwargs):
+        return self.heartbeats
 
 
 class CaptureObservabilityStore:
@@ -1786,6 +1822,96 @@ def test_observatory_static_serving_is_external_container_contract(
         assert "frontend_serving" not in ready.object["data_quality"]["missing_signals"]
         assert all(
             "frontend-serving-unavailable" not in issue["reason_codes"]
+            for issue in ready.object["issues"]
+        )
+    finally:
+        get_settings.cache_clear()
+
+
+def test_observatory_readiness_reports_known_core_reachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    get_settings.cache_clear()
+    try:
+        app = create_app(
+            job_store=MemoryCoreReachabilityJobStore(),
+            audit_store=MemoryAuditStore(),
+            observability_store=CaptureObservabilityStore(),
+        )
+        route = _routes(app)[("/admin/api/v1/health/ready", "GET")]
+
+        ready = asyncio.run(route.endpoint(authorization="Bearer control-token"))
+
+        core = ready.object["core_reachability"]
+        assert ready.object["ready"] is True
+        assert core["known"] is True
+        assert core["reachable"] is True
+        assert core["health"] == "reachable"
+        assert core["reason_code"] is None
+        assert core["ready_worker_ids"] == ["scheduler-ready-1"]
+        assert core["last_core_heartbeat_at"] is not None
+        assert core["disabled_action_reasons"] == []
+        assert "core_unreachable" not in ready.object["data_quality"]["issues"]
+        assert all(
+            "core_unreachable" not in issue["reason_codes"]
+            for issue in ready.object["issues"]
+        )
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("job_store", "expected_heartbeat"),
+    [
+        (MemoryCoreReachabilityJobStore(scheduler_heartbeat=False), None),
+        (
+            MemoryCoreReachabilityJobStore(
+                scheduler_status="stopped",
+                scheduler_concurrency=0,
+            ),
+            "present",
+        ),
+    ],
+)
+def test_observatory_readiness_reports_core_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+    job_store: MemoryCoreReachabilityJobStore,
+    expected_heartbeat: str | None,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    get_settings.cache_clear()
+    try:
+        app = create_app(
+            job_store=job_store,
+            audit_store=MemoryAuditStore(),
+            observability_store=CaptureObservabilityStore(),
+        )
+        route = _routes(app)[("/admin/api/v1/health/ready", "GET")]
+
+        ready = asyncio.run(route.endpoint(authorization="Bearer control-token"))
+
+        core = ready.object["core_reachability"]
+        assert ready.object["ready"] is False
+        assert ready.object["global_health"] == "blocked"
+        assert core["known"] is True
+        assert core["reachable"] is False
+        assert core["health"] == "unreachable"
+        assert core["reason_code"] == "core_unreachable"
+        assert core["ready_worker_ids"] == []
+        assert core["disabled_action_reasons"] == ["core_unreachable"]
+        if expected_heartbeat is None:
+            assert core["last_core_heartbeat_at"] is None
+        else:
+            assert core["last_core_heartbeat_at"] is not None
+        assert "core_unreachable" in ready.object["data_quality"]["issues"]
+        assert "core_unreachable" in ready.object["data_quality"]["reason_codes"]
+        assert any(
+            "core_unreachable" in issue["reason_codes"]
             for issue in ready.object["issues"]
         )
     finally:

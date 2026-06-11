@@ -2537,6 +2537,41 @@ def _scheduler_worker_heartbeat_detail(heartbeats: list[Any]) -> dict[str, objec
     }
 
 
+def _core_reachability_from_worker_health(
+    worker_health: dict[str, Any],
+) -> dict[str, object]:
+    workers = [
+        worker
+        for worker in worker_health.get("workers", [])
+        if isinstance(worker, dict) and worker.get("pool") == "scheduler"
+    ]
+    ready_workers = [
+        worker
+        for worker in workers
+        if int(worker.get("concurrency") or 0) > 0
+        and str(worker.get("status")) in {"idle", "running"}
+    ]
+    last_seen_values = [
+        str(worker.get("last_seen_at"))
+        for worker in workers
+        if worker.get("last_seen_at")
+    ]
+    reachable = bool(ready_workers)
+    return {
+        "known": True,
+        "reachable": reachable,
+        "source": "worker_health.scheduler_worker_heartbeat",
+        "scheduler_worker_count": len(workers),
+        "ready_worker_ids": [
+            str(worker.get("worker_id"))
+            for worker in ready_workers[:10]
+            if worker.get("worker_id")
+        ],
+        "last_core_heartbeat_at": max(last_seen_values) if last_seen_values else None,
+        "disabled_action_reasons": [] if reachable else ["core_unreachable"],
+    }
+
+
 def _read_model_contract_readiness_detail(storage_readiness: Any) -> dict[str, object]:
     expected_contract = READ_MODEL_CONTRACT_BY_SCHEMA_MIGRATION.get(
         storage_readiness.schema_contract
@@ -6254,6 +6289,7 @@ def create_app(
             concurrency_by_pool=_worker_concurrency_by_pool(settings),
             workspace_key=effective_workspace_id,
         )
+        worker_health_payload = worker_health.to_json()
         status_payload = {
             "mode": settings.mode.value,
             "database_configured": bool(settings.database_url),
@@ -6265,7 +6301,10 @@ def create_app(
                 "max_tokens": settings.max_context_hint_tokens,
             },
             "jobs": job_summary.counts,
-            "workers": worker_health.to_json(),
+            "workers": worker_health_payload,
+            "core_reachability": _core_reachability_from_worker_health(
+                worker_health_payload
+            ),
         }
         metrics_snapshot = await observability.operator_metrics(
             workspace_key=effective_workspace_id,
@@ -6281,7 +6320,7 @@ def create_app(
             settings=settings,
             status=status_payload,
             operator_metrics=metrics_snapshot,
-            worker_health=worker_health.to_json(),
+            worker_health=worker_health_payload,
             audit_chain_valid=audit_chain_valid,
             static_available=static_available,
             workspace_id=effective_workspace_id,
@@ -11264,6 +11303,7 @@ def create_app(
                 "schema_version": "skillkernel.observatory.ready.v1",
                 "ready": snapshot["global_health"] not in {"blocked", "offline"},
                 "global_health": snapshot["global_health"],
+                "core_reachability": snapshot["core_reachability"],
                 "data_quality": snapshot["data_quality"],
                 "issues": snapshot["issue_board"],
                 "self_health": object_microscope(
