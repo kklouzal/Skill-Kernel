@@ -2,6 +2,7 @@ import asyncio
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+import autoskill.api.app as api_app
 from autoskill.api.app import (
     ContextArtifactRecordRequest,
     ContextBudgetEventRequest,
@@ -463,6 +464,20 @@ def test_deployment_readiness_passes_when_required_gates_are_present(
         "missing_tables": [],
         "error_type": None,
     }
+    assert response.checks["read_model_contract_compatible"] == {
+        "status": "passed",
+        "compatible": True,
+        "reason_code": "read_model_contract_compatible",
+        "advertised_contract_version": "skillkernel.readmodels.v1",
+        "expected_contract_version": "skillkernel.readmodels.v1",
+        "schema_migration_version": "0001_autoskill_schema",
+        "schema_contract": "0001_autoskill_schema",
+        "required_catalogs": [
+            "autoskill.admin_component_catalog",
+            "autoskill.admin_subsystem_catalog",
+        ],
+        "missing_catalogs": [],
+    }
     assert response.checks["scheduler_worker_heartbeat"]["status"] == "passed"
     scheduler_worker = response.checks["scheduler_worker_heartbeat"]["workers"][0]
     assert scheduler_worker["worker_id"] == "scheduler-ready-1"
@@ -533,8 +548,86 @@ def test_core_health_ready_uses_deployment_readiness_gates(monkeypatch) -> None:
         "storage_plane_schema_ready"
     ]["status"] == "passed"
     assert response.checks["deployment_readiness"]["checks"][
+        "read_model_contract_compatible"
+    ]["status"] == "passed"
+    assert response.checks["deployment_readiness"]["checks"][
         "scheduler_worker_heartbeat"
     ]["status"] == "passed"
+
+    get_settings.cache_clear()
+
+
+def test_deployment_readiness_blocks_incompatible_read_model_contract(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    monkeypatch.setenv("AUTOSKILL_LLM_API_BASE_URL", "http://llm.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_BASE_URL", "http://embed.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
+    monkeypatch.setenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", "true")
+    monkeypatch.setattr(
+        api_app,
+        "READ_MODEL_CONTRACT_VERSION",
+        "skillkernel.readmodels.v2",
+    )
+    get_settings.cache_clear()
+
+    broker_policies = NullBrokerPolicyStore()
+
+    async def seed_broker_policy() -> None:
+        await broker_policies.upsert_policy_version(
+            workspace_key="dev-01",
+            version="prod.v1",
+            policy={"max_tokens": 800},
+            status="active",
+        )
+        await broker_policies.record_replay_episode(
+            workspace_key="dev-01",
+            episode_key="prod-episode-1",
+            redacted_user_intent="Diagnose a bounded OpenClaw failure.",
+            expected_decision="skill_hint",
+            tags=["production", "operator-reviewed", "telemetry-derived"],
+            source_retrieval_log_id=uuid4(),
+        )
+
+    asyncio.run(seed_broker_policy())
+
+    app = create_app(
+        job_store=MemoryReadinessJobStore({}),
+        profile_store=MemoryReadinessProfileStore(),
+        broker_policy_store=broker_policies,
+    )
+    route = next(route for route in app.routes if route.path == "/v1/deployment/readiness")
+
+    async def run():
+        return await route.endpoint(
+            authorization="Bearer control-token",
+            workspace_id="dev-01",
+            replay_tag="production",
+        )
+
+    response = asyncio.run(run())
+
+    assert response.ready is False
+    assert "read_model_contract_compatible" in response.blockers
+    assert response.checks["storage_plane_schema_ready"]["status"] == "passed"
+    assert response.checks["read_model_contract_compatible"] == {
+        "status": "blocked",
+        "compatible": False,
+        "reason_code": "read_model_contract_incompatible",
+        "advertised_contract_version": "skillkernel.readmodels.v2",
+        "expected_contract_version": "skillkernel.readmodels.v1",
+        "schema_migration_version": "0001_autoskill_schema",
+        "schema_contract": "0001_autoskill_schema",
+        "required_catalogs": [
+            "autoskill.admin_component_catalog",
+            "autoskill.admin_subsystem_catalog",
+        ],
+        "missing_catalogs": [],
+    }
 
     get_settings.cache_clear()
 
@@ -605,6 +698,20 @@ def test_deployment_readiness_blocks_when_storage_plane_schema_not_observable(
         "schema_contract": "0001_autoskill_schema",
         "missing_tables": ["autoskill.worker_heartbeats"],
         "error_type": "storage_probe_unavailable",
+    }
+    assert response.checks["read_model_contract_compatible"] == {
+        "status": "blocked",
+        "compatible": False,
+        "reason_code": "storage_plane_uninitialized",
+        "advertised_contract_version": "skillkernel.readmodels.v1",
+        "expected_contract_version": "skillkernel.readmodels.v1",
+        "schema_migration_version": None,
+        "schema_contract": "0001_autoskill_schema",
+        "required_catalogs": [
+            "autoskill.admin_component_catalog",
+            "autoskill.admin_subsystem_catalog",
+        ],
+        "missing_catalogs": [],
     }
 
     get_settings.cache_clear()

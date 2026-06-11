@@ -142,6 +142,15 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
         "decompose",
     ]
     assert contract.contract["admin_base_path"] == "/admin/api/v1"
+    assert contract.contract["schema_migration_version"] == "0001_autoskill_schema"
+    assert contract.contract["expected_contract_version"] == "skillkernel.readmodels.v1"
+    assert contract.contract["required_catalogs"] == [
+        "autoskill.admin_component_catalog",
+        "autoskill.admin_subsystem_catalog",
+    ]
+    assert "read_model_contract_incompatible" in contract.contract[
+        "compatibility_reason_codes"
+    ]
     assert contract.contract["content_policy"]["live_stream_raw_content"] == "forbidden"
     assert ready.ready is False
     assert ready.checks["database_configured"] is False

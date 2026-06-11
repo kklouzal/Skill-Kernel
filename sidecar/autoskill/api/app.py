@@ -252,6 +252,13 @@ DEFAULT_OBSERVATORY_WORKSPACE_ID = "dev-01"
 API_CONTRACT_VERSION = "skillkernel.api.v1"
 SCHEMA_MIGRATION_VERSION = "0001_autoskill_schema"
 READ_MODEL_CONTRACT_VERSION = "skillkernel.readmodels.v1"
+READ_MODEL_CONTRACT_BY_SCHEMA_MIGRATION = {
+    SCHEMA_MIGRATION_VERSION: READ_MODEL_CONTRACT_VERSION,
+}
+READ_MODEL_CONTRACT_CATALOG_TABLES = [
+    "autoskill.admin_component_catalog",
+    "autoskill.admin_subsystem_catalog",
+]
 MINIMUM_SUPPORTED_OBSERVATORY_VERSION = "0.1.0"
 MAXIMUM_TESTED_OBSERVATORY_VERSION = "0.1.x"
 NO_STORE_HEADERS = {
@@ -2530,6 +2537,48 @@ def _scheduler_worker_heartbeat_detail(heartbeats: list[Any]) -> dict[str, objec
     }
 
 
+def _read_model_contract_readiness_detail(storage_readiness: Any) -> dict[str, object]:
+    expected_contract = READ_MODEL_CONTRACT_BY_SCHEMA_MIGRATION.get(
+        storage_readiness.schema_contract
+    )
+    advertised_contract = READ_MODEL_CONTRACT_VERSION
+    missing_catalogs = [
+        table
+        for table in READ_MODEL_CONTRACT_CATALOG_TABLES
+        if table in storage_readiness.missing_tables
+    ]
+    compatible = (
+        storage_readiness.ready
+        and expected_contract is not None
+        and advertised_contract == expected_contract
+        and not missing_catalogs
+    )
+    if compatible:
+        reason_code = "read_model_contract_compatible"
+    elif missing_catalogs:
+        reason_code = "read_model_contract_missing"
+    elif (
+        not storage_readiness.reachable
+        or not storage_readiness.schema_present
+        or not storage_readiness.migration_marker_present
+    ):
+        reason_code = "storage_plane_uninitialized"
+    elif storage_readiness.migration_version != storage_readiness.schema_contract:
+        reason_code = "migration_required"
+    else:
+        reason_code = "read_model_contract_incompatible"
+    return {
+        "compatible": compatible,
+        "reason_code": reason_code,
+        "advertised_contract_version": advertised_contract,
+        "expected_contract_version": expected_contract,
+        "schema_migration_version": storage_readiness.migration_version,
+        "schema_contract": storage_readiness.schema_contract,
+        "required_catalogs": READ_MODEL_CONTRACT_CATALOG_TABLES,
+        "missing_catalogs": missing_catalogs,
+    }
+
+
 def _broker_replay_corpus_detail(
     episodes: list[Any],
     *,
@@ -2668,6 +2717,17 @@ async def _deployment_readiness_report(
         "storage_plane_schema_ready",
         passed=storage_readiness.ready,
         detail=storage_readiness.to_json(),
+    )
+    read_model_contract_detail = _read_model_contract_readiness_detail(
+        storage_readiness
+    )
+    _readiness_check(
+        checks,
+        blockers,
+        warnings,
+        "read_model_contract_compatible",
+        passed=bool(read_model_contract_detail["compatible"]),
+        detail=read_model_contract_detail,
     )
 
     executor_profiles = await profiles.list_executor_profiles(
@@ -4692,6 +4752,18 @@ def create_app(
                 "schema": "skillkernel.read-model-contract.v1",
                 "admin_base_path": "/admin/api/v1",
                 "read_model_contract_version": READ_MODEL_CONTRACT_VERSION,
+                "schema_migration_version": SCHEMA_MIGRATION_VERSION,
+                "expected_contract_version": READ_MODEL_CONTRACT_BY_SCHEMA_MIGRATION[
+                    SCHEMA_MIGRATION_VERSION
+                ],
+                "required_catalogs": READ_MODEL_CONTRACT_CATALOG_TABLES,
+                "compatibility_reason_codes": [
+                    "read_model_contract_compatible",
+                    "read_model_contract_missing",
+                    "read_model_contract_incompatible",
+                    "storage_plane_uninitialized",
+                    "migration_required",
+                ],
                 "catalogs": [
                     "admin_component_catalog",
                     "admin_subsystem_catalog",

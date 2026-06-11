@@ -1,5 +1,26 @@
 # SkillKernel Implementation Plan
 
+2026-06-11 update: deployment readiness now includes an explicit
+`read_model_contract_compatible` check. The check derives a content-safe
+compatibility state from the live storage/schema probe and the read-model
+contract expected for `0001_autoskill_schema`, reporting required Observatory
+catalog tables and failing closed with `storage_plane_uninitialized`,
+`migration_required`, `read_model_contract_missing`, or
+`read_model_contract_incompatible` when the schema/read-model state cannot be
+trusted. `/v1/read-model-contract` also advertises the schema migration,
+expected contract version, required catalogs, and compatibility reason codes.
+This advances the Container health/readiness and Inter-container API
+compatibility contracts without adding schema writes, Observatory repair
+authority, runtime skill mutation, or activation authority. Validation: focused
+readiness/compatibility tests passed (`16 passed, 15 deselected`) with `uv run
+pytest sidecar/autoskill/tests/test_admin_surfaces.py
+sidecar/autoskill/tests/test_compatibility.py -q -k 'readiness or ready or
+compatibility or read_model_contract'`, and touched-file Ruff passed. Required
+gates passed with `uv run ruff check sidecar`, `uv run pytest` (`484 passed`),
+`uv run python -m compileall -q sidecar`, and `git diff --check`. Next: verify
+the reason-code surface against the real Dev-01 Postgres/pgvector deployment
+once the unrelated storage/model ops dirty work is reconciled.
+
 2026-06-11 update: deployment readiness now requires observable storage-plane
 schema readiness before reporting ready. The new `storage_plane_schema_ready`
 check lives in the shared deployment readiness substrate and uses the job-store

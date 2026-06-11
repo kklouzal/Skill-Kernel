@@ -17,6 +17,29 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 ## Current State
 
 - 2026-06-11: Deployment readiness now includes a deterministic
+  `read_model_contract_compatible` gate. The gate maps the live storage/schema
+  probe into the expected read-model contract for `0001_autoskill_schema`,
+  reports required Observatory catalog tables, and fails closed with
+  content-safe reason codes (`storage_plane_uninitialized`,
+  `migration_required`, `read_model_contract_missing`, or
+  `read_model_contract_incompatible`) instead of allowing Core readiness to
+  report healthy when the advertised read-model contract drifts from the
+  migration-backed contract. `/v1/read-model-contract` now also advertises the
+  schema migration, expected contract version, required catalogs, and supported
+  compatibility reason codes. This advances the unified Container health and
+  readiness plus Inter-container API compatibility contract without adding
+  migrations, Observatory repair authority, runtime skill writes, or activation
+  authority. Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_admin_surfaces.py
+  sidecar/autoskill/tests/test_compatibility.py -q -k 'readiness or ready or
+  compatibility or read_model_contract'` (`16 passed, 15 deselected`) and
+  touched-file Ruff. Required gates passed with `uv run ruff check sidecar`,
+  `uv run pytest` (`484 passed`), `uv run python -m compileall -q sidecar`,
+  and `git diff --check`. Next gate: verify the compatibility reason code
+  against a real Dev-01 Postgres/pgvector deployment after the pending
+  storage/model ops dirty work is reconciled.
+
+- 2026-06-11: Deployment readiness now includes a deterministic
   `storage_plane_schema_ready` gate in the shared readiness substrate. The gate
   uses the job-store storage connection to verify live Postgres reachability,
   installed pgvector extension visibility, the `autoskill` schema, required Core
