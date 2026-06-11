@@ -4666,6 +4666,7 @@ def create_app(
     async def health_ready() -> CoreReadyResponse:
         settings = get_settings()
         embedding_policy = embedding_provider_policy(settings)
+        workspace_id = DEFAULT_OBSERVATORY_WORKSPACE_ID
         checks = {
             "database_configured": bool(settings.database_url),
             "schema_migration_version": SCHEMA_MIGRATION_VERSION,
@@ -4683,6 +4684,32 @@ def create_app(
             ),
             "embedding_profile_degraded_reason": embedding_policy.reason_code,
         }
+        try:
+            deployment_report = await _deployment_readiness_report(
+                workspace_id=workspace_id,
+                jobs=jobs,
+                profiles=profiles,
+                broker_policies=broker_policies,
+                writer_workspace_root=writer_workspace_root,
+                replay_tag="production",
+            )
+            checks["deployment_readiness"] = {
+                "workspace_id": deployment_report.workspace_id,
+                "ready": deployment_report.ready,
+                "blockers": deployment_report.blockers,
+                "warnings": deployment_report.warnings,
+                "checks": deployment_report.checks,
+            }
+            deployment_ready = deployment_report.ready
+        except Exception as error:
+            checks["deployment_readiness"] = {
+                "workspace_id": workspace_id,
+                "ready": False,
+                "blockers": ["deployment_readiness_unavailable"],
+                "warnings": [],
+                "error_type": type(error).__name__,
+            }
+            deployment_ready = False
         ready_checks = {
             key: value
             for key, value in checks.items()
@@ -4692,11 +4719,12 @@ def create_app(
                 "embedding_profile_degraded",
                 "embedding_dependent_jobs_paused",
                 "embedding_profile_degraded_reason",
+                "deployment_readiness",
             }
         }
         return CoreReadyResponse(
             **_core_protocol_payload(),
-            ready=all(bool(value) for value in ready_checks.values()),
+            ready=deployment_ready and all(bool(value) for value in ready_checks.values()),
             checks=checks,
         )
 

@@ -1,5 +1,20 @@
 # SkillKernel Implementation Plan
 
+2026-06-11 update: Core `/v1/health/ready` now gates its protocol-level ready
+bit through the existing deployment readiness report for the default `dev-01`
+workspace instead of relying on config booleans alone. The response keeps the
+Core readiness protocol fields and adds content-safe deployment blockers,
+warnings, and check summaries under `checks`; failed readiness-store access now
+fails closed without exposing raw payloads or secrets. This advances the
+Container health and readiness contract while leaving `/v1/deployment/readiness`
+behavior intact and preserving no runtime writes, no live OpenClaw mutation, and
+no activation authority. Validation: focused readiness tests passed (`6 passed,
+20 deselected`), touched-file Ruff passed, and required gates passed with
+`uv run ruff check sidecar`, `uv run pytest` (`479 passed`), `uv run python -m
+compileall -q sidecar`, and `git diff --check`. Next: add live
+Postgres/pgvector, schema/read-model, and scheduler lease probes to the shared
+deployment readiness substrate.
+
 2026-06-11 update: topology proposal services now enforce evidence-fidelity
 authority even when called below the FastAPI wrapper. The shared service-level
 `create`, `improve`, `compose`, and `decompose` paths treat a missing

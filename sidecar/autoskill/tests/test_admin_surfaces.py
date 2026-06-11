@@ -341,6 +341,10 @@ def test_deployment_readiness_passes_when_required_gates_are_present(
     monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
     monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
     monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    monkeypatch.setenv("AUTOSKILL_LLM_API_BASE_URL", "http://llm.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_BASE_URL", "http://embed.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
     monkeypatch.setenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", "true")
     get_settings.cache_clear()
 
@@ -390,6 +394,63 @@ def test_deployment_readiness_passes_when_required_gates_are_present(
     assert response.checks["telemetry_linked_broker_replay_corpus"]["status"] == (
         "passed"
     )
+
+    get_settings.cache_clear()
+
+
+def test_core_health_ready_uses_deployment_readiness_gates(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    monkeypatch.setenv("AUTOSKILL_LLM_API_BASE_URL", "http://llm.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_BASE_URL", "http://embed.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
+    monkeypatch.setenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", "true")
+    get_settings.cache_clear()
+
+    broker_policies = NullBrokerPolicyStore()
+
+    async def seed_broker_policy() -> None:
+        await broker_policies.upsert_policy_version(
+            workspace_key="dev-01",
+            version="prod.v1",
+            policy={"max_tokens": 800},
+            status="active",
+        )
+        await broker_policies.record_replay_episode(
+            workspace_key="dev-01",
+            episode_key="prod-episode-1",
+            redacted_user_intent="Diagnose a bounded OpenClaw failure.",
+            expected_decision="skill_hint",
+            tags=["production", "operator-reviewed", "telemetry-derived"],
+            source_retrieval_log_id=uuid4(),
+        )
+
+    asyncio.run(seed_broker_policy())
+
+    app = create_app(
+        job_store=NullJobStore(),
+        profile_store=MemoryReadinessProfileStore(),
+        broker_policy_store=broker_policies,
+    )
+    route = next(route for route in app.routes if route.path == "/v1/health/ready")
+
+    response = asyncio.run(route.endpoint())
+
+    assert response.ready is True
+    assert response.checks["deployment_readiness"]["workspace_id"] == "dev-01"
+    assert response.checks["deployment_readiness"]["ready"] is True
+    assert response.checks["deployment_readiness"]["blockers"] == []
+    assert response.checks["deployment_readiness"]["checks"]["active_executor_profile"][
+        "status"
+    ] == "passed"
+    assert response.checks["deployment_readiness"]["checks"]["active_broker_policy"][
+        "version"
+    ] == "prod.v1"
+    assert response.checks["deployment_readiness"]["checks"]["broker_replay_corpus"][
+        "sampled"
+    ] == 1
 
     get_settings.cache_clear()
 

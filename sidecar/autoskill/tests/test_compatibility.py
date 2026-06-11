@@ -3,7 +3,10 @@ from uuid import uuid4
 
 from autoskill.api.app import SkillProfileCompatibilityUpsertRequest, create_app
 from autoskill.core.config import effective_skillkernel_config, get_settings
+from autoskill.db.broker_policy import NullBrokerPolicyStore
 from autoskill.db.compatibility import NullCompatibilityStore
+from autoskill.db.jobs import NullJobStore
+from autoskill.db.profiles import NullProfileStore
 from autoskill.observatory_main import create_observatory_app
 
 
@@ -76,7 +79,11 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
     monkeypatch.delenv("AUTOSKILL_LLM_API_BASE_URL", raising=False)
     monkeypatch.delenv("AUTOSKILL_EMBEDDING_API_BASE_URL", raising=False)
     get_settings.cache_clear()
-    app = create_app()
+    app = create_app(
+        job_store=NullJobStore(),
+        profile_store=NullProfileStore(),
+        broker_policy_store=NullBrokerPolicyStore(),
+    )
     routes = {
         (route.path, method): route
         for route in app.routes
@@ -148,7 +155,7 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
     get_settings.cache_clear()
 
 
-def test_ready_endpoint_ignores_non_paused_production_embedding_flag(monkeypatch) -> None:
+def test_ready_endpoint_fails_closed_when_only_env_config_is_present(monkeypatch) -> None:
     monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
     monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://autoskill:test@db/autoskill")
     monkeypatch.setenv("AUTOSKILL_LLM_API_BASE_URL", "http://llm.local/v1")
@@ -156,16 +163,26 @@ def test_ready_endpoint_ignores_non_paused_production_embedding_flag(monkeypatch
     monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_BASE_URL", "http://embed.local/v1")
     monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
     get_settings.cache_clear()
-    app = create_app()
+    app = create_app(
+        job_store=NullJobStore(),
+        profile_store=NullProfileStore(),
+        broker_policy_store=NullBrokerPolicyStore(),
+    )
     route = next(route for route in app.routes if route.path == "/v1/health/ready")
 
     ready = asyncio.run(route.endpoint())
 
-    assert ready.ready is True
+    assert ready.ready is False
     assert ready.checks["embedding_profile_configured"] is True
     assert ready.checks["embedding_profile_degraded"] is False
     assert ready.checks["embedding_dependent_jobs_paused"] is False
     assert ready.checks["embedding_profile_ready_or_explicitly_degraded"] is True
+    assert ready.checks["deployment_readiness"]["ready"] is False
+    assert "active_executor_profile" in ready.checks["deployment_readiness"]["blockers"]
+    assert "active_broker_policy" in ready.checks["deployment_readiness"]["blockers"]
+    assert "operator_reviewed_broker_replay_corpus" in ready.checks[
+        "deployment_readiness"
+    ]["blockers"]
 
     get_settings.cache_clear()
 

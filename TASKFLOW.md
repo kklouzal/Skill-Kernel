@@ -16,6 +16,26 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-11: Core `/v1/health/ready` now reuses the deterministic deployment
+  readiness substrate for the default `dev-01` workspace before reporting the
+  Core container ready. The endpoint preserves the `CoreReadyResponse` protocol
+  shape while adding content-safe deployment readiness detail under `checks`,
+  including blockers, warnings, and gated profile/broker/job summaries, and it
+  fails closed if the deployment readiness substrate cannot be queried. This
+  advances the unified Container health and readiness contract by making Core
+  readiness depend on storage/profile/gate state rather than config booleans
+  alone, without changing `/v1/deployment/readiness`, exposing secrets or raw
+  payloads, writing runtime skills, or adding activation authority. Focused
+  validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_compatibility.py
+  sidecar/autoskill/tests/test_admin_surfaces.py -q -k 'ready or
+  deployment_readiness'` (`6 passed, 20 deselected`) and touched-file Ruff.
+  Required gates passed with `uv run ruff check sidecar`, `uv run pytest`
+  (`479 passed`), `uv run python -m compileall -q sidecar`, and `git diff
+  --check`. Next gate: extend readiness toward live Postgres/pgvector/schema
+  and scheduler lease probes so the deployment readiness substrate covers the
+  full storage-plane contract in production.
+
 - 2026-06-11: Topology proposal services now fail closed when semantic
   topology evidence is present but no governed evidence-fidelity map is
   supplied. The shared `create`, `improve`, `compose`, and `decompose`
