@@ -1,5 +1,21 @@
 # SkillKernel Implementation Plan
 
+2026-06-12 update: deployment readiness now treats executor profiles as
+operator-visible compatibility contracts, not count-only presence. The
+`active_executor_profile` check fails closed unless an active profile includes
+agent backend, model family, sandbox, OS name, tool surface, binary surface,
+and API-contract keys; readiness detail returns content-safe profile keys,
+compatibility fields, tool/binary/API-contract summaries, permission keys, and
+reason codes for blocked profiles without exposing secrets, prompts, evidence,
+or broad environment dumps. This advances executor-profile-aware evaluation and
+routing contracts, deployment/readiness fake-health prevention, and the
+OpenClaw assurance seam while preserving no runtime skill writes, plugin
+activation, autonomous apply, or production OpenClaw mutation. Validation
+covered focused admin readiness tests and the deployment-readiness smoke
+summary test, touched-file Ruff, touched-file compileall, sidecar Ruff, full
+pytest, sidecar compileall, and `git diff --check`. Next: verify the SQL smoke
+reports the richer profile detail against Dev-01 readiness.
+
 2026-06-12 update: deployment readiness now treats model and embedding profile
 qualification as a hard fail-closed gate. `/v1/deployment/readiness` accepts
 text profiles only when they carry an autonomous-capable

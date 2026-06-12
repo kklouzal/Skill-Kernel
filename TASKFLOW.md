@@ -16,6 +16,22 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-12: Deployment readiness now enforces executor-profile compatibility
+  detail instead of accepting a count of active executor profiles. The
+  `active_executor_profile` check reports content-safe profile keys, agent
+  backend, model family, sandbox, OS name, tool/binary counts and keys,
+  API-contract counts and keys, permission keys, compatible profiles, blocked
+  profiles, and deterministic reason codes; active profiles missing core
+  compatibility shape now block readiness. This advances the unified
+  executor-profile-aware contracts, deployment/readiness fake-health
+  prevention, and OpenClaw assurance seam without runtime skill writes, plugin
+  activation, autonomous apply, or production OpenClaw mutation. Validation
+  passed with focused admin readiness tests and the deployment-readiness smoke
+  summary test, touched-file Ruff, touched-file compileall, sidecar Ruff, full
+  pytest, sidecar compileall, and `git diff --check`. Next gate: verify the
+  SQL smoke reports the richer executor profile detail against Dev-01
+  readiness.
+
 - 2026-06-12: Deployment readiness now fails closed on model/embedding profile
   qualification state instead of accepting merely active profiles. Core
   readiness requires a text profile with an autonomous-capable

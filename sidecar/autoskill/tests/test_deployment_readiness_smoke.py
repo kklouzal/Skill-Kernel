@@ -43,7 +43,30 @@ def test_deployment_readiness_smoke_summary_is_content_safe_and_assertable() -> 
                 "observed": 1,
                 "ready_worker_ids": ["deployment-readiness-smoke:scheduler"],
             },
-            "active_executor_profile": {"status": "passed", "count": 1},
+            "active_executor_profile": {
+                "status": "passed",
+                "count": 1,
+                "profile_keys": ["deployment-readiness-smoke-executor"],
+                "compatible_profiles": [
+                    {
+                        "profile_key": "deployment-readiness-smoke-executor",
+                        "status": "active",
+                        "agent_backend": "codex",
+                        "model_family": "gpt",
+                        "sandbox": "danger-full-access",
+                        "os_name": "linux",
+                        "tool_count": 1,
+                        "tool_keys": ["exec"],
+                        "binary_count": 2,
+                        "binary_keys": ["git", "uv"],
+                        "api_contract_count": 1,
+                        "api_contract_keys": ["skillkernel"],
+                        "permission_keys": ["filesystem"],
+                        "reason_codes": [],
+                    }
+                ],
+                "blocked_profiles": [],
+            },
             "qualified_text_model_profile": {
                 "status": "passed",
                 "count": 1,

@@ -2729,6 +2729,84 @@ def _profile_qualification_readiness_detail(
     }
 
 
+def _executor_profile_reason_codes(profile: Any) -> list[str]:
+    reason_codes: list[str] = []
+    required_fields = [
+        ("agent_backend", "executor_profile_agent_backend_missing"),
+        ("model_family", "executor_profile_model_family_missing"),
+        ("sandbox", "executor_profile_sandbox_missing"),
+        ("os_name", "executor_profile_os_name_missing"),
+    ]
+    for field_name, reason_code in required_fields:
+        if not str(getattr(profile, field_name, "") or "").strip():
+            reason_codes.append(reason_code)
+
+    available_tools = getattr(profile, "available_tools", None)
+    if not isinstance(available_tools, list) or not available_tools:
+        reason_codes.append("executor_profile_tools_missing")
+
+    available_binaries = getattr(profile, "available_binaries", None)
+    if not isinstance(available_binaries, list) or not available_binaries:
+        reason_codes.append("executor_profile_binaries_missing")
+
+    api_contracts = getattr(profile, "api_contracts", None)
+    if not isinstance(api_contracts, dict) or not api_contracts:
+        reason_codes.append("executor_profile_api_contracts_missing")
+
+    return reason_codes
+
+
+def _safe_string_list(values: Any, *, limit: int = 25) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return sorted(str(value) for value in values if str(value).strip())[:limit]
+
+
+def _safe_string_count(values: Any) -> int:
+    if not isinstance(values, list):
+        return 0
+    return len([value for value in values if str(value).strip()])
+
+
+def _executor_profile_readiness_detail(profiles: list[Any]) -> dict[str, object]:
+    usable_profiles = []
+    blocked_profiles = []
+    for profile in profiles:
+        api_contracts = getattr(profile, "api_contracts", None)
+        api_contracts = api_contracts if isinstance(api_contracts, dict) else {}
+        permissions = getattr(profile, "permissions", None)
+        permissions = permissions if isinstance(permissions, dict) else {}
+        reason_codes = _executor_profile_reason_codes(profile)
+        record = {
+            "profile_key": getattr(profile, "profile_key", None),
+            "status": getattr(profile, "status", None),
+            "agent_backend": getattr(profile, "agent_backend", None),
+            "model_family": getattr(profile, "model_family", None),
+            "sandbox": getattr(profile, "sandbox", None),
+            "os_name": getattr(profile, "os_name", None),
+            "tool_count": _safe_string_count(getattr(profile, "available_tools", [])),
+            "tool_keys": _safe_string_list(getattr(profile, "available_tools", [])),
+            "binary_count": _safe_string_count(
+                getattr(profile, "available_binaries", [])
+            ),
+            "binary_keys": _safe_string_list(getattr(profile, "available_binaries", [])),
+            "api_contract_count": len(api_contracts),
+            "api_contract_keys": sorted(str(key) for key in api_contracts)[:25],
+            "permission_keys": sorted(str(key) for key in permissions)[:25],
+            "reason_codes": reason_codes,
+        }
+        if reason_codes:
+            blocked_profiles.append(record)
+        else:
+            usable_profiles.append(record)
+    return {
+        "count": len(usable_profiles),
+        "profile_keys": [profile["profile_key"] for profile in usable_profiles],
+        "compatible_profiles": usable_profiles[:25],
+        "blocked_profiles": blocked_profiles[:25],
+    }
+
+
 def _broker_replay_corpus_detail(
     episodes: list[Any],
     *,
@@ -2885,13 +2963,14 @@ async def _deployment_readiness_report(
         status="active",
         limit=500,
     )
+    executor_profile_detail = _executor_profile_readiness_detail(executor_profiles)
     _readiness_check(
         checks,
         blockers,
         warnings,
         "active_executor_profile",
-        passed=bool(executor_profiles),
-        detail={"count": len(executor_profiles)},
+        passed=bool(executor_profile_detail["count"]),
+        detail=executor_profile_detail,
     )
 
     model_profiles = await profiles.list_model_profiles(

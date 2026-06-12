@@ -151,7 +151,7 @@ class MemoryReadinessProfileStore:
                 available_tools=["exec"],
                 available_binaries=["git"],
                 permissions={"filesystem": "workspace"},
-                api_contracts={},
+                api_contracts={"skillkernel": "readiness-fixture"},
                 status="active",
                 created_at=now,
                 updated_at=now,
@@ -492,6 +492,27 @@ def test_deployment_readiness_passes_when_required_gates_are_present(
     assert response.checks["qualified_text_model_profile"]["profile_keys"] == [
         "text-prod"
     ]
+    assert response.checks["active_executor_profile"]["profile_keys"] == [
+        "codex-prod"
+    ]
+    assert response.checks["active_executor_profile"]["compatible_profiles"] == [
+        {
+            "profile_key": "codex-prod",
+            "status": "active",
+            "agent_backend": "codex",
+            "model_family": "gpt",
+            "sandbox": "danger-full-access",
+            "os_name": "ubuntu",
+            "tool_count": 1,
+            "tool_keys": ["exec"],
+            "binary_count": 1,
+            "binary_keys": ["git"],
+            "api_contract_count": 1,
+            "api_contract_keys": ["skillkernel"],
+            "permission_keys": ["filesystem"],
+            "reason_codes": [],
+        }
+    ]
     assert response.checks["qualified_text_model_profile"]["qualified_profiles"][0][
         "latest_qualification_verdict"
     ] == "qualified_autonomous"
@@ -544,6 +565,56 @@ def test_deployment_readiness_passes_when_required_gates_are_present(
     assert response.checks["scheduler_worker_heartbeat"]["ready_worker_ids"] == [
         "scheduler-ready-1"
     ]
+
+    get_settings.cache_clear()
+
+
+def test_deployment_readiness_blocks_structurally_incomplete_executor_profile(
+    monkeypatch,
+) -> None:
+    _configure_deployment_readiness_env(monkeypatch)
+    profile_store = MemoryReadinessProfileStore()
+    profile_store.executor_profiles[0] = profile_store.executor_profiles[0].__class__(
+        **{
+            **profile_store.executor_profiles[0].__dict__,
+            "model_family": None,
+            "os_name": None,
+            "available_tools": [],
+            "api_contracts": {},
+        }
+    )
+
+    response = _deployment_readiness_response(profile_store)
+
+    assert response.ready is False
+    assert "active_executor_profile" in response.blockers
+    check = response.checks["active_executor_profile"]
+    assert check["profile_keys"] == []
+    assert check["blocked_profiles"][0]["profile_key"] == "codex-prod"
+    assert check["blocked_profiles"][0]["tool_count"] == 0
+    assert check["blocked_profiles"][0]["api_contract_count"] == 0
+    assert check["blocked_profiles"][0]["reason_codes"] == [
+        "executor_profile_model_family_missing",
+        "executor_profile_os_name_missing",
+        "executor_profile_tools_missing",
+        "executor_profile_api_contracts_missing",
+    ]
+    assert set(check["blocked_profiles"][0]) == {
+        "profile_key",
+        "status",
+        "agent_backend",
+        "model_family",
+        "sandbox",
+        "os_name",
+        "tool_count",
+        "tool_keys",
+        "binary_count",
+        "binary_keys",
+        "api_contract_count",
+        "api_contract_keys",
+        "permission_keys",
+        "reason_codes",
+    }
 
     get_settings.cache_clear()
 
