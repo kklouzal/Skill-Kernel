@@ -2614,6 +2614,121 @@ def _read_model_contract_readiness_detail(storage_readiness: Any) -> dict[str, o
     }
 
 
+def _parse_qualification_expires_at(value: object) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _profile_checklist_keys(qualification: dict[str, Any]) -> list[str]:
+    checks = qualification.get("checks")
+    if not isinstance(checks, dict):
+        probe_results = qualification.get("probe_results")
+        if isinstance(probe_results, dict):
+            checks = probe_results.get("checks")
+    if not isinstance(checks, dict):
+        return []
+    return sorted(str(key) for key in checks)[:25]
+
+
+def _qualification_verdict(profile: Any) -> str | None:
+    qualification = getattr(profile, "qualification", None)
+    if not isinstance(qualification, dict):
+        return None
+    verdict = (
+        qualification.get("latest_qualification_verdict")
+        or qualification.get("verdict")
+    )
+    return str(verdict) if verdict else None
+
+
+def _profile_qualification_reason_codes(
+    profile: Any,
+    *,
+    required_verdicts: set[str],
+    status_fallbacks: set[str],
+) -> list[str]:
+    status = str(getattr(profile, "status", "") or "")
+    verdict = _qualification_verdict(profile)
+    qualification = getattr(profile, "qualification", None)
+    qualification = qualification if isinstance(qualification, dict) else {}
+    expires_at = _parse_qualification_expires_at(
+        qualification.get("qualification_expires_at")
+        or qualification.get("expires_at")
+    )
+    now = datetime.now(UTC)
+    reason_codes: list[str] = []
+    if status in {"paused", "degraded"}:
+        reason_codes.append(f"profile_explicitly_{status}")
+    if status == "expired" or verdict == "expired" or (
+        expires_at is not None and expires_at <= now
+    ):
+        reason_codes.append("profile_qualification_expired")
+    if not verdict and status not in status_fallbacks:
+        reason_codes.append("profile_qualification_missing")
+    if verdict == "failed" or status == "failed":
+        reason_codes.append("profile_qualification_failed")
+    if verdict == "qualified_propose_only":
+        reason_codes.append("profile_qualification_propose_only")
+    if verdict == "qualified_classify":
+        reason_codes.append("profile_qualification_classify_only")
+    if (
+        not reason_codes
+        and verdict not in required_verdicts
+        and status not in status_fallbacks
+    ):
+        reason_codes.append("profile_qualification_not_usable")
+    return reason_codes
+
+
+def _profile_qualification_readiness_detail(
+    profiles: list[Any],
+    *,
+    required_verdicts: set[str],
+    status_fallbacks: set[str],
+) -> dict[str, object]:
+    usable_profiles = []
+    blocked_profiles = []
+    for profile in profiles:
+        qualification = getattr(profile, "qualification", None)
+        qualification = qualification if isinstance(qualification, dict) else {}
+        verdict = _qualification_verdict(profile)
+        reason_codes = _profile_qualification_reason_codes(
+            profile,
+            required_verdicts=required_verdicts,
+            status_fallbacks=status_fallbacks,
+        )
+        record = {
+            "profile_key": getattr(profile, "profile_key", None),
+            "status": getattr(profile, "status", None),
+            "latest_qualification_verdict": verdict,
+            "qualification_expires_at": (
+                qualification.get("qualification_expires_at")
+                or qualification.get("expires_at")
+            ),
+            "checklist_keys": _profile_checklist_keys(qualification),
+            "reason_codes": reason_codes,
+        }
+        if reason_codes:
+            blocked_profiles.append(record)
+        else:
+            usable_profiles.append(record)
+    return {
+        "count": len(usable_profiles),
+        "profile_keys": [profile["profile_key"] for profile in usable_profiles],
+        "qualified_profiles": usable_profiles[:25],
+        "blocked_profiles": blocked_profiles[:25],
+    }
+
+
 def _broker_replay_corpus_detail(
     episodes: list[Any],
     *,
@@ -2783,41 +2898,41 @@ async def _deployment_readiness_report(
         workspace_key=workspace_id,
         limit=500,
     )
-    qualified_model_profiles = [
-        profile
-        for profile in model_profiles
-        if profile.status in {"active", "qualified", "qualified_autonomous"}
-    ]
+    model_profile_detail = _profile_qualification_readiness_detail(
+        model_profiles,
+        required_verdicts={"qualified_autonomous"},
+        status_fallbacks={"qualified_autonomous"},
+    )
     _readiness_check(
         checks,
         blockers,
         warnings,
         "qualified_text_model_profile",
-        passed=bool(qualified_model_profiles),
-        detail={
-            "count": len(qualified_model_profiles),
-            "profile_keys": [profile.profile_key for profile in qualified_model_profiles],
-        },
+        passed=bool(model_profile_detail["count"]),
+        detail=model_profile_detail,
     )
 
     embedding_profiles = await profiles.list_embedding_profiles(
         workspace_key=workspace_id,
         limit=500,
     )
-    active_embedding_profiles = [
-        profile for profile in embedding_profiles if profile.status == "active"
+    embedding_profile_detail = _profile_qualification_readiness_detail(
+        embedding_profiles,
+        required_verdicts={"qualified"},
+        status_fallbacks={"qualified"},
+    )
+    embedding_profile_detail["dimensions"] = [
+        profile.embedding_dim
+        for profile in embedding_profiles
+        if profile.profile_key in set(embedding_profile_detail["profile_keys"])
     ]
     _readiness_check(
         checks,
         blockers,
         warnings,
         "active_embedding_profile",
-        passed=bool(active_embedding_profiles),
-        detail={
-            "count": len(active_embedding_profiles),
-            "profile_keys": [profile.profile_key for profile in active_embedding_profiles],
-            "dimensions": [profile.embedding_dim for profile in active_embedding_profiles],
-        },
+        passed=bool(embedding_profile_detail["count"]),
+        detail=embedding_profile_detail,
     )
 
     active_policy = await broker_policies.get_active_policy(workspace_key=workspace_id)

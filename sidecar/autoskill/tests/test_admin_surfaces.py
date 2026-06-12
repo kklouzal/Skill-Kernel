@@ -1,8 +1,9 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import autoskill.api.app as api_app
+import pytest
 from autoskill.api.app import (
     ContextArtifactRecordRequest,
     ContextBudgetEventRequest,
@@ -170,7 +171,15 @@ class MemoryReadinessProfileStore:
                 thinking_level="medium",
                 thinking_fallback_policy="omit",
                 status="qualified",
-                qualification={"verdict": "qualified"},
+                qualification={
+                    "latest_qualification_verdict": "qualified_autonomous",
+                    "checks": {
+                        "json_adherence": True,
+                        "evidence_id_preserved": True,
+                        "secret_refusal_marker": True,
+                        "bounded_output": True,
+                    },
+                },
                 kind="model",
                 embedding_dim=None,
                 created_at=now,
@@ -191,7 +200,17 @@ class MemoryReadinessProfileStore:
                 thinking_level="off",
                 thinking_fallback_policy="omit",
                 status="active",
-                qualification={"verdict": "qualified"},
+                qualification={
+                    "latest_qualification_verdict": "qualified",
+                    "checks": {
+                        "route_supported": True,
+                        "dimension_matches": True,
+                        "finite_values": True,
+                        "non_zero": True,
+                        "stable_single": True,
+                        "negative_pair_separation": True,
+                    },
+                },
                 kind="embedding",
                 embedding_dim=768,
                 created_at=now,
@@ -307,6 +326,59 @@ class MemoryReadinessJobStore(NullJobStore):
         )
 
 
+def _configure_deployment_readiness_env(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    monkeypatch.setenv("AUTOSKILL_LLM_API_BASE_URL", "http://llm.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_BASE_URL", "http://embed.local/v1")
+    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
+    monkeypatch.setenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", "true")
+    get_settings.cache_clear()
+
+
+def _ready_broker_policy_store() -> NullBrokerPolicyStore:
+    broker_policies = NullBrokerPolicyStore()
+
+    async def seed_broker_policy() -> None:
+        await broker_policies.upsert_policy_version(
+            workspace_key="dev-01",
+            version="prod.v1",
+            policy={"max_tokens": 800},
+            status="active",
+        )
+        await broker_policies.record_replay_episode(
+            workspace_key="dev-01",
+            episode_key="prod-episode-1",
+            redacted_user_intent="Diagnose a bounded OpenClaw failure.",
+            expected_decision="skill_hint",
+            tags=["production", "operator-reviewed", "telemetry-derived"],
+            source_retrieval_log_id=uuid4(),
+        )
+
+    asyncio.run(seed_broker_policy())
+    return broker_policies
+
+
+def _deployment_readiness_response(profile_store: MemoryReadinessProfileStore):
+    app = create_app(
+        job_store=MemoryReadinessJobStore({}),
+        profile_store=profile_store,
+        broker_policy_store=_ready_broker_policy_store(),
+    )
+    route = next(route for route in app.routes if route.path == "/v1/deployment/readiness")
+
+    async def run():
+        return await route.endpoint(
+            authorization="Bearer control-token",
+            workspace_id="dev-01",
+            replay_tag="production",
+        )
+
+    return asyncio.run(run())
+
+
 def test_skills_endpoint_lists_persisted_skill_metadata() -> None:
     skill_store = MemorySkillStore()
     app = create_app(skill_store=skill_store)
@@ -396,35 +468,8 @@ def test_deployment_readiness_reports_blockers_without_mutating_runtime(monkeypa
 def test_deployment_readiness_passes_when_required_gates_are_present(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
-    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
-    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
-    monkeypatch.setenv("AUTOSKILL_LLM_API_BASE_URL", "http://llm.local/v1")
-    monkeypatch.setenv("AUTOSKILL_EMBEDDING_PROVIDER", "openai_compatible")
-    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_BASE_URL", "http://embed.local/v1")
-    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
-    monkeypatch.setenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", "true")
-    get_settings.cache_clear()
-
-    broker_policies = NullBrokerPolicyStore()
-
-    async def seed_broker_policy() -> None:
-        await broker_policies.upsert_policy_version(
-            workspace_key="dev-01",
-            version="prod.v1",
-            policy={"max_tokens": 800},
-            status="active",
-        )
-        await broker_policies.record_replay_episode(
-            workspace_key="dev-01",
-            episode_key="prod-episode-1",
-            redacted_user_intent="Diagnose a bounded OpenClaw failure.",
-            expected_decision="skill_hint",
-            tags=["production", "operator-reviewed", "telemetry-derived"],
-            source_retrieval_log_id=uuid4(),
-        )
-
-    asyncio.run(seed_broker_policy())
+    _configure_deployment_readiness_env(monkeypatch)
+    broker_policies = _ready_broker_policy_store()
 
     app = create_app(
         job_store=MemoryReadinessJobStore({}),
@@ -444,6 +489,18 @@ def test_deployment_readiness_passes_when_required_gates_are_present(
 
     assert response.ready is True
     assert response.blockers == []
+    assert response.checks["qualified_text_model_profile"]["profile_keys"] == [
+        "text-prod"
+    ]
+    assert response.checks["qualified_text_model_profile"]["qualified_profiles"][0][
+        "latest_qualification_verdict"
+    ] == "qualified_autonomous"
+    assert response.checks["active_embedding_profile"]["profile_keys"] == [
+        "embedding-prod"
+    ]
+    assert response.checks["active_embedding_profile"]["qualified_profiles"][0][
+        "latest_qualification_verdict"
+    ] == "qualified"
     assert response.checks["active_broker_policy"]["version"] == "prod.v1"
     assert response.checks["active_embedding_profile"]["dimensions"] == [768]
     assert response.checks["operator_reviewed_broker_replay_corpus"]["status"] == (
@@ -491,36 +548,118 @@ def test_deployment_readiness_passes_when_required_gates_are_present(
     get_settings.cache_clear()
 
 
-def test_core_health_ready_uses_deployment_readiness_gates(monkeypatch) -> None:
-    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
-    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
-    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
-    monkeypatch.setenv("AUTOSKILL_LLM_API_BASE_URL", "http://llm.local/v1")
-    monkeypatch.setenv("AUTOSKILL_EMBEDDING_PROVIDER", "openai_compatible")
-    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_BASE_URL", "http://embed.local/v1")
-    monkeypatch.setenv("AUTOSKILL_EMBEDDING_API_KEY", "test-key")
-    monkeypatch.setenv("AUTOSKILL_RUNTIME_CONTEXT_BROKER_ENABLED", "true")
+@pytest.mark.parametrize(
+    ("qualification", "expected_reason"),
+    [
+        ({}, "profile_qualification_missing"),
+        (
+            {"latest_qualification_verdict": "failed"},
+            "profile_qualification_failed",
+        ),
+        (
+            {
+                "latest_qualification_verdict": "qualified_autonomous",
+                "qualification_expires_at": (
+                    datetime.now(UTC) - timedelta(minutes=1)
+                ).isoformat(),
+            },
+            "profile_qualification_expired",
+        ),
+        (
+            {"latest_qualification_verdict": "qualified_propose_only"},
+            "profile_qualification_propose_only",
+        ),
+    ],
+)
+def test_deployment_readiness_blocks_active_text_profile_without_autonomous_qualification(
+    monkeypatch,
+    qualification: dict[str, object],
+    expected_reason: str,
+) -> None:
+    _configure_deployment_readiness_env(monkeypatch)
+    profile_store = MemoryReadinessProfileStore()
+    profile_store.model_profiles[0] = profile_store.model_profiles[0].__class__(
+        **{
+            **profile_store.model_profiles[0].__dict__,
+            "status": "active",
+            "qualification": qualification,
+        }
+    )
+
+    response = _deployment_readiness_response(profile_store)
+
+    assert response.ready is False
+    assert "qualified_text_model_profile" in response.blockers
+    check = response.checks["qualified_text_model_profile"]
+    assert check["profile_keys"] == []
+    assert check["blocked_profiles"][0]["profile_key"] == "text-prod"
+    assert expected_reason in check["blocked_profiles"][0]["reason_codes"]
+    assert set(check["blocked_profiles"][0]) == {
+        "profile_key",
+        "status",
+        "latest_qualification_verdict",
+        "qualification_expires_at",
+        "checklist_keys",
+        "reason_codes",
+    }
+
     get_settings.cache_clear()
 
-    broker_policies = NullBrokerPolicyStore()
 
-    async def seed_broker_policy() -> None:
-        await broker_policies.upsert_policy_version(
-            workspace_key="dev-01",
-            version="prod.v1",
-            policy={"max_tokens": 800},
-            status="active",
-        )
-        await broker_policies.record_replay_episode(
-            workspace_key="dev-01",
-            episode_key="prod-episode-1",
-            redacted_user_intent="Diagnose a bounded OpenClaw failure.",
-            expected_decision="skill_hint",
-            tags=["production", "operator-reviewed", "telemetry-derived"],
-            source_retrieval_log_id=uuid4(),
-        )
+@pytest.mark.parametrize(
+    ("qualification", "expected_reason"),
+    [
+        ({}, "profile_qualification_missing"),
+        ({"latest_qualification_verdict": "failed"}, "profile_qualification_failed"),
+        (
+            {
+                "latest_qualification_verdict": "qualified",
+                "qualification_expires_at": (
+                    datetime.now(UTC) - timedelta(minutes=1)
+                ).isoformat(),
+            },
+            "profile_qualification_expired",
+        ),
+    ],
+)
+def test_deployment_readiness_blocks_active_embedding_profile_without_qualification(
+    monkeypatch,
+    qualification: dict[str, object],
+    expected_reason: str,
+) -> None:
+    _configure_deployment_readiness_env(monkeypatch)
+    profile_store = MemoryReadinessProfileStore()
+    profile_store.embedding_profiles[0] = profile_store.embedding_profiles[0].__class__(
+        **{
+            **profile_store.embedding_profiles[0].__dict__,
+            "status": "active",
+            "qualification": qualification,
+        }
+    )
 
-    asyncio.run(seed_broker_policy())
+    response = _deployment_readiness_response(profile_store)
+
+    assert response.ready is False
+    assert "active_embedding_profile" in response.blockers
+    check = response.checks["active_embedding_profile"]
+    assert check["profile_keys"] == []
+    assert check["blocked_profiles"][0]["profile_key"] == "embedding-prod"
+    assert expected_reason in check["blocked_profiles"][0]["reason_codes"]
+    assert set(check["blocked_profiles"][0]) == {
+        "profile_key",
+        "status",
+        "latest_qualification_verdict",
+        "qualification_expires_at",
+        "checklist_keys",
+        "reason_codes",
+    }
+
+    get_settings.cache_clear()
+
+
+def test_core_health_ready_uses_deployment_readiness_gates(monkeypatch) -> None:
+    _configure_deployment_readiness_env(monkeypatch)
+    broker_policies = _ready_broker_policy_store()
 
     app = create_app(
         job_store=MemoryReadinessJobStore({}),

@@ -1,5 +1,18 @@
 # SkillKernel Implementation Plan
 
+2026-06-12 update: deployment readiness now treats model and embedding profile
+qualification as a hard fail-closed gate. `/v1/deployment/readiness` accepts
+text profiles only when they carry an autonomous-capable
+`qualified_autonomous` qualification verdict/status and accepts embedding
+profiles only when they carry a `qualified` verdict/status. Active profiles
+with missing, failed, expired, or propose-only qualification no longer satisfy
+Core readiness; the check returns only content-safe profile keys, status/verdict
+values, checklist keys, and reason codes for blocked profiles. The SQL
+deployment-readiness smoke seed was aligned to the autonomous text verdict.
+Validation covered focused readiness/profile admin tests, touched-file Ruff,
+touched-file compileall, related deployment-readiness smoke tests, and `git
+diff --check`.
+
 2026-06-12 update: the SQL-backed Observatory live-stream smoke is now a
 repeatable CI/operator gate. `scripts/autoskill_observatory_live_smoke.py`
 continues to target a caller-provided Postgres/pgvector DSN, apply the

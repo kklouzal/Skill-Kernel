@@ -157,7 +157,7 @@ async def _seed_readiness_records(
         status="qualified",
         qualification={
             "schema": "autoskill.deployment-readiness-smoke.qualification.v1",
-            "latest_qualification_verdict": "qualified",
+            "latest_qualification_verdict": "qualified_autonomous",
             "content_safe": True,
         },
         thinking_level="medium",

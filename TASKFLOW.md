@@ -16,6 +16,18 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-12: Deployment readiness now fails closed on model/embedding profile
+  qualification state instead of accepting merely active profiles. Core
+  readiness requires a text profile with an autonomous-capable
+  `qualified_autonomous` verdict/status and an embedding profile with
+  `qualified` verdict/status; active profiles with missing, failed, expired,
+  or propose-only qualification are blockers with content-safe profile keys,
+  status/verdict, checklist keys, and reason codes. The deployment readiness
+  SQL smoke seed now uses `qualified_autonomous` for the text profile. Focused
+  validation passed with the readiness/profile admin tests, touched-file Ruff,
+  touched-file compileall, related deployment-readiness smoke tests, and `git
+  diff --check`.
+
 - 2026-06-12: Promoted the SQL-backed Observatory live-stream smoke to a
   repeatable CI/operator gate for unified Observatory Sections 12.3 live stream
   envelope, 12.6 API truth/stability, 13 read models, and Part V Section 7
