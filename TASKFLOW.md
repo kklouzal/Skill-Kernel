@@ -16,6 +16,27 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-12: Wired the SQL-backed topology admission smoke into repeatable
+  CI/operator validation. `.github/workflows/publish-ghcr.yml` now runs a
+  `topology-admission-smoke` job after deterministic Python tests, starts a
+  disposable `pgvector/pgvector:pg17` service, installs the existing uv
+  dependency set, waits for asyncpg connectivity, and executes
+  `scripts/autoskill_topology_admission_smoke.py` through
+  `AUTOSKILL_DATABASE_URL`. The local image-build matrix now depends on both
+  SQL-backed smoke gates (`revocation-traversal-smoke` and
+  `topology-admission-smoke`) alongside plugin and Observatory checks, so GHCR
+  publication remains downstream of deterministic topology admission coverage.
+  This advances unified Sections 13.6-13.8 and Part V evidence-sufficiency /
+  autonomy assurance without production runtime behavior, plugin activation,
+  runtime skill writes, autonomous apply, raw evidence exposure, or live
+  OpenClaw mutation. Validation passed with `yq '.'
+  .github/workflows/publish-ghcr.yml >/dev/null`, `uv run ruff check sidecar
+  scripts/autoskill_topology_admission_smoke.py`, `uv run python -m
+  compileall -q sidecar scripts/autoskill_topology_admission_smoke.py`, and a
+  disposable local `pgvector/pgvector:pg17` topology smoke on
+  `127.0.0.1:56999`. Next gate: parent review plus pushed GitHub Actions
+  confirmation on Dev-01/GHCR.
+
 - 2026-06-12: Wired the SQL-backed revocation traversal smoke into repeatable
   CI validation. `.github/workflows/publish-ghcr.yml` now runs a
   `revocation-traversal-smoke` job after deterministic Python tests, starts a

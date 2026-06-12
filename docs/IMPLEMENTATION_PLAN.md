@@ -1,5 +1,25 @@
 # SkillKernel Implementation Plan
 
+2026-06-12 update: the SQL-backed topology admission smoke is now a repeatable
+CI/operator gate in `.github/workflows/publish-ghcr.yml`. The new
+`topology-admission-smoke` job runs after deterministic Python tests, provisions
+a disposable `pgvector/pgvector:pg17` Postgres service, waits for asyncpg
+connectivity, and executes `scripts/autoskill_topology_admission_smoke.py`
+through `AUTOSKILL_DATABASE_URL`. Local image-build validation now depends on
+both SQL-backed smoke gates (`revocation-traversal-smoke` and
+`topology-admission-smoke`) alongside plugin and Observatory checks, keeping
+GHCR publication downstream of deterministic topology admission assurance for
+Sections 13.6-13.8 and Part V evidence-sufficiency/autonomy requirements. The
+gate preserves content-safe summaries only and adds no production runtime
+behavior, plugin activation, runtime skill writes, autonomous apply, raw
+evidence exposure, or live OpenClaw mutation. Validation passed with
+`yq '.' .github/workflows/publish-ghcr.yml >/dev/null`,
+`uv run ruff check sidecar scripts/autoskill_topology_admission_smoke.py`,
+`uv run python -m compileall -q sidecar
+scripts/autoskill_topology_admission_smoke.py`, and a disposable local
+`pgvector/pgvector:pg17` topology smoke on `127.0.0.1:56999`. Next: confirm
+the pushed GitHub Actions run.
+
 2026-06-12 update: the revocation traversal smoke is now a CI gate in
 `.github/workflows/publish-ghcr.yml`. The new `revocation-traversal-smoke` job
 runs after deterministic Python tests, provisions a disposable
