@@ -92,6 +92,26 @@ compileall -q sidecar`, and `git diff --check`. Next: add live
 Postgres/pgvector, schema/read-model, and scheduler lease probes to the shared
 deployment readiness substrate.
 
+2026-06-11 update: SQL-backed topology admission now has a bounded smoke
+primitive at `scripts/autoskill_topology_admission_smoke.py`. The smoke applies
+the bootstrap migration to disposable pgvector/Postgres, inserts content-safe
+governed evidence rows, resolves evidence fidelity through
+`AsyncpgEvidenceStore`, and persists create topology proposals through the
+asyncpg topology/governance/autonomy stores. It verifies `hash_only`,
+`metadata_only`, and unavailable evidence persist blocked/fail-closed, while
+`redacted_derivative` and `declassified_summary` persist as propose-only
+candidate operations with planned trials and staged transactions. This advances
+topology/evidence-to-skill bridge Sections 13.6-13.8 plus Part V
+evidence-sufficiency/autonomy assurance, while preserving no raw-evidence
+exposure, no runtime skill writes, no activation authority, and no live
+OpenClaw mutation. Validation: `uv run python
+scripts/autoskill_topology_admission_smoke.py --database-url
+postgresql://autoskill:autoskill-dev@127.0.0.1:55433/autoskill` passed against
+a disposable `pgvector/pgvector:pg17` container, and touched-file Ruff
+(`uv run ruff check scripts/autoskill_topology_admission_smoke.py`) passed.
+Next: wire the smoke into the operator/CI runbook or extend the same
+SQL-backed proof to usage-derived topology proposal sources.
+
 2026-06-11 update: topology proposal services now enforce evidence-fidelity
 authority even when called below the FastAPI wrapper. The shared service-level
 `create`, `improve`, `compose`, and `decompose` paths treat a missing

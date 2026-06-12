@@ -116,6 +116,25 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   and scheduler lease probes so the deployment readiness substrate covers the
   full storage-plane contract in production.
 
+- 2026-06-11: Added a bounded SQL-backed topology admission smoke primitive in
+  `scripts/autoskill_topology_admission_smoke.py`. The smoke applies the
+  bootstrap migration to a disposable pgvector/Postgres database, seeds
+  content-safe governed evidence rows, resolves fidelity through
+  `AsyncpgEvidenceStore`, and persists create topology proposals through the
+  asyncpg topology/governance/autonomy stores. It proves `hash_only`,
+  `metadata_only`, and unavailable evidence fail closed as blocked persisted
+  operations, while `redacted_derivative` and `declassified_summary` evidence
+  remain propose-only candidates with planned trials and staged transactions.
+  This advances unified Sections 13.6-13.8 and Part V evidence-sufficiency /
+  autonomy assurance without raw evidence exposure, runtime skill writes,
+  activation authority, or live OpenClaw mutation. Validation passed with
+  `uv run python scripts/autoskill_topology_admission_smoke.py --database-url
+  postgresql://autoskill:autoskill-dev@127.0.0.1:55433/autoskill` against a
+  disposable `pgvector/pgvector:pg17` container, and touched-file Ruff passed
+  with `uv run ruff check scripts/autoskill_topology_admission_smoke.py`.
+  Next gate: wire this smoke into the operator/CI runbook or extend the same
+  SQL-backed proof to usage-derived topology proposal sources.
+
 - 2026-06-11: Topology proposal services now fail closed when semantic
   topology evidence is present but no governed evidence-fidelity map is
   supplied. The shared `create`, `improve`, `compose`, and `decompose`
