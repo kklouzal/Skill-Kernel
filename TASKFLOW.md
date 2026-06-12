@@ -16,6 +16,24 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-12: Promoted the SQL-backed Observatory live-stream smoke to a
+  repeatable CI/operator gate for unified Observatory Sections 12.3 live stream
+  envelope, 12.6 API truth/stability, 13 read models, and Part V Section 7
+  Observatory assurance. `scripts/autoskill_observatory_live_smoke.py` now
+  emits an assertable content-safe summary proving a timestamp snapshot cursor
+  fences pre-existing `admin_live_event_outbox` rows while later persisted
+  outbox deltas still stream with reconnect-safe `seq` / `cursor_seq` and the
+  expected UI-safe payload. `.github/workflows/publish-ghcr.yml` now runs
+  `observatory-live-smoke` after deterministic tests with a disposable
+  `pgvector/pgvector:pg17` service and makes `build-test-images` depend on it
+  alongside revocation, topology, and deployment readiness smokes. The gate
+  preserves no raw-vault exposure, no runtime skill writes, no plugin
+  activation, no autonomous apply, and no live OpenClaw mutation. Validation
+  evidence for this slice is the focused non-live unit test, workflow YAML
+  parse, touched-file Ruff, touched-file compileall, and `git diff --check`.
+  Next gate: parent review and pushed GitHub Actions confirmation of the new
+  live-stream CI job.
+
 - 2026-06-12: Added a SQL-backed deployment readiness smoke primitive and CI
   gate for the unified Container health/readiness and Inter-container API
   compatibility contracts. `scripts/autoskill_deployment_readiness_smoke.py`

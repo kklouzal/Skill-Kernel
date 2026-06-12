@@ -104,17 +104,14 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             live_seq=live_event.seq,
             smoke_id=smoke_id,
         )
-        return {
-            "schema": "autoskill.observatory-live-smoke.v1",
-            "ok": True,
-            "workspace_id": args.workspace_id,
-            "smoke_id": smoke_id,
-            "snapshot_seq": snapshot_payload["seq"],
-            "snapshot_cursor_seq": snapshot_payload["cursor_seq"],
-            "stale_outbox_seq": stale_event.seq,
-            "live_outbox_seq": live_event.seq,
-            "live_event_type": live_payload["event_type"],
-        }
+        return _summarize_smoke(
+            workspace_id=args.workspace_id,
+            smoke_id=smoke_id,
+            snapshot_payload=snapshot_payload,
+            stale_seq=stale_event.seq,
+            live_payload=live_payload,
+            live_seq=live_event.seq,
+        )
     finally:
         await _delete_smoke_rows(args.database_url, smoke_id)
         await store.close()
@@ -148,6 +145,33 @@ def _assert_smoke(
     payload = live_payload.get("payload")
     if not isinstance(payload, dict) or payload.get("smoke_id") != smoke_id:
         raise SystemExit("live frame did not replay the smoke event payload")
+
+
+def _summarize_smoke(
+    *,
+    workspace_id: str,
+    smoke_id: str,
+    snapshot_payload: dict[str, Any],
+    stale_seq: int,
+    live_payload: dict[str, Any],
+    live_seq: int,
+) -> dict[str, Any]:
+    return {
+        "schema": "autoskill.observatory-live-smoke.v1",
+        "ok": True,
+        "workspace_id": workspace_id,
+        "smoke_id": smoke_id,
+        "snapshot_seq": snapshot_payload["seq"],
+        "snapshot_cursor_seq": snapshot_payload["cursor_seq"],
+        "stale_outbox_seq": stale_seq,
+        "live_outbox_seq": live_seq,
+        "live_event_type": live_payload["event_type"],
+        "raw_vault_exposure": False,
+        "runtime_skill_writes": False,
+        "plugin_activation": False,
+        "autonomous_apply": False,
+        "live_openclaw_mutation": False,
+    }
 
 
 async def _wait_for_smoke_event(

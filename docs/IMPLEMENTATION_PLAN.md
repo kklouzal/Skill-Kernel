@@ -1,5 +1,25 @@
 # SkillKernel Implementation Plan
 
+2026-06-12 update: the SQL-backed Observatory live-stream smoke is now a
+repeatable CI/operator gate. `scripts/autoskill_observatory_live_smoke.py`
+continues to target a caller-provided Postgres/pgvector DSN, apply the
+bootstrap migration by default, seed isolated `observatory-live-smoke-*`
+outbox events, and exercise the real `/admin/live-sse` route over the asyncpg
+Observatory admin store. Its emitted JSON now includes explicit safe-summary
+flags while proving the Section 12.3 live stream envelope and Section 12.6
+truth/stability behavior: the initial snapshot carries a cursor that fences
+pre-existing outbox rows, and later persisted deltas still arrive with stable
+event type, `seq`, `cursor_seq`, and UI-safe payload. The gate also reinforces
+Section 13 read-model/outbox consumption and Part V Section 7 Observatory
+assurance without raw-vault exposure, runtime skill writes, plugin activation,
+autonomous apply, or live OpenClaw mutation. `.github/workflows/publish-ghcr.yml`
+now runs `observatory-live-smoke` after deterministic tests with disposable
+`pgvector/pgvector:pg17`, and local image-build validation depends on it
+alongside the revocation, topology, and deployment readiness SQL smokes.
+Validation for this slice: focused unit test, workflow YAML parse, touched-file
+Ruff, touched-file compileall, and `git diff --check`. Next: confirm the
+pushed GitHub Actions run.
+
 2026-06-12 update: SQL-backed deployment readiness now has a repeatable smoke
 primitive and CI gate. `scripts/autoskill_deployment_readiness_smoke.py`
 targets a caller-provided `--database-url`, applies the bootstrap migration by
