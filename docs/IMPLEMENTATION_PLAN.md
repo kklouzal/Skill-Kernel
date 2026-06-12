@@ -1,5 +1,20 @@
 # SkillKernel Implementation Plan
 
+2026-06-12 update: the revocation traversal smoke is now a CI gate in
+`.github/workflows/publish-ghcr.yml`. The new `revocation-traversal-smoke` job
+runs after deterministic Python tests, provisions a disposable
+`pgvector/pgvector:pg17` Postgres service, waits for asyncpg connectivity, and
+executes `scripts/autoskill_revocation_traversal_smoke.py` against
+`AUTOSKILL_DATABASE_URL`. Local image-build validation now depends on the smoke
+alongside plugin and Observatory checks, keeping GHCR publication downstream of
+the SQL-backed Section 1.2 / 2.26 rollback-complete derived-data revocation
+proof. The gate preserves content-safe summaries only and adds no production
+runtime behavior, plugin activation, runtime skill writes, or live OpenClaw
+mutation. Validation: workflow YAML parsing, `uv run ruff check sidecar`, `uv
+run pytest`, `uv run python -m compileall -q sidecar`, `git diff --check`, and
+a disposable local `pgvector/pgvector:pg17` revocation smoke passed. Next:
+confirm the pushed GitHub Actions run.
+
 2026-06-12 update: SQL-backed rollback-complete derived-data revocation now has
 a bounded smoke primitive at `scripts/autoskill_revocation_traversal_smoke.py`.
 The smoke uses the real asyncpg governance store against Postgres to create an
@@ -15,8 +30,7 @@ granting activation authority, or mutating live OpenClaw state. Validation:
 `uv run python scripts/autoskill_revocation_traversal_smoke.py --database-url
 postgresql://autoskill:autoskill-dev@127.0.0.1:55433/autoskill` passed against a
 disposable `pgvector/pgvector:pg17` container, and focused Ruff/compileall
-passed for the touched script. Next: parent review and optional operator/CI
-runbook integration; this is not yet claimed as deployed CI coverage.
+passed for the touched script. The follow-up CI gate is now recorded above.
 
 2026-06-11 update: Observatory readiness now reports Core reachability as a
 known/not-assumed readiness primitive. `/admin/api/v1/health/ready` and the

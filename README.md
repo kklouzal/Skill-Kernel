@@ -309,9 +309,10 @@ uv run python scripts/autoskill_conformance.py --json
 uv run python scripts/autoskill_red_team.py --output /tmp/autoskill-red-team.json
 ```
 
-CI currently runs Ruff, deterministic Python tests, plugin syntax/tests,
-Observatory build, Docker image build tests, and GHCR publication for the split
-Core and Observatory images on configured refs.
+CI currently runs Ruff, deterministic Python tests, the SQL-backed revocation
+traversal smoke against disposable `pgvector/pgvector:pg17`, plugin
+syntax/tests, Observatory build, Docker image build tests, and GHCR publication
+for the split Core and Observatory images on configured refs.
 
 ## Security and privacy posture
 

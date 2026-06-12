@@ -16,6 +16,23 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-12: Wired the SQL-backed revocation traversal smoke into repeatable
+  CI validation. `.github/workflows/publish-ghcr.yml` now runs a
+  `revocation-traversal-smoke` job after deterministic Python tests, starts a
+  disposable `pgvector/pgvector:pg17` service, installs the existing uv
+  dependency set, waits for asyncpg connectivity, and executes
+  `scripts/autoskill_revocation_traversal_smoke.py` through
+  `AUTOSKILL_DATABASE_URL`. The local image-build matrix now depends on this
+  smoke alongside plugin and Observatory checks, so GHCR publication remains
+  downstream of rollback-complete derived-data revocation coverage. This
+  advances unified Sections 1.2 and 2.26 without production runtime behavior,
+  plugin activation, runtime skill writes, raw evidence exposure, or live
+  OpenClaw mutation. Validation passed locally with workflow YAML parsing,
+  `uv run ruff check sidecar`, `uv run pytest`, `uv run python -m compileall -q
+  sidecar`, `git diff --check`, and a disposable local `pgvector/pgvector:pg17`
+  smoke on `127.0.0.1:55434`. Next gate: parent review and pushed GitHub
+  Actions confirmation on Dev-01/GHCR.
+
 - 2026-06-12: Added a bounded SQL-backed revocation traversal smoke primitive
   in `scripts/autoskill_revocation_traversal_smoke.py` for unified Sections
   1.2 and 2.26. The smoke applies the bootstrap migration unless skipped,
@@ -34,9 +51,8 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `activation_authority=false`, and `live_openclaw_mutation=false`. Focused
   checks passed with `uv run ruff check
   scripts/autoskill_revocation_traversal_smoke.py` and `uv run python -m
-  compileall -q scripts/autoskill_revocation_traversal_smoke.py`. Next gate:
-  parent-side review plus optional operator/CI runbook wiring; do not treat this
-  as deployed CI coverage yet.
+  compileall -q scripts/autoskill_revocation_traversal_smoke.py`. This is now
+  followed by the CI wiring recorded above.
 
 - 2026-06-11: Observatory readiness now exposes a first-class, content-safe
   `core_reachability` primitive on the snapshot and
