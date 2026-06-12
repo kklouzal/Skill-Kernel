@@ -1,5 +1,29 @@
 # SkillKernel Implementation Plan
 
+2026-06-12 update: SQL-backed deployment readiness now has a repeatable smoke
+primitive and CI gate. `scripts/autoskill_deployment_readiness_smoke.py`
+targets a caller-provided `--database-url`, applies the bootstrap migration by
+default unless `--skip-migrations` is supplied, seeds only content-safe minimal
+readiness records in an isolated workspace, and exercises the real
+`/v1/deployment/readiness` route endpoint over asyncpg-backed job/profile/broker
+stores. The smoke proves migrated Postgres/pgvector schema visibility,
+read-model contract compatibility, scheduler heartbeat visibility, active
+executor/text-model/embedding/broker-policy records, telemetry-linked
+operator-reviewed replay evidence, and final ready state while explicitly
+reporting `raw_evidence_returned=false`, `runtime_skill_writes=false`,
+`activation_authority=false`, and `live_openclaw_mutation=false`.
+`.github/workflows/publish-ghcr.yml` now runs this as a separate
+`deployment-readiness-smoke` job after deterministic tests using a disposable
+`pgvector/pgvector:pg17` service, and local image-build validation depends on
+it alongside the existing revocation and topology SQL smoke gates. This advances
+the Container health/readiness contract, Inter-container API compatibility
+contract, and Part V diagnostic/evidence assurance without production runtime
+behavior, plugin activation, runtime skill writes, autonomous apply, raw
+evidence exposure, or live OpenClaw mutation. Validation passed with the focused
+unit test, touched-file Ruff, touched-file compileall, workflow YAML parsing,
+and a disposable local pgvector smoke on `127.0.0.1:57031`. Next: confirm the
+pushed GitHub Actions run.
+
 2026-06-12 update: the SQL-backed topology admission smoke is now a repeatable
 CI/operator gate in `.github/workflows/publish-ghcr.yml`. The new
 `topology-admission-smoke` job runs after deterministic Python tests, provisions

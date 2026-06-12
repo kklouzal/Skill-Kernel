@@ -16,6 +16,33 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-12: Added a SQL-backed deployment readiness smoke primitive and CI
+  gate for the unified Container health/readiness and Inter-container API
+  compatibility contracts. `scripts/autoskill_deployment_readiness_smoke.py`
+  applies `0001_autoskill_schema` by default to a caller-provided Postgres /
+  pgvector DSN, seeds an isolated `deployment-readiness-smoke-*` workspace with
+  content-safe asyncpg-backed executor/model/embedding profiles, active broker
+  policy, telemetry-linked operator-reviewed replay evidence, and scheduler
+  heartbeat state, then exercises the real `/v1/deployment/readiness` route
+  endpoint through asyncpg stores. The JSON result proves
+  `storage_plane_schema_ready`, `read_model_contract_compatible`,
+  `scheduler_worker_heartbeat`, active executor/model/embedding/broker policy,
+  operator-reviewed replay evidence, and final readiness without raw evidence
+  return, runtime skill writes, activation authority, plugin activation, or
+  live OpenClaw mutation. `.github/workflows/publish-ghcr.yml` now runs this as
+  a separate `deployment-readiness-smoke` job after deterministic tests with a
+  disposable `pgvector/pgvector:pg17` service, and local image-build validation
+  depends on it alongside the existing revocation and topology SQL smokes.
+  Validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_deployment_readiness_smoke.py -q`, `uv run ruff
+  check scripts/autoskill_deployment_readiness_smoke.py
+  sidecar/autoskill/tests/test_deployment_readiness_smoke.py`, `uv run python
+  -m compileall -q scripts/autoskill_deployment_readiness_smoke.py
+  sidecar/autoskill/tests/test_deployment_readiness_smoke.py`, `yq '.'
+  .github/workflows/publish-ghcr.yml >/dev/null`, and a disposable local
+  `pgvector/pgvector:pg17` deployment readiness smoke on `127.0.0.1:57031`.
+  Next gate: parent review and pushed GitHub Actions confirmation.
+
 - 2026-06-12: Wired the SQL-backed topology admission smoke into repeatable
   CI/operator validation. `.github/workflows/publish-ghcr.yml` now runs a
   `topology-admission-smoke` job after deterministic Python tests, starts a
