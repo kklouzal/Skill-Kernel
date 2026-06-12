@@ -1,5 +1,23 @@
 # SkillKernel Implementation Plan
 
+2026-06-12 update: SQL-backed rollback-complete derived-data revocation now has
+a bounded smoke primitive at `scripts/autoskill_revocation_traversal_smoke.py`.
+The smoke uses the real asyncpg governance store against Postgres to create an
+isolated workspace, seed content-safe evidence/memory source roots, stage a
+compile evolution transaction, record writer transaction items whose `item_id`
+values are affected `skill_version` UUIDs, connect source roots via
+`source_for_writer_item` provenance edges, preview evidence-root revocation
+traversal, queue an operator revocation request, and expand reached
+`transaction_item` nodes into `skill_version` impacts. This advances unified
+Sections 1.2 and 2.26 by proving the SQL provenance graph can discover derived
+writer artifacts without exposing raw evidence, writing runtime skills,
+granting activation authority, or mutating live OpenClaw state. Validation:
+`uv run python scripts/autoskill_revocation_traversal_smoke.py --database-url
+postgresql://autoskill:autoskill-dev@127.0.0.1:55433/autoskill` passed against a
+disposable `pgvector/pgvector:pg17` container, and focused Ruff/compileall
+passed for the touched script. Next: parent review and optional operator/CI
+runbook integration; this is not yet claimed as deployed CI coverage.
+
 2026-06-11 update: Observatory readiness now reports Core reachability as a
 known/not-assumed readiness primitive. `/admin/api/v1/health/ready` and the
 shared Observatory snapshot include a content-safe `core_reachability` object

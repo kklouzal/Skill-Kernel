@@ -16,6 +16,28 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-12: Added a bounded SQL-backed revocation traversal smoke primitive
+  in `scripts/autoskill_revocation_traversal_smoke.py` for unified Sections
+  1.2 and 2.26. The smoke applies the bootstrap migration unless skipped,
+  creates an isolated `revocation-traversal-smoke-*` workspace, seeds
+  content-safe evidence and memory UUID source roots, records an evolution
+  transaction with writer transaction items carrying affected
+  `skill_version_id` values, adds `source_for_writer_item` provenance edges,
+  and proves the real `AsyncpgGovernanceStore` can preview the evidence-root
+  traversal, queue a content-safe revocation request, and expand reached
+  writer items into affected `skill_version` impacts. Validation passed against
+  a disposable `pgvector/pgvector:pg17` container on `127.0.0.1:55433` with
+  `uv run python scripts/autoskill_revocation_traversal_smoke.py
+  --database-url
+  postgresql://autoskill:autoskill-dev@127.0.0.1:55433/autoskill`, reporting
+  `raw_evidence_returned=false`, `runtime_skill_writes=false`,
+  `activation_authority=false`, and `live_openclaw_mutation=false`. Focused
+  checks passed with `uv run ruff check
+  scripts/autoskill_revocation_traversal_smoke.py` and `uv run python -m
+  compileall -q scripts/autoskill_revocation_traversal_smoke.py`. Next gate:
+  parent-side review plus optional operator/CI runbook wiring; do not treat this
+  as deployed CI coverage yet.
+
 - 2026-06-11: Observatory readiness now exposes a first-class, content-safe
   `core_reachability` primitive on the snapshot and
   `/admin/api/v1/health/ready` response. The signal is derived from the
