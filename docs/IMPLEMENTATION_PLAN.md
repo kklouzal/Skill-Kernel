@@ -1,5 +1,22 @@
 # SkillKernel Implementation Plan
 
+2026-06-13 update: activation readiness is now policy-aware for
+semantic-equivalence context regression gates. `ActivationReadiness` includes
+the context compile run semantic-equivalence score, the SQL activation gate
+selects `context_compile_runs.semantic_equivalence_score`, and
+`_activation_blockers` fails closed with
+`context-semantic-equivalence-missing` or
+`context-semantic-equivalence-below-threshold` when activation-grade context
+proof is required and configured policy is not met. Filesystem and API writer
+apply paths pass the existing `require_semantic_equivalence` and
+`min_semantic_equivalence_score` settings into the activation gate, preserving
+content-safe blocker reporting and adding no runtime apply authority. This
+advances unified Sections 11.12-11.15. Validation covered focused activation
+gate regressions, affected worker apply expectations, touched-file Ruff,
+touched-file compileall, and `git diff --check`. Next: full sidecar/full
+pytest gates plus SQL-backed activation readiness coverage in the parent
+environment.
+
 2026-06-13 update: activation readiness now treats null/in-memory gate paths as
 fail-closed when deterministic context compile proof is required. The
 `NullActivationGateStore` mirrors the SQL activation gate's proof-presence

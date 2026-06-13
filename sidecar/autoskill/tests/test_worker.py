@@ -249,6 +249,8 @@ class MemoryActivationGateStore:
         context_artifact_id=None,
         compiled_text_hash=None,
         context_output_manifest_hash=None,
+        require_semantic_equivalence: bool = True,
+        min_semantic_equivalence_score: float | None = None,
         allowed_autonomy_actions=None,
     ) -> ActivationReadiness:
         self.calls.append(
@@ -261,6 +263,8 @@ class MemoryActivationGateStore:
                 "context_artifact_id": context_artifact_id,
                 "compiled_text_hash": compiled_text_hash,
                 "context_output_manifest_hash": context_output_manifest_hash,
+                "require_semantic_equivalence": require_semantic_equivalence,
+                "min_semantic_equivalence_score": min_semantic_equivalence_score,
                 "allowed_autonomy_actions": allowed_autonomy_actions,
             }
         )
@@ -285,6 +289,9 @@ class MemoryActivationGateStore:
             context_compile_run_id=context_compile_run_id,
             context_artifact_id=context_artifact_id,
             context_compile_status="passed" if allowed else "failed",
+            context_semantic_equivalence_score=(
+                min_semantic_equivalence_score if allowed else None
+            ),
             context_safety_status="passed" if allowed else "blocked",
             context_equivalence_status="passed" if allowed else "failed",
             context_budget_status="passed" if allowed else "over_budget",
@@ -2184,6 +2191,8 @@ def test_filesystem_worker_applies_staged_manifest_when_policy_approved(tmp_path
             "context_artifact_id": context_artifact_id,
             "compiled_text_hash": sha256_text("WHEN approved\nDO safe behavior\n"),
             "context_output_manifest_hash": context_output_manifest_hash,
+            "require_semantic_equivalence": True,
+            "min_semantic_equivalence_score": 0.9,
             "allowed_autonomy_actions": ("auto_accept", "stage_canary"),
         }
     ]

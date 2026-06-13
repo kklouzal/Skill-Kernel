@@ -22,6 +22,7 @@ class ActivationReadiness:
     context_compile_run_id: UUID | None
     context_artifact_id: UUID | None
     context_compile_status: str | None
+    context_semantic_equivalence_score: float | None
     context_safety_status: str | None
     context_equivalence_status: str | None
     context_budget_status: str | None
@@ -48,6 +49,7 @@ class ActivationReadiness:
                 str(self.context_artifact_id) if self.context_artifact_id else None
             ),
             "context_compile_status": self.context_compile_status,
+            "context_semantic_equivalence_score": self.context_semantic_equivalence_score,
             "context_safety_status": self.context_safety_status,
             "context_equivalence_status": self.context_equivalence_status,
             "context_budget_status": self.context_budget_status,
@@ -70,6 +72,8 @@ class ActivationGateStore(Protocol):
         context_artifact_id: UUID | None = None,
         compiled_text_hash: str | None = None,
         context_output_manifest_hash: str | None = None,
+        require_semantic_equivalence: bool = True,
+        min_semantic_equivalence_score: float | None = None,
         allowed_autonomy_actions: tuple[str, ...] | None = None,
     ) -> ActivationReadiness:
         """Return deterministic activation readiness for a staged skill version."""
@@ -87,6 +91,8 @@ class NullActivationGateStore:
         context_artifact_id: UUID | None = None,
         compiled_text_hash: str | None = None,
         context_output_manifest_hash: str | None = None,
+        require_semantic_equivalence: bool = True,
+        min_semantic_equivalence_score: float | None = None,
         allowed_autonomy_actions: tuple[str, ...] | None = None,
     ) -> ActivationReadiness:
         blockers: list[str] = []
@@ -97,6 +103,12 @@ class NullActivationGateStore:
             or not context_output_manifest_hash
         ):
             blockers.append("context-compile-proof-missing")
+        if (
+            require_context_compile_proof
+            and require_semantic_equivalence
+            and min_semantic_equivalence_score is not None
+        ):
+            blockers.append("context-semantic-equivalence-missing")
         return ActivationReadiness(
             allowed=not blockers,
             skill_version_id=skill_version_id,
@@ -108,6 +120,7 @@ class NullActivationGateStore:
             context_compile_run_id=context_compile_run_id,
             context_artifact_id=context_artifact_id,
             context_compile_status="passed",
+            context_semantic_equivalence_score=None,
             context_safety_status="passed",
             context_equivalence_status="passed",
             context_budget_status="passed",
@@ -129,6 +142,8 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
         context_artifact_id: UUID | None = None,
         compiled_text_hash: str | None = None,
         context_output_manifest_hash: str | None = None,
+        require_semantic_equivalence: bool = True,
+        min_semantic_equivalence_score: float | None = None,
         allowed_autonomy_actions: tuple[str, ...] | None = None,
     ) -> ActivationReadiness:
         pool = await self._get_pool()
@@ -144,6 +159,8 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
                   ccr.context_compile_run_id,
                   ca.context_artifact_id,
                   ccr.status AS context_compile_status,
+                  ccr.semantic_equivalence_score
+                    AS context_semantic_equivalence_score,
                   ca.safety_status AS context_safety_status,
                   ca.equivalence_status AS context_equivalence_status,
                   ca.budget_status AS context_budget_status,
@@ -210,6 +227,7 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
                 context_compile_run_id=context_compile_run_id,
                 context_artifact_id=context_artifact_id,
                 context_compile_status=None,
+                context_semantic_equivalence_score=None,
                 context_safety_status=None,
                 context_equivalence_status=None,
                 context_budget_status=None,
@@ -224,6 +242,8 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
             context_artifact_id=context_artifact_id,
             compiled_text_hash=compiled_text_hash,
             context_output_manifest_hash=context_output_manifest_hash,
+            require_semantic_equivalence=require_semantic_equivalence,
+            min_semantic_equivalence_score=min_semantic_equivalence_score,
             allowed_autonomy_actions=allowed_autonomy_actions,
         )
         return ActivationReadiness(
@@ -237,6 +257,9 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
             context_compile_run_id=row["context_compile_run_id"],
             context_artifact_id=row["context_artifact_id"],
             context_compile_status=row["context_compile_status"],
+            context_semantic_equivalence_score=row[
+                "context_semantic_equivalence_score"
+            ],
             context_safety_status=row["context_safety_status"],
             context_equivalence_status=row["context_equivalence_status"],
             context_budget_status=row["context_budget_status"],
@@ -256,6 +279,8 @@ def _activation_blockers(
     context_artifact_id: UUID | None,
     compiled_text_hash: str | None,
     context_output_manifest_hash: str | None,
+    require_semantic_equivalence: bool = True,
+    min_semantic_equivalence_score: float | None = None,
     allowed_autonomy_actions: tuple[str, ...] | None = None,
 ) -> list[str]:
     blockers: list[str] = []
@@ -298,6 +323,15 @@ def _activation_blockers(
         blockers.append("context-compile-run-not-found")
     elif row["context_compile_status"] != "passed":
         blockers.append("context-compile-not-passed")
+    elif require_semantic_equivalence:
+        semantic_equivalence_score = row["context_semantic_equivalence_score"]
+        if semantic_equivalence_score is None:
+            blockers.append("context-semantic-equivalence-missing")
+        elif (
+            min_semantic_equivalence_score is not None
+            and semantic_equivalence_score < min_semantic_equivalence_score
+        ):
+            blockers.append("context-semantic-equivalence-below-threshold")
     if row["context_artifact_id"] is None:
         blockers.append("context-artifact-not-found")
     else:

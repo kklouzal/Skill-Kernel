@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
+from autoskill.core.config import get_settings
 from autoskill.core.hashing import sha256_json
 from autoskill.core.skillir import SkillIR
 from autoskill.db.activation import ActivationGateStore
@@ -2954,6 +2955,7 @@ async def _check_writer_activation_gate(
         raise ValueError("writer apply activation gate requires manifest skill_version_id")
     context_gate_value = manifest.get("context_gate")
     context_gate = context_gate_value if isinstance(context_gate_value, dict) else {}
+    settings = get_settings()
     readiness = await stores.activation_gate.check_activation_readiness(
         workspace_key=workspace,
         skill_version_id=skill_version_id,
@@ -2966,6 +2968,8 @@ async def _check_writer_activation_gate(
             context_gate,
             "context_output_manifest_hash",
         ),
+        require_semantic_equivalence=settings.require_semantic_equivalence,
+        min_semantic_equivalence_score=settings.min_semantic_equivalence_score,
         allowed_autonomy_actions=("auto_accept", "stage_canary"),
     )
     if not readiness.allowed:

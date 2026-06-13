@@ -106,6 +106,8 @@ class MemoryTopologyActivationGate:
         context_artifact_id=None,
         compiled_text_hash=None,
         context_output_manifest_hash=None,
+        require_semantic_equivalence: bool = True,
+        min_semantic_equivalence_score: float | None = None,
         allowed_autonomy_actions=None,
     ) -> ActivationReadiness:
         self.calls.append(
@@ -114,6 +116,8 @@ class MemoryTopologyActivationGate:
                 "skill_version_id": skill_version_id,
                 "executor_profile_id": executor_profile_id,
                 "require_context_compile_proof": require_context_compile_proof,
+                "require_semantic_equivalence": require_semantic_equivalence,
+                "min_semantic_equivalence_score": min_semantic_equivalence_score,
                 "allowed_autonomy_actions": allowed_autonomy_actions,
             }
         )
@@ -128,6 +132,9 @@ class MemoryTopologyActivationGate:
             context_compile_run_id=context_compile_run_id,
             context_artifact_id=context_artifact_id,
             context_compile_status="passed" if self.allowed else "failed",
+            context_semantic_equivalence_score=(
+                min_semantic_equivalence_score if self.allowed else None
+            ),
             context_safety_status="passed" if self.allowed else "blocked",
             context_equivalence_status="passed" if self.allowed else "failed",
             context_budget_status="passed" if self.allowed else "over_budget",

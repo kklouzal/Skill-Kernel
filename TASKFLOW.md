@@ -16,6 +16,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-13: Activation readiness now enforces context semantic-equivalence
+  policy for activation-grade context compile proof. The SQL gate reads
+  `context_compile_runs.semantic_equivalence_score`, exposes it in readiness
+  JSON, and blocks writer apply with content-safe reason codes when semantic
+  equivalence is required but the score is missing or below the configured
+  threshold. Filesystem/API writer apply paths pass the existing
+  `require_semantic_equivalence` and `min_semantic_equivalence_score` settings
+  without broadening runtime authority. This advances unified Sections
+  11.12-11.15 context regression / semantic-equivalence activation gates.
+  Validation passed with focused activation and worker apply regressions plus
+  touched-file Ruff, compileall, and `git diff --check`. Next gate: run full
+  sidecar/full pytest gates and SQL-backed activation readiness coverage in
+  the parent environment.
+
 - 2026-06-13: Activation readiness now fails closed in the null/in-memory gate
   when context compile proof is required but the manifest proof tuple is
   incomplete. `NullActivationGateStore.check_activation_readiness` mirrors the

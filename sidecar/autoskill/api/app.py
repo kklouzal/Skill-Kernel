@@ -3731,6 +3731,7 @@ async def _check_writer_activation_gate_for_api(
             status_code=http_status.HTTP_400_BAD_REQUEST,
             detail=f"activation gate could not read staged manifest: {error}",
         ) from error
+    settings = get_settings()
     readiness = await activation_gate.check_activation_readiness(
         workspace_key=request.workspace_id,
         skill_version_id=skill_version_id,
@@ -3749,6 +3750,8 @@ async def _check_writer_activation_gate_for_api(
             manifest.get("context_gate"),
             "context_output_manifest_hash",
         ),
+        require_semantic_equivalence=settings.require_semantic_equivalence,
+        min_semantic_equivalence_score=settings.min_semantic_equivalence_score,
         allowed_autonomy_actions=("auto_accept", "stage_canary"),
     )
     if not readiness.allowed:
