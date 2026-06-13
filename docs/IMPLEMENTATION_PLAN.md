@@ -1,5 +1,19 @@
 # SkillKernel Implementation Plan
 
+2026-06-13 update: activation readiness now treats null/in-memory gate paths as
+fail-closed when deterministic context compile proof is required. The
+`NullActivationGateStore` mirrors the SQL activation gate's proof-presence
+semantics: missing `context_compile_run_id`, `context_artifact_id`, compiled
+text hash, or context output manifest hash returns
+`context-compile-proof-missing` and `allowed=false`; complete proof preserves
+the supplied run/artifact IDs and passed statuses. Focused regression tests
+cover proofless blocking and complete-proof readiness. Validation passed with
+`uv run pytest sidecar/autoskill/tests/test_activation_gate.py -q`, `uv run
+ruff check sidecar/autoskill/db/activation.py
+sidecar/autoskill/tests/test_activation_gate.py`, `uv run python -m compileall
+-q sidecar/autoskill/db/activation.py
+sidecar/autoskill/tests/test_activation_gate.py`, and `git diff --check`.
+
 2026-06-13 update: dirty-state reconciliation preserves the Dev-01 operational
 compose/Postgres and model-fixture alignment before new implementation work.
 `docker-compose.yml` defaults now target the Dev-01 Postgres/pgvector endpoint

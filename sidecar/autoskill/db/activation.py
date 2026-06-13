@@ -89,8 +89,16 @@ class NullActivationGateStore:
         context_output_manifest_hash: str | None = None,
         allowed_autonomy_actions: tuple[str, ...] | None = None,
     ) -> ActivationReadiness:
+        blockers: list[str] = []
+        if require_context_compile_proof and (
+            context_compile_run_id is None
+            or context_artifact_id is None
+            or not compiled_text_hash
+            or not context_output_manifest_hash
+        ):
+            blockers.append("context-compile-proof-missing")
         return ActivationReadiness(
-            allowed=True,
+            allowed=not blockers,
             skill_version_id=skill_version_id,
             executor_profile_id=executor_profile_id,
             scanner_status="passed",
@@ -103,7 +111,7 @@ class NullActivationGateStore:
             context_safety_status="passed",
             context_equivalence_status="passed",
             context_budget_status="passed",
-            blockers=[],
+            blockers=blockers,
             autonomy_action="auto_accept" if allowed_autonomy_actions else None,
             autonomy_action_required=bool(allowed_autonomy_actions),
         )

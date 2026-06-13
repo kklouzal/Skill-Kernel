@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from autoskill.db.activation import _activation_blockers
+import asyncio
+from uuid import uuid4
+
+from autoskill.db.activation import NullActivationGateStore, _activation_blockers
 
 
 def _row(
@@ -114,3 +117,63 @@ def test_stage_canary_requires_autonomy_hard_invariants_to_pass() -> None:
         "evaluator-not-passed",
         "proposal-gate-not-passed",
     ]
+
+
+def test_null_activation_gate_requires_context_compile_proof() -> None:
+    skill_version_id = uuid4()
+
+    readiness = asyncio.run(
+        NullActivationGateStore().check_activation_readiness(
+            workspace_key="workspace-alpha",
+            skill_version_id=skill_version_id,
+            require_context_compile_proof=True,
+        )
+    )
+
+    assert readiness.allowed is False
+    assert readiness.skill_version_id == skill_version_id
+    assert readiness.blockers == ["context-compile-proof-missing"]
+    assert readiness.context_compile_run_id is None
+    assert readiness.context_artifact_id is None
+    assert readiness.context_compile_status == "passed"
+    assert readiness.context_safety_status == "passed"
+    assert readiness.context_equivalence_status == "passed"
+    assert readiness.context_budget_status == "passed"
+
+
+def test_null_activation_gate_accepts_complete_context_compile_proof() -> None:
+    skill_version_id = uuid4()
+    executor_profile_id = uuid4()
+    context_compile_run_id = uuid4()
+    context_artifact_id = uuid4()
+
+    readiness = asyncio.run(
+        NullActivationGateStore().check_activation_readiness(
+            workspace_key="workspace-alpha",
+            skill_version_id=skill_version_id,
+            executor_profile_id=executor_profile_id,
+            require_context_compile_proof=True,
+            context_compile_run_id=context_compile_run_id,
+            context_artifact_id=context_artifact_id,
+            compiled_text_hash="sha256:compiled",
+            context_output_manifest_hash="sha256:manifest",
+            allowed_autonomy_actions=("auto_accept",),
+        )
+    )
+
+    assert readiness.allowed is True
+    assert readiness.blockers == []
+    assert readiness.skill_version_id == skill_version_id
+    assert readiness.executor_profile_id == executor_profile_id
+    assert readiness.context_compile_run_id == context_compile_run_id
+    assert readiness.context_artifact_id == context_artifact_id
+    assert readiness.scanner_status == "passed"
+    assert readiness.evaluator_status == "passed"
+    assert readiness.latest_evaluation_status == "passed"
+    assert readiness.compatibility_status == "compatible"
+    assert readiness.context_compile_status == "passed"
+    assert readiness.context_safety_status == "passed"
+    assert readiness.context_equivalence_status == "passed"
+    assert readiness.context_budget_status == "passed"
+    assert readiness.autonomy_action == "auto_accept"
+    assert readiness.autonomy_action_required is True

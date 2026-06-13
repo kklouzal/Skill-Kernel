@@ -16,6 +16,21 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-13: Activation readiness now fails closed in the null/in-memory gate
+  when context compile proof is required but the manifest proof tuple is
+  incomplete. `NullActivationGateStore.check_activation_readiness` mirrors the
+  SQL gate's `context-compile-proof-missing` blocker for missing
+  `context_compile_run_id`, `context_artifact_id`, compiled text hash, or
+  output manifest hash, while preserving permissive behavior when proof is not
+  required and passing statuses/IDs when proof is complete. Focused regression
+  coverage was added for proofless blocking and complete-proof readiness.
+  Validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_activation_gate.py -q`, `uv run ruff check
+  sidecar/autoskill/db/activation.py
+  sidecar/autoskill/tests/test_activation_gate.py`, `uv run python -m
+  compileall -q sidecar/autoskill/db/activation.py
+  sidecar/autoskill/tests/test_activation_gate.py`, and `git diff --check`.
+
 - 2026-06-13: Dirty-state reconciliation carried forward the Dev-01
   compose/Postgres and live model-fixture alignment from the prior operational
   work. `docker-compose.yml` now points SkillKernel Core/worker/Observatory
