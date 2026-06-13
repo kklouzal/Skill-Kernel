@@ -28,9 +28,9 @@ apply paths pass the existing `require_semantic_equivalence` and
 content-safe blocker reporting and adding no runtime apply authority. This
 advances unified Sections 11.12-11.15. Validation covered focused activation
 gate regressions, affected worker apply expectations, touched-file Ruff,
-touched-file compileall, and `git diff --check`. Next: full sidecar/full
-pytest gates plus SQL-backed activation readiness coverage in the parent
-environment.
+touched-file compileall, and `git diff --check`. Follow-up SQL-backed
+activation readiness coverage and full parent validation are recorded in the
+2026-06-13 update above.
 
 2026-06-13 update: activation readiness now treats null/in-memory gate paths as
 fail-closed when deterministic context compile proof is required. The

@@ -25,10 +25,17 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `require_semantic_equivalence` and `min_semantic_equivalence_score` settings
   without broadening runtime authority. This advances unified Sections
   11.12-11.15 context regression / semantic-equivalence activation gates.
-  Validation passed with focused activation and worker apply regressions plus
-  touched-file Ruff, compileall, and `git diff --check`. Next gate: run full
-  sidecar/full pytest gates and SQL-backed activation readiness coverage in
-  the parent environment.
+  SQL-backed coverage now exercises missing, below-threshold, and passing
+  semantic-equivalence scores through `AsyncpgActivationGateStore` against a
+  disposable Postgres-backed workspace and verifies cleanup of the seeded
+  activation rows. Fresh parent-run validation passed with `uv run python
+  scripts/autoskill_conformance.py`, `uv run python
+  scripts/autoskill_acceptance.py`, `uv run python
+  scripts/autoskill_observatory_acceptance.py`, `uv run ruff check sidecar`,
+  `uv run pytest` (`507 passed, 1 skipped`), `uv run python -m compileall -q
+  sidecar`, and `git diff --check`. Next gate: confirm the pushed GitHub
+  Actions/GHCR result for this commit, then redeploy only
+  `skillkernel-core` and `skillkernel-observatory` after green CI.
 
 - 2026-06-13: Activation readiness now fails closed in the null/in-memory gate
   when context compile proof is required but the manifest proof tuple is
