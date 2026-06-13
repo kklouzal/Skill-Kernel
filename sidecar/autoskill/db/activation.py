@@ -175,7 +175,7 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
                 FROM autoskill.skill_versions sv
                 JOIN autoskill.skills s ON s.skill_id = sv.skill_id
                 LEFT JOIN LATERAL (
-                  SELECT ev.status
+                  SELECT ev.status, ev.result
                   FROM autoskill.evaluations ev
                   WHERE ev.workspace_id = $1
                     AND ev.skill_version_id = sv.skill_version_id

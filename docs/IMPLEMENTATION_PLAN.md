@@ -1,5 +1,20 @@
 # SkillKernel Implementation Plan
 
+2026-06-13 update: activation semantic-equivalence readiness now has
+asyncpg-backed coverage for the real SQL store path. The activation gate test
+seeds a throwaway workspace, passed scanner/evaluator/proposal-gate state, a
+passed `skill_md` context artifact, and three `context_compile_runs` rows that
+exercise missing, below-threshold, and passing
+`semantic_equivalence_score` values through `AsyncpgActivationGateStore`.
+Cleanup removes the seeded workspace/version/artifact/run rows and derived
+trigger records, including default memory-contract rows inserted for the
+throwaway workspace. The SQL-backed test also exposed and fixed the asyncpg
+activation query's missing `latest_ev.result` lateral select, allowing the
+existing autonomy fallback fields to be read from the real store path.
+Validation passed with focused activation pytest against disposable Postgres
+(`12 passed`), `uv run ruff check sidecar`, `uv run pytest` (`507 passed, 1
+skipped`), `uv run python -m compileall -q sidecar`, and `git diff --check`.
+
 2026-06-13 update: activation readiness is now policy-aware for
 semantic-equivalence context regression gates. `ActivationReadiness` includes
 the context compile run semantic-equivalence score, the SQL activation gate
