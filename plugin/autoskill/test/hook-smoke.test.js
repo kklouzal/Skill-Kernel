@@ -228,7 +228,7 @@ test("llm input capture keeps normal ingest redacted and stores raw capture in v
     await handler(
       {
         provider: "llama-cpp-compaction",
-        model: "gemma-4-E2B-it-IQ4_NL.gguf",
+        model: "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
         systemPrompt: "private system prompt with sk-testtoken000000000000000000",
         messages: [
           { role: "user", content: "private user message" },
@@ -240,7 +240,7 @@ test("llm input capture keeps normal ingest redacted and stores raw capture in v
 
     const payload = calls.at(-1).body.events[0].payload;
     assert.equal(payload.provider, "llama-cpp-compaction");
-    assert.equal(payload.model, "gemma-4-E2B-it-IQ4_NL.gguf");
+    assert.equal(payload.model, "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf");
     assert.match(payload.systemPrompt, /^\[REDACTED_CONTENT bytes=/);
     assert.equal(payload.messages[0].role, "user");
     assert.match(payload.messages[0].content, /^\[REDACTED_CONTENT bytes=/);

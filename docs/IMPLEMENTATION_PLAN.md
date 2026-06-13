@@ -1,5 +1,19 @@
 # SkillKernel Implementation Plan
 
+2026-06-13 update: dirty-state reconciliation preserves the Dev-01 operational
+compose/Postgres and model-fixture alignment before new implementation work.
+`docker-compose.yml` defaults now target the Dev-01 Postgres/pgvector endpoint
+at `172.16.8.20:5432` and no longer attach SkillKernel services to the
+unused `dev01-postgres` external network, while keeping Core, Observatory,
+workers, and the data plane as separate service boundaries. The plugin hook
+smoke test and sidecar redaction test now reference the live
+`llama-cpp-compaction` model artifact
+`gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf`, keeping redaction fixtures aligned with
+the deployed local model route. The k8s/Postgres backup files remain untracked
+operator backups and are not part of the commit. No live OpenClaw gateway
+install, runtime skill write, autonomous apply, container redeploy, or runtime
+configuration mutation is part of this reconciliation.
+
 2026-06-12 update: the SQL-backed deployment readiness smoke now proves the
 executor-profile compatibility contract exposed by `/v1/deployment/readiness`
 instead of summarizing `active_executor_profile` as `{status,count}`. Its

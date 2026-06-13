@@ -21,7 +21,7 @@ def test_redacts_secret_keys_recursively() -> None:
 def test_strips_prompt_and_message_content_by_default() -> None:
     payload = {
         "provider": "llama-cpp-compaction",
-        "model": "gemma-4-E2B-it-IQ4_NL.gguf",
+        "model": "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
         "systemPrompt": "private system prompt with sk-abcdefghijklmnopqrstuvwxyz",
         "messages": [
             {"role": "user", "content": "private user message"},
@@ -32,7 +32,7 @@ def test_strips_prompt_and_message_content_by_default() -> None:
     redacted = redact_payload(payload)
 
     assert redacted["provider"] == "llama-cpp-compaction"
-    assert redacted["model"] == "gemma-4-E2B-it-IQ4_NL.gguf"
+    assert redacted["model"] == "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"
     assert redacted["systemPrompt"].startswith("[REDACTED_CONTENT bytes=")
     assert redacted["messages"][0]["role"] == "user"
     assert redacted["messages"][0]["content"].startswith("[REDACTED_CONTENT bytes=")

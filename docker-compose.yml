@@ -4,11 +4,10 @@ x-skillkernel-core-build: &skillkernel-core-build
 
 x-skillkernel-runtime-networks: &skillkernel-runtime-networks
   - default
-  - dev01-postgres
   - honcho_default
 
 x-skillkernel-env: &skillkernel-env
-  AUTOSKILL_DATABASE_URL: postgresql://autoskill:${AUTOSKILL_POSTGRES_PASSWORD:-autoskill-dev}@postgres:5432/autoskill
+  AUTOSKILL_DATABASE_URL: postgresql://autoskill:${AUTOSKILL_POSTGRES_PASSWORD:-autoskill-dev}@172.16.8.20:5432/autoskill
   PYTHONPATH: /app/sidecar
   AUTOSKILL_DB_POOL_MIN_SIZE: ${AUTOSKILL_DB_POOL_MIN_SIZE:-0}
   AUTOSKILL_DB_POOL_MAX_SIZE: ${AUTOSKILL_DB_POOL_MAX_SIZE:-5}
@@ -300,7 +299,5 @@ volumes:
   autoskill-postgres:
 
 networks:
-  dev01-postgres:
-    external: true
   honcho_default:
     external: true

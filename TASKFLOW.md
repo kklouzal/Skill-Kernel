@@ -16,6 +16,22 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-13: Dirty-state reconciliation carried forward the Dev-01
+  compose/Postgres and live model-fixture alignment from the prior operational
+  work. `docker-compose.yml` now points SkillKernel Core/worker/Observatory
+  defaults at the Dev-01 Postgres/pgvector endpoint on `172.16.8.20:5432`
+  instead of the in-compose `postgres` hostname and drops the now-unused
+  `dev01-postgres` external network, while preserving the split-container
+  Core/Observatory/data-plane boundaries. The plugin hook smoke test and
+  sidecar redaction fixture now use the live `llama-cpp-compaction` model
+  artifact `gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf` so redaction assertions match
+  the running Dev-01 model route. The untracked
+  `.env.bak-k8s-postgres-20260611T0208Z` and
+  `docker-compose.yml.bak-k8s-postgres-20260611T0208Z` files are operator
+  backups and remain intentionally uncommitted. No plugin activation, runtime
+  skill writes, autonomous apply, container redeploy, or OpenClaw runtime config
+  mutation was performed in this reconciliation slice.
+
 - 2026-06-12: The SQL-backed deployment readiness smoke now summarizes and
   asserts executor-profile compatibility detail instead of accepting a
   count-only `active_executor_profile` result. The smoke JSON preserves only
