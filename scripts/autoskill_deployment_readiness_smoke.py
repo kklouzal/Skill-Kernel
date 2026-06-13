@@ -36,6 +36,23 @@ REQUIRED_CHECKS = (
     "operator_reviewed_broker_replay_corpus",
 )
 
+EXECUTOR_PROFILE_DETAIL_KEYS = (
+    "profile_key",
+    "status",
+    "agent_backend",
+    "model_family",
+    "sandbox",
+    "os_name",
+    "tool_count",
+    "tool_keys",
+    "binary_count",
+    "binary_keys",
+    "api_contract_count",
+    "api_contract_keys",
+    "permission_keys",
+    "reason_codes",
+)
+
 
 def main() -> None:
     args = _parse_args()
@@ -334,7 +351,19 @@ def _concise_check(name: str, check: dict[str, Any]) -> dict[str, Any]:
             "ready_worker_ids": check.get("ready_worker_ids"),
         }
     if name == "active_executor_profile":
-        return {"status": check.get("status"), "count": check.get("count")}
+        return {
+            "status": check.get("status"),
+            "count": check.get("count"),
+            "profile_keys": check.get("profile_keys"),
+            "compatible_profiles": [
+                _concise_executor_profile(profile)
+                for profile in _json_objects(check.get("compatible_profiles"))
+            ],
+            "blocked_profiles": [
+                _concise_executor_profile(profile)
+                for profile in _json_objects(check.get("blocked_profiles"))
+            ],
+        }
     if name in {"qualified_text_model_profile", "active_embedding_profile"}:
         return {
             "status": check.get("status"),
@@ -382,6 +411,7 @@ def _assert_smoke(summary: dict[str, Any]) -> None:
     read_model = summary["key_checks"]["read_model_contract_compatible"]
     if read_model.get("reason_code") != "read_model_contract_compatible":
         raise SystemExit("read-model compatibility did not report compatible")
+    _assert_executor_profile_contract(summary["key_checks"]["active_executor_profile"])
     replay = summary["key_checks"]["broker_replay_corpus"]
     if replay.get("operator_reviewed") != 1 or replay.get("source_linked") != 1:
         raise SystemExit("operator-reviewed and telemetry-linked replay was not observed")
@@ -392,6 +422,60 @@ def _assert_smoke(summary: dict[str, Any]) -> None:
         or summary["live_openclaw_mutation"]
     ):
         raise SystemExit("smoke summary claimed an unsafe authority or mutation flag")
+
+
+def _concise_executor_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    return {key: profile.get(key) for key in EXECUTOR_PROFILE_DETAIL_KEYS}
+
+
+def _assert_executor_profile_contract(check: dict[str, Any]) -> None:
+    compatible_profiles = check.get("compatible_profiles")
+    if not isinstance(compatible_profiles, list) or not compatible_profiles:
+        raise SystemExit(
+            "executor profile readiness did not report compatibility detail"
+        )
+    if check.get("profile_keys") != ["deployment-readiness-smoke-executor"]:
+        raise SystemExit(
+            "executor profile readiness did not report the seeded profile key"
+        )
+    if check.get("blocked_profiles") != []:
+        raise SystemExit("executor profile readiness reported blocked profiles")
+    profile = _json_object(compatible_profiles[0])
+    for key in EXECUTOR_PROFILE_DETAIL_KEYS:
+        if key not in profile:
+            raise SystemExit(f"executor profile readiness omitted {key}")
+    expected_scalars = {
+        "profile_key": "deployment-readiness-smoke-executor",
+        "status": "active",
+        "agent_backend": "codex",
+        "model_family": "gpt",
+        "sandbox": "danger-full-access",
+        "os_name": "linux",
+    }
+    for key, value in expected_scalars.items():
+        if profile.get(key) != value:
+            raise SystemExit(f"executor profile readiness mismatched {key}")
+    expected_members = {
+        "tool_keys": "exec",
+        "binary_keys": "git",
+        "api_contract_keys": "skillkernel",
+        "permission_keys": "filesystem",
+    }
+    for key, value in expected_members.items():
+        members = profile.get(key)
+        if not isinstance(members, list) or value not in members:
+            raise SystemExit(f"executor profile readiness missed {key}")
+    if not isinstance(profile.get("tool_count"), int) or profile["tool_count"] < 1:
+        raise SystemExit("executor profile readiness missed tool count")
+    if not isinstance(profile.get("binary_count"), int) or profile["binary_count"] < 2:
+        raise SystemExit("executor profile readiness missed binary count")
+    if (
+        not isinstance(profile.get("api_contract_count"), int)
+        or profile["api_contract_count"] < 1
+    ):
+        raise SystemExit("executor profile readiness missed API contract count")
+    if profile.get("reason_codes") != []:
+        raise SystemExit("executor profile readiness included unexpected reason codes")
 
 
 async def _insert_content_safe_retrieval_log(
@@ -493,6 +577,12 @@ async def _delete_smoke_workspace(
 
 def _json_object(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _json_objects(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _default_database_url() -> str:

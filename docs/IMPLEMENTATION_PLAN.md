@@ -1,5 +1,19 @@
 # SkillKernel Implementation Plan
 
+2026-06-12 update: the SQL-backed deployment readiness smoke now proves the
+executor-profile compatibility contract exposed by `/v1/deployment/readiness`
+instead of summarizing `active_executor_profile` as `{status,count}`. Its
+content-safe summary carries profile keys, compatible and blocked profile
+records, tool/binary/API-contract counts and keys, permission keys, and reason
+codes, while `_assert_smoke` rejects count-only or incomplete executor detail.
+This closes the immediate smoke-reporting gate for executor-profile-aware
+readiness without raw evidence exposure, environment dumps, runtime skill
+writes, plugin activation, autonomous apply, or production OpenClaw mutation.
+Validation passed with the focused smoke tests, touched-file Ruff,
+touched-file compileall, and `git diff --check`. Next: run the real SQL smoke
+against Dev-01 readiness/Postgres and confirm the emitted JSON includes the
+richer executor-profile contract.
+
 2026-06-12 update: deployment readiness now treats executor profiles as
 operator-visible compatibility contracts, not count-only presence. The
 `active_executor_profile` check fails closed unless an active profile includes

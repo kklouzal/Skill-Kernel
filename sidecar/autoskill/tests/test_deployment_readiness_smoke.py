@@ -117,7 +117,52 @@ def test_deployment_readiness_smoke_summary_is_content_safe_and_assertable() -> 
     assert summary["runtime_skill_writes"] is False
     assert summary["activation_authority"] is False
     assert summary["live_openclaw_mutation"] is False
+    assert summary["key_checks"]["active_executor_profile"] == {
+        "status": "passed",
+        "count": 1,
+        "profile_keys": ["deployment-readiness-smoke-executor"],
+        "compatible_profiles": [
+            {
+                "profile_key": "deployment-readiness-smoke-executor",
+                "status": "active",
+                "agent_backend": "codex",
+                "model_family": "gpt",
+                "sandbox": "danger-full-access",
+                "os_name": "linux",
+                "tool_count": 1,
+                "tool_keys": ["exec"],
+                "binary_count": 2,
+                "binary_keys": ["git", "uv"],
+                "api_contract_count": 1,
+                "api_contract_keys": ["skillkernel"],
+                "permission_keys": ["filesystem"],
+                "reason_codes": [],
+            }
+        ],
+        "blocked_profiles": [],
+    }
     assert "episode_keys" not in summary["key_checks"]["broker_replay_corpus"]
+
+
+def test_deployment_readiness_smoke_rejects_count_only_executor_detail() -> None:
+    summary = _assertable_summary()
+    summary["key_checks"]["active_executor_profile"] = {
+        "status": "passed",
+        "count": 1,
+    }
+
+    with pytest.raises(SystemExit, match="compatibility detail"):
+        smoke._assert_smoke(summary)
+
+
+def test_deployment_readiness_smoke_rejects_incomplete_executor_detail() -> None:
+    summary = _assertable_summary()
+    del summary["key_checks"]["active_executor_profile"]["compatible_profiles"][0][
+        "binary_keys"
+    ]
+
+    with pytest.raises(SystemExit, match="omitted binary_keys"):
+        smoke._assert_smoke(summary)
 
 
 def test_deployment_readiness_smoke_asserts_failed_readiness() -> None:
@@ -133,3 +178,59 @@ def test_deployment_readiness_smoke_asserts_failed_readiness() -> None:
                 "live_openclaw_mutation": False,
             }
         )
+
+
+def _assertable_summary() -> dict:
+    return {
+        "ok": True,
+        "blockers": [],
+        "key_checks": {
+            "storage_plane_schema_ready": {
+                "status": "passed",
+                "pgvector_available": True,
+                "migration_version": "0001_autoskill_schema",
+            },
+            "read_model_contract_compatible": {
+                "status": "passed",
+                "reason_code": "read_model_contract_compatible",
+            },
+            "scheduler_worker_heartbeat": {"status": "passed"},
+            "active_executor_profile": {
+                "status": "passed",
+                "count": 1,
+                "profile_keys": ["deployment-readiness-smoke-executor"],
+                "compatible_profiles": [
+                    {
+                        "profile_key": "deployment-readiness-smoke-executor",
+                        "status": "active",
+                        "agent_backend": "codex",
+                        "model_family": "gpt",
+                        "sandbox": "danger-full-access",
+                        "os_name": "linux",
+                        "tool_count": 1,
+                        "tool_keys": ["exec"],
+                        "binary_count": 2,
+                        "binary_keys": ["git", "uv"],
+                        "api_contract_count": 1,
+                        "api_contract_keys": ["skillkernel"],
+                        "permission_keys": ["filesystem"],
+                        "reason_codes": [],
+                    }
+                ],
+                "blocked_profiles": [],
+            },
+            "qualified_text_model_profile": {"status": "passed"},
+            "active_embedding_profile": {"status": "passed"},
+            "active_broker_policy": {"status": "passed"},
+            "broker_replay_corpus": {
+                "status": "passed",
+                "operator_reviewed": 1,
+                "source_linked": 1,
+            },
+            "operator_reviewed_broker_replay_corpus": {"status": "passed"},
+        },
+        "raw_evidence_returned": False,
+        "runtime_skill_writes": False,
+        "activation_authority": False,
+        "live_openclaw_mutation": False,
+    }

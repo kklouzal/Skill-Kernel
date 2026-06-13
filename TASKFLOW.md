@@ -16,6 +16,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-12: The SQL-backed deployment readiness smoke now summarizes and
+  asserts executor-profile compatibility detail instead of accepting a
+  count-only `active_executor_profile` result. The smoke JSON preserves only
+  content-safe profile keys, compatible/blocked profile summaries,
+  tool/binary/API-contract counts and keys, permission keys, and reason codes;
+  `_assert_smoke` fails closed when the readiness API omits that compatibility
+  envelope or the seeded executor profile's expected safe contract. Focused
+  regression tests cover rich summary output plus count-only and incomplete
+  executor detail rejection. Validation passed with the focused smoke tests,
+  touched-file Ruff, touched-file compileall, and `git diff --check`. Next
+  gate: run the SQL smoke against Dev-01 readiness/Postgres in the parent
+  operator environment and confirm the emitted JSON carries the richer
+  executor-profile contract.
+
 - 2026-06-12: Deployment readiness now enforces executor-profile compatibility
   detail instead of accepting a count of active executor profiles. The
   `active_executor_profile` check reports content-safe profile keys, agent
