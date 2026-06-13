@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import ceil
 from uuid import UUID
 
@@ -9,7 +9,12 @@ from autoskill.core.hashing import sha256_json, sha256_text
 from autoskill.core.skillir import SkillIR, SupportArtifact
 from autoskill.db.autonomy import AutonomyControlStore
 from autoskill.db.context import ContextGovernanceStore
-from autoskill.services.scanner import ScannerFinding, has_blocking_findings, scan_text
+from autoskill.services.scanner import (
+    ScannerFinding,
+    has_blocking_findings,
+    scan_text,
+    scan_text_bundle,
+)
 
 DEFAULT_MAX_CONTEXT_TOKENS = 1200
 DEFAULT_DESCRIPTION_MAX_CHARS = 160
@@ -235,6 +240,15 @@ async def compile_skill_with_context_governance(
     """
 
     compiled = compile_skill(skill, max_context_tokens=max_context_tokens)
+    context_bundle_findings = scan_text_bundle(_context_bundle_scan_parts(skill, compiled))
+    if context_bundle_findings:
+        compiled = replace(
+            compiled,
+            scanner_findings=_merge_scanner_findings(
+                compiled.scanner_findings,
+                context_bundle_findings,
+            ),
+        )
     source_object_id = source_object_id or skill_version_id or candidate_id
     requirements = _required_runtime_requirements(skill)
     preserved = [requirement for requirement in requirements if requirement in compiled.skill_md]
@@ -294,6 +308,9 @@ async def compile_skill_with_context_governance(
             "preserved_requirements": len(preserved),
             "lost_requirements": lost_requirements,
             "scanner_codes": [finding.code for finding in compiled.scanner_findings],
+            "context_bundle_scanner_codes": [
+                finding.code for finding in context_bundle_findings
+            ],
             "probe_evidence_required": require_probe_evidence,
             "runtime_guard_count": len(skill.runtime_guards),
             "runtime_guard_templates": [
@@ -330,6 +347,9 @@ async def compile_skill_with_context_governance(
         "runtime_guard_count": len(skill.runtime_guards),
         "support_artifact_hashes": [
             artifact["text_hash"] for artifact in support_artifacts
+        ],
+        "context_bundle_scanner_codes": [
+            finding.code for finding in context_bundle_findings
         ],
         "loadability_class": "runtime_on_skill_load",
         "token_count": compiled.estimated_tokens,
@@ -378,6 +398,10 @@ async def compile_skill_with_context_governance(
             "runtime_guard_count": len(skill.runtime_guards),
             "support_artifact_hashes": [
                 artifact["text_hash"] for artifact in support_artifacts
+            ],
+            "scanner_codes": [finding.code for finding in compiled.scanner_findings],
+            "context_bundle_scanner_codes": [
+                finding.code for finding in context_bundle_findings
             ],
         },
     )
@@ -638,6 +662,29 @@ def _support_artifact_context_excerpt(artifact: SupportArtifact) -> str:
             f"declared_sha256: {declared_hash}",
         ]
     )
+
+
+def _context_bundle_scan_parts(skill: SkillIR, compiled: CompiledSkill) -> list[str]:
+    parts = [compiled.skill_md]
+    for artifact in skill.support_artifacts:
+        if artifact.load_policy in {"agent_may_read", "broker_excerpt_only"}:
+            parts.append(_support_artifact_context_excerpt(artifact))
+    return parts
+
+
+def _merge_scanner_findings(
+    first: list[ScannerFinding],
+    second: list[ScannerFinding],
+) -> list[ScannerFinding]:
+    merged: list[ScannerFinding] = []
+    seen: set[tuple[object, str, str]] = set()
+    for finding in [*first, *second]:
+        key = (finding.severity, finding.code, finding.message)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(finding)
+    return merged
 
 
 def _support_retrieval_boundary(load_policy: str) -> str:

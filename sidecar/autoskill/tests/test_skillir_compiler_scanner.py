@@ -228,6 +228,95 @@ def test_context_compiler_registers_support_artifact_excerpts() -> None:
     assert result.compile_run["output_manifest_hash"]
 
 
+def test_context_compiler_rejects_support_artifact_bundle_secret_exfiltration_chain() -> None:
+    skill = valid_skill().model_copy(
+        update={
+            "support_artifacts": [
+                SupportArtifact(
+                    path="references/credential-map.md",
+                    kind="template",
+                    capabilities=["secret"],
+                    load_policy="broker_excerpt_only",
+                ),
+                SupportArtifact(
+                    path="references/transfer-plan.md",
+                    kind="template",
+                    capabilities=["upload"],
+                    load_policy="agent_may_read",
+                ),
+            ]
+        }
+    )
+
+    result = asyncio.run(
+        compile_skill_with_context_governance(
+            skill,
+            NullContextGovernanceStore(),
+            workspace_key="dev-01",
+        )
+    )
+
+    codes = {finding.code for finding in result.compiled.scanner_findings}
+    assert result.status == "failed"
+    assert result.reject_reason == "scanner_blocked"
+    assert "bundle-secret-exfiltration-chain" in codes
+    assert result.context_artifact["safety_status"] == "blocked"
+    assert result.context_artifact["metadata"]["scanner_codes"] == [
+        finding.code for finding in result.compiled.scanner_findings
+    ]
+    assert "bundle-secret-exfiltration-chain" in result.context_artifact["metadata"][
+        "context_bundle_scanner_codes"
+    ]
+    assert result.compile_run["status"] == "failed"
+    assert result.compile_run["metadata"]["safety_status"] == "blocked"
+    assert "bundle-secret-exfiltration-chain" in result.compile_run["metadata"][
+        "context_bundle_scanner_codes"
+    ]
+    assert result.budget_event["decision"] == "reject_change"
+    assert len(result.support_context_artifacts) == 2
+    assert all(
+        artifact["safety_status"] == "passed"
+        for artifact in result.support_context_artifacts
+    )
+
+
+def test_context_compiler_allows_support_artifact_bundle_safety_boundary() -> None:
+    skill = valid_skill().model_copy(
+        update={
+            "support_artifacts": [
+                SupportArtifact(
+                    path="references/boundary.md",
+                    kind="template",
+                    capabilities=["boundary_review"],
+                    load_policy="broker_excerpt_only",
+                ),
+                SupportArtifact(
+                    path="references/report-upload.md",
+                    kind="template",
+                    capabilities=["publish_report"],
+                    load_policy="agent_may_read",
+                ),
+            ]
+        }
+    )
+
+    result = asyncio.run(
+        compile_skill_with_context_governance(
+            skill,
+            NullContextGovernanceStore(),
+            workspace_key="dev-01",
+        )
+    )
+
+    assert result.status == "passed"
+    assert result.reject_reason is None
+    assert result.context_artifact["safety_status"] == "passed"
+    assert "bundle-secret-exfiltration-chain" not in result.context_artifact[
+        "metadata"
+    ]["context_bundle_scanner_codes"]
+    assert result.compile_run["metadata"]["safety_status"] == "passed"
+
+
 def test_context_compiler_records_runtime_guard_metadata() -> None:
     skill = valid_skill().model_copy(
         update={

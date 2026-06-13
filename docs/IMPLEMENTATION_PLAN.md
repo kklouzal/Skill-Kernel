@@ -1,5 +1,23 @@
 # SkillKernel Implementation Plan
 
+2026-06-13 update: context compiler support-bundle scanning now fails closed
+before context-visible support artifacts can pass governance. The compiler
+builds the deterministic co-loadable bundle from rendered `SKILL.md` plus
+`agent_may_read` and `broker_excerpt_only` support excerpts, runs
+`scan_text_bundle`, merges bundle findings into compiled scanner findings, and
+persists content-safe scanner codes through context artifact metadata, compile
+manifest hash inputs, compile run metadata, budget rejection, and calibration
+signals. Focused regression tests prove a cross-artifact secret/upload chain in
+support declarations is rejected while a bounded non-sensitive report case
+passes. This advances unified Sections 11.10, 11.12-11.17, 24.1, and 24.6.
+Validation passed with `uv run pytest
+sidecar/autoskill/tests/test_skillir_compiler_scanner.py` (`26 passed`), `uv
+run ruff check sidecar/autoskill/services/compiler.py
+sidecar/autoskill/tests/test_skillir_compiler_scanner.py`, `uv run python -m
+compileall -q sidecar/autoskill/services/compiler.py
+sidecar/autoskill/tests/test_skillir_compiler_scanner.py`, and `git diff
+--check`. Next: parent broader sidecar gates.
+
 2026-06-13 update: activation semantic-equivalence readiness now has
 asyncpg-backed coverage for the real SQL store path. The activation gate test
 seeds a throwaway workspace, passed scanner/evaluator/proposal-gate state, a

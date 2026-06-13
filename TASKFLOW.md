@@ -16,6 +16,23 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-13: Context compiler support-bundle scanning is now fail-closed for
+  co-loadable support context artifacts. `compile_skill_with_context_governance`
+  runs `scan_text_bundle` across rendered `SKILL.md` plus `agent_may_read` and
+  `broker_excerpt_only` support excerpts before computing the compile verdict,
+  merges blocking bundle findings into the compiled scanner findings, and
+  records content-safe scanner codes in the context artifact, manifest hash
+  inputs, compile run metadata, budget rejection, and calibration signals. This
+  advances unified Sections 11.10, 11.12-11.17, 24.1, and 24.6 for compiler-side
+  context-bundle enforcement without staging, activation, runtime skill writes,
+  autonomous apply, or OpenClaw runtime mutation. Focused validation passed
+  with `uv run pytest sidecar/autoskill/tests/test_skillir_compiler_scanner.py`
+  (`26 passed`), `uv run ruff check sidecar/autoskill/services/compiler.py
+  sidecar/autoskill/tests/test_skillir_compiler_scanner.py`, `uv run python -m
+  compileall -q sidecar/autoskill/services/compiler.py
+  sidecar/autoskill/tests/test_skillir_compiler_scanner.py`, and
+  `git diff --check`. Next gate: parent broader sidecar validation.
+
 - 2026-06-13: Activation readiness now enforces context semantic-equivalence
   policy for activation-grade context compile proof. The SQL gate reads
   `context_compile_runs.semantic_equivalence_score`, exposes it in readiness
