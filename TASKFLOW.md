@@ -16,8 +16,24 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-14: Activation context smoke summaries now echo the effective
+  context-value and semantic-equivalence thresholds on every reported case, not
+  only at the run level. `_assert_smoke` fails closed when any case-level
+  threshold echo diverges from the top-level run policy, and focused tests prove
+  non-default `0.05` context-value / `0.95` semantic-equivalence policy is
+  echoed and enforced without exposing raw skill text, evidence, prompts, or
+  runtime mutation detail. This advances unified Sections 11.12-11.15 and Part
+  V Section 4 threshold-governance assurance. Validation passed with focused
+  pytest (`20 passed`), touched-file Ruff, touched-file compileall, `uv run
+  ruff check sidecar`, full `uv run pytest` (`533 passed, 2 skipped`), `uv run
+  python -m compileall -q sidecar`, `git diff --check`, and the Dev-01 SQL
+  smoke using `--skip-migrate --min-context-value-per-token 0.05
+  --min-semantic-equivalence-score 0.95`. Next gate: confirm the pushed GitHub
+  Actions/GHCR result for this commit, then redeploy only `skillkernel-core`
+  and `skillkernel-observatory` after green CI.
+
 - 2026-06-14: Activation context smoke CI and live-schema cleanup compatibility
-  are patched in the current uncommitted worktree. The
+  landed in recent commits. The
   `activation-context-smoke` GitHub Actions job invokes
   `scripts/autoskill_activation_context_smoke.py` with
   `--min-context-value-per-token 0.05` and explicit

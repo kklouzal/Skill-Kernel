@@ -1,7 +1,25 @@
 # SkillKernel Implementation Plan
 
+2026-06-14 update: activation context smoke summaries now carry per-case
+effective threshold echoes. Each missing, below-threshold, and passing case
+reports the content-safe `effective_min_context_value_per_token` and
+`effective_min_semantic_equivalence_score` used for that readiness check, and
+`_assert_smoke` rejects summaries where any case diverges from the top-level
+run policy. Focused tests prove non-default `0.05` context-value and `0.95`
+semantic-equivalence thresholds are echoed and enforced without raw skill text,
+evidence, prompt output, runtime skill writes, plugin activation, autonomous
+apply, or live OpenClaw mutation. This advances unified Sections 11.12-11.15
+and Part V Section 4 threshold-governance assurance. Validation passed with
+focused pytest (`20 passed`), touched-file Ruff, touched-file compileall,
+`uv run ruff check sidecar`, full `uv run pytest` (`533 passed, 2 skipped`),
+`uv run python -m compileall -q sidecar`, `git diff --check`, and the Dev-01
+SQL smoke using `--skip-migrate --min-context-value-per-token 0.05
+--min-semantic-equivalence-score 0.95`. Next: confirm the pushed GitHub
+Actions/GHCR result for this commit, then redeploy only `skillkernel-core` and
+`skillkernel-observatory` after green CI.
+
 2026-06-14 update: activation context smoke CI and live-schema cleanup
-compatibility are patched in the current uncommitted worktree.
+compatibility landed in recent commits.
 `.github/workflows/publish-ghcr.yml` runs
 `scripts/autoskill_activation_context_smoke.py` with
 `--min-context-value-per-token 0.05` and explicit

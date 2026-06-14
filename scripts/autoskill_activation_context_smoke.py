@@ -227,7 +227,14 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 min_context_value_per_token=args.min_context_value_per_token,
                 allowed_autonomy_actions=("auto_accept",),
             )
-            cases.append(_case_summary(case_name, readiness))
+            cases.append(
+                _case_summary(
+                    case_name,
+                    readiness,
+                    min_context_value_per_token=args.min_context_value_per_token,
+                    min_semantic_equivalence_score=args.min_semantic_equivalence_score,
+                )
+            )
         summary = {
             "schema": "autoskill.activation-context-smoke.v1",
             "ok": True,
@@ -251,11 +258,19 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             await _delete_smoke_workspace(args.database_url, workspace_key)
 
 
-def _case_summary(case_name: str, readiness: ActivationReadiness) -> dict[str, Any]:
+def _case_summary(
+    case_name: str,
+    readiness: ActivationReadiness,
+    *,
+    min_context_value_per_token: float,
+    min_semantic_equivalence_score: float,
+) -> dict[str, Any]:
     return {
         "case": case_name,
         "allowed": readiness.allowed,
         "blockers": readiness.blockers,
+        "effective_min_context_value_per_token": min_context_value_per_token,
+        "effective_min_semantic_equivalence_score": min_semantic_equivalence_score,
         "context_compile_run_id": (
             str(readiness.context_compile_run_id)
             if readiness.context_compile_run_id
@@ -302,6 +317,18 @@ def _assert_smoke(summary: dict[str, Any]) -> None:
         if case["blockers"] != expected["expected_blockers"]:
             raise SystemExit(
                 f"{case_name} blockers were unexpected: {case['blockers']}"
+            )
+        if case.get("effective_min_context_value_per_token") != summary[
+            "min_context_value_per_token"
+        ]:
+            raise SystemExit(
+                f"{case_name} context-value threshold did not match run policy"
+            )
+        if case.get("effective_min_semantic_equivalence_score") != summary[
+            "min_semantic_equivalence_score"
+        ]:
+            raise SystemExit(
+                f"{case_name} semantic-equivalence threshold did not match run policy"
             )
         if case["context_semantic_equivalence_score"] is None:
             raise SystemExit(f"{case_name} did not carry semantic equivalence proof")
