@@ -7,6 +7,8 @@ import tarfile
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 SCRIPT_ROOT = Path(__file__).resolve().parents[3] / "scripts"
 
 
@@ -19,6 +21,109 @@ def _load_script(name: str) -> ModuleType:
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_migrate_split_sql_statements_preserves_postgres_blocks() -> None:
+    migrate = _load_script("migrate")
+
+    statements = migrate.split_sql_statements(
+        """
+        CREATE TABLE demo (value text DEFAULT ';');
+        -- comment with ; must not split
+        INSERT INTO demo VALUES ('a'';b');
+        /* block ; comment */
+        DO $$
+        BEGIN
+          RAISE NOTICE 'inside; block';
+        END;
+        $$;
+        CREATE FUNCTION demo_fn() RETURNS void
+        LANGUAGE plpgsql
+        AS $body$
+        BEGIN
+          PERFORM ';';
+        END;
+        $body$;
+        """
+    )
+
+    assert len(statements) == 4
+    assert statements[0].startswith("CREATE TABLE demo")
+    assert "a'';b" in statements[1]
+    assert statements[2].startswith("/* block ; comment */\n        DO $$")
+    assert statements[3].endswith("$body$;")
+
+
+def test_migrate_split_sql_statements_ignores_invalid_dollar_tag_lookalike() -> None:
+    migrate = _load_script("migrate")
+
+    statements = migrate.split_sql_statements("SELECT $1$not a dollar block; SELECT 2;")
+
+    assert statements == ["SELECT $1$not a dollar block;", "SELECT 2;"]
+
+
+@pytest.mark.asyncio
+async def test_migrate_run_migration_executes_each_statement_in_order(capsys) -> None:
+    migrate = _load_script("migrate")
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        async def execute(self, query: str) -> str:
+            self.statements.append(query)
+            return "OK"
+
+    conn = FakeConnection()
+
+    await migrate.run_migration(conn, "SELECT 1; SELECT ';';")
+
+    assert conn.statements == ["SELECT 1;", "SELECT ';';"]
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.asyncio
+async def test_migrate_run_migration_reports_failing_statement(capsys) -> None:
+    migrate = _load_script("migrate")
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        async def execute(self, query: str) -> str:
+            self.statements.append(query)
+            if "broken" in query:
+                raise RuntimeError("boom")
+            return "OK"
+
+    conn = FakeConnection()
+
+    try:
+        await migrate.run_migration(conn, "SELECT 1; SELECT broken; SELECT 3;")
+    except RuntimeError as exc:
+        assert str(exc) == "boom"
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("expected migration failure")
+
+    assert conn.statements == ["SELECT 1;", "SELECT broken;"]
+    assert "migration statement 2 failed: SELECT broken;" in capsys.readouterr().err
+
+
+def test_schema_migration_deduplicates_historical_source_backfill() -> None:
+    migration = (SCRIPT_ROOT.parents[0] / "migrations" / "0001_autoskill_schema.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "WITH ranked_historical_import_sources AS" in migration
+    assert "row_number() OVER" in migration
+    assert (
+        "PARTITION BY\n"
+        "        workspace_id,\n"
+        "        autoskill.map_historical_source_type(source_kind),\n"
+        "        source_key"
+    ) in migration
+    assert "FROM ranked_historical_import_sources\nWHERE source_rank = 1" in migration
+    assert "ON CONFLICT (workspace_id, source_type, source_uri) DO UPDATE SET" in migration
 
 
 def test_red_team_default_cases_pass() -> None:

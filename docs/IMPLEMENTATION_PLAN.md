@@ -1,5 +1,23 @@
 # SkillKernel Implementation Plan
 
+2026-06-14 update: bootstrap migration idempotency is now a shared primitive
+for cron/operator SQL entry points. `scripts/migrate.py` executes
+`0001_autoskill_schema.sql` statement by statement, preserving quoted strings,
+comments, and PostgreSQL dollar blocks while reporting the failing statement
+preview. The activation context, deployment readiness, revocation traversal,
+topology admission, and Observatory live SQL smokes now reuse that runner
+instead of sending the whole migration as one asyncpg query. The migration
+schema patch keeps the `schema_migrations` marker as the final success marker,
+deduplicates runtime-artifact and historical-import compatibility backfills
+before `ON CONFLICT` updates, guards vector conversion, and recreates
+historical import sync triggers after backfill. This closes the Dev-01 reapply
+failure mode where an already-migrated database could fail with duplicate
+`ON CONFLICT` rows or single-query migration execution. Validation passed with
+focused migration, readiness, jobs, and operator-script tests (`26 passed`),
+touched-script Ruff, compileall for the migration runner/tests,
+`git diff --check`, direct `scripts/migrate.py` reapply against the configured
+Dev-01 database, and the deployment readiness smoke with `ok=true`.
+
 2026-06-14 update: activation context smoke summaries now carry per-case
 effective threshold echoes. Each missing, below-threshold, and passing case
 reports the content-safe `effective_min_context_value_per_token` and

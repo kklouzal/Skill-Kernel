@@ -16,6 +16,25 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-14: Bootstrap migration idempotency has been reconciled for
+  already-migrated Postgres/pgvector databases. `scripts/migrate.py` now splits
+  the bootstrap SQL into statement-sized executions without breaking quoted
+  strings, comments, or PostgreSQL dollar blocks, reports the failing statement
+  preview, and exposes a testable `run_migration` primitive. SQL smokes that
+  apply `0001_autoskill_schema.sql` reuse the same runner instead of submitting
+  the whole migration as one asyncpg query. The schema patch keeps the
+  `schema_migrations` marker at the end, de-duplicates runtime-artifact and
+  historical-import backfills before `ON CONFLICT` updates, guards vector
+  column conversion, and recreates historical import sync triggers after
+  compatibility backfills. Validation passed with focused migration, readiness,
+  jobs, and operator-script tests (`26 passed`), touched-script Ruff,
+  compileall for the migration runner/tests, `git diff --check`, direct
+  `scripts/migrate.py` reapply against the configured Dev-01 database, and the
+  deployment readiness smoke with `ok=true`. The live Core readiness endpoint
+  returned `ready=true` with no blockers or warnings after migrations and
+  worker services were restored. Next gate: parent review/commit, push, and
+  redeploy the bounded SkillKernel services.
+
 - 2026-06-14: Activation context smoke summaries now echo the effective
   context-value and semantic-equivalence thresholds on every reported case, not
   only at the run level. `_assert_smoke` fails closed when any case-level

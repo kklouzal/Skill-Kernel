@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import asyncpg
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "sidecar"))
 
 from autoskill.api.app import create_app
@@ -23,6 +24,7 @@ from autoskill.db.broker_policy import AsyncpgBrokerPolicyStore
 from autoskill.db.jobs import AsyncpgJobStore
 from autoskill.db.profiles import AsyncpgProfileStore
 from autoskill.db.workspaces import ensure_workspace
+from migrate import run_migration
 
 REQUIRED_CHECKS = (
     "storage_plane_schema_ready",
@@ -534,7 +536,7 @@ async def _apply_migration(database_url: str) -> None:
     )
     conn = await asyncpg.connect(database_url)
     try:
-        await conn.execute(migration)
+        await run_migration(conn, migration)
     finally:
         await conn.close()
 

@@ -14,10 +14,12 @@ from uuid import UUID, uuid4
 import asyncpg
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "sidecar"))
 
 from autoskill.db.activation import ActivationReadiness, AsyncpgActivationGateStore
 from autoskill.db.workspaces import ensure_workspace
+from migrate import run_migration
 
 CONTEXT_CASE_EXPECTATIONS = {
     "missing": {
@@ -622,7 +624,7 @@ async def _apply_migration(database_url: str) -> None:
     )
     conn = await asyncpg.connect(database_url)
     try:
-        await conn.execute(migration)
+        await run_migration(conn, migration)
     finally:
         await conn.close()
 

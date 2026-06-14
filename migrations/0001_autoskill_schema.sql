@@ -11,10 +11,6 @@ CREATE TABLE IF NOT EXISTS autoskill.schema_migrations (
   applied_at timestamptz NOT NULL DEFAULT now()
 );
 
-INSERT INTO autoskill.schema_migrations (version, description)
-VALUES ('0001_autoskill_schema', 'SkillKernel autoskill bootstrap schema')
-ON CONFLICT (version) DO NOTHING;
-
 CREATE TABLE IF NOT EXISTS autoskill.workspaces (
   workspace_id uuid PRIMARY KEY,
   external_key text UNIQUE NOT NULL,
@@ -2465,7 +2461,12 @@ INSERT INTO autoskill.runtime_artifacts (
   source_record_id,
   created_at
 )
-SELECT
+SELECT DISTINCT ON (cf.skill_version_id, CASE
+    WHEN lower(cf.path) = 'skill.md' OR lower(cf.path) LIKE '%/skill.md' THEN 'skill_md'
+    WHEN lower(cf.path) LIKE '%.schema.json' THEN 'schema'
+    WHEN lower(cf.path) LIKE '%.json' THEN 'manifest'
+    ELSE 'script'
+  END, cf.path)
   autoskill.stable_uuid_from_text('runtime_artifact:compiled_file:' || cf.compiled_file_id::text),
   s.workspace_id,
   cf.skill_version_id,
@@ -2490,6 +2491,17 @@ SELECT
 FROM autoskill.compiled_files cf
 JOIN autoskill.skill_versions sv ON sv.skill_version_id = cf.skill_version_id
 JOIN autoskill.skills s ON s.skill_id = sv.skill_id
+ORDER BY
+  cf.skill_version_id,
+  CASE
+    WHEN lower(cf.path) = 'skill.md' OR lower(cf.path) LIKE '%/skill.md' THEN 'skill_md'
+    WHEN lower(cf.path) LIKE '%.schema.json' THEN 'schema'
+    WHEN lower(cf.path) LIKE '%.json' THEN 'manifest'
+    ELSE 'script'
+  END,
+  cf.path,
+  cf.created_at DESC,
+  cf.compiled_file_id
 ON CONFLICT (skill_version_id, artifact_type, relative_path) DO UPDATE SET
   workspace_id = EXCLUDED.workspace_id,
   content_hash = EXCLUDED.content_hash,
@@ -2521,7 +2533,14 @@ INSERT INTO autoskill.runtime_artifacts (
   source_record_id,
   created_at
 )
-SELECT
+SELECT DISTINCT ON (sa.skill_version_id, CASE sa.kind
+    WHEN 'script' THEN 'script'
+    WHEN 'template' THEN 'template'
+    WHEN 'fixture' THEN 'probe_fixture'
+    WHEN 'manifest' THEN 'manifest'
+    WHEN 'asset' THEN 'asset'
+    ELSE 'reference'
+  END, sa.path)
   autoskill.stable_uuid_from_text('runtime_artifact:support_artifact:' || sa.support_artifact_id::text),
   s.workspace_id,
   sa.skill_version_id,
@@ -2559,6 +2578,19 @@ SELECT
 FROM autoskill.support_artifacts sa
 JOIN autoskill.skill_versions sv ON sv.skill_version_id = sa.skill_version_id
 JOIN autoskill.skills s ON s.skill_id = sv.skill_id
+ORDER BY
+  sa.skill_version_id,
+  CASE sa.kind
+    WHEN 'script' THEN 'script'
+    WHEN 'template' THEN 'template'
+    WHEN 'fixture' THEN 'probe_fixture'
+    WHEN 'manifest' THEN 'manifest'
+    WHEN 'asset' THEN 'asset'
+    ELSE 'reference'
+  END,
+  sa.path,
+  sa.created_at DESC,
+  sa.support_artifact_id
 ON CONFLICT (skill_version_id, artifact_type, relative_path) DO UPDATE SET
   workspace_id = EXCLUDED.workspace_id,
   content_hash = EXCLUDED.content_hash,
@@ -2590,7 +2622,13 @@ INSERT INTO autoskill.runtime_artifacts (
   source_record_id,
   created_at
 )
-SELECT
+SELECT DISTINCT ON (skill_version_id, CASE artifact_kind
+    WHEN 'skill_md' THEN 'skill_md'
+    WHEN 'broker_hint' THEN 'broker_hint'
+    WHEN 'tool_template' THEN 'template'
+    WHEN 'support_excerpt' THEN 'context_excerpt'
+    ELSE 'reference'
+  END, COALESCE(NULLIF(metadata->>'relative_path', ''), 'context/' || context_artifact_id::text || '.txt'))
   autoskill.stable_uuid_from_text('runtime_artifact:context_artifact:' || context_artifact_id::text),
   workspace_id,
   skill_version_id,
@@ -2634,6 +2672,18 @@ SELECT
   created_at
 FROM autoskill.context_artifacts
 WHERE skill_version_id IS NOT NULL
+ORDER BY
+  skill_version_id,
+  CASE artifact_kind
+    WHEN 'skill_md' THEN 'skill_md'
+    WHEN 'broker_hint' THEN 'broker_hint'
+    WHEN 'tool_template' THEN 'template'
+    WHEN 'support_excerpt' THEN 'context_excerpt'
+    ELSE 'reference'
+  END,
+  COALESCE(NULLIF(metadata->>'relative_path', ''), 'context/' || context_artifact_id::text || '.txt'),
+  created_at DESC,
+  context_artifact_id
 ON CONFLICT (skill_version_id, artifact_type, relative_path) DO UPDATE SET
   workspace_id = EXCLUDED.workspace_id,
   content_hash = EXCLUDED.content_hash,
@@ -3096,9 +3146,22 @@ ALTER TABLE autoskill.embeddings
 
 DROP INDEX IF EXISTS autoskill.embeddings_hnsw_cosine_idx;
 
-ALTER TABLE autoskill.embeddings
-  ALTER COLUMN embedding TYPE vector
-  USING embedding::vector;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'autoskill'
+      AND table_name = 'embeddings'
+      AND column_name = 'embedding'
+      AND udt_name <> 'vector'
+  ) THEN
+    ALTER TABLE autoskill.embeddings
+      ALTER COLUMN embedding TYPE vector
+      USING embedding::vector;
+  END IF;
+END;
+$$;
 
 ALTER TABLE autoskill.embeddings
   DROP CONSTRAINT IF EXISTS embeddings_object_type_object_id_embedding_model_key;
@@ -3943,6 +4006,11 @@ ALTER TABLE autoskill.historical_import_chunks
 ALTER TABLE autoskill.historical_import_chunks
   ADD COLUMN IF NOT EXISTS record_index integer;
 
+DROP TRIGGER IF EXISTS historical_import_sources_sync_historical_sources
+  ON autoskill.historical_import_sources;
+DROP TRIGGER IF EXISTS historical_import_chunks_sync_historical_items
+  ON autoskill.historical_import_chunks;
+
 UPDATE autoskill.historical_import_chunks
 SET source_item_locator_hash = COALESCE(
       source_item_locator_hash,
@@ -4571,6 +4639,31 @@ CREATE TRIGGER historical_import_runs_sync_checkpoints
 AFTER INSERT OR UPDATE ON autoskill.historical_import_runs
 FOR EACH ROW EXECUTE FUNCTION autoskill.sync_historical_checkpoint_from_import_run();
 
+WITH ranked_historical_import_sources AS (
+  SELECT
+    historical_import_source_id,
+    workspace_id,
+    source_kind,
+    source_key,
+    fingerprint,
+    trust_level,
+    metadata,
+    status,
+    created_at,
+    last_seen_at,
+    autoskill.map_historical_source_type(source_kind) AS source_type,
+    row_number() OVER (
+      PARTITION BY
+        workspace_id,
+        autoskill.map_historical_source_type(source_kind),
+        source_key
+      ORDER BY
+        last_seen_at DESC,
+        created_at DESC,
+        historical_import_source_id
+    ) AS source_rank
+  FROM autoskill.historical_import_sources
+)
 INSERT INTO autoskill.historical_sources (
   historical_source_id,
   workspace_id,
@@ -4590,7 +4683,7 @@ SELECT
   autoskill.stable_historical_source_id(workspace_id, source_kind, source_key),
   workspace_id,
   NULLIF(metadata->>'agent_id', ''),
-  autoskill.map_historical_source_type(source_kind),
+  source_type,
   source_key,
   COALESCE(NULLIF(metadata->>'source_owner', ''), 'openclaw'),
   metadata || jsonb_build_object(
@@ -4604,7 +4697,8 @@ SELECT
   historical_import_source_id,
   created_at,
   last_seen_at
-FROM autoskill.historical_import_sources
+FROM ranked_historical_import_sources
+WHERE source_rank = 1
 ON CONFLICT (workspace_id, source_type, source_uri) DO UPDATE SET
   workspace_id = EXCLUDED.workspace_id,
   agent_id = EXCLUDED.agent_id,
@@ -4639,7 +4733,7 @@ INSERT INTO autoskill.historical_source_items (
   updated_at
 )
 SELECT DISTINCT ON (
-  historical_import_source_id,
+  canonical_historical_source_id,
   item_key,
   parser_version,
   redaction_policy_version
@@ -4681,7 +4775,13 @@ FROM (
   JOIN autoskill.historical_import_sources src
     ON src.historical_import_source_id = hic.historical_import_source_id
 ) historical_import_chunks
-ORDER BY historical_import_source_id, item_key, parser_version, redaction_policy_version, created_at
+ORDER BY
+  canonical_historical_source_id,
+  item_key,
+  parser_version,
+  redaction_policy_version,
+  created_at DESC,
+  historical_import_chunk_id
 ON CONFLICT (historical_source_id, item_key, parser_version, redaction_policy_version) DO UPDATE SET
   workspace_id = EXCLUDED.workspace_id,
   agent_id = COALESCE(EXCLUDED.agent_id, autoskill.historical_source_items.agent_id),
@@ -4714,7 +4814,18 @@ INSERT INTO autoskill.historical_chunks (
   source_historical_import_chunk_id,
   created_at
 )
-SELECT
+SELECT DISTINCT ON (
+  workspace_id,
+  autoskill.stable_uuid_from_text(
+    'historical_source_item:' ||
+    canonical_historical_source_id::text || ':' ||
+    item_key || ':' ||
+    parser_version || ':' ||
+    redaction_policy_version
+  ),
+  content_hash,
+  COALESCE(NULLIF(metadata->>'chunking_policy_version', ''), 'historical-import-chunker.v1')
+)
   historical_import_chunk_id,
   autoskill.stable_uuid_from_text(
     'historical_source_item:' ||
@@ -4755,7 +4866,21 @@ FROM (
   JOIN autoskill.historical_import_sources src
     ON src.historical_import_source_id = hic.historical_import_source_id
 ) historical_import_chunks
-ON CONFLICT (source_historical_import_chunk_id) DO UPDATE SET
+ORDER BY
+  workspace_id,
+  autoskill.stable_uuid_from_text(
+    'historical_source_item:' ||
+    canonical_historical_source_id::text || ':' ||
+    item_key || ':' ||
+    parser_version || ':' ||
+    redaction_policy_version
+  ),
+  content_hash,
+  COALESCE(NULLIF(metadata->>'chunking_policy_version', ''), 'historical-import-chunker.v1'),
+  created_at DESC,
+  historical_import_chunk_id
+ON CONFLICT (workspace_id, historical_source_item_id, redacted_hash, chunking_policy_version) DO UPDATE SET
+  source_historical_import_chunk_id = EXCLUDED.source_historical_import_chunk_id,
   historical_source_item_id = EXCLUDED.historical_source_item_id,
   workspace_id = EXCLUDED.workspace_id,
   agent_id = EXCLUDED.agent_id,
@@ -6322,3 +6447,8 @@ CREATE INDEX IF NOT EXISTS embeddings_hnsw_cosine_1536_idx
 
 CREATE INDEX IF NOT EXISTS embeddings_object_idx
   ON autoskill.embeddings (workspace_id, object_type, skill_id);
+
+INSERT INTO autoskill.schema_migrations (version, description)
+VALUES ('0001_autoskill_schema', 'SkillKernel autoskill bootstrap schema')
+ON CONFLICT (version) DO UPDATE SET
+  description = EXCLUDED.description;

@@ -14,12 +14,14 @@ from uuid import uuid4
 import asyncpg
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "sidecar"))
 
 from autoskill.api.app import create_app
 from autoskill.core.config import get_settings
 from autoskill.db.audit import NullAuditStore
 from autoskill.db.observatory_admin import AsyncpgObservatoryAdminStore
+from migrate import run_migration
 
 
 def main() -> None:
@@ -215,7 +217,7 @@ async def _apply_migration(database_url: str) -> None:
     )
     conn = await asyncpg.connect(database_url)
     try:
-        await conn.execute(migration)
+        await run_migration(conn, migration)
     finally:
         await conn.close()
 

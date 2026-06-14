@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 import asyncpg
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "sidecar"))
 
 from autoskill.core.hashing import sha256_json
@@ -29,6 +30,7 @@ from autoskill.services.topology import (
     persist_topology_proposal,
     propose_creation,
 )
+from migrate import run_migration
 
 LOW_FIDELITY_CASES = ("hash_only", "metadata_only", "unavailable")
 ADMISSIBLE_FIDELITY_CASES = ("redacted_derivative", "declassified_summary")
@@ -420,7 +422,7 @@ async def _apply_migration(database_url: str) -> None:
     )
     conn = await asyncpg.connect(database_url)
     try:
-        await conn.execute(migration)
+        await run_migration(conn, migration)
     finally:
         await conn.close()
 
