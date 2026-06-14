@@ -1311,6 +1311,8 @@ class MemoryActivationGate:
         context_output_manifest_hash=None,
         require_semantic_equivalence: bool = True,
         min_semantic_equivalence_score: float | None = None,
+        require_context_value: bool = False,
+        min_context_value_per_token: float | None = None,
         allowed_autonomy_actions=None,
     ):
         self.calls.append(
@@ -1321,6 +1323,8 @@ class MemoryActivationGate:
                 "require_context_compile_proof": require_context_compile_proof,
                 "require_semantic_equivalence": require_semantic_equivalence,
                 "min_semantic_equivalence_score": min_semantic_equivalence_score,
+                "require_context_value": require_context_value,
+                "min_context_value_per_token": min_context_value_per_token,
                 "allowed_autonomy_actions": allowed_autonomy_actions,
             }
         )
@@ -1337,6 +1341,9 @@ class MemoryActivationGate:
             context_compile_status="passed" if self.allowed else "failed",
             context_semantic_equivalence_score=(
                 min_semantic_equivalence_score if self.allowed else None
+            ),
+            context_value_per_token=(
+                min_context_value_per_token if self.allowed else None
             ),
             context_safety_status="passed" if self.allowed else "blocked",
             context_equivalence_status="passed" if self.allowed else "failed",

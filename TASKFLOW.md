@@ -16,6 +16,30 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-13: Activation readiness now has an opt-in activation-grade
+  marginal/context value gate for compiled runtime context. Callers can require
+  recorded context value or set `min_context_value_per_token`; when context
+  compile proof is required, the SQL gate reads
+  `context_artifacts.metadata.last_context_value_per_token`, exposes the
+  content-safe score in readiness JSON, and blocks with deterministic
+  `context-marginal-value-missing` or
+  `context-marginal-value-below-threshold` reason codes. The null gate fails
+  closed when this policy is required and no SQL metadata is available. This
+  advances unified Sections 11.12-11.15 for context regression / marginal
+  value per token enforcement without runtime skill writes, activation, deploy,
+  autonomous apply, or OpenClaw runtime mutation. Focused validation passed
+  with `uv run pytest sidecar/autoskill/tests/test_activation_gate.py -q`
+  (`15 passed, 2 skipped`; SQL-backed smoke cases skipped because local
+  Postgres was unavailable), `uv run ruff check
+  sidecar/autoskill/db/activation.py
+  sidecar/autoskill/tests/test_activation_gate.py
+  sidecar/autoskill/tests/test_worker.py
+  sidecar/autoskill/tests/test_audit_writer_events.py
+  sidecar/autoskill/tests/test_topology_services.py`, `uv run python -m
+  compileall -q` on the same files, and `git diff --check`. Next gate:
+  run the activation SQL smoke against Dev-01 Postgres so the metadata-backed
+  missing/below-threshold/passing path executes instead of skipping.
+
 - 2026-06-13: Context compiler support-bundle scanning is now fail-closed for
   co-loadable support context artifacts. `compile_skill_with_context_governance`
   runs `scan_text_bundle` across rendered `SKILL.md` plus `agent_may_read` and

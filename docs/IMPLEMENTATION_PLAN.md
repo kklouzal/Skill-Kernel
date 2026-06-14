@@ -1,5 +1,21 @@
 # SkillKernel Implementation Plan
 
+2026-06-13 update: activation readiness now exposes and optionally enforces
+compiled context marginal value per token. `ActivationGateStore` accepts
+`require_context_value` and `min_context_value_per_token` without changing
+existing default behavior; when activation-grade context compile proof is
+required and this policy is enabled, SQL readiness reads
+`context_artifacts.metadata.last_context_value_per_token` and emits
+content-safe blockers for missing or below-threshold marginal value. The null
+gate fails closed under the same required policy because it has no real context
+artifact metadata. Focused tests cover blocker behavior, null-store
+fail-closed behavior, and SQL-backed missing/below-threshold/passing fixture
+paths when a Postgres autoskill schema is available. This advances unified
+Sections 11.12-11.15. Validation passed with `uv run pytest
+sidecar/autoskill/tests/test_activation_gate.py -q` (`15 passed, 2 skipped`;
+SQL-backed smoke cases skipped because local Postgres was unavailable), touched
+file Ruff, touched file compileall, and `git diff --check`.
+
 2026-06-13 update: context compiler support-bundle scanning now fails closed
 before context-visible support artifacts can pass governance. The compiler
 builds the deterministic co-loadable bundle from rendered `SKILL.md` plus

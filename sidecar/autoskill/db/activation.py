@@ -23,6 +23,7 @@ class ActivationReadiness:
     context_artifact_id: UUID | None
     context_compile_status: str | None
     context_semantic_equivalence_score: float | None
+    context_value_per_token: float | None
     context_safety_status: str | None
     context_equivalence_status: str | None
     context_budget_status: str | None
@@ -50,6 +51,7 @@ class ActivationReadiness:
             ),
             "context_compile_status": self.context_compile_status,
             "context_semantic_equivalence_score": self.context_semantic_equivalence_score,
+            "context_value_per_token": self.context_value_per_token,
             "context_safety_status": self.context_safety_status,
             "context_equivalence_status": self.context_equivalence_status,
             "context_budget_status": self.context_budget_status,
@@ -74,6 +76,8 @@ class ActivationGateStore(Protocol):
         context_output_manifest_hash: str | None = None,
         require_semantic_equivalence: bool = True,
         min_semantic_equivalence_score: float | None = None,
+        require_context_value: bool = False,
+        min_context_value_per_token: float | None = None,
         allowed_autonomy_actions: tuple[str, ...] | None = None,
     ) -> ActivationReadiness:
         """Return deterministic activation readiness for a staged skill version."""
@@ -93,6 +97,8 @@ class NullActivationGateStore:
         context_output_manifest_hash: str | None = None,
         require_semantic_equivalence: bool = True,
         min_semantic_equivalence_score: float | None = None,
+        require_context_value: bool = False,
+        min_context_value_per_token: float | None = None,
         allowed_autonomy_actions: tuple[str, ...] | None = None,
     ) -> ActivationReadiness:
         blockers: list[str] = []
@@ -109,6 +115,11 @@ class NullActivationGateStore:
             and min_semantic_equivalence_score is not None
         ):
             blockers.append("context-semantic-equivalence-missing")
+        if (
+            require_context_compile_proof
+            and (require_context_value or min_context_value_per_token is not None)
+        ):
+            blockers.append("context-marginal-value-missing")
         return ActivationReadiness(
             allowed=not blockers,
             skill_version_id=skill_version_id,
@@ -121,6 +132,7 @@ class NullActivationGateStore:
             context_artifact_id=context_artifact_id,
             context_compile_status="passed",
             context_semantic_equivalence_score=None,
+            context_value_per_token=None,
             context_safety_status="passed",
             context_equivalence_status="passed",
             context_budget_status="passed",
@@ -144,6 +156,8 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
         context_output_manifest_hash: str | None = None,
         require_semantic_equivalence: bool = True,
         min_semantic_equivalence_score: float | None = None,
+        require_context_value: bool = False,
+        min_context_value_per_token: float | None = None,
         allowed_autonomy_actions: tuple[str, ...] | None = None,
     ) -> ActivationReadiness:
         pool = await self._get_pool()
@@ -161,6 +175,8 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
                   ccr.status AS context_compile_status,
                   ccr.semantic_equivalence_score
                     AS context_semantic_equivalence_score,
+                  (ca.metadata->>'last_context_value_per_token')::double precision
+                    AS context_value_per_token,
                   ca.safety_status AS context_safety_status,
                   ca.equivalence_status AS context_equivalence_status,
                   ca.budget_status AS context_budget_status,
@@ -228,6 +244,7 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
                 context_artifact_id=context_artifact_id,
                 context_compile_status=None,
                 context_semantic_equivalence_score=None,
+                context_value_per_token=None,
                 context_safety_status=None,
                 context_equivalence_status=None,
                 context_budget_status=None,
@@ -244,6 +261,8 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
             context_output_manifest_hash=context_output_manifest_hash,
             require_semantic_equivalence=require_semantic_equivalence,
             min_semantic_equivalence_score=min_semantic_equivalence_score,
+            require_context_value=require_context_value,
+            min_context_value_per_token=min_context_value_per_token,
             allowed_autonomy_actions=allowed_autonomy_actions,
         )
         return ActivationReadiness(
@@ -260,6 +279,7 @@ class AsyncpgActivationGateStore(AsyncpgPoolOwner):
             context_semantic_equivalence_score=row[
                 "context_semantic_equivalence_score"
             ],
+            context_value_per_token=row["context_value_per_token"],
             context_safety_status=row["context_safety_status"],
             context_equivalence_status=row["context_equivalence_status"],
             context_budget_status=row["context_budget_status"],
@@ -281,6 +301,8 @@ def _activation_blockers(
     context_output_manifest_hash: str | None,
     require_semantic_equivalence: bool = True,
     min_semantic_equivalence_score: float | None = None,
+    require_context_value: bool = False,
+    min_context_value_per_token: float | None = None,
     allowed_autonomy_actions: tuple[str, ...] | None = None,
 ) -> list[str]:
     blockers: list[str] = []
@@ -332,6 +354,15 @@ def _activation_blockers(
             and semantic_equivalence_score < min_semantic_equivalence_score
         ):
             blockers.append("context-semantic-equivalence-below-threshold")
+    if require_context_value or min_context_value_per_token is not None:
+        context_value_per_token = row["context_value_per_token"]
+        if context_value_per_token is None:
+            blockers.append("context-marginal-value-missing")
+        elif (
+            min_context_value_per_token is not None
+            and context_value_per_token < min_context_value_per_token
+        ):
+            blockers.append("context-marginal-value-below-threshold")
     if row["context_artifact_id"] is None:
         blockers.append("context-artifact-not-found")
     else:
