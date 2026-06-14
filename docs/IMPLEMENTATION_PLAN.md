@@ -1,5 +1,17 @@
 # SkillKernel Implementation Plan
 
+2026-06-14 update: activation context smoke threshold fixtures are now
+policy-relative. `scripts/autoskill_activation_context_smoke.py` derives the
+missing, below-threshold, and passing context-value cases from the accepted
+`--min-context-value-per-token` before seeding SQL rows, preserving the default
+fixture values where practical while letting positive caller thresholds retain
+one below-policy case and one at/above-policy passing case. The summary
+assertions remain fail-closed and prove the below and passing cases relative to
+policy. Focused tests cover a positive `0.05` threshold. This advances unified
+Sections 11.12-11.15 and Part V Section 4 threshold-governance assurance.
+Validation passed with the focused activation context smoke tests (`14
+passed`). Next: parent SQL smoke with a positive context-value threshold.
+
 2026-06-14 update: activation context smoke caller-provided threshold policy
 now fails closed before any Postgres mutation. `scripts/autoskill_activation_context_smoke.py`
 validates threshold CLI inputs during argument parsing, rejecting non-finite

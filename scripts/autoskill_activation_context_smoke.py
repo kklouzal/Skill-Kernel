@@ -19,22 +19,19 @@ sys.path.insert(0, str(ROOT / "sidecar"))
 from autoskill.db.activation import ActivationReadiness, AsyncpgActivationGateStore
 from autoskill.db.workspaces import ensure_workspace
 
-CONTEXT_CASES = {
+CONTEXT_CASE_EXPECTATIONS = {
     "missing": {
         "semantic_equivalence_score": 0.95,
-        "context_value_per_token": None,
         "expected_allowed": False,
         "expected_blockers": ["context-marginal-value-missing"],
     },
     "below_threshold": {
         "semantic_equivalence_score": 0.95,
-        "context_value_per_token": -0.01,
         "expected_allowed": False,
         "expected_blockers": ["context-marginal-value-below-threshold"],
     },
     "passing": {
         "semantic_equivalence_score": 0.95,
-        "context_value_per_token": 0.02,
         "expected_allowed": True,
         "expected_blockers": [],
     },
@@ -121,9 +118,10 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             args.database_url,
             workspace_key=workspace_key,
             smoke_id=smoke_id,
+            min_context_value_per_token=args.min_context_value_per_token,
         )
         cases = []
-        for case_name in CONTEXT_CASES:
+        for case_name in CONTEXT_CASE_EXPECTATIONS:
             readiness = await activation.check_activation_readiness(
                 workspace_key=workspace_key,
                 skill_version_id=seeded["skill_version_id"],
@@ -201,12 +199,12 @@ def _assert_smoke(summary: dict[str, Any]) -> None:
             raise SystemExit(f"activation context smoke safety flag failed: {flag}")
 
     by_case = {case["case"]: case for case in summary.get("cases", [])}
-    if set(by_case) != set(CONTEXT_CASES):
+    if set(by_case) != set(CONTEXT_CASE_EXPECTATIONS):
         raise SystemExit(
             "activation context smoke did not report expected cases: "
             f"{sorted(by_case)}"
         )
-    for case_name, expected in CONTEXT_CASES.items():
+    for case_name, expected in CONTEXT_CASE_EXPECTATIONS.items():
         case = by_case[case_name]
         if case["allowed"] is not expected["expected_allowed"]:
             raise SystemExit(f"{case_name} activation allowed state was unexpected")
@@ -252,15 +250,17 @@ async def _seed_activation_context_cases(
     *,
     workspace_key: str,
     smoke_id: str,
+    min_context_value_per_token: float,
 ) -> dict[str, Any]:
     conn = await asyncpg.connect(database_url)
     try:
         workspace_id = await ensure_workspace(conn, workspace_key)
         skill_id = uuid4()
         skill_version_id = uuid4()
+        context_cases = _context_cases(min_context_value_per_token)
         compiled_text_hashes = {
             case_name: f"sha256:compiled-{case_name}-{uuid4().hex}"
-            for case_name in CONTEXT_CASES
+            for case_name in context_cases
         }
         output_manifest_hash = f"sha256:manifest-{uuid4().hex}"
         await conn.execute(
@@ -307,7 +307,7 @@ async def _seed_activation_context_cases(
         )
         context_artifact_ids: dict[str, UUID] = {}
         context_compile_run_ids: dict[str, UUID] = {}
-        for case_name, case in CONTEXT_CASES.items():
+        for case_name, case in context_cases.items():
             context_artifact_id = uuid4()
             context_compile_run_id = uuid4()
             context_artifact_ids[case_name] = context_artifact_id
@@ -338,6 +338,30 @@ async def _seed_activation_context_cases(
         }
     finally:
         await conn.close()
+
+
+def _context_cases(min_context_value_per_token: float) -> dict[str, dict[str, Any]]:
+    below_threshold = (
+        -0.01
+        if min_context_value_per_token == 0.0
+        else min_context_value_per_token / 2.0
+    )
+    passing = max(0.02, min_context_value_per_token)
+    return {
+        case_name: {
+            **expectation,
+            "context_value_per_token": context_value_per_token,
+        }
+        for case_name, expectation, context_value_per_token in (
+            ("missing", CONTEXT_CASE_EXPECTATIONS["missing"], None),
+            (
+                "below_threshold",
+                CONTEXT_CASE_EXPECTATIONS["below_threshold"],
+                below_threshold,
+            ),
+            ("passing", CONTEXT_CASE_EXPECTATIONS["passing"], passing),
+        )
+    }
 
 
 async def _insert_passing_proposal_gate(

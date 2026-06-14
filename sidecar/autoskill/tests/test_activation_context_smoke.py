@@ -84,6 +84,26 @@ def test_activation_context_smoke_rejects_passing_case_below_policy() -> None:
         smoke._assert_smoke(summary)
 
 
+def test_activation_context_smoke_derives_cases_from_positive_threshold() -> None:
+    context_cases = smoke._context_cases(0.05)
+
+    assert context_cases["missing"]["context_value_per_token"] is None
+    assert context_cases["below_threshold"]["context_value_per_token"] == 0.025
+    assert context_cases["below_threshold"]["context_value_per_token"] < 0.05
+    assert context_cases["passing"]["context_value_per_token"] == 0.05
+    assert context_cases["passing"]["context_value_per_token"] >= 0.05
+
+    summary = _assertable_summary(min_context_value_per_token=0.05)
+    summary["cases"][1]["context_value_per_token"] = context_cases[
+        "below_threshold"
+    ]["context_value_per_token"]
+    summary["cases"][2]["context_value_per_token"] = context_cases["passing"][
+        "context_value_per_token"
+    ]
+
+    smoke._assert_smoke(summary)
+
+
 def test_activation_context_smoke_rejects_missing_semantic_proof() -> None:
     summary = _assertable_summary()
     summary["cases"][2]["context_semantic_equivalence_score"] = None
@@ -122,18 +142,18 @@ def test_activation_context_smoke_accepts_default_threshold_policy() -> None:
 def test_activation_context_smoke_uses_distinct_compiled_hashes_per_case() -> None:
     compiled_hashes = {
         case_name: f"sha256:compiled-{case_name}-{uuid4().hex}"
-        for case_name in smoke.CONTEXT_CASES
+        for case_name in smoke.CONTEXT_CASE_EXPECTATIONS
     }
 
-    assert set(compiled_hashes) == set(smoke.CONTEXT_CASES)
-    assert len(set(compiled_hashes.values())) == len(smoke.CONTEXT_CASES)
+    assert set(compiled_hashes) == set(smoke.CONTEXT_CASE_EXPECTATIONS)
+    assert len(set(compiled_hashes.values())) == len(smoke.CONTEXT_CASE_EXPECTATIONS)
 
 
-def _assertable_summary() -> dict:
+def _assertable_summary(min_context_value_per_token: float = 0.0) -> dict:
     skill_version_id = uuid4()
     return {
         "ok": True,
-        "min_context_value_per_token": 0.0,
+        "min_context_value_per_token": min_context_value_per_token,
         "min_semantic_equivalence_score": 0.9,
         "cases": [
             _case_summary(

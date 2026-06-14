@@ -16,6 +16,18 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-14: Activation context smoke fixtures are now derived from the
+  caller's accepted `--min-context-value-per-token` policy before SQL seeding.
+  The helper preserves the default missing / `-0.01` below-threshold / `0.02`
+  passing behavior, while positive thresholds seed a below-policy value and a
+  passing value at or above policy. Summary assertions still fail closed for
+  missing marginal value, below-policy value, and passing value below policy.
+  This advances unified Sections 11.12-11.15 and Part V Section 4
+  threshold-governance assurance. Validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_activation_context_smoke.py -q` (`14 passed`).
+  Next gate: parent run the real SQL smoke with a positive
+  `--min-context-value-per-token` against disposable or Dev-01 Postgres.
+
 - 2026-06-14: Activation context smoke threshold inputs now fail closed during
   CLI parsing before migration or Postgres mutation. The smoke rejects
   non-finite threshold values, requires
