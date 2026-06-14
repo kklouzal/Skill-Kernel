@@ -16,6 +16,32 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-14: Activation context smoke CI and live-schema cleanup compatibility
+  are patched in the current uncommitted worktree. The
+  `activation-context-smoke` GitHub Actions job invokes
+  `scripts/autoskill_activation_context_smoke.py` with
+  `--min-context-value-per-token 0.05` and explicit
+  `--min-semantic-equivalence-score 0.9`, so the SQL-backed smoke seeds and
+  asserts missing, below-policy, and passing context-value cases under a
+  non-default threshold. The smoke cleanup now discovers existing
+  `autoskill` tables, fails closed when core smoke tables are missing, and
+  deletes optional/later cleanup tables such as `runtime_artifacts`,
+  `skill_components`, `skill_ir_revisions`, `skill_state_records`, and
+  `memory_contracts` only when they exist. This addresses parent Dev-01
+  evidence where a full migration reapply failed on an already-migrated DB with
+  `ON CONFLICT DO UPDATE command cannot affect row a second time`, then the
+  safer `--skip-migrate --min-context-value-per-token 0.05` rerun hit
+  `relation "autoskill.runtime_artifacts" does not exist` during cleanup.
+  Validation passed with focused activation-context tests (`17 passed`),
+  touched-file Ruff, touched-file compileall, workflow YAML parse, diff
+  hygiene, and the parent-style Dev-01
+  `set -a; . ./.env; set +a; uv run python
+  scripts/autoskill_activation_context_smoke.py --skip-migrate
+  --min-context-value-per-token 0.05` smoke. This advances unified Sections
+  1.4 and 11.12-11.15 plus Part V Section 4 threshold-governance assurance.
+  Next gate: parent review/commit and confirm the CI
+  `activation-context-smoke` job passes.
+
 - 2026-06-14: Activation context smoke fixtures are now derived from the
   caller's accepted `--min-context-value-per-token` policy before SQL seeding.
   The helper preserves the default missing / `-0.01` below-threshold / `0.02`

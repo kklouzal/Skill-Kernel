@@ -364,6 +364,8 @@ jobs:
         run: >-
           uv run python
           scripts/autoskill_activation_context_smoke.py
+          --min-context-value-per-token 0.05
+          --min-semantic-equivalence-score 0.9
 
   observatory-live-smoke:
     runs-on: ubuntu-latest

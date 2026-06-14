@@ -8,7 +8,7 @@ import math
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -36,6 +36,97 @@ CONTEXT_CASE_EXPECTATIONS = {
         "expected_blockers": [],
     },
 }
+
+REQUIRED_CLEANUP_TABLES = frozenset(
+    {
+        "workspaces",
+        "skills",
+        "skill_versions",
+        "evaluations",
+        "context_artifacts",
+        "context_compile_runs",
+    }
+)
+
+
+class CleanupStatement(NamedTuple):
+    target_table: str
+    sql: str
+    optional: bool = False
+
+
+CLEANUP_STATEMENTS = (
+    CleanupStatement(
+        "context_compile_runs",
+        "DELETE FROM autoskill.context_compile_runs WHERE workspace_id = $1",
+    ),
+    CleanupStatement(
+        "runtime_artifacts",
+        "DELETE FROM autoskill.runtime_artifacts WHERE workspace_id = $1",
+        optional=True,
+    ),
+    CleanupStatement(
+        "context_artifacts",
+        "DELETE FROM autoskill.context_artifacts WHERE workspace_id = $1",
+    ),
+    CleanupStatement(
+        "evaluations",
+        "DELETE FROM autoskill.evaluations WHERE workspace_id = $1",
+    ),
+    CleanupStatement(
+        "skill_components",
+        """
+        DELETE FROM autoskill.skill_components
+        WHERE skill_version_id IN (
+          SELECT sv.skill_version_id
+          FROM autoskill.skill_versions sv
+          JOIN autoskill.skills s ON s.skill_id = sv.skill_id
+          WHERE s.workspace_id = $1
+        )
+        """,
+        optional=True,
+    ),
+    CleanupStatement(
+        "skill_ir_revisions",
+        """
+        DELETE FROM autoskill.skill_ir_revisions
+        WHERE skill_version_id IN (
+          SELECT sv.skill_version_id
+          FROM autoskill.skill_versions sv
+          JOIN autoskill.skills s ON s.skill_id = sv.skill_id
+          WHERE s.workspace_id = $1
+        )
+        """,
+        optional=True,
+    ),
+    CleanupStatement(
+        "skill_versions",
+        """
+        DELETE FROM autoskill.skill_versions
+        WHERE skill_id IN (
+          SELECT skill_id FROM autoskill.skills WHERE workspace_id = $1
+        )
+        """,
+    ),
+    CleanupStatement(
+        "skill_state_records",
+        "DELETE FROM autoskill.skill_state_records WHERE workspace_id = $1",
+        optional=True,
+    ),
+    CleanupStatement(
+        "memory_contracts",
+        "DELETE FROM autoskill.memory_contracts WHERE workspace_id = $1",
+        optional=True,
+    ),
+    CleanupStatement(
+        "skills",
+        "DELETE FROM autoskill.skills WHERE workspace_id = $1",
+    ),
+    CleanupStatement(
+        "workspaces",
+        "DELETE FROM autoskill.workspaces WHERE workspace_id = $1",
+    ),
+)
 
 
 def main() -> None:
@@ -512,6 +603,8 @@ async def _apply_migration(database_url: str) -> None:
 async def _delete_smoke_workspace(database_url: str, workspace_key: str) -> None:
     conn = await asyncpg.connect(database_url)
     try:
+        existing_tables = await _fetch_autoskill_tables(conn)
+        cleanup_statements = _cleanup_statements_for_existing_tables(existing_tables)
         workspace_id = await conn.fetchval(
             "SELECT workspace_id FROM autoskill.workspaces WHERE external_key = $1",
             workspace_key,
@@ -519,43 +612,37 @@ async def _delete_smoke_workspace(database_url: str, workspace_key: str) -> None
         if workspace_id is None:
             return
         async with conn.transaction():
-            for statement in (
-                "DELETE FROM autoskill.context_compile_runs WHERE workspace_id = $1",
-                "DELETE FROM autoskill.runtime_artifacts WHERE workspace_id = $1",
-                "DELETE FROM autoskill.context_artifacts WHERE workspace_id = $1",
-                "DELETE FROM autoskill.evaluations WHERE workspace_id = $1",
-                """
-                DELETE FROM autoskill.skill_components
-                WHERE skill_version_id IN (
-                  SELECT sv.skill_version_id
-                  FROM autoskill.skill_versions sv
-                  JOIN autoskill.skills s ON s.skill_id = sv.skill_id
-                  WHERE s.workspace_id = $1
-                )
-                """,
-                """
-                DELETE FROM autoskill.skill_ir_revisions
-                WHERE skill_version_id IN (
-                  SELECT sv.skill_version_id
-                  FROM autoskill.skill_versions sv
-                  JOIN autoskill.skills s ON s.skill_id = sv.skill_id
-                  WHERE s.workspace_id = $1
-                )
-                """,
-                """
-                DELETE FROM autoskill.skill_versions
-                WHERE skill_id IN (
-                  SELECT skill_id FROM autoskill.skills WHERE workspace_id = $1
-                )
-                """,
-                "DELETE FROM autoskill.skill_state_records WHERE workspace_id = $1",
-                "DELETE FROM autoskill.memory_contracts WHERE workspace_id = $1",
-                "DELETE FROM autoskill.skills WHERE workspace_id = $1",
-                "DELETE FROM autoskill.workspaces WHERE workspace_id = $1",
-            ):
+            for statement in cleanup_statements:
                 await conn.execute(statement, workspace_id)
     finally:
         await conn.close()
+
+
+async def _fetch_autoskill_tables(conn: asyncpg.Connection) -> frozenset[str]:
+    rows = await conn.fetch(
+        """
+        SELECT tablename
+        FROM pg_catalog.pg_tables
+        WHERE schemaname = 'autoskill'
+        """
+    )
+    return frozenset(row["tablename"] for row in rows)
+
+
+def _cleanup_statements_for_existing_tables(
+    existing_tables: frozenset[str] | set[str],
+) -> tuple[str, ...]:
+    missing_required = REQUIRED_CLEANUP_TABLES - existing_tables
+    if missing_required:
+        raise RuntimeError(
+            "activation context smoke cleanup requires missing autoskill tables: "
+            f"{', '.join(sorted(missing_required))}"
+        )
+    return tuple(
+        statement.sql
+        for statement in CLEANUP_STATEMENTS
+        if not statement.optional or statement.target_table in existing_tables
+    )
 
 
 def _default_database_url() -> str:

@@ -149,6 +149,50 @@ def test_activation_context_smoke_uses_distinct_compiled_hashes_per_case() -> No
     assert len(set(compiled_hashes.values())) == len(smoke.CONTEXT_CASE_EXPECTATIONS)
 
 
+def test_activation_context_smoke_cleanup_skips_absent_optional_tables() -> None:
+    statements = smoke._cleanup_statements_for_existing_tables(
+        smoke.REQUIRED_CLEANUP_TABLES
+    )
+    rendered = "\n".join(statements)
+
+    assert "autoskill.context_compile_runs" in rendered
+    assert "autoskill.context_artifacts" in rendered
+    assert "autoskill.skill_versions" in rendered
+    assert "autoskill.workspaces" in rendered
+    assert "autoskill.runtime_artifacts" not in rendered
+    assert "autoskill.skill_components" not in rendered
+    assert "autoskill.skill_ir_revisions" not in rendered
+    assert "autoskill.skill_state_records" not in rendered
+    assert "autoskill.memory_contracts" not in rendered
+
+
+def test_activation_context_smoke_cleanup_retains_existing_optional_tables() -> None:
+    statements = smoke._cleanup_statements_for_existing_tables(
+        smoke.REQUIRED_CLEANUP_TABLES
+        | {
+            "runtime_artifacts",
+            "skill_components",
+            "skill_ir_revisions",
+            "skill_state_records",
+            "memory_contracts",
+        }
+    )
+    rendered = "\n".join(statements)
+
+    assert "autoskill.runtime_artifacts" in rendered
+    assert "autoskill.skill_components" in rendered
+    assert "autoskill.skill_ir_revisions" in rendered
+    assert "autoskill.skill_state_records" in rendered
+    assert "autoskill.memory_contracts" in rendered
+
+
+def test_activation_context_smoke_cleanup_requires_core_tables() -> None:
+    existing_tables = smoke.REQUIRED_CLEANUP_TABLES - {"context_compile_runs"}
+
+    with pytest.raises(RuntimeError, match="context_compile_runs"):
+        smoke._cleanup_statements_for_existing_tables(existing_tables)
+
+
 def _assertable_summary(min_context_value_per_token: float = 0.0) -> dict:
     skill_version_id = uuid4()
     return {
