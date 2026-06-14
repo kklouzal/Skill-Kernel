@@ -2200,6 +2200,8 @@ def test_filesystem_worker_applies_staged_manifest_when_policy_approved(tmp_path
             "context_output_manifest_hash": context_output_manifest_hash,
             "require_semantic_equivalence": True,
             "min_semantic_equivalence_score": 0.9,
+            "require_context_value": False,
+            "min_context_value_per_token": None,
             "allowed_autonomy_actions": ("auto_accept", "stage_canary"),
         }
     ]

@@ -1,5 +1,22 @@
 # SkillKernel Implementation Plan
 
+2026-06-14 update: activation context marginal-value readiness now has a
+standalone SQL-backed smoke primitive. `scripts/autoskill_activation_context_smoke.py`
+uses `--database-url` / `AUTOSKILL_DATABASE_URL`, applies
+`0001_autoskill_schema.sql` unless skipped, seeds an isolated workspace with
+passed activation prerequisites, `skill_md` context artifacts, passed compile
+runs, semantic-equivalence proof, and three marginal-value cases, then calls
+`AsyncpgActivationGateStore.check_activation_readiness` to prove missing,
+below-threshold, and passing context value per token behavior. The summary
+assertions preserve content-safe output and no runtime skill writes, plugin
+activation, autonomous apply, deployment, or live OpenClaw mutation.
+`.github/workflows/publish-ghcr.yml` now runs the smoke as an independent
+pgvector-backed job after deterministic tests and gates local image builds on
+it. This advances unified Sections 1.4 and 11.12-11.15. Validation passed with
+the focused smoke summary tests (`4 passed`), touched-file Ruff, touched-file
+compileall, and workflow YAML parsing. Next: parent/CI run the real SQL smoke
+against disposable or Dev-01 Postgres and confirm the emitted JSON.
+
 2026-06-13 update: activation readiness now exposes and optionally enforces
 compiled context marginal value per token. `ActivationGateStore` accepts
 `require_context_value` and `min_context_value_per_token` without changing

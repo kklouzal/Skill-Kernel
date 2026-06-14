@@ -16,6 +16,31 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-14: Activation context marginal-value SQL smoke is now a repeatable
+  primitive. `scripts/autoskill_activation_context_smoke.py` targets
+  `--database-url` / `AUTOSKILL_DATABASE_URL`, applies the bootstrap migration
+  by default, seeds an isolated workspace with passed scanner/evaluator,
+  activation-grade `skill_md` context artifacts, passed compile runs, semantic
+  equivalence proof, and missing/below-threshold/passing
+  `last_context_value_per_token` cases, then exercises
+  `AsyncpgActivationGateStore.check_activation_readiness` on the real SQL path.
+  The emitted summary is content-safe and asserts deterministic
+  `context-marginal-value-missing`,
+  `context-marginal-value-below-threshold`, and passing activation readiness
+  without runtime skill writes, plugin activation, autonomous apply, deployment,
+  or live OpenClaw mutation. `.github/workflows/publish-ghcr.yml` now runs this
+  as an independent pgvector-backed job after deterministic tests, and local
+  image-build validation depends on it. This advances unified Sections 1.4 and
+  11.12-11.15 from skipped local SQL coverage to a CI/operator smoke gate.
+  Validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_activation_context_smoke.py -q` (`4 passed`),
+  `uv run ruff check scripts/autoskill_activation_context_smoke.py
+  sidecar/autoskill/tests/test_activation_context_smoke.py`, `uv run python -m
+  compileall -q scripts/autoskill_activation_context_smoke.py
+  sidecar/autoskill/tests/test_activation_context_smoke.py`, and workflow YAML
+  parse. Next gate: parent run the new SQL smoke against disposable or Dev-01
+  Postgres and confirm the GitHub Actions job passes.
+
 - 2026-06-13: Activation readiness now has an opt-in activation-grade
   marginal/context value gate for compiled runtime context. Callers can require
   recorded context value or set `min_context_value_per_token`; when context
