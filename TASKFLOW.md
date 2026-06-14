@@ -16,6 +16,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-14: Activation context smoke threshold inputs now fail closed during
+  CLI parsing before migration or Postgres mutation. The smoke rejects
+  non-finite threshold values, requires
+  `--min-semantic-equivalence-score` to be within `[0.0, 1.0]`, and requires
+  `--min-context-value-per-token` to be finite and non-negative while
+  preserving default valid behavior. Focused tests cover invalid policy inputs
+  through argument parsing without touching Postgres. This advances unified
+  Sections 11.12-11.15 and Part V Section 4 threshold-governance assurance.
+  Validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_activation_context_smoke.py -q` (`12 passed`),
+  touched-file Ruff, touched-file compileall, and `git diff --check`. Next
+  gate: parent/CI can re-run the SQL smoke with valid policy thresholds.
+
 - 2026-06-14: Activation context marginal-value SQL smoke is now a repeatable
   primitive. `scripts/autoskill_activation_context_smoke.py` targets
   `--database-url` / `AUTOSKILL_DATABASE_URL`, applies the bootstrap migration

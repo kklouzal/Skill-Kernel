@@ -1,5 +1,17 @@
 # SkillKernel Implementation Plan
 
+2026-06-14 update: activation context smoke caller-provided threshold policy
+now fails closed before any Postgres mutation. `scripts/autoskill_activation_context_smoke.py`
+validates threshold CLI inputs during argument parsing, rejecting non-finite
+values, semantic-equivalence thresholds outside `[0.0, 1.0]`, and negative
+context-value-per-token thresholds while preserving the default valid policy.
+Focused tests cover invalid threshold rejection without calling `_run` or
+requiring Postgres. This advances unified Sections 11.12-11.15 and Part V
+Section 4 threshold-governance assurance. Validation passed with the focused
+activation context smoke tests (`12 passed`), touched-file Ruff, touched-file
+compileall, and `git diff --check`. Next: parent/CI SQL smoke with valid
+policy thresholds.
+
 2026-06-14 update: activation context marginal-value readiness now has a
 standalone SQL-backed smoke primitive. `scripts/autoskill_activation_context_smoke.py`
 uses `--database-url` / `AUTOSKILL_DATABASE_URL`, applies

@@ -92,6 +92,43 @@ def test_activation_context_smoke_rejects_missing_semantic_proof() -> None:
         smoke._assert_smoke(summary)
 
 
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [
+        ("--min-context-value-per-token", "nan"),
+        ("--min-context-value-per-token", "inf"),
+        ("--min-context-value-per-token", "-0.01"),
+        ("--min-semantic-equivalence-score", "nan"),
+        ("--min-semantic-equivalence-score", "inf"),
+        ("--min-semantic-equivalence-score", "-0.01"),
+        ("--min-semantic-equivalence-score", "1.01"),
+    ],
+)
+def test_activation_context_smoke_rejects_invalid_thresholds_before_run(
+    flag: str,
+    value: str,
+) -> None:
+    with pytest.raises(SystemExit):
+        smoke._parse_args([flag, value])
+
+
+def test_activation_context_smoke_accepts_default_threshold_policy() -> None:
+    args = smoke._parse_args([])
+
+    assert args.min_context_value_per_token == 0.0
+    assert args.min_semantic_equivalence_score == 0.9
+
+
+def test_activation_context_smoke_uses_distinct_compiled_hashes_per_case() -> None:
+    compiled_hashes = {
+        case_name: f"sha256:compiled-{case_name}-{uuid4().hex}"
+        for case_name in smoke.CONTEXT_CASES
+    }
+
+    assert set(compiled_hashes) == set(smoke.CONTEXT_CASES)
+    assert len(set(compiled_hashes.values())) == len(smoke.CONTEXT_CASES)
+
+
 def _assertable_summary() -> dict:
     skill_version_id = uuid4()
     return {

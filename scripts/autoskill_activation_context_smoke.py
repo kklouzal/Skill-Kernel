@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -46,7 +47,7 @@ def main() -> None:
     print(json.dumps(result, indent=2, sort_keys=True))
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run a real-Postgres activation context smoke proving "
@@ -71,17 +72,41 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--min-context-value-per-token",
-        type=float,
+        type=_non_negative_finite_float,
         default=0.0,
         help="Minimum context value per token required for passing activation.",
     )
     parser.add_argument(
         "--min-semantic-equivalence-score",
-        type=float,
+        type=_semantic_equivalence_threshold,
         default=0.9,
         help="Minimum semantic-equivalence score required by the activation gate.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def _finite_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a finite number") from exc
+    if not math.isfinite(parsed):
+        raise argparse.ArgumentTypeError("must be a finite number")
+    return parsed
+
+
+def _non_negative_finite_float(value: str) -> float:
+    parsed = _finite_float(value)
+    if parsed < 0.0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return parsed
+
+
+def _semantic_equivalence_threshold(value: str) -> float:
+    parsed = _finite_float(value)
+    if not 0.0 <= parsed <= 1.0:
+        raise argparse.ArgumentTypeError("must be between 0.0 and 1.0")
+    return parsed
 
 
 async def _run(args: argparse.Namespace) -> dict[str, Any]:
@@ -105,7 +130,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 require_context_compile_proof=True,
                 context_compile_run_id=seeded["context_compile_run_ids"][case_name],
                 context_artifact_id=seeded["context_artifact_ids"][case_name],
-                compiled_text_hash=seeded["compiled_text_hash"],
+                compiled_text_hash=seeded["compiled_text_hashes"][case_name],
                 context_output_manifest_hash=seeded["output_manifest_hash"],
                 require_semantic_equivalence=True,
                 min_semantic_equivalence_score=args.min_semantic_equivalence_score,
@@ -233,7 +258,10 @@ async def _seed_activation_context_cases(
         workspace_id = await ensure_workspace(conn, workspace_key)
         skill_id = uuid4()
         skill_version_id = uuid4()
-        compiled_text_hash = f"sha256:compiled-{uuid4().hex}"
+        compiled_text_hashes = {
+            case_name: f"sha256:compiled-{case_name}-{uuid4().hex}"
+            for case_name in CONTEXT_CASES
+        }
         output_manifest_hash = f"sha256:manifest-{uuid4().hex}"
         await conn.execute(
             """
@@ -292,7 +320,7 @@ async def _seed_activation_context_cases(
                 context_artifact_id=context_artifact_id,
                 context_compile_run_id=context_compile_run_id,
                 case_name=case_name,
-                compiled_text_hash=compiled_text_hash,
+                compiled_text_hash=compiled_text_hashes[case_name],
                 output_manifest_hash=output_manifest_hash,
                 semantic_equivalence_score=case["semantic_equivalence_score"],
                 context_value_per_token=case["context_value_per_token"],
@@ -305,7 +333,7 @@ async def _seed_activation_context_cases(
             "skill_version_id": skill_version_id,
             "context_artifact_ids": context_artifact_ids,
             "context_compile_run_ids": context_compile_run_ids,
-            "compiled_text_hash": compiled_text_hash,
+            "compiled_text_hashes": compiled_text_hashes,
             "output_manifest_hash": output_manifest_hash,
         }
     finally:
