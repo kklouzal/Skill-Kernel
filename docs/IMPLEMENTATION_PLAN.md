@@ -10,8 +10,10 @@ audit rows. Focused Observatory API coverage proves success, failure, limit
 clamping, policy metrics, and live-event outcomes. This advances unified
 Section 28.3 audit hash-chain integrity and Observatory action truthfulness.
 Validation passed with the focused Observatory API test slice, touched-file
-Ruff, touched-file compileall, diff hygiene, parent full `uv run pytest`, and
-conformance report. Next: review/commit and CI confirmation.
+Ruff, touched-file compileall, diff hygiene, parent full `uv run pytest`,
+conformance report, and GitHub Actions run `27578009449` for commit
+`f8b3927`. Next: continue the next narrow production-hardening slice under
+TaskFlow/`codex-worker` authority.
 
 2026-06-15 update: audit hash-chain persistence now serializes SQL appends per
 workspace with a deterministic transaction-level Postgres advisory lock. The

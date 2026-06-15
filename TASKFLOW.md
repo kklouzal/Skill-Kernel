@@ -27,7 +27,9 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   audit hash-chain integrity and Observatory operator action truthfulness.
   Validation passed with the focused Observatory API test slice, touched-file
   Ruff, touched-file compileall, diff hygiene, parent full `uv run pytest`,
-  and conformance report. Next gate: review/commit and CI confirmation.
+  conformance report, and GitHub Actions run `27578009449` for commit
+  `f8b3927`. Next gate: continue the next narrow production-hardening slice
+  under TaskFlow/`codex-worker` authority.
 
 - 2026-06-15: Audit hash-chain appends now take a deterministic
   transaction-scoped Postgres advisory lock per workspace after workspace
