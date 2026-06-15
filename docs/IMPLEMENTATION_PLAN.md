@@ -1,5 +1,17 @@
 # SkillKernel Implementation Plan
 
+2026-06-15 update: audit hash-chain persistence now serializes SQL appends per
+workspace with a deterministic transaction-level Postgres advisory lock. The
+lock is taken in `AsyncpgAuditStore.append_record` immediately after
+`ensure_workspace` and before reading the previous audit hash, so the empty
+chain case cannot admit concurrent first records with the same `previous_hash`.
+Focused fake-asyncpg coverage proves the lock/select/insert ordering without a
+live Postgres dependency, while leaving `NullAuditStore` and public audit APIs
+unchanged. This advances unified Section 28.3 audit hash-chain integrity.
+Validation passed with the focused audit pytest slice, touched-file Ruff,
+touched-file compileall, and diff hygiene. Next: parent broader sidecar/full
+validation.
+
 2026-06-15 update: topology composition admission now carries the Section
 1.5.1 effect-signature contract into composed SkillGraphIR proposals. A narrow
 deterministic checker in `services/topology.py` rejects composed outputs that

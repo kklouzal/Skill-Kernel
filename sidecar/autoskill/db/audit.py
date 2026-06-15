@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from typing import Protocol
+from uuid import UUID
 
 import asyncpg
 
@@ -51,6 +52,10 @@ class AsyncpgAuditStore(AsyncpgPoolOwner):
         pool = await self._get_pool()
         async with pool.acquire() as conn, conn.transaction():
             workspace_id = await ensure_workspace(conn, workspace_key)
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1, $2)",
+                *_workspace_audit_lock_key(workspace_id),
+            )
             previous_hash = await conn.fetchval(
                 """
                 SELECT audit_hash
@@ -144,6 +149,19 @@ def _verify_recent_segment(records: list[AuditRecord]) -> bool:
         ordered,
         initial_previous_hash=initial_previous_hash,
     )
+
+
+def _workspace_audit_lock_key(workspace_id: UUID) -> tuple[int, int]:
+    value = workspace_id.int
+    high = (value >> 96) & 0xFFFFFFFF
+    low = value & 0xFFFFFFFF
+    return (_to_signed_int32(high), _to_signed_int32(low))
+
+
+def _to_signed_int32(value: int) -> int:
+    if value >= 0x80000000:
+        return value - 0x100000000
+    return value
 
 
 def _record_from_row(row: asyncpg.Record) -> AuditRecord:

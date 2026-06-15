@@ -16,6 +16,18 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-15: Audit hash-chain appends now take a deterministic
+  transaction-scoped Postgres advisory lock per workspace after workspace
+  resolution and before reading the previous audit hash. This serializes
+  `AsyncpgAuditStore.append_record` even for an empty workspace chain, closing
+  the concurrent-first-record case where multiple sealed rows could share the
+  same `previous_hash`. A focused fake-asyncpg regression proves the lock is
+  acquired before selecting the prior hash and inserting the sealed record,
+  preserving `NullAuditStore` behavior and public APIs. Validation passed with
+  the focused audit pytest slice, touched-file Ruff, touched-file compileall,
+  and diff hygiene. Next gate: parent review and broader sidecar/full
+  validation.
+
 - 2026-06-15: Topology composition admission now fails closed when a proposed
   composed output hides explicit component state deltas, side effects, unsafe
   conditions, or termination semantics. The new deterministic

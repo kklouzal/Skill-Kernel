@@ -9,8 +9,13 @@ from autoskill.api.app import WriterApplyRequest, WriterRollbackRequest, create_
 from autoskill.core.audit import AuditRecord, verify_hash_chain
 from autoskill.core.enums import TrustClass
 from autoskill.core.events import EventEnvelope
+from autoskill.db import audit as audit_db
 from autoskill.db.activation import ActivationReadiness
-from autoskill.db.audit import _verify_recent_segment
+from autoskill.db.audit import (
+    AsyncpgAuditStore,
+    _verify_recent_segment,
+    _workspace_audit_lock_key,
+)
 from autoskill.db.observability import TraceSpanRecord
 from autoskill.services.writer import (
     PathContainmentError,
@@ -159,6 +164,104 @@ def test_audit_recent_segment_rejects_broken_workspace_chain() -> None:
     ).sealed()
 
     assert _verify_recent_segment([broken, first]) is False
+
+
+@pytest.mark.asyncio
+async def test_asyncpg_audit_append_locks_workspace_before_reading_previous_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_id = uuid4()
+    previous_hash = "sha256:previous"
+    conn = FakeAuditConnection(previous_hash=previous_hash)
+
+    async def ensure_workspace(_conn: object, workspace_key: str):
+        conn.calls.append(("ensure_workspace", workspace_key))
+        return workspace_id
+
+    monkeypatch.setattr(audit_db, "ensure_workspace", ensure_workspace)
+
+    store = FakeAsyncpgAuditStore(FakeAuditPool(conn))
+    record = AuditRecord(action="create", subject_type="skill", subject_id="one")
+
+    sealed = await store.append_record(record, workspace_key="workspace-a")
+
+    lock_key = _workspace_audit_lock_key(workspace_id)
+    assert conn.calls[:5] == [
+        ("acquire",),
+        ("transaction_enter",),
+        ("ensure_workspace", "workspace-a"),
+        ("lock", *lock_key),
+        ("select_previous", workspace_id),
+    ]
+    assert conn.calls[-2:] == [("transaction_exit", None), ("release", None)]
+    assert sealed.previous_hash == previous_hash
+    assert sealed.audit_hash is not None
+    assert conn.insert_args[1] == workspace_id
+    assert conn.insert_args[7] == previous_hash
+    assert conn.insert_args[8] == sealed.audit_hash
+
+
+class FakeAsyncpgAuditStore(AsyncpgAuditStore):
+    def __init__(self, pool: object) -> None:
+        self.pool = pool
+
+    async def _get_pool(self) -> object:
+        return self.pool
+
+
+class FakeAuditPool:
+    def __init__(self, conn: "FakeAuditConnection") -> None:
+        self.conn = conn
+
+    def acquire(self) -> "FakeAuditAcquire":
+        return FakeAuditAcquire(self.conn)
+
+
+class FakeAuditAcquire:
+    def __init__(self, conn: "FakeAuditConnection") -> None:
+        self.conn = conn
+
+    async def __aenter__(self) -> "FakeAuditConnection":
+        self.conn.calls.append(("acquire",))
+        return self.conn
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.conn.calls.append(("release", exc_type))
+
+
+class FakeAuditTransaction:
+    def __init__(self, conn: "FakeAuditConnection") -> None:
+        self.conn = conn
+
+    async def __aenter__(self) -> None:
+        self.conn.calls.append(("transaction_enter",))
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.conn.calls.append(("transaction_exit", exc_type))
+
+
+class FakeAuditConnection:
+    def __init__(self, *, previous_hash: str) -> None:
+        self.previous_hash = previous_hash
+        self.calls: list[tuple[object, ...]] = []
+        self.insert_args: tuple[object, ...] = ()
+
+    def transaction(self) -> FakeAuditTransaction:
+        return FakeAuditTransaction(self)
+
+    async def fetchval(self, query: str, *args: object) -> object:
+        assert "SELECT audit_hash" in query
+        self.calls.append(("select_previous", *args))
+        return self.previous_hash
+
+    async def execute(self, query: str, *args: object) -> str:
+        if "pg_advisory_xact_lock" in query:
+            self.calls.append(("lock", *args))
+            return "SELECT 1"
+        assert "INSERT INTO autoskill.audit_records" in query
+        self.calls.append(("insert", args[1], args[7], args[8]))
+        self.insert_args = args
+        return "INSERT 0 1"
 
 
 def test_writer_rejects_path_escape(tmp_path: Path) -> None:
