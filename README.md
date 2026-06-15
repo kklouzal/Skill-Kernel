@@ -44,15 +44,15 @@ The current repository implements the following product surfaces.
 | --- | --- |
 | OpenClaw capture | Runtime plugin package, typed hook registration, local redaction, bounded spool/replay, sidecar forwarding, runtime context-hint hook, optional tool-boundary blocking, hook smoke tests. |
 | Data plane | One `autoskill` Postgres schema, pgvector extension, migrations for workspaces, events, evidence, skills, SkillIR revisions, embeddings, scheduler/jobs, traces, governance, topology, Observatory read models, audit, quarantine, and revocation state. |
-| Core API | FastAPI `/v1` health, readiness, ingest, raw evidence, memory quarantine, control-flow, runtime context hints, profiles, topology, evidence, candidates, evaluations, writer, rollback, retrieval, embeddings, jobs, schedules, workers, traces, metrics, and audit endpoints. |
+| Core API | FastAPI `/v1` health, readiness, deployment fingerprint, ingest, raw evidence, memory quarantine, control-flow, runtime context hints, profiles, topology, evidence, candidates, evaluations, writer, rollback, retrieval, embeddings, jobs, schedules, workers, traces, metrics, and audit endpoints. |
 | Worker model | Durable worker pools for scheduler, ingest, backfill, embedding, retrieval, analysis, LLM generation, scanner, evaluation, filesystem, and maintenance work. |
 | Retrieval and broker | Body index documents, lexical indexes, pgvector embeddings, retrieval logs/events, runtime broker policy versions, context artifacts, token ledgers, compile runs, budget events, and broker replay episodes. |
-| Skill governance | SkillIR and SkillGraphIR primitives, deterministic compiler, scanner, evaluator/probes, candidate proposals, topology proposal/trial/apply records, proposal review, lifecycle state, canary/freeze, provenance traversal, revocation, staged writer apply, and rollback. |
+| Skill governance | SkillIR and SkillGraphIR primitives, deterministic compiler, scanner, evaluator/probes, autonomy-assurance fallback records, threshold-deadlock detection, candidate proposals, topology proposal/trial/apply records, proposal review, lifecycle state, canary/freeze, provenance traversal, revocation, staged writer apply, and rollback. |
 | Safety controls | Redaction-before-store/embed defaults, raw-vault access logging, memory quarantine, control-flow events, harmful-capability and prompt-injection scanner classes, action-attribution checks, forbidden hidden markdown, generated skill network/shell defaults off, and admin raw-content defaults off. |
 | Historical/bootstrap import | Source discovery, dry-run inventory, historical import tables, chunking, taint/confidence controls, bootstrap candidate generation, lower trust for stale/summary evidence, and stage-only external-skill import review. |
 | Model and embedding profiles | Operator-selected OpenAI-compatible text and embedding endpoints, profile records, qualification runs, active embedding selection, profile-qualified queued embedding generation, content-safe embedding traces, and production embedding validation API. |
-| Observatory | Split web/API container, React UI, 30-station assembly-line map, subsystem workcells, station cockpit, issue board, search, skills/topology views, gates/autonomy views, trace replay, broker replay corpus, storage diagnostics, live WebSocket/SSE updates, action gateway, CSRF/auth handling, generated API client, and deterministic UI fixture catalog. |
-| Operations | Deployment readiness endpoint, backup/restore scripts, acceptance/readiness/conformance/traceability reports, deterministic scanner red-team runner, replay-corpus tooling, and Docker/GHCR packaging workflow. |
+| Observatory | Split web/API container, React UI, 30-station assembly-line map, subsystem workcells, station cockpit, issue board, search, skills/topology views, gates/autonomy views, content-safe autonomy/evidence read models, threshold-deadlock diagnostics, trace replay, broker replay corpus, storage diagnostics, deployment fingerprint health output, live WebSocket/SSE updates, action gateway, CSRF/auth handling, generated API client, and deterministic UI fixture catalog. |
+| Operations | Deployment readiness and deployment-fingerprint endpoints, backup/restore scripts, acceptance/readiness/conformance/traceability reports, deterministic scanner red-team runner, replay-corpus tooling, activation-context smoke tooling, and Docker/GHCR packaging workflow. |
 
 ## Architecture at a glance
 
@@ -211,6 +211,8 @@ SkillKernel accepts the historical `AUTOSKILL_*` environment names and newer
 | `SKILLKERNEL_SIDECAR_TOKEN` / `AUTOSKILL_INGEST_TOKEN` | Shared token for plugin-to-Core ingest. Set this before exposing ingest beyond localhost. |
 | `SKILLKERNEL_CONTROL_TOKEN` / `AUTOSKILL_CONTROL_TOKEN` | Token for control/job/admin-like Core APIs. |
 | `SKILLKERNEL_ADMIN_TOKEN` / `AUTOSKILL_WEB_ADMIN_TOKEN` | Bearer token for Observatory non-liveness endpoints. |
+| `SKILLKERNEL_BUILD_SHA` / `AUTOSKILL_BUILD_SHA` | Content-safe revision label surfaced in Core and Observatory health/readiness deployment fingerprints. Defaults to `local`. |
+| `SKILLKERNEL_IMAGE_SOURCE` / `AUTOSKILL_IMAGE_SOURCE` | Content-safe image/source label surfaced with the deployment fingerprint. Defaults to `local`. |
 | `AUTOSKILL_WORKSPACE_ID` | Workspace partition key used in records, reports, and replay tooling. |
 | `AUTOSKILL_ACTIVE_ROOT` | Runtime skill root, defaulting to `skills/autoskill`. |
 | `AUTOSKILL_ARCHIVE_ROOT` | Archive root for inactive artifacts and rollback material. |
@@ -247,8 +249,9 @@ pass.
 
 Open Observatory at `/admin/` with an admin token. The UI exposes a pipeline map,
 subsystem lenses, station cockpit views, issue board, search, skills/topology,
-gates/autonomy, traces, replay corpus, storage/read-model status, and audited
-action gateway.
+gates/autonomy, autonomy/evidence diagnostics, threshold-deadlock drill-downs,
+traces, replay corpus, storage/read-model status, deployment fingerprints, and
+audited action gateway.
 
 ### 4. Validate broker and topology behavior
 
@@ -309,8 +312,9 @@ uv run python scripts/autoskill_conformance.py --json
 uv run python scripts/autoskill_red_team.py --output /tmp/autoskill-red-team.json
 ```
 
-CI currently runs Ruff, deterministic Python tests, the SQL-backed revocation
-traversal smoke against disposable `pgvector/pgvector:pg17`, plugin
+CI currently runs Ruff, deterministic Python tests, SQL-backed revocation
+traversal, topology admission, deployment readiness, activation-context, and
+Observatory-live smokes against disposable `pgvector/pgvector:pg17`, plugin
 syntax/tests, Observatory build, Docker image build tests, and GHCR publication
 for the split Core and Observatory images on configured refs.
 
