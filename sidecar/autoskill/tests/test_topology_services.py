@@ -388,6 +388,168 @@ def test_composition_blocks_unresolved_required_effects() -> None:
     ]
 
 
+def test_composition_blocks_hidden_component_state_delta_and_side_effect() -> None:
+    result = propose_composition(
+        ComposeTopologyRequest(
+            components=[
+                TopologySkill(
+                    slug="stage-runtime-config",
+                    effects=EffectSignature(
+                        outputs=["runtime config"],
+                        state_delta=["workspace configuration staged"],
+                        side_effects=["temporary config file written"],
+                    ),
+                ),
+                TopologySkill(
+                    slug="verify-runtime-config",
+                    effects=EffectSignature(outputs=["verification report"]),
+                ),
+            ],
+            composed_output=TopologySkill(
+                slug="stage-and-verify-runtime-config",
+                effects=EffectSignature(
+                    outputs=["runtime config", "verification report"],
+                ),
+            ),
+            evidence_ids=["evidence-a"],
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(["evidence-a"]),
+        )
+    )
+
+    assert not result.ok
+    assert result.skill_graph_ir is None
+    assert result.blockers == [
+        (
+            "component stage-runtime-config state delta is not disclosed by "
+            "composed output: workspace configuration staged"
+        ),
+        (
+            "component stage-runtime-config side effect is not disclosed by "
+            "composed output: temporary config file written"
+        ),
+    ]
+
+
+def test_composition_blocks_hidden_component_unsafe_condition() -> None:
+    result = propose_composition(
+        ComposeTopologyRequest(
+            components=[
+                TopologySkill(
+                    slug="publish-runtime-config",
+                    effects=EffectSignature(
+                        outputs=["runtime config"],
+                        side_effects=["runtime config published"],
+                        unsafe_when=["deployment freeze is active"],
+                    ),
+                ),
+                TopologySkill(
+                    slug="verify-runtime-config",
+                    effects=EffectSignature(outputs=["verification report"]),
+                ),
+            ],
+            composed_output=TopologySkill(
+                slug="publish-and-verify-runtime-config",
+                effects=EffectSignature(
+                    outputs=["runtime config", "verification report"],
+                    side_effects=["runtime config published"],
+                ),
+            ),
+            evidence_ids=["evidence-a"],
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(["evidence-a"]),
+        )
+    )
+
+    assert not result.ok
+    assert result.skill_graph_ir is None
+    assert result.blockers == [
+        (
+            "component publish-runtime-config unsafe condition is not disclosed "
+            "by composed output: deployment freeze is active"
+        )
+    ]
+
+
+def test_composition_blocks_hidden_component_termination_semantics() -> None:
+    result = propose_composition(
+        ComposeTopologyRequest(
+            components=[
+                TopologySkill(
+                    slug="stop-runtime-worker",
+                    effects=EffectSignature(
+                        outputs=["worker stopped"],
+                        termination=["runtime worker process stopped"],
+                    ),
+                ),
+                TopologySkill(
+                    slug="summarize-runtime-stop",
+                    effects=EffectSignature(outputs=["stop summary"]),
+                ),
+            ],
+            composed_output=TopologySkill(
+                slug="stop-and-summarize-runtime-worker",
+                effects=EffectSignature(outputs=["worker stopped", "stop summary"]),
+            ),
+            evidence_ids=["evidence-a"],
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(["evidence-a"]),
+        )
+    )
+
+    assert not result.ok
+    assert result.skill_graph_ir is None
+    assert result.blockers == [
+        (
+            "component stop-runtime-worker termination is not disclosed by "
+            "composed output: runtime worker process stopped"
+        )
+    ]
+
+
+def test_composition_allows_disclosed_component_state_side_effect_and_termination() -> None:
+    result = propose_composition(
+        ComposeTopologyRequest(
+            components=[
+                TopologySkill(
+                    slug="stage-runtime-config",
+                    effects=EffectSignature(
+                        outputs=["runtime config"],
+                        state_delta=["workspace configuration staged"],
+                        side_effects=["temporary config file written"],
+                        unsafe_when=["deployment freeze is active"],
+                    ),
+                ),
+                TopologySkill(
+                    slug="stop-runtime-worker",
+                    effects=EffectSignature(
+                        outputs=["worker stopped"],
+                        termination=["runtime worker process stopped"],
+                    ),
+                ),
+            ],
+            composed_output=TopologySkill(
+                slug="stage-config-and-stop-worker",
+                effects=EffectSignature(
+                    outputs=["runtime config", "worker stopped"],
+                    state_delta=["workspace configuration staged"],
+                    side_effects=["temporary config file written"],
+                    unsafe_when=["deployment freeze is active"],
+                    termination=["runtime worker process stopped"],
+                ),
+            ),
+            evidence_ids=["evidence-a"],
+            evidence_fidelity_by_id=_redacted_fidelity_by_id(["evidence-a"]),
+        )
+    )
+
+    assert result.ok
+    assert result.skill_graph_ir is not None
+    assert result.skill_graph_ir.effect_coverage == {
+        "runtime config": ["stage-runtime-config"],
+        "runtime worker process stopped": ["stop-runtime-worker"],
+        "worker stopped": ["stop-runtime-worker"],
+        "workspace configuration staged": ["stage-runtime-config"],
+    }
+
+
 def test_decomposition_requires_successor_effect_coverage() -> None:
     result = propose_decomposition(
         DecomposeTopologyRequest(

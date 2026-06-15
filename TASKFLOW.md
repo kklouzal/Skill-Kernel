@@ -16,6 +16,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-15: Topology composition admission now fails closed when a proposed
+  composed output hides explicit component state deltas, side effects, unsafe
+  conditions, or termination semantics. The new deterministic
+  `services/topology.py` contract check extends the existing unresolved
+  required-effect blocker without changing SkillIR schemas or rejecting valid
+  default-empty contracts with unknown idempotency. Focused tests cover hidden
+  state/side-effect disclosure, hidden unsafe condition, hidden termination,
+  and the passing case where the composed output carries the component
+  disclosures. This advances unified Section 1.5.1 effect signatures and
+  Section 17 skill-composition graph constraints. Validation passed with the
+  focused topology test suite. Next gate: touched-file Ruff/compileall, diff
+  hygiene, and parent broader sidecar/full gates.
+
 - 2026-06-15: Observatory readiness now exposes a first-class,
   content-safe `live_stream_health` object on
   `/admin/api/v1/health/ready`. The signal reports stream availability,

@@ -837,6 +837,12 @@ def propose_composition(request: ComposeTopologyRequest) -> TopologyProposalResu
     blockers.extend(
         _evidence_fidelity_blockers(request.evidence_ids, request.evidence_fidelity_by_id)
     )
+    blockers.extend(
+        _composition_contract_blockers(
+            components=request.components,
+            composed_output=request.composed_output,
+        )
+    )
     required_by_slug = request.required_effects_by_component or {}
     previous_components: list[TopologySkill] = []
     edges: list[SkillGraphEdge] = []
@@ -1218,6 +1224,40 @@ def _bounded_component_blockers(skills: list[TopologySkill], max_count: int) -> 
     slugs = [skill.slug for skill in skills]
     duplicates = sorted({slug for slug in slugs if slugs.count(slug) > 1})
     blockers.extend(f"duplicate skill slug: {slug}" for slug in duplicates)
+    return blockers
+
+
+def _composition_contract_blockers(
+    *,
+    components: list[TopologySkill],
+    composed_output: TopologySkill,
+) -> list[str]:
+    checks = (
+        ("state delta", "state_delta"),
+        ("side effect", "side_effects"),
+        ("unsafe condition", "unsafe_when"),
+        ("termination", "termination"),
+    )
+    blockers: list[str] = []
+    output_effects = composed_output.effects
+    for component in components:
+        component_effects = component.effects
+        for label, field_name in checks:
+            component_values = {
+                value.strip()
+                for value in getattr(component_effects, field_name)
+                if value.strip()
+            }
+            output_values = {
+                value.strip()
+                for value in getattr(output_effects, field_name)
+                if value.strip()
+            }
+            hidden_values = sorted(component_values - output_values)
+            blockers.extend(
+                f"component {component.slug} {label} is not disclosed by composed output: {value}"
+                for value in hidden_values
+            )
     return blockers
 
 

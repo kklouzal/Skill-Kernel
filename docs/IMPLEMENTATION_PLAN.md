@@ -1,5 +1,15 @@
 # SkillKernel Implementation Plan
 
+2026-06-15 update: topology composition admission now carries the Section
+1.5.1 effect-signature contract into composed SkillGraphIR proposals. A narrow
+deterministic checker in `services/topology.py` rejects composed outputs that
+hide explicit component state deltas, side effects, unsafe conditions, or
+termination semantics, while preserving existing valid default-empty contracts
+and not treating unknown idempotency as a blocker. Focused topology tests prove
+hidden disclosure blockers and the passing disclosed-output case. Next:
+touched-file Ruff/compileall, diff hygiene, then parent broader sidecar/full
+validation.
+
 2026-06-15 update: Observatory readiness now includes a content-safe
 `live_stream_health` field on `/admin/api/v1/health/ready`. The object reports
 availability, health, reason codes, snapshot/outbox cursor summaries, and an
