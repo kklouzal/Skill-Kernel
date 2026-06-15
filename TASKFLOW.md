@@ -16,6 +16,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-15: Observatory `verify_audit_chain` actions now perform an actual
+  content-safe audit-chain verification before acceptance when not a dry run.
+  The action clamps caller-provided limits, calls the workspace audit store,
+  rejects invalid chains with `audit-chain-verification-failed`, and records
+  only the verification envelope in the redacted receipt/audit details without
+  returning raw audit rows or details. Focused Observatory API tests prove the
+  accepted and rejected paths, limit clamping, policy metrics, audit detail
+  persistence, and live-event outcomes. This advances unified Section 28.3
+  audit hash-chain integrity and Observatory operator action truthfulness.
+  Validation passed with the focused Observatory API test slice, touched-file
+  Ruff, touched-file compileall, diff hygiene, parent full `uv run pytest`,
+  and conformance report. Next gate: review/commit and CI confirmation.
+
 - 2026-06-15: Audit hash-chain appends now take a deterministic
   transaction-scoped Postgres advisory lock per workspace after workspace
   resolution and before reading the previous audit hash. This serializes

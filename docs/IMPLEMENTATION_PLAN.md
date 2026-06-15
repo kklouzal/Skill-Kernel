@@ -1,5 +1,18 @@
 # SkillKernel Implementation Plan
 
+2026-06-15 update: Observatory `verify_audit_chain` operator actions now check
+the audit store before accepting non-dry-run verification requests. The handler
+normalizes and clamps caller-provided verification limits, calls
+`audit.verify_chain` for the requested workspace, rejects invalid chains with
+`audit-chain-verification-failed`, and records a content-safe verification
+envelope in the redacted receipt and action audit details without returning raw
+audit rows. Focused Observatory API coverage proves success, failure, limit
+clamping, policy metrics, and live-event outcomes. This advances unified
+Section 28.3 audit hash-chain integrity and Observatory action truthfulness.
+Validation passed with the focused Observatory API test slice, touched-file
+Ruff, touched-file compileall, diff hygiene, parent full `uv run pytest`, and
+conformance report. Next: review/commit and CI confirmation.
+
 2026-06-15 update: audit hash-chain persistence now serializes SQL appends per
 workspace with a deterministic transaction-level Postgres advisory lock. The
 lock is taken in `AsyncpgAuditStore.append_record` immediately after

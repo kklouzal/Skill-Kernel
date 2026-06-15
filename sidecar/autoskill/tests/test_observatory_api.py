@@ -106,6 +106,17 @@ class MemoryAuditStore:
         return verify_hash_chain(self.records[-limit:])
 
 
+class SpyAuditStore(MemoryAuditStore):
+    def __init__(self, *, chain_valid: bool = True) -> None:
+        super().__init__()
+        self.chain_valid = chain_valid
+        self.verify_calls: list[dict[str, object]] = []
+
+    async def verify_chain(self, *, workspace_key: str | None = None, limit: int = 1000) -> bool:
+        self.verify_calls.append({"workspace_key": workspace_key, "limit": limit})
+        return self.chain_valid
+
+
 class MemoryObservatoryJobStore(NullJobStore):
     def __init__(self, records: list[JobRecord]) -> None:
         self.records = records
@@ -5735,6 +5746,103 @@ def test_observatory_action_records_audited_policy_receipt() -> None:
         response.receipt["action_audit"]["action_id"].replace("-", "")
     )
     assert audit_store.records[0].action == "observatory.verify_audit_chain"
+
+
+def test_observatory_verify_audit_chain_action_checks_store_before_accepting() -> None:
+    audit_store = SpyAuditStore(chain_valid=True)
+    attribution_store = NullAttributionStore()
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(
+        audit_store=audit_store,
+        attribution_store=attribution_store,
+        observatory_admin_store=observatory_admin,
+    )
+    route = _routes(app)[("/admin/api/v1/actions", "POST")]
+
+    async def run():
+        return await route.endpoint(
+            http_request=None,
+            request=ObservatoryActionRequest(
+                workspace_id="dev-01",
+                action="verify_audit_chain",
+                idempotency_key="obs-verify-chain-success-1",
+                reason="operator requested audit proof",
+                dry_run=False,
+                metadata={"audit_limit": 250},
+            ),
+        )
+
+    response = asyncio.run(run())
+
+    verification = response.receipt["action_audit"]["request_payload_redacted"][
+        "audit_chain_verification"
+    ]
+    assert response.receipt["accepted"] is True
+    assert response.receipt["policy"]["allowed"] is True
+    assert audit_store.verify_calls == [{"workspace_key": "dev-01", "limit": 250}]
+    assert verification == {
+        "schema_version": "skillkernel.observatory.audit-chain-verification.v1",
+        "attempted": True,
+        "limit": 250,
+        "chain_valid": True,
+        "raw_audit_details_returned": False,
+    }
+    assert audit_store.records[0].details["audit_chain_verification"] == verification
+    assert attribution_store.checks[0].metrics["reason_codes"] == []
+    assert response.receipt["live_event"]["event_type"] == "audit_record_appended"
+    assert "records" not in json.dumps(verification, sort_keys=True)
+
+
+def test_observatory_verify_audit_chain_action_rejects_invalid_chain() -> None:
+    audit_store = SpyAuditStore(chain_valid=False)
+    attribution_store = NullAttributionStore()
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(
+        audit_store=audit_store,
+        attribution_store=attribution_store,
+        observatory_admin_store=observatory_admin,
+    )
+    route = _routes(app)[("/admin/api/v1/actions", "POST")]
+
+    async def run():
+        return await route.endpoint(
+            http_request=None,
+            request=ObservatoryActionRequest(
+                workspace_id="dev-01",
+                action="verify_audit_chain",
+                idempotency_key="obs-verify-chain-failure-1",
+                reason="operator requested audit proof",
+                dry_run=False,
+                metadata={"audit_limit": 50_000},
+            ),
+        )
+
+    response = asyncio.run(run())
+
+    verification = response.receipt["action_audit"]["request_payload_redacted"][
+        "audit_chain_verification"
+    ]
+    assert response.receipt["accepted"] is False
+    assert response.receipt["policy"]["allowed"] is False
+    assert response.receipt["policy"]["reason_codes"] == [
+        "audit-chain-verification-failed"
+    ]
+    assert response.receipt["action_audit"]["result"] == "rejected"
+    assert audit_store.verify_calls == [{"workspace_key": "dev-01", "limit": 10_000}]
+    assert verification["attempted"] is True
+    assert verification["limit"] == 10_000
+    assert verification["chain_valid"] is False
+    assert verification["raw_audit_details_returned"] is False
+    assert audit_store.records[0].details["accepted"] is False
+    assert audit_store.records[0].details["reason_codes"] == [
+        "audit-chain-verification-failed"
+    ]
+    assert audit_store.records[0].details["audit_chain_verification"] == verification
+    assert attribution_store.checks[0].verdict == "blocked"
+    assert attribution_store.checks[0].metrics["reason_codes"] == [
+        "audit-chain-verification-failed"
+    ]
+    assert response.receipt["live_event"]["event_type"] == "observatory_self_health_changed"
 
 
 def test_observatory_audit_record_microscope_redacts_arbitrary_details() -> None:

@@ -10934,6 +10934,7 @@ def create_app(
         accepted = request.action in allowed_actions
         reason_codes: list[str] = [] if accepted else ["unsupported-observatory-action"]
         reveal_grant: dict[str, object] | None = None
+        audit_chain_verification: dict[str, object] | None = None
         if (
             request.action == "reveal_raw_content"
             and not get_settings().web_admin_raw_content_enabled
@@ -10966,6 +10967,31 @@ def create_app(
         ):
             accepted = False
             reason_codes = ["confirmation-required"]
+        if accepted and request.action == "verify_audit_chain" and not request.dry_run:
+            requested_limit = (
+                request.metadata.get("audit_limit")
+                or request.metadata.get("verify_limit")
+                or request.metadata.get("limit")
+            )
+            try:
+                audit_verify_limit = int(requested_limit) if requested_limit is not None else 1000
+            except (TypeError, ValueError):
+                audit_verify_limit = 1000
+            audit_verify_limit = max(1, min(audit_verify_limit, 10_000))
+            chain_valid = await audit.verify_chain(
+                workspace_key=request.workspace_id,
+                limit=audit_verify_limit,
+            )
+            audit_chain_verification = {
+                "schema_version": "skillkernel.observatory.audit-chain-verification.v1",
+                "attempted": True,
+                "limit": audit_verify_limit,
+                "chain_valid": chain_valid,
+                "raw_audit_details_returned": False,
+            }
+            if not chain_valid:
+                accepted = False
+                reason_codes = ["audit-chain-verification-failed"]
         response_meta = _admin_response_meta()
         target_type, target_id = _observatory_action_target(
             request.action,
@@ -11043,6 +11069,8 @@ def create_app(
             "request_fingerprint": request_fingerprint,
             "source": _source_identity(http_request),
         }
+        if audit_chain_verification is not None:
+            action_request_payload["audit_chain_verification"] = audit_chain_verification
         if reveal_grant is not None:
             action_request_payload["raw_reveal_grant"] = {
                 "token_hash": reveal_grant["token_hash"],
@@ -11168,6 +11196,7 @@ def create_app(
                         reveal_grant["token_hash"] if reveal_grant is not None else None
                     ),
                     "raw_content_included": False,
+                    "audit_chain_verification": audit_chain_verification,
                 },
             ),
             workspace_key=request.workspace_id,
