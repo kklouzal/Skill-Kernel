@@ -310,6 +310,7 @@ class HealthResponse(BaseModel):
     ok: bool
     service: str
     version: str
+    deployment_fingerprint: dict[str, str] | None = None
 
 
 class CoreProtocolResponse(BaseModel):
@@ -368,26 +369,34 @@ def _core_degraded_features() -> list[str]:
 
 
 def _core_protocol_payload() -> dict[str, object]:
-    settings = get_settings()
     generated_at = datetime.now(UTC).isoformat()
     return {
         "service_version": __version__,
         "features": _core_protocol_features(),
         "degraded_features": _core_degraded_features(),
         "generated_at": generated_at,
-        "deployment_fingerprint": {
-            "service": "skillkernel-core",
-            "build_sha": settings.build_sha,
-            "revision": settings.build_sha,
-            "image_source": settings.image_source,
-            "source": "environment",
-            "generated_at": generated_at,
-        },
+        "deployment_fingerprint": _deployment_fingerprint(
+            service="skillkernel-core",
+            generated_at=generated_at,
+        ),
     }
 
 
 def _core_protocol_response() -> CoreProtocolResponse:
     return CoreProtocolResponse(**_core_protocol_payload())
+
+
+def _deployment_fingerprint(service: str, generated_at: str | None = None) -> dict[str, str]:
+    settings = get_settings()
+    generated_at = generated_at or datetime.now(UTC).isoformat()
+    return {
+        "service": service,
+        "build_sha": settings.build_sha,
+        "revision": settings.build_sha,
+        "image_source": settings.image_source,
+        "source": "environment",
+        "generated_at": generated_at,
+    }
 
 
 class StatusResponse(BaseModel):
@@ -11492,7 +11501,12 @@ def create_app(
 
     @app.get("/admin/api/v1/health/live", response_model=HealthResponse)
     async def observatory_health_live() -> HealthResponse:
-        return HealthResponse(ok=True, service="skillkernel-observatory", version=__version__)
+        return HealthResponse(
+            ok=True,
+            service="skillkernel-observatory",
+            version=__version__,
+            deployment_fingerprint=_deployment_fingerprint("skillkernel-observatory"),
+        )
 
     @app.get("/admin/api/v1/health/ready", response_model=ObservatoryObjectResponse)
     async def observatory_health_ready(
@@ -11511,6 +11525,7 @@ def create_app(
                 "schema_version": "skillkernel.observatory.ready.v1",
                 "ready": snapshot["global_health"] not in {"blocked", "offline"},
                 "global_health": snapshot["global_health"],
+                "deployment_fingerprint": _deployment_fingerprint("skillkernel-observatory"),
                 "core_reachability": snapshot["core_reachability"],
                 "data_quality": snapshot["data_quality"],
                 "issues": snapshot["issue_board"],

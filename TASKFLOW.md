@@ -16,6 +16,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-15: Observatory admin health now reports its own content-safe
+  deployment fingerprint. The existing settings/env primitive for
+  `SKILLKERNEL_BUILD_SHA` and `SKILLKERNEL_IMAGE_SOURCE` is shared through a
+  small API helper and exposed for service `skillkernel-observatory` on
+  `/admin/api/v1/health/live` and `/admin/api/v1/health/ready`, while
+  `/healthz` remains the compatible plain-text liveness probe. The readiness
+  object now carries service, build SHA/revision, image source, source, and
+  generated-at time without raw/private content or new control-plane
+  authority. This advances the unified Observatory health/readiness reporting
+  contract and keeps runtime compatibility explicit rather than tag-assumed.
+  Focused validation passed for Observatory health/readiness fingerprint
+  coverage, touched-file Ruff, touched-file compileall, and diff hygiene. Next
+  gate: parent review, full test suite, and real container/deploy confirmation.
+
 - 2026-06-15: Runtime deployment fingerprint reporting now continues the OCI
   image-label packaging slice through the live Core compatibility handshake.
   `SKILLKERNEL_BUILD_SHA` and `SKILLKERNEL_IMAGE_SOURCE` are accepted by

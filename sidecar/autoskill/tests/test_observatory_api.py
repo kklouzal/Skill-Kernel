@@ -1194,6 +1194,73 @@ def test_observatory_collection_routes_return_bounded_content_safe_envelopes() -
     assert ready.object["ready"] is False
 
 
+def test_observatory_health_reports_content_safe_deployment_fingerprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
+    monkeypatch.setenv("SKILLKERNEL_BUILD_SHA", "obs1234")
+    monkeypatch.setenv("SKILLKERNEL_IMAGE_SOURCE", "ghcr.io/openclaw/skillkernel-observatory:obs1234")
+    get_settings.cache_clear()
+    try:
+        app = create_app(audit_store=MemoryAuditStore())
+        routes = _routes(app)
+
+        async def run():
+            live = await routes[("/admin/api/v1/health/live", "GET")].endpoint()
+            ready = await routes[("/admin/api/v1/health/ready", "GET")].endpoint()
+            return live, ready
+
+        live, ready = asyncio.run(run())
+
+        expected = {
+            "service": "skillkernel-observatory",
+            "build_sha": "obs1234",
+            "revision": "obs1234",
+            "image_source": "ghcr.io/openclaw/skillkernel-observatory:obs1234",
+            "source": "environment",
+        }
+        assert {
+            key: live.deployment_fingerprint[key]
+            for key in expected
+        } == expected
+        assert {
+            key: ready.object["deployment_fingerprint"][key]
+            for key in expected
+        } == expected
+        assert live.deployment_fingerprint["generated_at"]
+        assert ready.object["deployment_fingerprint"]["generated_at"]
+        encoded = json.dumps(ready.object)
+        assert "raw_vault_payload" not in encoded
+        assert "private secret" not in encoded
+    finally:
+        get_settings.cache_clear()
+
+
+def test_observatory_health_deployment_fingerprint_defaults_to_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
+    monkeypatch.delenv("SKILLKERNEL_BUILD_SHA", raising=False)
+    monkeypatch.delenv("SKILLKERNEL_IMAGE_SOURCE", raising=False)
+    monkeypatch.delenv("AUTOSKILL_BUILD_SHA", raising=False)
+    monkeypatch.delenv("AUTOSKILL_IMAGE_SOURCE", raising=False)
+    get_settings.cache_clear()
+    try:
+        app = create_app(audit_store=MemoryAuditStore())
+        routes = _routes(app)
+
+        ready = asyncio.run(routes[("/admin/api/v1/health/ready", "GET")].endpoint())
+
+        fingerprint = ready.object["deployment_fingerprint"]
+        assert fingerprint["service"] == "skillkernel-observatory"
+        assert fingerprint["build_sha"] == "local"
+        assert fingerprint["revision"] == "local"
+        assert fingerprint["image_source"] == "local"
+        assert fingerprint["source"] == "environment"
+    finally:
+        get_settings.cache_clear()
+
+
 def test_observatory_playbook_detail_exposes_current_signal_state() -> None:
     app = create_app(audit_store=MemoryAuditStore())
     routes = _routes(app)

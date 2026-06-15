@@ -1,5 +1,19 @@
 # SkillKernel Implementation Plan
 
+2026-06-15 update: Observatory admin health now exposes a content-safe
+deployment fingerprint for the independently deployed web container. The
+existing settings/env primitive for `SKILLKERNEL_BUILD_SHA` and
+`SKILLKERNEL_IMAGE_SOURCE` is shared through a small API helper and reported
+with service `skillkernel-observatory` on `/admin/api/v1/health/live` and
+`/admin/api/v1/health/ready`; `/healthz` remains the compatible plain-text
+liveness probe. This advances the unified Observatory health/readiness and
+inter-container compatibility assurance requirements by making Observatory's
+runtime identity visible without exposing secrets, raw/private content, or
+adding a second control plane. Focused validation passed for the new
+Observatory fingerprint coverage, touched-file Ruff, touched-file compileall,
+and diff hygiene. Next: parent review, full suite, and real
+container/deployment confirmation.
+
 2026-06-15 update: runtime deployment fingerprint reporting now extends the
 OCI image-label packaging primitive into Core's compatibility and readiness
 surfaces. Settings accept `SKILLKERNEL_BUILD_SHA` and
