@@ -26,8 +26,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   and the passing case where the composed output carries the component
   disclosures. This advances unified Section 1.5.1 effect signatures and
   Section 17 skill-composition graph constraints. Validation passed with the
-  focused topology test suite. Next gate: touched-file Ruff/compileall, diff
-  hygiene, and parent broader sidecar/full gates.
+  focused topology test suite, touched-file Ruff/compileall, diff hygiene,
+  parent full `uv run pytest`, conformance report, and GitHub Actions run
+  `27557599613` for commit `d02e8be`. Next gate: continue the next narrow
+  production-hardening slice under TaskFlow/`codex-worker` authority.
 
 - 2026-06-15: Observatory readiness now exposes a first-class,
   content-safe `live_stream_health` object on
