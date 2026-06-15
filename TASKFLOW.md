@@ -4305,3 +4305,32 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   readiness, and conformance scripts reported `ready=true`; root `docker
   compose -f docker-compose.yml config --quiet` passed; `git diff --check`
   passed.
+
+## Part V Section 4 Threshold-Deadlock Observatory Diagnostics - 2026-06-15T09:22Z
+
+- Spec item: repeated soft-threshold stalls must record threshold-deadlock
+  findings, run autonomous remediation, and show the deadlock reason,
+  attempted autonomous remedies, calibration data, and safest next action in
+  Observatory.
+- Status: narrow read-only primitive advanced. Threshold-deadlock collection,
+  detail, and generic object microscope payloads now derive content-safe
+  remediation attempts/status, fallback linkage, calibration-support linkage,
+  reason codes, and `safe_next_action` from the linked sanitized evaluation
+  read-model when present, with conservative fallbacks when absent. The API
+  still exposes no raw replay, probe, fallback, remediation, or calibration
+  payloads and grants no mutation authority.
+- Files changed: `sidecar/autoskill/api/app.py`,
+  `sidecar/autoskill/db/evaluations.py`,
+  `sidecar/autoskill/tests/test_observatory_api.py`,
+  `TASKFLOW.md`, and `docs/IMPLEMENTATION_PLAN.md`.
+- Validation: `uv run pytest
+  sidecar/autoskill/tests/test_observatory_api.py -q -k
+  'autonomy_evidence_read_models_are_content_safe'` passed (`1 passed, 70
+  deselected`); `uv run ruff check sidecar/autoskill/api/app.py
+  sidecar/autoskill/db/evaluations.py
+  sidecar/autoskill/tests/test_observatory_api.py` passed; `uv run python -m
+  compileall -q sidecar/autoskill/api/app.py
+  sidecar/autoskill/db/evaluations.py
+  sidecar/autoskill/tests/test_observatory_api.py` passed. Next gate: parent
+  should run the broader Observatory/API suite plus acceptance/conformance
+  reports before commit.

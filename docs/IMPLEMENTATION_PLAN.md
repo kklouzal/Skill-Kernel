@@ -3135,3 +3135,20 @@ Acceptance:
   passed (`416 passed`); `uv run ruff check ...`, `uv run python -m compileall
   -q sidecar scripts`, `docker compose -f docker-compose.yml config --quiet`,
   acceptance/readiness/conformance scripts, and `git diff --check` passed.
+- validation evidence for the Part V Section 4 threshold-deadlock Observatory
+  diagnostics slice passed on the focused tree: threshold-deadlock collection,
+  detail, and generic object microscope payloads now include content-safe
+  attempted autonomous remedies, remediation status, fallback linkage,
+  calibration-support linkage, reason codes, and safest next action derived
+  from the linked sanitized evaluation read-model where available. The
+  diagnostic remains read-only and suppresses raw fallback, remediation,
+  replay/probe, and calibration payloads. Focused validation passed with
+  `uv run pytest sidecar/autoskill/tests/test_observatory_api.py -q -k
+  'autonomy_evidence_read_models_are_content_safe'` (`1 passed, 70
+  deselected`), `uv run ruff check sidecar/autoskill/api/app.py
+  sidecar/autoskill/db/evaluations.py
+  sidecar/autoskill/tests/test_observatory_api.py`, and `uv run python -m
+  compileall -q sidecar/autoskill/api/app.py
+  sidecar/autoskill/db/evaluations.py
+  sidecar/autoskill/tests/test_observatory_api.py`. Next gate: broader
+  Observatory/API suite plus acceptance/conformance reports.

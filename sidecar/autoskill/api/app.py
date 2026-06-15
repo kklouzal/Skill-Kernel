@@ -7533,6 +7533,93 @@ def create_app(
             or record.soft_threshold_state == "threshold_deadlock_candidate"
         )
 
+    def _result_summary_dict(evaluation: dict[str, Any] | None) -> dict[str, Any]:
+        if not evaluation:
+            return {}
+        result_summary = evaluation.get("result_summary")
+        return result_summary if isinstance(result_summary, dict) else {}
+
+    def _dict_field(value: dict[str, Any], field: str) -> dict[str, Any]:
+        nested = value.get(field)
+        return nested if isinstance(nested, dict) else {}
+
+    def _threshold_deadlock_reason_codes(
+        record: Any,
+        *,
+        assurance: dict[str, Any],
+        fallback: dict[str, Any],
+    ) -> list[str]:
+        reason_codes = [
+            str(code)
+            for code in (
+                assurance.get("soft_threshold_misses")
+                or fallback.get("reason_codes")
+                or []
+            )
+        ]
+        if record.dominant_reason_code:
+            reason_codes.insert(0, str(record.dominant_reason_code))
+        return list(dict.fromkeys(reason_codes)) or ["threshold_deadlock"]
+
+    def _threshold_deadlock_safe_next_action(
+        record: Any,
+        *,
+        remediation: dict[str, Any],
+        fallback: dict[str, Any],
+        reason_codes: list[str],
+    ) -> str:
+        recommended = remediation.get("recommended_action")
+        if recommended:
+            return str(recommended)
+        selected_action = str(
+            remediation.get("selected_action") or fallback.get("selected_action") or ""
+        )
+        selected_action_map = {
+            "run_more_probes": "generate_more_probes",
+            "run_re_adjudication": "run_verifier_adjudication",
+            "stage_ephemeral_candidate": "try_ephemeral_candidate",
+            "stage_canary": "canary_with_smaller_blast_radius",
+            "reduce_scope": "narrow_scope",
+            "auto_reject": "reject_cohort",
+            "no_op_reschedule": "reschedule",
+        }
+        if selected_action in selected_action_map:
+            return selected_action_map[selected_action]
+        if record.selected_action in selected_action_map:
+            return selected_action_map[str(record.selected_action)]
+        reason_code_set = set(reason_codes)
+        if reason_code_set & {
+            "metadata_only_without_redacted_derivative",
+            "evidence-insufficient",
+            "intervention-required",
+        }:
+            return "inspect_evidence_coverage"
+        return "inspect_adjudication_and_collect_more_evidence"
+
+    def _threshold_deadlock_evaluation_index(
+        evaluations_payload: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        indexed: dict[str, dict[str, Any]] = {}
+        for evaluation in evaluations_payload:
+            result_summary = _result_summary_dict(evaluation)
+            fallback = _dict_field(result_summary, "autonomy_fallback")
+            decision_id = fallback.get("autonomy_decision_id")
+            if decision_id:
+                indexed[str(decision_id)] = evaluation
+        return indexed
+
+    async def _threshold_deadlock_evaluation_index_for_workspace(
+        workspace_key: str | None,
+    ) -> dict[str, dict[str, Any]]:
+        reviews = await evaluations.list_evaluation_reviews(
+            workspace_key=workspace_key,
+            status=None,
+            limit=250,
+        )
+        return _threshold_deadlock_evaluation_index(
+            [review.to_json() for review in reviews]
+        )
+
     def _evidence_fidelity_microscope(record: Any) -> dict[str, Any]:
         payload = record.to_json()
         object_id = str(payload["object_id"])
@@ -7999,8 +8086,85 @@ def create_app(
             },
         }
 
-    def _threshold_deadlock_payload(record: Any) -> dict[str, Any]:
+    def _threshold_deadlock_payload(
+        record: Any,
+        *,
+        evaluation: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         decision = _autonomy_decision_microscope(record)
+        result_summary = _result_summary_dict(evaluation)
+        assurance = _dict_field(result_summary, "autonomy_assurance")
+        fallback = _dict_field(result_summary, "autonomy_fallback")
+        remediation = _dict_field(result_summary, "autonomy_remediation")
+        reason_codes = _threshold_deadlock_reason_codes(
+            record,
+            assurance=assurance,
+            fallback=fallback,
+        )
+        attempted_remedies = [
+            str(remedy)
+            for remedy in remediation.get("attempted_autonomous_remedies") or []
+        ]
+        remediation_attempts = [
+            {
+                "attempt": attempt.get("attempt"),
+                "selected_action": attempt.get("selected_action"),
+                "status": attempt.get("status"),
+                "attempted_autonomous_remedies": [
+                    str(remedy)
+                    for remedy in attempt.get("attempted_autonomous_remedies") or []
+                ],
+                "contrastive_replay_count": int(
+                    attempt.get("contrastive_replay_count") or 0
+                ),
+                "supplemental_probe_hash_count": int(
+                    attempt.get("supplemental_probe_hash_count") or 0
+                ),
+                "updated_at": attempt.get("updated_at"),
+                "trace_id": attempt.get("trace_id"),
+                "span_id": attempt.get("span_id"),
+                "parent_span_id": attempt.get("parent_span_id"),
+            }
+            for attempt in remediation.get("attempts") or []
+            if isinstance(attempt, dict)
+        ]
+        safe_next_action = _threshold_deadlock_safe_next_action(
+            record,
+            remediation=remediation,
+            fallback=fallback,
+            reason_codes=reason_codes,
+        )
+        fallback_linkage = {
+            "selected_action": fallback.get("selected_action") or record.selected_action,
+            "decision_band": fallback.get("decision_band"),
+            "confidence_band": fallback.get("confidence_band")
+            or record.confidence_band,
+            "reason_codes": list(fallback.get("reason_codes") or []),
+            "autonomy_decision_id": fallback.get("autonomy_decision_id")
+            or str(record.decision_id),
+            "adjudication_id": fallback.get("adjudication_id"),
+            "deterministic_admissible": bool(
+                _dict_field(fallback, "deterministic_checks").get("admissible")
+            ),
+            "runtime_writes_authorized": bool(
+                fallback.get("runtime_writes_authorized")
+            ),
+        }
+        calibration_linkage = {
+            "calibration_family": assurance.get("decision_family")
+            or fallback.get("decision_family")
+            or record.decision_family,
+            "policy_version": assurance.get("policy_version"),
+            "calibration_support_status": assurance.get(
+                "calibration_support_status"
+            ),
+            "evidence_mode": assurance.get("evidence_mode"),
+            "linked_read_models": [
+                "autonomy_calibration_observations",
+                "autonomy_reliability_metrics",
+                "threshold_policies",
+            ],
+        }
         return {
             "schema_version": "skillkernel.observatory.threshold-deadlock.v1",
             "object_type": "threshold_deadlock",
@@ -8023,8 +8187,29 @@ def create_app(
                 "derived_from_object_type": "autonomy_decision",
                 "derived_from_object_id": str(record.decision_id),
                 "threshold_deadlock_candidate": True,
+                "deadlock_reason_codes": reason_codes,
+                "attempted_autonomous_remedies": attempted_remedies,
+                "autonomous_remediation": {
+                    "status": remediation.get("status"),
+                    "attempt_count": int(remediation.get("attempt_count") or 0),
+                    "threshold_deadlock_candidate": bool(
+                        remediation.get("threshold_deadlock_candidate")
+                    ),
+                    "recommended_action": remediation.get("recommended_action"),
+                    "selected_action": remediation.get("selected_action"),
+                    "attempts": remediation_attempts,
+                    "contrastive_replay_count": int(
+                        remediation.get("contrastive_replay_count") or 0
+                    ),
+                    "supplemental_probe_hash_count": int(
+                        remediation.get("supplemental_probe_hash_count") or 0
+                    ),
+                    "raw_remediation_payload_returned": False,
+                },
+                "fallback_linkage": fallback_linkage,
+                "calibration_linkage": calibration_linkage,
                 "raw_content_available": False,
-                "safe_next_action": "inspect_adjudication_and_collect_more_evidence",
+                "safe_next_action": safe_next_action,
             },
             "provenance": {
                 "upstream": [
@@ -8038,8 +8223,24 @@ def create_app(
                         "object_id": record.target_id,
                         "relationship": "decision_target",
                     },
+                    {
+                        "object_type": "autonomy_calibration_family",
+                        "object_id": str(calibration_linkage["calibration_family"]),
+                        "relationship": "calibration_support_context",
+                    },
                 ],
-                "downstream": [],
+                "downstream": [
+                    {
+                        "object_type": "autonomy_reliability_metric",
+                        "object_id": str(calibration_linkage["calibration_family"]),
+                        "relationship": "calibration_rollup",
+                    },
+                    {
+                        "object_type": "threshold_policy",
+                        "object_id": str(calibration_linkage["calibration_family"]),
+                        "relationship": "soft_threshold_policy_context",
+                    },
+                ],
             },
             "created_at": record.created_at.isoformat(),
             "updated_at": record.updated_at.isoformat(),
@@ -8047,6 +8248,9 @@ def create_app(
                 "raw_available": False,
                 "raw_reason": "threshold-deadlock-status-read-model",
                 "redaction_state": "status_only",
+                "raw_remediation_payload_returned": False,
+                "raw_fallback_payload_returned": False,
+                "raw_calibration_payload_returned": False,
             },
         }
 
@@ -12235,8 +12439,14 @@ def create_app(
             decision_family=None,
             limit=500,
         )
+        evaluation_index = await _threshold_deadlock_evaluation_index_for_workspace(
+            workspace_id
+        )
         deadlocks = [
-            _threshold_deadlock_payload(record)
+            _threshold_deadlock_payload(
+                record,
+                evaluation=evaluation_index.get(str(record.decision_id)),
+            )
             for record in records
             if _is_threshold_deadlock_decision(record)
         ]
@@ -12271,7 +12481,15 @@ def create_app(
                 status_code=http_status.HTTP_404_NOT_FOUND,
                 detail="threshold deadlock not found",
             )
-        return ObservatoryObjectResponse(object=_threshold_deadlock_payload(record))
+        evaluation_index = await _threshold_deadlock_evaluation_index_for_workspace(
+            record.workspace_key
+        )
+        return ObservatoryObjectResponse(
+            object=_threshold_deadlock_payload(
+                record,
+                evaluation=evaluation_index.get(str(record.decision_id)),
+            )
+        )
 
     @app.get(
         "/admin/api/v1/autonomy/policies",
@@ -12609,8 +12827,16 @@ def create_app(
                 decision_id=decision_id
             )
             if decision is not None and _is_threshold_deadlock_decision(decision):
+                evaluation_index = (
+                    await _threshold_deadlock_evaluation_index_for_workspace(
+                        workspace_id or decision.workspace_key
+                    )
+                )
                 return ObservatoryObjectResponse(
-                    object=_threshold_deadlock_payload(decision)
+                    object=_threshold_deadlock_payload(
+                        decision,
+                        evaluation=evaluation_index.get(str(decision.decision_id)),
+                    )
                 )
         if object_type in {
             "threshold_policy",

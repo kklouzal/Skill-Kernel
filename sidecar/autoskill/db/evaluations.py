@@ -133,6 +133,9 @@ class EvaluationReviewRecord:
                 "autonomy_fallback": _safe_autonomy_fallback(
                     _json_dict(result.get("autonomy_fallback"))
                 ),
+                "autonomy_remediation": _safe_autonomy_remediation(
+                    _json_dict(result.get("autonomy_remediation"))
+                ),
             },
             created_at=row["created_at"],
         )
@@ -1420,6 +1423,53 @@ def _safe_autonomy_fallback(value: dict[str, Any]) -> dict[str, Any]:
             ),
             "admissible": bool(deterministic_checks.get("admissible")),
         },
+    }
+
+
+def _safe_autonomy_remediation(value: dict[str, Any]) -> dict[str, Any]:
+    if not value:
+        return {}
+    attempts = []
+    for attempt in _json_list(value.get("attempts")):
+        attempts.append(
+            {
+                "attempt": attempt.get("attempt"),
+                "selected_action": attempt.get("selected_action"),
+                "status": attempt.get("status"),
+                "attempted_autonomous_remedies": list(
+                    attempt.get("attempted_autonomous_remedies") or []
+                ),
+                "contrastive_replay_count": int(
+                    attempt.get("contrastive_replays") or 0
+                ),
+                "supplemental_probe_hash_count": len(
+                    attempt.get("supplemental_probe_hashes") or []
+                ),
+                "updated_at": attempt.get("updated_at"),
+                "trace_id": attempt.get("trace_id"),
+                "span_id": attempt.get("span_id"),
+                "parent_span_id": attempt.get("parent_span_id"),
+            }
+        )
+    return {
+        "schema": value.get("schema"),
+        "source": value.get("source"),
+        "selected_action": value.get("selected_action"),
+        "status": value.get("status"),
+        "attempt_count": int(value.get("attempt_count") or 0),
+        "attempted_autonomous_remedies": list(
+            value.get("attempted_autonomous_remedies") or []
+        ),
+        "contrastive_replay_count": len(value.get("contrastive_replays") or []),
+        "supplemental_probe_hash_count": len(
+            value.get("supplemental_probe_hashes") or []
+        ),
+        "threshold_deadlock_candidate": bool(
+            value.get("threshold_deadlock_candidate")
+        ),
+        "recommended_action": value.get("recommended_action"),
+        "attempts": attempts[-10:],
+        "updated_at": value.get("updated_at"),
     }
 
 

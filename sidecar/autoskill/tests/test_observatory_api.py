@@ -3152,6 +3152,88 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
             completed_at=now,
         )
     )
+    evaluation_store = NullEvaluationStore()
+    evaluation_store.reviews.append(
+        EvaluationReviewRecord(
+            workspace_id=uuid4(),
+            workspace_key="dev-01",
+            evaluation_id=uuid4(),
+            skill_version_id=uuid4(),
+            skill_slug="candidate-1",
+            skill_version=1,
+            executor_profile_id=None,
+            category="proposal_gate",
+            status="needs_intervention",
+            result_summary={
+                "candidate_slug": "candidate-1",
+                "status": "needs_intervention",
+                "reason_codes": ["probe-margin-low"],
+                "autonomy_assurance": {
+                    "decision_family": "skill_plan_semantic_adjudication",
+                    "policy_version": "proposal_gate_acceptance_policy.v1",
+                    "hard_invariant_failures": [],
+                    "soft_threshold_misses": [
+                        "probe-margin-low",
+                        "utility-delta-below-threshold",
+                    ],
+                    "autonomous_fallback_actions": [
+                        "assemble_richer_permitted_evidence",
+                        "generate_more_probes",
+                    ],
+                    "threshold_deadlock_candidate": True,
+                    "administrative_escalation_allowed": False,
+                    "calibration_support_status": (
+                        "fixed_policy_pending_replay_calibration"
+                    ),
+                    "evidence_mode": "semantic_derivative_only",
+                },
+                "autonomy_fallback": {
+                    "selected_action": "run_more_probes",
+                    "decision_family": "skill_plan_semantic_adjudication",
+                    "decision_band": "improve_evidence",
+                    "reason_codes": ["probe-margin-low"],
+                    "autonomy_decision_id": str(decision_id),
+                    "adjudication_id": str(adjudication_id),
+                    "confidence_band": "improve_evidence",
+                    "evidence_fidelity": "redacted_derivative",
+                    "runtime_writes_authorized": False,
+                    "deterministic_checks": {"admissible": True},
+                    "private_fallback_payload": "private fallback narrative",
+                },
+                "autonomy_remediation": {
+                    "selected_action": "run_more_probes",
+                    "status": "threshold_deadlock_candidate",
+                    "attempt_count": 3,
+                    "attempted_autonomous_remedies": [
+                        "inspect_evidence_coverage",
+                        "derive_contrastive_replay_from_permitted_evidence",
+                        "generate_additional_probe_plan",
+                    ],
+                    "threshold_deadlock_candidate": True,
+                    "recommended_action": "generate_more_probes",
+                    "contrastive_replay_count": 0,
+                    "supplemental_probe_hash_count": 0,
+                    "attempts": [
+                        {
+                            "attempt": 3,
+                            "selected_action": "run_more_probes",
+                            "status": "threshold_deadlock_candidate",
+                            "attempted_autonomous_remedies": [
+                                "inspect_evidence_coverage",
+                                "generate_additional_probe_plan",
+                            ],
+                            "contrastive_replay_count": 0,
+                            "supplemental_probe_hash_count": 0,
+                            "updated_at": now.isoformat(),
+                            "private_attempt_payload": "private remediation narrative",
+                        }
+                    ],
+                    "private_remediation_payload": "private contrastive replay",
+                },
+            },
+            created_at=now,
+        )
+    )
     observatory_admin.administrative_escalations.append(
         AdminAdministrativeEscalationStatusRecord(
             event_id=escalation_id,
@@ -3176,6 +3258,7 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
     app = create_app(
         audit_store=MemoryAuditStore(),
         observatory_admin_store=observatory_admin,
+        evaluation_store=evaluation_store,
     )
     routes = _routes(app)
 
@@ -3419,16 +3502,55 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
         "autonomy_reliability_metric"
     )
 
-    assert deadlocks.collection["items"][0]["object_type"] == "threshold_deadlock"
-    assert deadlocks.collection["items"][0]["object_id"] == str(decision_id)
+    deadlock_item = deadlocks.collection["items"][0]
+    assert deadlock_item["object_type"] == "threshold_deadlock"
+    assert deadlock_item["object_id"] == str(decision_id)
     assert deadlock_detail.object["autonomy_decision"]["object_type"] == (
         "autonomy_decision"
     )
-    assert deadlock_detail.object["diagnostics"]["safe_next_action"] == (
-        "inspect_adjudication_and_collect_more_evidence"
+    deadlock_diagnostics = deadlock_detail.object["diagnostics"]
+    assert deadlock_item["diagnostics"]["safe_next_action"] == "generate_more_probes"
+    assert deadlock_diagnostics["safe_next_action"] == "generate_more_probes"
+    assert deadlock_diagnostics["deadlock_reason_codes"] == [
+        "threshold_deadlock",
+        "probe-margin-low",
+        "utility-delta-below-threshold",
+    ]
+    assert deadlock_diagnostics["attempted_autonomous_remedies"] == [
+        "inspect_evidence_coverage",
+        "derive_contrastive_replay_from_permitted_evidence",
+        "generate_additional_probe_plan",
+    ]
+    assert deadlock_diagnostics["autonomous_remediation"]["status"] == (
+        "threshold_deadlock_candidate"
     )
+    assert deadlock_diagnostics["autonomous_remediation"]["attempt_count"] == 3
+    assert deadlock_diagnostics["autonomous_remediation"]["attempts"][0][
+        "attempted_autonomous_remedies"
+    ] == ["inspect_evidence_coverage", "generate_additional_probe_plan"]
+    assert deadlock_diagnostics["autonomous_remediation"][
+        "raw_remediation_payload_returned"
+    ] is False
+    assert deadlock_diagnostics["fallback_linkage"]["selected_action"] == (
+        "run_more_probes"
+    )
+    assert deadlock_diagnostics["fallback_linkage"][
+        "deterministic_admissible"
+    ] is True
+    assert deadlock_diagnostics["calibration_linkage"] == {
+        "calibration_family": "skill_plan_semantic_adjudication",
+        "policy_version": "proposal_gate_acceptance_policy.v1",
+        "calibration_support_status": "fixed_policy_pending_replay_calibration",
+        "evidence_mode": "semantic_derivative_only",
+        "linked_read_models": [
+            "autonomy_calibration_observations",
+            "autonomy_reliability_metrics",
+            "threshold_policies",
+        ],
+    }
     assert deadlock_detail.object["content_policy"]["raw_available"] is False
     assert deadlock_object_detail.object["object_type"] == "threshold_deadlock"
+    assert deadlock_object_detail.object["diagnostics"] == deadlock_diagnostics
 
     escalation_item = escalations.collection["items"][0]
     assert escalation_item["hard_boundary_kind"] == "raw_reveal_requested"
@@ -3478,6 +3600,9 @@ def test_observatory_autonomy_evidence_read_models_are_content_safe() -> None:
     assert "api-key-secret" not in combined
     assert "verbatim_llm_verdict" not in combined
     assert "private calibration outcome narrative" not in combined
+    assert "private fallback narrative" not in combined
+    assert "private remediation narrative" not in combined
+    assert "private contrastive replay" not in combined
 
 
 def test_observatory_topology_exposes_operation_metrics_read_model() -> None:
