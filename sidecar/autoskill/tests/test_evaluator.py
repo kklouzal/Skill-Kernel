@@ -13,6 +13,7 @@ from autoskill.db.evaluations import (
     EvaluationRunItem,
     EvaluationRunResult,
     _attach_contrastive_replays,
+    _claim_fallback_remediation_evaluations,
     _finish_evaluation,
     _recommended_deadlock_action,
     _remediation_patch,
@@ -1235,6 +1236,56 @@ def test_fallback_remediation_records_threshold_deadlock_after_repeated_waits() 
     assert remediation["attempts"][-1]["status"] == "threshold_deadlock_candidate"
 
 
+def test_fallback_remediation_claim_skips_parked_threshold_deadlocks() -> None:
+    conn = FakeClaimConnection(rows=[])
+
+    async def run():
+        return await _claim_fallback_remediation_evaluations(
+            conn,
+            workspace_key="dev-01",
+            limit=17,
+        )
+
+    rows = asyncio.run(run())
+
+    assert rows == []
+    assert conn.args[0] == "dev-01"
+    assert conn.args[1] == 17
+    assert "collect_more_evidence" in conn.args[2]
+    assert "ev.status = 'needs_intervention'" in conn.query
+    assert (
+        "ev.result #>> '{autonomy_remediation,status}',\n            ''\n"
+        "          ) <> 'threshold_deadlock_candidate'"
+    ) in conn.query
+    assert (
+        "ev.result #>> '{autonomy_remediation,threshold_deadlock_candidate}'"
+    ) in conn.query
+    assert "FROM autoskill.threshold_deadlock_findings tdf" in conn.query
+    assert "tdf.status = 'open'" in conn.query
+    assert "ev.skill_version_id = ANY(tdf.stalled_candidate_ids)" in conn.query
+
+
+def test_fallback_remediation_claim_still_selects_ordinary_fallback_rows() -> None:
+    evaluation_id = uuid4()
+    conn = FakeClaimConnection(rows=[{"evaluation_id": evaluation_id}])
+
+    async def run():
+        return await _claim_fallback_remediation_evaluations(
+            conn,
+            workspace_key=None,
+            limit=50,
+        )
+
+    rows = asyncio.run(run())
+
+    assert rows == [{"evaluation_id": evaluation_id}]
+    assert conn.args[0] is None
+    assert conn.args[1] == 50
+    assert "run_more_probes" in conn.args[2]
+    assert "stage_ephemeral_candidate" in conn.args[2]
+    assert conn.query.count("FOR UPDATE OF ev SKIP LOCKED") == 1
+
+
 def test_fallback_remediation_classifies_threshold_deadlock_recommendations() -> None:
     assert (
         _recommended_deadlock_action(
@@ -1630,6 +1681,18 @@ class FakeContrastiveConnection:
             self.updated_probe_hashes.append(str(_args[1]))
         if "INSERT INTO autoskill.evidence_maturity" in query:
             self.maturity_evidence_ids.append(_args[1])
+
+
+class FakeClaimConnection:
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self.rows = rows
+        self.query = ""
+        self.args: tuple[object, ...] = ()
+
+    async def fetch(self, query: str, *args: object) -> list[dict[str, object]]:
+        self.query = query
+        self.args = args
+        return self.rows
 
 
 class FakeEvaluationConnection:

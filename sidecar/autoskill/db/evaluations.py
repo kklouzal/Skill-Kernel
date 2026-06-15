@@ -693,6 +693,22 @@ async def _claim_fallback_remediation_evaluations(
           AND ev.status = 'needs_intervention'
           AND ev.result ? 'autonomy_fallback'
           AND ev.result #>> '{autonomy_fallback,selected_action}' = ANY($3::text[])
+          AND COALESCE(
+            ev.result #>> '{autonomy_remediation,status}',
+            ''
+          ) <> 'threshold_deadlock_candidate'
+          AND COALESCE(
+            (ev.result #>> '{autonomy_remediation,threshold_deadlock_candidate}')::boolean,
+            false
+          ) IS NOT true
+          AND NOT EXISTS (
+            SELECT 1
+            FROM autoskill.threshold_deadlock_findings tdf
+            WHERE tdf.workspace_id = ev.workspace_id
+              AND tdf.policy_kind = 'proposal_gate_acceptance_policy.v1'
+              AND tdf.status = 'open'
+              AND ev.skill_version_id = ANY(tdf.stalled_candidate_ids)
+          )
           AND s.lifecycle_state = ANY($4::text[])
           AND ($1::text IS NULL OR w.external_key = $1)
         ORDER BY
