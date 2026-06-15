@@ -323,6 +323,7 @@ class CoreProtocolResponse(BaseModel):
     features: list[str]
     degraded_features: list[str]
     generated_at: str
+    deployment_fingerprint: dict[str, str]
 
 
 class CoreCapabilitiesResponse(CoreProtocolResponse):
@@ -367,11 +368,21 @@ def _core_degraded_features() -> list[str]:
 
 
 def _core_protocol_payload() -> dict[str, object]:
+    settings = get_settings()
+    generated_at = datetime.now(UTC).isoformat()
     return {
         "service_version": __version__,
         "features": _core_protocol_features(),
         "degraded_features": _core_degraded_features(),
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": generated_at,
+        "deployment_fingerprint": {
+            "service": "skillkernel-core",
+            "build_sha": settings.build_sha,
+            "revision": settings.build_sha,
+            "image_source": settings.image_source,
+            "source": "environment",
+            "generated_at": generated_at,
+        },
     }
 
 

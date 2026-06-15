@@ -76,6 +76,8 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
     monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
     monkeypatch.delenv("AUTOSKILL_DATABASE_URL", raising=False)
     monkeypatch.delenv("SKILLKERNEL_DATABASE_URL", raising=False)
+    monkeypatch.delenv("SKILLKERNEL_BUILD_SHA", raising=False)
+    monkeypatch.delenv("SKILLKERNEL_IMAGE_SOURCE", raising=False)
     monkeypatch.delenv("AUTOSKILL_LLM_API_BASE_URL", raising=False)
     monkeypatch.delenv("AUTOSKILL_EMBEDDING_API_BASE_URL", raising=False)
     get_settings.cache_clear()
@@ -102,6 +104,11 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
     assert "guarded_action_requests" in version.features
     assert "semantic_adjudication" in version.degraded_features
     assert "embedding_generation" in version.degraded_features
+    assert version.deployment_fingerprint["service"] == "skillkernel-core"
+    assert version.deployment_fingerprint["build_sha"] == "local"
+    assert version.deployment_fingerprint["revision"] == "local"
+    assert version.deployment_fingerprint["image_source"] == "local"
+    assert version.deployment_fingerprint["source"] == "environment"
     assert capabilities.capabilities["ingest_contract"] == {
         "path": "/v1/ingest/events",
         "method": "POST",
@@ -160,6 +167,50 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
     assert ready.checks["embedding_profile_ready_or_explicitly_degraded"] is True
     assert ready.checks["embedding_profile_degraded_reason"] == "hash_embedding_provider_test_mode"
     assert ready.checks["read_model_contract_version"] == "skillkernel.readmodels.v1"
+    assert ready.deployment_fingerprint["build_sha"] == "local"
+    assert ready.deployment_fingerprint["image_source"] == "local"
+
+    get_settings.cache_clear()
+
+
+def test_core_compatibility_handshake_reports_env_deployment_fingerprint(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_IGNORE_ENV_FILE", "1")
+    monkeypatch.setenv("SKILLKERNEL_BUILD_SHA", "abc1234")
+    monkeypatch.setenv("SKILLKERNEL_IMAGE_SOURCE", "ghcr.io/openclaw/skillkernel:abc1234")
+    get_settings.cache_clear()
+    app = create_app(
+        job_store=NullJobStore(),
+        profile_store=NullProfileStore(),
+        broker_policy_store=NullBrokerPolicyStore(),
+    )
+    routes = {
+        (route.path, method): route
+        for route in app.routes
+        for method in route.methods
+    }
+
+    version = asyncio.run(routes[("/v1/version", "GET")].endpoint())
+    ready = asyncio.run(routes[("/v1/health/ready", "GET")].endpoint())
+
+    expected = {
+        "service": "skillkernel-core",
+        "build_sha": "abc1234",
+        "revision": "abc1234",
+        "image_source": "ghcr.io/openclaw/skillkernel:abc1234",
+        "source": "environment",
+    }
+    assert {
+        key: version.deployment_fingerprint[key]
+        for key in expected
+    } == expected
+    assert {
+        key: ready.deployment_fingerprint[key]
+        for key in expected
+    } == expected
+    assert version.deployment_fingerprint["generated_at"]
+    assert ready.deployment_fingerprint["generated_at"]
 
     get_settings.cache_clear()
 

@@ -16,6 +16,22 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-15: Runtime deployment fingerprint reporting now continues the OCI
+  image-label packaging slice through the live Core compatibility handshake.
+  `SKILLKERNEL_BUILD_SHA` and `SKILLKERNEL_IMAGE_SOURCE` are accepted by
+  settings with `local` defaults, passed through the shared compose runtime env
+  for Core, worker/migration, and Observatory containers, and exposed as a
+  content-safe `deployment_fingerprint` on `/v1/version`,
+  `/v1/capabilities`, `/v1/read-model-contract`, and `/v1/health/ready`. The
+  object includes service, build SHA/revision, image source, source, and
+  generation time, so readiness and compatibility surfaces report runtime
+  state rather than relying on matching image tags. This advances the unified
+  Container health/readiness and Inter-container API compatibility contracts.
+  Validation passed with focused compatibility coverage (`7 passed`), `uv run
+  ruff check sidecar`, full `uv run pytest` (`541 passed`), `uv run python -m
+  compileall -q sidecar`, and `git diff --check`. Next gate: parent
+  review/commit and post-commit CI/deploy confirmation.
+
 - 2026-06-15: Container build revision traceability is now a deterministic
   packaging primitive for SkillKernel Core and Observatory. The first-class
   Dockerfiles and root release aliases declare `SKILLKERNEL_BUILD_SHA` and

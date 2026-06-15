@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     )
     schema_name: str = "autoskill"
     statement_timeout_ms: int = 30_000
+    build_sha: str = Field(
+        default="local",
+        validation_alias=AliasChoices("SKILLKERNEL_BUILD_SHA", "AUTOSKILL_BUILD_SHA"),
+    )
+    image_source: str = Field(
+        default="local",
+        validation_alias=AliasChoices("SKILLKERNEL_IMAGE_SOURCE", "AUTOSKILL_IMAGE_SOURCE"),
+    )
     ingest_token: str | None = Field(
         default=None,
         validation_alias=AliasChoices("SKILLKERNEL_SIDECAR_TOKEN", "AUTOSKILL_INGEST_TOKEN"),
