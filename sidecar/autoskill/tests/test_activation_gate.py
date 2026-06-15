@@ -22,7 +22,7 @@ class _ActivationSqlFixture:
     skill_version_id: UUID
     context_artifact_ids: dict[str, UUID]
     context_compile_run_ids: dict[str, UUID]
-    compiled_text_hash: str
+    compiled_text_hashes: dict[str, str]
     output_manifest_hash: str
 
 
@@ -457,7 +457,7 @@ async def test_asyncpg_activation_gate_reads_semantic_equivalence_score() -> Non
             require_context_compile_proof=True,
             context_compile_run_id=fixture.context_compile_run_ids["missing"],
             context_artifact_id=fixture.context_artifact_ids["missing"],
-            compiled_text_hash=fixture.compiled_text_hash,
+            compiled_text_hash=fixture.compiled_text_hashes["missing"],
             context_output_manifest_hash=fixture.output_manifest_hash,
             require_semantic_equivalence=True,
             min_semantic_equivalence_score=0.9,
@@ -469,7 +469,7 @@ async def test_asyncpg_activation_gate_reads_semantic_equivalence_score() -> Non
             require_context_compile_proof=True,
             context_compile_run_id=fixture.context_compile_run_ids["below_threshold"],
             context_artifact_id=fixture.context_artifact_ids["below_threshold"],
-            compiled_text_hash=fixture.compiled_text_hash,
+            compiled_text_hash=fixture.compiled_text_hashes["below_threshold"],
             context_output_manifest_hash=fixture.output_manifest_hash,
             require_semantic_equivalence=True,
             min_semantic_equivalence_score=0.9,
@@ -481,7 +481,7 @@ async def test_asyncpg_activation_gate_reads_semantic_equivalence_score() -> Non
             require_context_compile_proof=True,
             context_compile_run_id=fixture.context_compile_run_ids["passing"],
             context_artifact_id=fixture.context_artifact_ids["passing"],
-            compiled_text_hash=fixture.compiled_text_hash,
+            compiled_text_hash=fixture.compiled_text_hashes["passing"],
             context_output_manifest_hash=fixture.output_manifest_hash,
             require_semantic_equivalence=True,
             min_semantic_equivalence_score=0.9,
@@ -532,7 +532,7 @@ async def test_asyncpg_activation_gate_reads_context_value_per_token() -> None:
             require_context_compile_proof=True,
             context_compile_run_id=fixture.context_compile_run_ids["missing"],
             context_artifact_id=fixture.context_artifact_ids["missing"],
-            compiled_text_hash=fixture.compiled_text_hash,
+            compiled_text_hash=fixture.compiled_text_hashes["missing"],
             context_output_manifest_hash=fixture.output_manifest_hash,
             require_semantic_equivalence=False,
             require_context_value=True,
@@ -545,7 +545,7 @@ async def test_asyncpg_activation_gate_reads_context_value_per_token() -> None:
             require_context_compile_proof=True,
             context_compile_run_id=fixture.context_compile_run_ids["below_threshold"],
             context_artifact_id=fixture.context_artifact_ids["below_threshold"],
-            compiled_text_hash=fixture.compiled_text_hash,
+            compiled_text_hash=fixture.compiled_text_hashes["below_threshold"],
             context_output_manifest_hash=fixture.output_manifest_hash,
             require_semantic_equivalence=False,
             require_context_value=True,
@@ -558,7 +558,7 @@ async def test_asyncpg_activation_gate_reads_context_value_per_token() -> None:
             require_context_compile_proof=True,
             context_compile_run_id=fixture.context_compile_run_ids["passing"],
             context_artifact_id=fixture.context_artifact_ids["passing"],
-            compiled_text_hash=fixture.compiled_text_hash,
+            compiled_text_hash=fixture.compiled_text_hashes["passing"],
             context_output_manifest_hash=fixture.output_manifest_hash,
             require_semantic_equivalence=False,
             require_context_value=True,
@@ -640,7 +640,11 @@ async def _seed_activation_sql_fixture(
         "below_threshold": uuid4(),
         "passing": uuid4(),
     }
-    compiled_text_hash = f"sha256:compiled-{uuid4().hex}"
+    compiled_text_hashes = {
+        "missing": f"sha256:compiled-missing-{uuid4().hex}",
+        "below_threshold": f"sha256:compiled-below-threshold-{uuid4().hex}",
+        "passing": f"sha256:compiled-passing-{uuid4().hex}",
+    }
     output_manifest_hash = f"sha256:manifest-{uuid4().hex}"
 
     workspace_id = await conn.fetchval(
@@ -754,7 +758,7 @@ async def _seed_activation_sql_fixture(
             workspace_id,
             skill_version_id,
             skill_id,
-            compiled_text_hash,
+            compiled_text_hashes[fixture_key],
             json.dumps(metadata, sort_keys=True),
         )
         await conn.execute(
@@ -794,7 +798,7 @@ async def _seed_activation_sql_fixture(
         skill_version_id=skill_version_id,
         context_artifact_ids=context_artifact_ids,
         context_compile_run_ids=context_compile_run_ids,
-        compiled_text_hash=compiled_text_hash,
+        compiled_text_hashes=compiled_text_hashes,
         output_manifest_hash=output_manifest_hash,
     )
 

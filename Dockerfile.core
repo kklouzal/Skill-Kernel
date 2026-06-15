@@ -1,5 +1,10 @@
 FROM python:3.13-slim
 
+ARG SKILLKERNEL_BUILD_SHA=local
+ARG SKILLKERNEL_IMAGE_SOURCE=local
+LABEL org.opencontainers.image.revision="${SKILLKERNEL_BUILD_SHA}" \
+    org.opencontainers.image.source="${SKILLKERNEL_IMAGE_SOURCE}"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/sidecar \

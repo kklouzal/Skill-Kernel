@@ -16,6 +16,37 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-15: Container build revision traceability is now a deterministic
+  packaging primitive for SkillKernel Core and Observatory. The first-class
+  Dockerfiles and root release aliases declare `SKILLKERNEL_BUILD_SHA` and
+  `SKILLKERNEL_IMAGE_SOURCE` build args with local-safe defaults, then stamp
+  `org.opencontainers.image.revision` and `org.opencontainers.image.source`
+  OCI labels onto the runtime images. `docker-compose.yml` passes the same
+  args through the shared Core build anchor and Observatory build, while
+  `.github/workflows/publish-ghcr.yml` passes `${{ github.sha }}` and the
+  repository URL for both CI build-test images and GHCR publish builds without
+  changing runtime service boundaries or redeploying containers. The static
+  conformance packaging gate now asserts the Dockerfile, compose, and workflow
+  contract. This advances unified first-class repository packaging requirements
+  and deployment traceability/inter-container evidence. Validation passed with
+  the focused conformance test, compose config, touched-script Ruff,
+  touched-script compileall, parent `uv run ruff check sidecar
+  scripts/autoskill_conformance.py`, parent full `uv run pytest` (`540
+  passed`), parent `uv run python -m compileall -q sidecar
+  scripts/autoskill_conformance.py`, and diff hygiene. Next gate: parent
+  review/commit, then CI/GHCR confirmation that pushed Core and Observatory
+  images carry the revision label.
+
+- 2026-06-15 follow-up: SQL activation gate fixture validation now respects
+  the live `autoskill.context_artifacts` uniqueness contract by carrying a
+  per-case compiled text hash for the missing, below-threshold, and passing
+  context proof rows and passing the matching hash into each readiness check.
+  This preserves the semantic-equivalence and context-value assertions while
+  removing the unrelated fixture collision that blocked parent full-test
+  validation. Focused activation gate validation, packaging conformance,
+  compose config, touched-test Ruff/compileall, parent full `uv run pytest`
+  (`540 passed`), and diff hygiene passed.
+
 - 2026-06-14: Bootstrap migration idempotency has been reconciled for
   already-migrated Postgres/pgvector databases. `scripts/migrate.py` now splits
   the bootstrap SQL into statement-sized executions without breaking quoted

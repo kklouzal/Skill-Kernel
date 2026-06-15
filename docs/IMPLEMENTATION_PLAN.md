@@ -1,5 +1,33 @@
 # SkillKernel Implementation Plan
 
+2026-06-15 update: Core and Observatory container build revision traceability
+is now part of the deterministic packaging contract. The container Dockerfiles
+and root release aliases accept `SKILLKERNEL_BUILD_SHA` and
+`SKILLKERNEL_IMAGE_SOURCE` with local-safe defaults and stamp
+`org.opencontainers.image.revision` plus `org.opencontainers.image.source`
+labels on the runtime images. `docker-compose.yml` threads those args through
+the shared Core build anchor and Observatory build, and
+`.github/workflows/publish-ghcr.yml` passes `${{ github.sha }}` plus the
+repository URL to both local CI image builds and GHCR publish builds. The
+conformance packaging check now asserts the Dockerfile, compose, and workflow
+contract. This advances first-class repository packaging and deployable image
+traceability without runtime behavior changes. Validation passed with the
+focused conformance test, compose config, touched-script Ruff, touched-script
+compileall, parent `uv run ruff check sidecar scripts/autoskill_conformance.py`,
+parent full `uv run pytest` (`540 passed`), parent `uv run python -m
+compileall -q sidecar scripts/autoskill_conformance.py`, and diff hygiene.
+Next: parent review/commit, then verify pushed GHCR Core and Observatory images
+expose the revision label.
+
+2026-06-15 follow-up: the SQL activation gate fixture now uses per-case
+compiled text hashes for the missing, below-threshold, and passing context
+proof rows, matching the live `autoskill.context_artifacts` uniqueness
+contract while keeping the semantic-equivalence and context-value assertions
+unchanged. This removes the unrelated fixture collision found by parent full
+validation. Focused activation gate validation, packaging conformance, compose
+config, touched-test Ruff/compileall, parent full `uv run pytest` (`540
+passed`), and diff hygiene passed.
+
 2026-06-14 update: bootstrap migration idempotency is now a shared primitive
 for cron/operator SQL entry points. `scripts/migrate.py` executes
 `0001_autoskill_schema.sql` statement by statement, preserving quoted strings,

@@ -513,6 +513,9 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          build-args: |
+            SKILLKERNEL_BUILD_SHA=${{ github.sha }}
+            SKILLKERNEL_IMAGE_SOURCE=https://github.com/${{ github.repository }}
           load: true
           tags: skillkernel-${{ matrix.image }}:ci
 
@@ -563,6 +566,9 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          build-args: |
+            SKILLKERNEL_BUILD_SHA=${{ github.sha }}
+            SKILLKERNEL_IMAGE_SOURCE=https://github.com/${{ github.repository }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

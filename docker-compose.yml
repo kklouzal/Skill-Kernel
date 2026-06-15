@@ -1,6 +1,9 @@
 x-skillkernel-core-build: &skillkernel-core-build
   context: .
   dockerfile: containers/core/Dockerfile
+  args:
+    SKILLKERNEL_BUILD_SHA: ${SKILLKERNEL_BUILD_SHA:-local}
+    SKILLKERNEL_IMAGE_SOURCE: ${SKILLKERNEL_IMAGE_SOURCE:-local}
 
 x-skillkernel-runtime-networks: &skillkernel-runtime-networks
   - default
@@ -114,6 +117,9 @@ services:
     build:
       context: .
       dockerfile: containers/observatory/Dockerfile
+      args:
+        SKILLKERNEL_BUILD_SHA: ${SKILLKERNEL_BUILD_SHA:-local}
+        SKILLKERNEL_IMAGE_SOURCE: ${SKILLKERNEL_IMAGE_SOURCE:-local}
     networks: *skillkernel-runtime-networks
     environment:
       <<: *skillkernel-env

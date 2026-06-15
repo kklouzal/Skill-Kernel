@@ -644,6 +644,7 @@ def _check_container_packaging_assets() -> StaticCheck:
         ROOT / "containers" / "observatory" / "Dockerfile",
     )
     compose = _read_files(ROOT / "docker-compose.yml", ROOT / "compose" / "compose.example.yml")
+    workflow = (ROOT / ".github" / "workflows" / "publish-ghcr.yml").read_text(encoding="utf-8")
     if "USER skillkernel" not in core_dockerfiles:
         details.append("core Dockerfiles do not switch to non-root skillkernel user")
     if "USER skillkernel" not in observatory_dockerfiles:
@@ -654,10 +655,32 @@ def _check_container_packaging_assets() -> StaticCheck:
         details.append("Observatory Dockerfiles still reference nginx proxy packaging")
     if "HEALTHCHECK" not in core_dockerfiles or "HEALTHCHECK" not in observatory_dockerfiles:
         details.append("Dockerfiles do not declare health checks")
+    if (
+        "ARG SKILLKERNEL_BUILD_SHA=local" not in core_dockerfiles
+        or "ARG SKILLKERNEL_BUILD_SHA=local" not in observatory_dockerfiles
+        or "org.opencontainers.image.revision" not in core_dockerfiles
+        or "org.opencontainers.image.revision" not in observatory_dockerfiles
+    ):
+        details.append("Dockerfiles do not expose deterministic OCI revision labels")
+    if (
+        "ARG SKILLKERNEL_IMAGE_SOURCE=local" not in core_dockerfiles
+        or "ARG SKILLKERNEL_IMAGE_SOURCE=local" not in observatory_dockerfiles
+        or "org.opencontainers.image.source" not in core_dockerfiles
+        or "org.opencontainers.image.source" not in observatory_dockerfiles
+    ):
+        details.append("Dockerfiles do not expose deterministic OCI source labels")
     if "containers/core/Dockerfile" not in compose:
         details.append("compose files do not build the first-class Core Dockerfile")
     if "containers/observatory/Dockerfile" not in compose:
         details.append("compose files do not build the first-class Observatory Dockerfile")
+    if "SKILLKERNEL_BUILD_SHA: ${SKILLKERNEL_BUILD_SHA:-local}" not in compose:
+        details.append("compose files do not pass the revision build arg")
+    if "SKILLKERNEL_IMAGE_SOURCE: ${SKILLKERNEL_IMAGE_SOURCE:-local}" not in compose:
+        details.append("compose files do not pass the source build arg")
+    if "SKILLKERNEL_BUILD_SHA=${{ github.sha }}" not in workflow:
+        details.append("publish workflow does not pass the GitHub SHA build arg")
+    if "SKILLKERNEL_IMAGE_SOURCE=https://github.com/${{ github.repository }}" not in workflow:
+        details.append("publish workflow does not pass the GitHub source build arg")
     if "SKILLKERNEL_DATABASE_URL_FILE" not in compose:
         details.append("reference compose does not mount database URL as a Core secret file")
     if "SKILLKERNEL_SIDECAR_TOKEN_FILE" not in compose:
