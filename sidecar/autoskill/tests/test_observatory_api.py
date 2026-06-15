@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+import autoskill.api.app as app_module
 import pytest
 from autoskill.api.app import (
     ADMIN_ACTION_RATE_LIMIT,
@@ -534,6 +535,11 @@ class CaptureObservabilityStore:
             "metrics": {},
             "dashboards": {},
         }
+
+
+class FailingLiveEventOutboxStore(NullObservatoryAdminStore):
+    async def latest_live_event_seq(self):
+        raise RuntimeError("live event outbox unavailable")
 
 
 def _routes(app):
@@ -1907,12 +1913,14 @@ def test_observatory_readiness_reports_known_core_reachable(
             job_store=MemoryCoreReachabilityJobStore(),
             audit_store=MemoryAuditStore(),
             observability_store=CaptureObservabilityStore(),
+            observatory_admin_store=NullObservatoryAdminStore(),
         )
         route = _routes(app)[("/admin/api/v1/health/ready", "GET")]
 
         ready = asyncio.run(route.endpoint(authorization="Bearer control-token"))
 
         core = ready.object["core_reachability"]
+        live_stream = ready.object["live_stream_health"]
         assert ready.object["ready"] is True
         assert core["known"] is True
         assert core["reachable"] is True
@@ -1926,6 +1934,107 @@ def test_observatory_readiness_reports_known_core_reachable(
             "core_unreachable" not in issue["reason_codes"]
             for issue in ready.object["issues"]
         )
+        assert live_stream["schema_version"] == (
+            "skillkernel.observatory.live-stream-health.v1"
+        )
+        assert live_stream["available"] is True
+        assert live_stream["health"] == "available"
+        assert live_stream["reason_code"] is None
+        assert live_stream["reason_codes"] == []
+        assert live_stream["event_type"] == "heartbeat"
+        assert live_stream["snapshot_seq"] > 0
+        assert live_stream["latest_outbox_seq"] is None
+        assert live_stream["cursor_seq"] == 0
+        assert live_stream["content_policy"]["raw_available"] is False
+        assert live_stream["content_policy"]["payloads_returned"] is False
+    finally:
+        get_settings.cache_clear()
+
+
+def test_observatory_readiness_reports_degraded_live_stream_reason_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    get_settings.cache_clear()
+    try:
+        app = create_app(
+            job_store=MemoryCoreReachabilityJobStore(),
+            audit_store=MemoryAuditStore(),
+            observability_store=CaptureObservabilityStore(),
+            observatory_admin_store=FailingLiveEventOutboxStore(),
+        )
+        route = _routes(app)[("/admin/api/v1/health/ready", "GET")]
+
+        ready = asyncio.run(route.endpoint(authorization="Bearer control-token"))
+
+        live_stream = ready.object["live_stream_health"]
+        assert ready.object["ready"] is True
+        assert live_stream["available"] is False
+        assert live_stream["health"] == "degraded"
+        assert live_stream["reason_code"] == "live-event-outbox-unavailable"
+        assert live_stream["reason_codes"] == ["live-event-outbox-unavailable"]
+        assert "payload" not in live_stream
+        rendered = json.dumps(live_stream, sort_keys=True)
+        assert "secret" not in rendered
+        assert "prompt" not in rendered
+        assert "skill text" not in rendered
+    finally:
+        get_settings.cache_clear()
+
+
+def test_observatory_readiness_reports_sequence_gap_degraded_reason_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    get_settings.cache_clear()
+    original_builder = app_module.build_observatory_snapshot
+
+    def snapshot_with_sequence_gap_issue(**kwargs):
+        snapshot = original_builder(**kwargs)
+        snapshot["issue_board"].append(
+            {
+                "issue_id": "observatory_admin:sequence-gap-detected",
+                "severity": "medium",
+                "component_id": "observatory_admin",
+                "subsystem_id": "observatory",
+                "title": "Sequence Gap Detected",
+                "summary": "A content-safe live stream sequence gap was detected.",
+                "reason_codes": ["sequence-gap-detected"],
+                "evidence_refs": [
+                    {"object_type": "component", "object_id": "observatory_admin"}
+                ],
+                "safe_next_actions": [],
+                "deep_link": "/admin/components/observatory_admin?issue=sequence-gap-detected",
+            }
+        )
+        return snapshot
+
+    monkeypatch.setattr(
+        app_module,
+        "build_observatory_snapshot",
+        snapshot_with_sequence_gap_issue,
+    )
+    try:
+        app = create_app(
+            job_store=MemoryCoreReachabilityJobStore(),
+            audit_store=MemoryAuditStore(),
+            observability_store=CaptureObservabilityStore(),
+            observatory_admin_store=NullObservatoryAdminStore(),
+        )
+        route = _routes(app)[("/admin/api/v1/health/ready", "GET")]
+
+        ready = asyncio.run(route.endpoint(authorization="Bearer control-token"))
+
+        live_stream = ready.object["live_stream_health"]
+        assert live_stream["available"] is True
+        assert live_stream["health"] == "degraded"
+        assert live_stream["reason_code"] == "sequence-gap-detected"
+        assert live_stream["reason_codes"] == ["sequence-gap-detected"]
+        assert live_stream["content_policy"]["payloads_returned"] is False
     finally:
         get_settings.cache_clear()
 

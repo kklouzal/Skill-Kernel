@@ -16,6 +16,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-15: Observatory readiness now exposes a first-class,
+  content-safe `live_stream_health` object on
+  `/admin/api/v1/health/ready`. The signal reports stream availability,
+  health, reason codes, snapshot/outbox cursor summaries, and explicit
+  no-payload content policy using the existing Observatory snapshot,
+  live-envelope, issue, and outbox sequence surfaces. Live outbox read
+  failures degrade with `live-event-outbox-unavailable`, and sequence-gap
+  reason codes in Observatory self-health degrade the stream without exposing
+  raw event payloads, secrets, prompts, skill text, or adding control-plane
+  authority. Focused validation passed for the touched readiness tests,
+  broader Observatory readiness slice, touched-file Ruff, touched-file
+  compileall, and diff hygiene. Next gate: parent review and full gates.
+
 - 2026-06-15: Observatory admin health now reports its own content-safe
   deployment fingerprint. The existing settings/env primitive for
   `SKILLKERNEL_BUILD_SHA` and `SKILLKERNEL_IMAGE_SOURCE` is shared through a

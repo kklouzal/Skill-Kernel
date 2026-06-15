@@ -11578,6 +11578,74 @@ def create_app(
     ) -> dict[str, object]:
         return build_live_envelope(snapshot, last_seq=last_seq, cursor_seq=cursor_seq)
 
+    async def _observatory_live_stream_health(
+        snapshot: dict[str, object],
+    ) -> dict[str, object]:
+        latest_outbox_seq: int | None = None
+        read_error = False
+        try:
+            latest_outbox_seq = await observatory_admin.latest_live_event_seq()
+        except Exception:
+            read_error = True
+        envelope = _snapshot_live_fallback(
+            snapshot,
+            last_seq=int(snapshot["snapshot_seq"]),
+            cursor_seq=latest_outbox_seq if latest_outbox_seq is not None else 0,
+        )
+        observatory_component = object_microscope(
+            snapshot,
+            object_type="component",
+            object_id="observatory_admin",
+        )
+        diagnostics = observatory_component.get("diagnostics", {})
+        if not isinstance(diagnostics, dict):
+            diagnostics = {}
+        data_quality = diagnostics.get("data_quality", {})
+        if not isinstance(data_quality, dict):
+            data_quality = {}
+        reason_codes: set[str] = set()
+        for code in diagnostics.get("reason_codes", []):
+            code_text = str(code)
+            if "sequence-gap" in code_text or "live-stream" in code_text:
+                reason_codes.add(code_text)
+        for issue in snapshot.get("issue_board", []):
+            if not isinstance(issue, dict):
+                continue
+            if str(issue.get("component_id")) != "observatory_admin":
+                continue
+            for code in issue.get("reason_codes", []):
+                if "sequence-gap" in str(code) or "live-stream" in str(code):
+                    reason_codes.add(str(code))
+        missing_signal_keys = {
+            str(key)
+            for key in data_quality.get("missing_signal_keys", [])
+            if str(key)
+        }
+        if "sequence_gap" in missing_signal_keys or "sequence-gap" in missing_signal_keys:
+            reason_codes.add("sequence-gap-signal-missing")
+        if read_error:
+            reason_codes.add("live-event-outbox-unavailable")
+        available = not read_error
+        reason_code = sorted(reason_codes)[0] if reason_codes else None
+        return {
+            "schema_version": "skillkernel.observatory.live-stream-health.v1",
+            "available": available,
+            "health": "available" if available and reason_code is None else "degraded",
+            "reason_code": reason_code,
+            "reason_codes": sorted(reason_codes),
+            "snapshot_seq": int(snapshot["snapshot_seq"]),
+            "latest_outbox_seq": latest_outbox_seq,
+            "cursor_seq": envelope["cursor_seq"],
+            "event_type": envelope["event_type"],
+            "requires_snapshot_reload": bool(envelope["requires_snapshot_reload"]),
+            "source": "observatory_snapshot_and_live_event_outbox",
+            "content_policy": {
+                "raw_available": False,
+                "raw_reason": "raw-content-disabled",
+                "payloads_returned": False,
+            },
+        }
+
     async def _observatory_starting_outbox_seq(last_seq: int | None) -> int | None:
         latest_seq = await observatory_admin.latest_live_event_seq()
         if latest_seq is None:
@@ -11724,6 +11792,7 @@ def create_app(
             workspace_id=workspace_id,
             window_minutes=window_minutes,
         )
+        live_stream_health = await _observatory_live_stream_health(snapshot)
         return ObservatoryObjectResponse(
             object={
                 "schema_version": "skillkernel.observatory.ready.v1",
@@ -11731,6 +11800,7 @@ def create_app(
                 "global_health": snapshot["global_health"],
                 "deployment_fingerprint": _deployment_fingerprint("skillkernel-observatory"),
                 "core_reachability": snapshot["core_reachability"],
+                "live_stream_health": live_stream_health,
                 "data_quality": snapshot["data_quality"],
                 "issues": snapshot["issue_board"],
                 "self_health": object_microscope(

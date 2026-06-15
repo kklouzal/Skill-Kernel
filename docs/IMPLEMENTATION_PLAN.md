@@ -1,5 +1,17 @@
 # SkillKernel Implementation Plan
 
+2026-06-15 update: Observatory readiness now includes a content-safe
+`live_stream_health` field on `/admin/api/v1/health/ready`. The object reports
+availability, health, reason codes, snapshot/outbox cursor summaries, and an
+explicit no-payload content policy from existing snapshot, live-envelope,
+issue, and live-event outbox sequence signals. Outbox read failures now degrade
+with `live-event-outbox-unavailable`, while sequence-gap self-health reason
+codes surface as degraded stream health without exposing raw event payloads,
+secrets, prompts, skill text, or introducing any control-plane authority.
+Focused readiness tests, the broader Observatory readiness slice, touched-file
+Ruff, touched-file compileall, and diff hygiene passed. Next: parent full
+validation.
+
 2026-06-15 update: Observatory admin health now exposes a content-safe
 deployment fingerprint for the independently deployed web container. The
 existing settings/env primitive for `SKILLKERNEL_BUILD_SHA` and
