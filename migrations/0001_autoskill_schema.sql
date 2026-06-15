@@ -4494,7 +4494,8 @@ BEGIN
     NEW.historical_import_chunk_id,
     NEW.created_at
   )
-  ON CONFLICT (source_historical_import_chunk_id) DO UPDATE SET
+  ON CONFLICT (workspace_id, historical_source_item_id, redacted_hash, chunking_policy_version) DO UPDATE SET
+    source_historical_import_chunk_id = EXCLUDED.source_historical_import_chunk_id,
     historical_source_item_id = EXCLUDED.historical_source_item_id,
     workspace_id = EXCLUDED.workspace_id,
     agent_id = EXCLUDED.agent_id,

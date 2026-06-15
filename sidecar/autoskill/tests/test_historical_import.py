@@ -163,11 +163,14 @@ class MemoryHistoricalImportStore(HistoricalImportStore):
             content_hash = f"hash:{redacted_text}"
             key = (
                 workspace_key,
-                str(source.historical_import_source_id),
                 chunk.item_key,
-                str(chunk.chunk_index),
-                chunk.chunk_kind,
+                chunk.parser_version,
+                chunk.redaction_policy_version,
                 content_hash,
+                (chunk.metadata or {}).get(
+                    "chunking_policy_version",
+                    "historical-import-chunker.v1",
+                ),
             )
             if key in self.chunks:
                 skipped += 1
@@ -431,6 +434,80 @@ def test_historical_import_records_only_redacted_chunks() -> None:
     assert "[REDACTED_EMAIL]" in first.chunks[0].redacted_text
     assert first.chunks[0].taint == {"raw_text_stripped": True}
     assert duplicate.skipped == 1
+
+
+def test_historical_import_skips_canonical_chunk_duplicates() -> None:
+    store = MemoryHistoricalImportStore()
+
+    async def run():
+        await store.upsert_sources(
+            workspace_key="dev-01",
+            sources=[
+                HistoricalSourceInput(
+                    source_kind="transcript",
+                    source_key="session.jsonl",
+                    fingerprint="sha256:session",
+                    parser_version="historical-import.v1",
+                    redaction_policy_version="redaction.v1",
+                )
+            ],
+        )
+        first = await store.record_chunks(
+            workspace_key="dev-01",
+            chunks=[
+                HistoricalChunkInput(
+                    source_kind="transcript",
+                    source_key="session.jsonl",
+                    fingerprint="sha256:session",
+                    item_key="session#0",
+                    chunk_index=0,
+                    redacted_text="same canonical chunk",
+                    parser_version="historical-import.v1",
+                    redaction_policy_version="redaction.v1",
+                    metadata={"chunking_policy_version": "historical-import-chunker.v1"},
+                )
+            ],
+        )
+        duplicate = await store.record_chunks(
+            workspace_key="dev-01",
+            chunks=[
+                HistoricalChunkInput(
+                    source_kind="transcript",
+                    source_key="session.jsonl",
+                    fingerprint="sha256:session",
+                    item_key="session#0",
+                    chunk_index=1,
+                    redacted_text="same canonical chunk",
+                    parser_version="historical-import.v1",
+                    redaction_policy_version="redaction.v1",
+                    metadata={"chunking_policy_version": "historical-import-chunker.v1"},
+                )
+            ],
+        )
+        distinct_policy = await store.record_chunks(
+            workspace_key="dev-01",
+            chunks=[
+                HistoricalChunkInput(
+                    source_kind="transcript",
+                    source_key="session.jsonl",
+                    fingerprint="sha256:session",
+                    item_key="session#0",
+                    chunk_index=1,
+                    redacted_text="same canonical chunk",
+                    parser_version="historical-import.v1",
+                    redaction_policy_version="redaction.v1",
+                    metadata={"chunking_policy_version": "historical-import-chunker.v2"},
+                )
+            ],
+        )
+        return first, duplicate, distinct_policy
+
+    first, duplicate, distinct_policy = asyncio.run(run())
+    assert first.created == 1
+    assert duplicate.created == 0
+    assert duplicate.skipped == 1
+    assert distinct_policy.created == 1
+    assert distinct_policy.skipped == 0
 
 
 def test_historical_chunk_input_storage_redacts_secret_like_text() -> None:

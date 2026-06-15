@@ -602,6 +602,44 @@ class AsyncpgHistoricalImportStore(AsyncpgPoolOwner):
                 redacted_text = redact_text(chunk.redacted_text)
                 content_hash = sha256_text(redacted_text)
                 source_item_columns = _chunk_source_item_columns(chunk)
+                canonical_duplicate = await conn.fetchval(
+                    """
+                    SELECT 1
+                    FROM autoskill.historical_import_sources src
+                    JOIN autoskill.historical_source_items item
+                      ON item.workspace_id = src.workspace_id
+                     AND item.historical_source_id =
+                       autoskill.stable_historical_source_id(
+                         src.workspace_id,
+                         src.source_kind,
+                         src.source_key
+                       )
+                     AND item.item_key = $3
+                     AND item.parser_version = $4
+                     AND item.redaction_policy_version = $5
+                    JOIN autoskill.historical_chunks chunk
+                      ON chunk.workspace_id = src.workspace_id
+                     AND chunk.historical_source_item_id = item.historical_source_item_id
+                     AND chunk.redacted_hash = $6
+                     AND chunk.chunking_policy_version = COALESCE(
+                       NULLIF($7::jsonb->>'chunking_policy_version', ''),
+                       'historical-import-chunker.v1'
+                     )
+                    WHERE src.workspace_id = $1
+                      AND src.historical_import_source_id = $2
+                    LIMIT 1
+                    """,
+                    workspace_id,
+                    source["historical_import_source_id"],
+                    chunk.item_key,
+                    chunk.parser_version,
+                    chunk.redaction_policy_version,
+                    content_hash,
+                    json.dumps(chunk.metadata or {}),
+                )
+                if canonical_duplicate is not None:
+                    skipped += 1
+                    continue
                 row = await conn.fetchrow(
                     """
                     INSERT INTO autoskill.historical_import_chunks (
