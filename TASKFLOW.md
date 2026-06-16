@@ -40,8 +40,9 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   sidecar/autoskill/tests/test_candidates.py
   sidecar/autoskill/tests/test_evaluator.py -q -k 'probe'` (`5 passed, 46
   deselected`), touched-file Ruff, touched-file compileall, diff hygiene,
-  parent full `uv run pytest`, and conformance report. Next gate:
-  review/commit and CI confirmation.
+  parent full `uv run pytest`, conformance report, and GitHub Actions run
+  `27586323912` for commit `5f8f39f`. Next gate: continue the next narrow
+  production-hardening slice under TaskFlow/`codex-worker` authority.
 
 - 2026-06-15: Observatory `verify_audit_chain` actions now perform an actual
   content-safe audit-chain verification before acceptance when not a dry run.
