@@ -36,7 +36,9 @@ SOFT_THRESHOLD_FALLBACKS = {
     "intervention-required": [
         "assemble_richer_permitted_evidence",
         "generate_more_probes",
+        "try_ephemeral_candidate",
         "run_counterfactual_trial",
+        "canary_with_smaller_exposure",
         "no_op_reschedule",
     ],
 }

@@ -1015,7 +1015,7 @@ superseded
 external_readonly
 ```
 
-`ephemeral_candidate` is not visible to OpenClaw as a normal skill. It exists for temporary broker trials, probe generation, and evidence gathering. Promotion from `ephemeral_candidate` to `trial_candidate` requires clustered evidence, explicit current-user request, or a configured admin bootstrap policy. Admin bootstrap policy is configuration authority, not routine semantic adjudication. Promotion to `active` requires normal maturity, scanner, evaluator, context, provenance, and rollback gates.
+`ephemeral_candidate` is not visible to OpenClaw as a normal skill. It exists for temporary broker trials, probe generation, and evidence gathering. When hard invariants, scanner checks, regression probes, and adversarial probes pass but the proposal gate lacks skill-visible evidence for the no-skill control, SkillKernel gathers that evidence through limited reversible `ephemeral_candidate`, `trial_candidate`, or canary exposure rather than requiring impossible pre-existing skill-visible evidence. Promotion from `ephemeral_candidate` to `trial_candidate` requires clustered evidence, explicit current-user request, or a configured admin bootstrap policy. Admin bootstrap policy is configuration authority, not routine semantic adjudication. Promotion to `active` requires normal maturity, scanner, evaluator, context, provenance, and rollback gates.
 
 ##### 1.6.2 Topology labels to add to SkillIR
 
@@ -14264,8 +14264,8 @@ inspect evidence coverage
 → run verifier adjudication
 → generate additional probes
 → reduce operation scope
-→ try ephemeral candidate
-→ canary with smaller blast radius
+→ try ephemeral candidate for reversible skill-visible evidence
+→ canary with smaller blast radius for reversible skill-visible evidence
 → auto-reject or reschedule when evidence remains inadequate
 → escalate_admin only for hard authority boundaries or unresolved contradiction
 ```

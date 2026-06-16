@@ -20,6 +20,7 @@ AUTONOMOUS_REMEDIATION_ACTIONS = (
     "run_more_probes",
     "run_re_adjudication",
     "stage_ephemeral_candidate",
+    "stage_canary",
     "reduce_scope",
     "auto_reject",
     "no_op_reschedule",
@@ -426,6 +427,11 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                     probes=probes,
                 )
                 contrastive_replay_count += len(contrastive_replays)
+                selected_action = _trial_lane_action(
+                    result,
+                    selected_action=selected_action,
+                    scanner_status=str(row["scanner_status"] or ""),
+                )
                 remediation, attempt_count, threshold_deadlock = _remediation_patch(
                     result,
                     selected_action=selected_action,
@@ -464,6 +470,11 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                         conn,
                         workspace_id=row["workspace_id"],
                         skill_id=row["skill_id"],
+                    )
+                    await _mark_threshold_deadlock_trialing(
+                        conn,
+                        workspace_id=row["workspace_id"],
+                        skill_version_id=row["skill_version_id"],
                     )
                 if selected_action == "auto_reject":
                     updated_result.pop("autonomy_fallback", None)
@@ -696,21 +707,61 @@ async def _claim_fallback_remediation_evaluations(
           AND ev.status = 'needs_intervention'
           AND ev.result ? 'autonomy_fallback'
           AND ev.result #>> '{autonomy_fallback,selected_action}' = ANY($3::text[])
-          AND COALESCE(
-            ev.result #>> '{autonomy_remediation,status}',
-            ''
-          ) <> 'threshold_deadlock_candidate'
-          AND COALESCE(
-            (ev.result #>> '{autonomy_remediation,threshold_deadlock_candidate}')::boolean,
-            false
-          ) IS NOT true
-          AND NOT EXISTS (
-            SELECT 1
-            FROM autoskill.threshold_deadlock_findings tdf
-            WHERE tdf.workspace_id = ev.workspace_id
-              AND tdf.policy_kind = 'proposal_gate_acceptance_policy.v1'
-              AND tdf.status = 'open'
-              AND ev.skill_version_id = ANY(tdf.stalled_candidate_ids)
+          AND COALESCE(ev.result #>> '{autonomy_remediation,status}', '') NOT IN (
+            'ephemeral_candidate_staged',
+            'canary_staged',
+            'scope_reduction_recorded',
+            'auto_rejected'
+          )
+          AND (
+            (
+              COALESCE(ev.result #>> '{autonomy_remediation,status}', '')
+                <> 'threshold_deadlock_candidate'
+              AND COALESCE(
+                (
+                  ev.result #>>
+                    '{autonomy_remediation,threshold_deadlock_candidate}'
+                )::boolean,
+                false
+              ) IS NOT true
+              AND NOT EXISTS (
+                SELECT 1
+                FROM autoskill.threshold_deadlock_findings tdf
+                WHERE tdf.workspace_id = ev.workspace_id
+                  AND tdf.policy_kind = 'proposal_gate_acceptance_policy.v1'
+                  AND tdf.status = 'open'
+                  AND ev.skill_version_id = ANY(tdf.stalled_candidate_ids)
+              )
+            )
+            OR (
+              sv.scanner_status = 'passed'
+              AND ev.result #>> '{autonomy_fallback,selected_action}' = ANY($5::text[])
+              AND COALESCE(
+                jsonb_array_length(
+                  ev.result #> '{autonomy_assurance,hard_invariant_failures}'
+                ),
+                0
+              ) = 0
+              AND COALESCE(
+                (ev.result #>> '{autonomy_fallback,deterministic_checks,hard_invariants_passed}')::boolean,
+                true
+              ) IS true
+              AND (
+                COALESCE(ev.result -> 'reason_codes', '[]'::jsonb) ?| $6::text[]
+                OR COALESCE(
+                  ev.result #> '{autonomy_assurance,soft_threshold_misses}',
+                  '[]'::jsonb
+                ) ?| $6::text[]
+              )
+              AND jsonb_path_exists(
+                ev.result,
+                '$.probe_results[*] ? (@.kind == "no_skill_control" && @.status == "needs_intervention")'
+              )
+              AND NOT jsonb_path_exists(
+                ev.result,
+                '$.probe_results[*] ? (!((@.kind == "no_skill_control" && @.status == "needs_intervention") || ((@.kind == "target" || @.kind == "regression" || @.kind == "adversarial") && @.status == "passed")))'
+              )
+            )
           )
           AND s.lifecycle_state = ANY($4::text[])
           AND ($1::text IS NULL OR w.external_key = $1)
@@ -727,6 +778,13 @@ async def _claim_fallback_remediation_evaluations(
         limit,
         list(AUTONOMOUS_REMEDIATION_ACTIONS),
         list(PROPOSAL_GATE_LIFECYCLE_STATES),
+        [
+            "collect_more_evidence",
+            "run_more_probes",
+            "run_re_adjudication",
+            "no_op_reschedule",
+        ],
+        ["intervention-required", "no_skill_control-evidence-insufficient"],
     )
 
 
@@ -1046,6 +1104,27 @@ async def _mark_threshold_deadlock_status(
         )
 
 
+async def _mark_threshold_deadlock_trialing(
+    conn: asyncpg.Connection,
+    *,
+    workspace_id: UUID,
+    skill_version_id: UUID,
+) -> None:
+    await conn.execute(
+        """
+        UPDATE autoskill.threshold_deadlock_findings
+        SET status = 'trialing_policy',
+            resolved_at = now()
+        WHERE workspace_id = $1
+          AND policy_kind = 'proposal_gate_acceptance_policy.v1'
+          AND status = 'open'
+          AND $2 = ANY(stalled_candidate_ids)
+        """,
+        workspace_id,
+        skill_version_id,
+    )
+
+
 def _remediation_patch(
     result: dict[str, Any],
     *,
@@ -1072,6 +1151,8 @@ def _remediation_patch(
         attempted.append("run_llm_re_adjudication")
     if selected_action == "stage_ephemeral_candidate":
         attempted.append("stage_ephemeral_candidate")
+    if selected_action == "stage_canary":
+        attempted.append("stage_canary_with_smaller_blast_radius")
     if selected_action == "reduce_scope":
         attempted.append("record_scope_reduction_required")
     if selected_action == "auto_reject":
@@ -1089,6 +1170,8 @@ def _remediation_patch(
         status = "rescheduled_for_re_adjudication"
     elif selected_action == "stage_ephemeral_candidate":
         status = "ephemeral_candidate_staged"
+    elif selected_action == "stage_canary":
+        status = "canary_staged"
     elif selected_action == "reduce_scope":
         status = "scope_reduction_recorded"
     elif selected_action == "auto_reject":
@@ -1099,7 +1182,7 @@ def _remediation_patch(
         "hard_invariant_failures"
     )
     threshold_deadlock = (
-        selected_action != "auto_reject"
+        selected_action not in {"auto_reject", "stage_ephemeral_candidate", "stage_canary"}
         and not contrastive_replays
         and not supplemental_probe_hashes
         and attempt_count >= 3
@@ -1142,6 +1225,65 @@ def _remediation_patch(
         attempt_count,
         threshold_deadlock,
     )
+
+
+def _trial_lane_action(
+    result: dict[str, Any],
+    *,
+    selected_action: str,
+    scanner_status: str,
+) -> str:
+    """Route eligible no-skill-control stalls into reversible evidence gathering."""
+
+    if selected_action in {"stage_ephemeral_candidate", "stage_canary", "auto_reject"}:
+        return selected_action
+    if selected_action not in {
+        "collect_more_evidence",
+        "run_more_probes",
+        "run_re_adjudication",
+        "no_op_reschedule",
+    }:
+        return selected_action
+    if not _eligible_for_trial_lane(result, scanner_status=scanner_status):
+        return selected_action
+    return "stage_ephemeral_candidate"
+
+
+def _eligible_for_trial_lane(result: dict[str, Any], *, scanner_status: str) -> bool:
+    if scanner_status != "passed":
+        return False
+    assurance = _json_dict(result.get("autonomy_assurance"))
+    if assurance.get("hard_invariant_failures"):
+        return False
+    deterministic = _json_dict(_json_dict(result.get("autonomy_fallback")).get(
+        "deterministic_checks"
+    ))
+    if deterministic and deterministic.get("hard_invariants_passed") is False:
+        return False
+    reason_codes = {str(code) for code in result.get("reason_codes") or []}
+    soft_misses = {
+        str(code) for code in assurance.get("soft_threshold_misses") or []
+    }
+    if not ({"intervention-required", "no_skill_control-evidence-insufficient"} & (
+        reason_codes | soft_misses
+    )):
+        return False
+    probe_results = [
+        probe for probe in result.get("probe_results") or [] if isinstance(probe, dict)
+    ]
+    if not probe_results:
+        return False
+    has_no_skill_intervention = False
+    for probe in probe_results:
+        kind = str(probe.get("kind") or "")
+        status = str(probe.get("status") or "")
+        if kind == "no_skill_control" and status == "needs_intervention":
+            has_no_skill_intervention = True
+            continue
+        if kind in {"target", "regression", "adversarial"} and status == "passed":
+            continue
+        return False
+    return has_no_skill_intervention
 
 
 def _reason_codes_for_deadlock(result: dict[str, Any]) -> list[str]:

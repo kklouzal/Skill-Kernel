@@ -36,6 +36,7 @@ ACTION_ALIASES = {
     "create_ephemeral_candidate": "stage_ephemeral_candidate",
     "decompose_candidate": "reduce_scope",
     "ephemeral_candidate": "stage_ephemeral_candidate",
+    "try_ephemeral_candidate": "stage_ephemeral_candidate",
     "auto_reject_with_reason": "auto_reject",
     "re_adjudicate": "run_re_adjudication",
     "run_llm_re_adjudication": "run_re_adjudication",
