@@ -304,11 +304,17 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                     skill_ir=_json_dict(row["skill_ir"]),
                     scanner_status=row["scanner_status"],
                     probes=probes,
+                    executor_profile_id=row["executor_profile_id"],
                 )
                 result = {
                     **_json_dict(row["result"]),
                     **gate.to_json(),
                     "executor": "deterministic-proposal-gate.v1",
+                    "executor_profile_id": (
+                        str(row["executor_profile_id"])
+                        if row["executor_profile_id"]
+                        else None
+                    ),
                     "workspace_key": row["workspace_key"],
                     "skill_id": str(row["skill_id"]),
                     "evidence_ids": _probe_evidence_ids(probes),

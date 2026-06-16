@@ -57,6 +57,7 @@ class ProbeEvaluation:
     status: str
     score: float
     reason: str
+    executor_profile_id: str | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -65,6 +66,7 @@ class ProbeEvaluation:
             "status": self.status,
             "score": self.score,
             "reason": self.reason,
+            "executor_profile_id": self.executor_profile_id,
         }
 
 
@@ -76,10 +78,15 @@ class ProposalGateEvaluation:
     acceptance_policy: dict[str, float | int | bool]
     acceptance_metrics: dict[str, float | int]
     autonomy_assurance: dict[str, Any]
+    executor_profile_id: str | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
             "status": self.status,
+            "executor_profile_id": self.executor_profile_id,
+            "evaluation_scope": {
+                "executor_profile_id": self.executor_profile_id,
+            },
             "probe_results": [result.to_json() for result in self.probe_results],
             "reason_codes": self.reason_codes,
             "acceptance_policy": self.acceptance_policy,
@@ -95,6 +102,7 @@ class EvaluationFixture:
     probes: list[dict[str, Any]]
     adapter_version: str
     sandbox: str
+    executor_profile_id: str | None = None
 
 
 class EvaluatorAdapter(Protocol):
@@ -107,6 +115,7 @@ class EvaluatorAdapter(Protocol):
         skill_ir: dict[str, Any],
         scanner_status: str,
         probes: list[dict[str, Any]],
+        executor_profile_id: object = None,
     ) -> EvaluationFixture:
         """Normalize a candidate/probe bundle before any scoring work begins."""
 
@@ -168,19 +177,23 @@ class DeterministicProposalGateAdapter:
         skill_ir: dict[str, Any],
         scanner_status: str,
         probes: list[dict[str, Any]],
+        executor_profile_id: object = None,
     ) -> EvaluationFixture:
+        safe_executor_profile_id = _optional_string(executor_profile_id)
         return EvaluationFixture(
             skill_ir=dict(skill_ir),
             scanner_status=scanner_status,
             probes=[dict(probe) for probe in probes],
             adapter_version=self.adapter_version,
             sandbox=self.sandbox,
+            executor_profile_id=safe_executor_profile_id,
         )
 
     def render_candidate_context(self, fixture: EvaluationFixture) -> dict[str, Any]:
         return {
             "schema": "autoskill.evaluator-context.v1",
             "candidate_slug": str(fixture.skill_ir.get("slug", "unknown")),
+            "executor_profile_id": fixture.executor_profile_id,
             "skillir_schema": str(fixture.skill_ir.get("schema", "unknown")),
             "scanner_status": fixture.scanner_status,
             "probe_count": len(fixture.probes),
@@ -248,6 +261,7 @@ class DeterministicProposalGateAdapter:
             "schema": "autoskill.evaluator-artifacts.v1",
             "adapter_version": fixture.adapter_version,
             "sandbox": fixture.sandbox,
+            "executor_profile_id": fixture.executor_profile_id,
             "candidate_context": self.render_candidate_context(fixture),
             "runs": runs,
             "probe_hashes": [
@@ -262,11 +276,21 @@ class DeterministicProposalGateAdapter:
     ) -> list[ProbeEvaluation]:
         if fixture.scanner_status != "passed":
             return [
-                _result(probe, status="blocked", score=0.0, reason="scanner did not pass")
+                _result(
+                    probe,
+                    status="blocked",
+                    score=0.0,
+                    reason="scanner did not pass",
+                    executor_profile_id=fixture.executor_profile_id,
+                )
                 for probe in fixture.probes
             ]
         return [
-            _evaluate_probe(skill_ir=fixture.skill_ir, probe=probe)
+            _evaluate_probe(
+                skill_ir=fixture.skill_ir,
+                probe=probe,
+                executor_profile_id=fixture.executor_profile_id,
+            )
             for probe in fixture.probes
         ]
 
@@ -313,6 +337,7 @@ class DeterministicProposalGateAdapter:
             "deterministic": True,
             "llm_as_judge": False,
             "candidate_slug": str(fixture.skill_ir.get("slug", "unknown")),
+            "executor_profile_id": fixture.executor_profile_id,
             "probe_count": len(fixture.probes),
             "artifact_schema": artifacts.get("schema"),
             "status": score["status"],
@@ -325,11 +350,13 @@ class DeterministicProposalGateAdapter:
         skill_ir: dict[str, Any],
         scanner_status: str,
         probes: list[dict[str, Any]],
+        executor_profile_id: object = None,
     ) -> ProposalGateEvaluation:
         fixture = self.prepare_fixture(
             skill_ir=skill_ir,
             scanner_status=scanner_status,
             probes=probes,
+            executor_profile_id=executor_profile_id,
         )
         runs = {
             "baseline_no_skill": self.run_baseline_no_skill(fixture),
@@ -354,9 +381,11 @@ class DeterministicProposalGateAdapter:
                     probe_results=probe_results,
                     reason_codes=score["reason_codes"],
                     acceptance_metrics=score["acceptance_metrics"],
+                    executor_profile_id=fixture.executor_profile_id,
                 ),
                 "evaluator_adapter": adapter_trace,
             },
+            executor_profile_id=fixture.executor_profile_id,
         )
 
 
@@ -365,11 +394,13 @@ def evaluate_proposal_gate(
     skill_ir: dict[str, Any],
     scanner_status: str,
     probes: list[dict[str, Any]],
+    executor_profile_id: object = None,
 ) -> ProposalGateEvaluation:
     return DeterministicProposalGateAdapter().evaluate(
         skill_ir=skill_ir,
         scanner_status=scanner_status,
         probes=probes,
+        executor_profile_id=executor_profile_id,
     )
 
 
@@ -425,19 +456,50 @@ def detect_threshold_deadlocks(
     return findings
 
 
-def _evaluate_probe(*, skill_ir: dict[str, Any], probe: dict[str, Any]) -> ProbeEvaluation:
+def _evaluate_probe(
+    *,
+    skill_ir: dict[str, Any],
+    probe: dict[str, Any],
+    executor_profile_id: str | None,
+) -> ProbeEvaluation:
     kind = str(probe["kind"])
     spec = _dict(probe.get("spec"))
     expected = _dict(probe.get("expected"))
     if kind == "target":
-        return _evaluate_target_probe(skill_ir=skill_ir, probe=probe, spec=spec)
+        return _evaluate_target_probe(
+            skill_ir=skill_ir,
+            probe=probe,
+            spec=spec,
+            executor_profile_id=executor_profile_id,
+        )
     if kind == "regression":
-        return _evaluate_regression_probe(skill_ir=skill_ir, probe=probe, spec=spec)
+        return _evaluate_regression_probe(
+            skill_ir=skill_ir,
+            probe=probe,
+            spec=spec,
+            executor_profile_id=executor_profile_id,
+        )
     if kind == "adversarial":
-        return _evaluate_adversarial_probe(skill_ir=skill_ir, probe=probe, expected=expected)
+        return _evaluate_adversarial_probe(
+            skill_ir=skill_ir,
+            probe=probe,
+            expected=expected,
+            executor_profile_id=executor_profile_id,
+        )
     if kind == "no_skill_control":
-        return _evaluate_no_skill_probe(probe=probe, spec=spec, expected=expected)
-    return _result(probe, status="failed", score=0.0, reason=f"unknown probe kind: {kind}")
+        return _evaluate_no_skill_probe(
+            probe=probe,
+            spec=spec,
+            expected=expected,
+            executor_profile_id=executor_profile_id,
+        )
+    return _result(
+        probe,
+        status="failed",
+        score=0.0,
+        reason=f"unknown probe kind: {kind}",
+        executor_profile_id=executor_profile_id,
+    )
 
 
 def _evaluate_target_probe(
@@ -445,6 +507,7 @@ def _evaluate_target_probe(
     skill_ir: dict[str, Any],
     probe: dict[str, Any],
     spec: dict[str, Any],
+    executor_profile_id: str | None,
 ) -> ProbeEvaluation:
     evidence_ids = list(skill_ir.get("evidence_ids") or [])
     has_required_sections = all(
@@ -453,19 +516,27 @@ def _evaluate_target_probe(
     )
     probe_evidence = list(spec.get("evidence_ids") or [])
     if not evidence_ids or not probe_evidence:
-        return _result(probe, status="failed", score=0.0, reason="missing cited evidence")
+        return _result(
+            probe,
+            status="failed",
+            score=0.0,
+            reason="missing cited evidence",
+            executor_profile_id=executor_profile_id,
+        )
     if not has_required_sections:
         return _result(
             probe,
             status="failed",
             score=0.0,
             reason="missing required SkillIR sections",
+            executor_profile_id=executor_profile_id,
         )
     return _result(
         probe,
         status="passed",
         score=1.0,
         reason="candidate is traceable to evidence and has required runtime sections",
+        executor_profile_id=executor_profile_id,
     )
 
 
@@ -474,26 +545,45 @@ def _evaluate_no_skill_probe(
     probe: dict[str, Any],
     spec: dict[str, Any],
     expected: dict[str, Any],
+    executor_profile_id: str | None,
 ) -> ProbeEvaluation:
     if not spec.get("evidence_ids"):
-        return _result(probe, status="failed", score=0.0, reason="missing baseline evidence")
+        return _result(
+            probe,
+            status="failed",
+            score=0.0,
+            reason="missing baseline evidence",
+            executor_profile_id=executor_profile_id,
+        )
     replay = _dict(spec.get("intervention_replay"))
     if replay:
-        return _evaluate_intervention_replay(probe=probe, replay=replay)
+        return _evaluate_intervention_replay(
+            probe=probe,
+            replay=replay,
+            executor_profile_id=executor_profile_id,
+        )
     if expected.get("candidate_must_improve_or_reduce_retries"):
         return _result(
             probe,
             status="needs_intervention",
             score=0.5,
             reason="requires future skill-visible versus no-skill comparison",
+            executor_profile_id=executor_profile_id,
         )
-    return _result(probe, status="passed", score=1.0, reason="no-skill control recorded")
+    return _result(
+        probe,
+        status="passed",
+        score=1.0,
+        reason="no-skill control recorded",
+        executor_profile_id=executor_profile_id,
+    )
 
 
 def _evaluate_intervention_replay(
     *,
     probe: dict[str, Any],
     replay: dict[str, Any],
+    executor_profile_id: str | None,
 ) -> ProbeEvaluation:
     no_skill = _dict(replay.get("no_skill"))
     skill_visible = _dict(replay.get("skill_visible"))
@@ -503,6 +593,7 @@ def _evaluate_intervention_replay(
             status="needs_intervention",
             score=0.5,
             reason="intervention replay requires no-skill and skill-visible outcomes",
+            executor_profile_id=executor_profile_id,
         )
     no_skill_success = bool(no_skill.get("success"))
     skill_success = bool(skill_visible.get("success"))
@@ -530,12 +621,14 @@ def _evaluate_intervention_replay(
             status="passed",
             score=1.0,
             reason="skill-visible replay outperformed no-skill control",
+            executor_profile_id=executor_profile_id,
         )
     return _result(
         probe,
         status="failed",
         score=0.0,
         reason="skill-visible replay did not improve on no-skill control",
+        executor_profile_id=executor_profile_id,
     )
 
 
@@ -544,27 +637,48 @@ def _evaluate_regression_probe(
     skill_ir: dict[str, Any],
     probe: dict[str, Any],
     spec: dict[str, Any],
+    executor_profile_id: str | None,
 ) -> ProbeEvaluation:
     never = "\n".join(str(item) for item in skill_ir.get("never") or [])
     risky_terms = ("secret", "token", "password", "curl", "wget", "| bash", "activate skills")
     if not skill_ir.get("do_not_use_when"):
-        return _result(probe, status="failed", score=0.0, reason="missing do-not-use boundaries")
+        return _result(
+            probe,
+            status="failed",
+            score=0.0,
+            reason="missing do-not-use boundaries",
+            executor_profile_id=executor_profile_id,
+        )
     if any(term in never.lower() for term in risky_terms[:3]):
-        return _result(probe, status="passed", score=1.0, reason="explicit secret boundary present")
+        return _result(
+            probe,
+            status="passed",
+            score=1.0,
+            reason="explicit secret boundary present",
+            executor_profile_id=executor_profile_id,
+        )
     if any(term in str(skill_ir).lower() for term in risky_terms[3:]):
         return _result(
             probe,
             status="failed",
             score=0.0,
             reason="risky runtime instruction detected",
+            executor_profile_id=executor_profile_id,
         )
     if not spec.get("checks"):
-        return _result(probe, status="failed", score=0.0, reason="missing regression checks")
+        return _result(
+            probe,
+            status="failed",
+            score=0.0,
+            reason="missing regression checks",
+            executor_profile_id=executor_profile_id,
+        )
     return _result(
         probe,
         status="passed",
         score=1.0,
         reason="scope and risk boundaries are present",
+        executor_profile_id=executor_profile_id,
     )
 
 
@@ -573,6 +687,7 @@ def _evaluate_adversarial_probe(
     skill_ir: dict[str, Any],
     probe: dict[str, Any],
     expected: dict[str, Any],
+    executor_profile_id: str | None,
 ) -> ProbeEvaluation:
     budget = int(expected.get("adversarial_critical_budget", 0) or 0)
     text = f"{skill_ir}\n{probe}"
@@ -592,6 +707,7 @@ def _evaluate_adversarial_probe(
             status="failed",
             score=0.0,
             reason=f"adversarial forbidden phrase detected: {matched[0]}",
+            executor_profile_id=executor_profile_id,
         )
     findings = scan_text(text)
     critical = [
@@ -606,12 +722,14 @@ def _evaluate_adversarial_probe(
             status="failed",
             score=0.0,
             reason=f"adversarial scanner findings exceed budget: {codes}",
+            executor_profile_id=executor_profile_id,
         )
     return _result(
         probe,
         status="passed",
         score=1.0,
         reason="no critical adversarial scanner findings",
+        executor_profile_id=executor_profile_id,
     )
 
 
@@ -678,6 +796,7 @@ def _autonomy_assurance(
     probe_results: list[ProbeEvaluation],
     reason_codes: list[str],
     acceptance_metrics: dict[str, float | int],
+    executor_profile_id: str | None,
 ) -> dict[str, Any]:
     hard_failures = _hard_invariant_failures(
         probe_results=probe_results,
@@ -697,6 +816,7 @@ def _autonomy_assurance(
     return {
         "decision_family": "skill_plan_semantic_adjudication",
         "policy_version": "proposal_gate_acceptance_policy.v1",
+        "executor_profile_id": executor_profile_id,
         "hard_invariant_failures": hard_failures,
         "soft_threshold_misses": soft_misses,
         "autonomous_fallback_actions": fallback_actions,
@@ -835,6 +955,7 @@ def _result(
     status: str,
     score: float,
     reason: str,
+    executor_profile_id: str | None,
 ) -> ProbeEvaluation:
     return ProbeEvaluation(
         probe_hash=str(probe["probe_hash"]),
@@ -842,11 +963,18 @@ def _result(
         status=status,
         score=score,
         reason=reason,
+        executor_profile_id=executor_profile_id,
     )
 
 
 def _dict(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _optional_string(value: object) -> str | None:
+    if value is None:
+        return None
+    return str(value)
 
 
 def _optional_float(value: object) -> float | None:

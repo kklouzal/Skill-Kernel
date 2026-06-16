@@ -9,6 +9,7 @@ import autoskill.db.evaluations as evaluations_db
 from autoskill.api.app import EvaluationRunRequest, create_app
 from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.evaluations import (
+    AsyncpgEvaluationStore,
     EvaluationFallbackRemediationResult,
     EvaluationReviewRecord,
     EvaluationRunItem,
@@ -166,6 +167,47 @@ def test_evaluator_adapter_exposes_stable_benchmark_interface() -> None:
     assert score["status"] == "passed"
     assert trace["deterministic"] is True
     assert trace["llm_as_judge"] is False
+
+
+def test_proposal_gate_scopes_probe_results_and_trace_to_executor_profile() -> None:
+    executor_profile_id = uuid4()
+
+    result = evaluate_proposal_gate(
+        skill_ir=skill_ir(),
+        scanner_status="passed",
+        probes=replayed_probes(),
+        executor_profile_id=executor_profile_id,
+    )
+
+    payload = result.to_json()
+
+    assert payload["executor_profile_id"] == str(executor_profile_id)
+    assert payload["evaluation_scope"] == {
+        "executor_profile_id": str(executor_profile_id)
+    }
+    assert {
+        probe["executor_profile_id"] for probe in payload["probe_results"]
+    } == {str(executor_profile_id)}
+    assurance = payload["autonomy_assurance"]
+    assert assurance["executor_profile_id"] == str(executor_profile_id)
+    trace = assurance["evaluator_adapter"]
+    assert trace["executor_profile_id"] == str(executor_profile_id)
+
+    adapter = DeterministicProposalGateAdapter()
+    fixture = adapter.prepare_fixture(
+        skill_ir=skill_ir(),
+        scanner_status="passed",
+        probes=replayed_probes(),
+        executor_profile_id=executor_profile_id,
+    )
+    artifacts = adapter.collect_artifacts(
+        fixture,
+        {"candidate_skill": adapter.run_candidate_skill(fixture)},
+    )
+    assert artifacts["executor_profile_id"] == str(executor_profile_id)
+    assert artifacts["candidate_context"]["executor_profile_id"] == str(
+        executor_profile_id
+    )
 
 
 def test_proposal_gate_passes_with_intervention_replay_improvement() -> None:
@@ -1206,6 +1248,90 @@ def test_evaluation_finish_records_executor_profile_compatibility() -> None:
     assert compatibility["evidence"]["evaluation_id"] == str(evaluation_id)
     assert compatibility["evidence"]["reason_codes"] == ["intervention-required"]
     assert compatibility["evidence"]["trace_id"] == str(trace_id)
+
+
+def test_asyncpg_pending_gate_passes_row_executor_profile_into_result(monkeypatch) -> None:
+    class FakeAcquire:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, _exc_type, _exc, _tb):
+            return None
+
+        def transaction(self):
+            return self
+
+    class FakePool:
+        def acquire(self):
+            return FakeAcquire()
+
+    workspace_id = uuid4()
+    evaluation_id = uuid4()
+    skill_id = uuid4()
+    skill_version_id = uuid4()
+    executor_profile_id = uuid4()
+    finished: list[dict[str, object]] = []
+    row = {
+        "workspace_id": workspace_id,
+        "evaluation_id": evaluation_id,
+        "skill_id": skill_id,
+        "skill_version_id": skill_version_id,
+        "executor_profile_id": executor_profile_id,
+        "result": {},
+        "workspace_key": "dev-01",
+        "skill_ir": skill_ir(),
+        "scanner_status": "passed",
+    }
+
+    async def fake_claim(_conn, *, workspace_key, limit):
+        assert workspace_key == "dev-01"
+        assert limit == 1
+        return [row]
+
+    async def fake_load_probes(_conn, claimed_row):
+        assert claimed_row is row
+        return replayed_probes()
+
+    async def fake_attach(_conn, *, workspace_id, probes):
+        assert workspace_id == row["workspace_id"]
+        return probes, []
+
+    async def fake_finish(_conn, **kwargs):
+        finished.append(kwargs)
+
+    async def fake_get_pool():
+        return FakePool()
+
+    store = AsyncpgEvaluationStore("postgresql://unused")
+    monkeypatch.setattr(store, "_get_pool", fake_get_pool)
+    monkeypatch.setattr(evaluations_db, "_claim_planned_evaluations", fake_claim)
+    monkeypatch.setattr(evaluations_db, "_load_probes", fake_load_probes)
+    monkeypatch.setattr(evaluations_db, "_attach_contrastive_replays", fake_attach)
+    monkeypatch.setattr(evaluations_db, "_finish_evaluation", fake_finish)
+
+    async def run() -> EvaluationRunResult:
+        return await store.run_pending_proposal_gates(workspace_key="dev-01", limit=1)
+
+    run_result = asyncio.run(run())
+
+    assert run_result.evaluated == 1
+    item = run_result.evaluations[0]
+    assert item.executor_profile_id == executor_profile_id
+    assert item.result["executor_profile_id"] == str(executor_profile_id)
+    assert item.result["evaluation_scope"] == {
+        "executor_profile_id": str(executor_profile_id)
+    }
+    assert {
+        probe["executor_profile_id"] for probe in item.result["probe_results"]
+    } == {str(executor_profile_id)}
+    assert item.result["autonomy_assurance"]["executor_profile_id"] == str(
+        executor_profile_id
+    )
+    assert item.result["autonomy_assurance"]["evaluator_adapter"][
+        "executor_profile_id"
+    ] == str(executor_profile_id)
+    assert finished[0]["executor_profile_id"] == executor_profile_id
+    assert finished[0]["result"]["executor_profile_id"] == str(executor_profile_id)
 
 
 def test_fallback_remediation_records_threshold_deadlock_after_repeated_waits() -> None:

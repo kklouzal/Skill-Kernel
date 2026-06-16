@@ -1,5 +1,17 @@
 # SkillKernel Implementation Plan
 
+2026-06-16 update: proposal-gate evaluation results now make executor-profile
+scope explicit without breaking callers that do not have a profile. The
+deterministic evaluator threads optional `executor_profile_id` through its
+fixture, per-probe JSON, evaluator-level `evaluation_scope`, adapter
+context/artifacts/trace, and autonomy assurance. The asyncpg evaluation runner
+passes the row `executor_profile_id` into the gate and stores the same safe
+string scope in the result before preserving existing compatibility recording.
+This advances unified Sections 23.6 and 2.14. Validation passed with focused
+executor/profile proposal-gate pytest coverage, touched-file Ruff, touched-file
+compileall, diff hygiene, parent full `uv run pytest`, and conformance report.
+Next: review/commit and CI confirmation.
+
 2026-06-16 update: generated candidate probes now fail closed before they can
 become proposal-gate evaluation material. Candidate persistence and fallback
 `run_more_probes` expansion both honor `ProbePlan.ok`, skip generated probes

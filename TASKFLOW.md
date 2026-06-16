@@ -16,6 +16,18 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-16: Proposal-gate evaluation now carries optional executor-profile
+  scope through the deterministic evaluator fixture, per-probe result JSON,
+  evaluator-level `evaluation_scope`, adapter context/artifacts/trace, and
+  autonomy assurance while preserving `None` for legacy callers. The asyncpg
+  planned-evaluation path passes `evaluations.executor_profile_id` into
+  `evaluate_proposal_gate`, so stored proposal-gate results align with later
+  skill-profile compatibility recording. This advances unified Sections 23.6
+  and 2.14 for executor-profile-aware evaluation. Focused validation passed
+  with executor/profile proposal-gate pytest coverage, touched-file Ruff,
+  touched-file compileall, diff hygiene, parent full `uv run pytest`, and
+  conformance report. Next gate: review/commit and CI confirmation.
+
 - 2026-06-16: Generated candidate probes now honor the Section 23.4 / Part V
   assurance that probes are scanned before becoming evaluation material.
   Candidate persistence and fallback `run_more_probes` expansion skip
