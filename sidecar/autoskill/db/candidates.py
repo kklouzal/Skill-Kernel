@@ -14,6 +14,7 @@ from autoskill.core.hashing import sha256_text
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.db.workspaces import ensure_workspace
 from autoskill.services.candidates import CandidateSkillProposal
+from autoskill.services.probes import probe_scan_envelope
 
 DEFAULT_MAX_CONTEXT_TOKENS = 1200
 
@@ -662,6 +663,8 @@ async def _persist_probe_plan(
 ) -> list[str]:
     probe_hashes: list[str] = []
     for probe in proposal.probe_plan:
+        if not probe.ok:
+            continue
         probe_hashes.append(probe.probe_hash)
         spec = {
             **probe.spec,
@@ -736,7 +739,20 @@ async def _persist_evaluation_gate(
     probe_hashes: list[str],
     scanner_status: str,
 ) -> str:
-    status = "blocked" if scanner_status != "passed" else "planned"
+    probe_scan_envelopes = [probe_scan_envelope(probe) for probe in proposal.probe_plan]
+    blocked_probe_scans = [
+        envelope for envelope in probe_scan_envelopes if envelope["status"] == "blocked"
+    ]
+    status = (
+        "blocked"
+        if scanner_status != "passed" or blocked_probe_scans
+        else "planned"
+    )
+    reason_codes = []
+    if scanner_status != "passed":
+        reason_codes.append("scanner-blocked")
+    if blocked_probe_scans:
+        reason_codes.append("probe-scanner-blocked")
     await conn.execute(
         """
         INSERT INTO autoskill.evaluations (
@@ -765,6 +781,9 @@ async def _persist_evaluation_gate(
                 "required_gates": ["target", "no_skill_control", "regression", "adversarial"],
                 "probe_hashes": probe_hashes,
                 "scanner_status": scanner_status,
+                "probe_scan_envelope": probe_scan_envelopes,
+                "blocked_probe_scans": blocked_probe_scans,
+                "reason_codes": reason_codes,
                 "proposal_metadata": proposal.metadata,
             }
         ),

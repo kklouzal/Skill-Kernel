@@ -13,7 +13,7 @@ from autoskill.core.skillir import SkillIR
 from autoskill.db.pool import AsyncpgPoolOwner
 from autoskill.services.contrastive import derive_contrastive_replay
 from autoskill.services.evaluator import evaluate_proposal_gate
-from autoskill.services.probes import plan_candidate_probes
+from autoskill.services.probes import plan_candidate_probes, probe_scan_envelope
 
 AUTONOMOUS_REMEDIATION_ACTIONS = (
     "collect_more_evidence",
@@ -93,6 +93,12 @@ class EvaluationFallbackRemediationResult:
             "threshold_deadlocks": self.threshold_deadlocks,
             "remediations": self.remediations,
         }
+
+
+@dataclass(frozen=True)
+class MissingProbeUpsertResult:
+    added_probe_hashes: list[str]
+    blocked_probe_scans: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -410,8 +416,9 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                 selected_action = str(fallback.get("selected_action") or "")
                 probes = await _load_probes(conn, row)
                 supplemental_probe_hashes: list[str] = []
+                blocked_probe_scans: list[dict[str, Any]] = []
                 if selected_action == "run_more_probes":
-                    supplemental_probe_hashes = await _upsert_missing_candidate_probes(
+                    supplemental_probe_upsert = await _upsert_missing_candidate_probes(
                         conn,
                         workspace_id=row["workspace_id"],
                         skill_version_id=row["skill_version_id"],
@@ -421,6 +428,10 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                             for probe_hash in result.get("probe_hashes", [])
                         ],
                     )
+                    supplemental_probe_hashes = (
+                        supplemental_probe_upsert.added_probe_hashes
+                    )
+                    blocked_probe_scans = supplemental_probe_upsert.blocked_probe_scans
                 _enriched, contrastive_replays = await _attach_contrastive_replays(
                     conn,
                     workspace_id=row["workspace_id"],
@@ -437,6 +448,7 @@ class AsyncpgEvaluationStore(AsyncpgPoolOwner):
                     selected_action=selected_action,
                     contrastive_replays=contrastive_replays,
                     supplemental_probe_hashes=supplemental_probe_hashes,
+                    blocked_probe_scans=blocked_probe_scans,
                     trace_id=trace_id,
                     span_id=span_id,
                     parent_span_id=parent_span_id,
@@ -795,15 +807,19 @@ async def _upsert_missing_candidate_probes(
     skill_version_id: UUID,
     skill_ir: dict[str, Any],
     current_probe_hashes: list[str],
-) -> list[str]:
+) -> MissingProbeUpsertResult:
     try:
         skill = SkillIR.model_validate(skill_ir)
     except Exception:
-        return []
+        return MissingProbeUpsertResult(added_probe_hashes=[], blocked_probe_scans=[])
     current = {str(probe_hash) for probe_hash in current_probe_hashes}
     added: list[str] = []
+    blocked_probe_scans: list[dict[str, Any]] = []
     for probe in plan_candidate_probes(skill):
         if probe.probe_hash in current:
+            continue
+        if not probe.ok:
+            blocked_probe_scans.append(probe_scan_envelope(probe))
             continue
         spec = {
             **probe.spec,
@@ -828,7 +844,10 @@ async def _upsert_missing_candidate_probes(
             _json(probe.expected),
         )
         added.append(probe.probe_hash)
-    return added
+    return MissingProbeUpsertResult(
+        added_probe_hashes=added,
+        blocked_probe_scans=blocked_probe_scans,
+    )
 
 
 async def _stage_ephemeral_candidate(
@@ -1134,8 +1153,10 @@ def _remediation_patch(
     trace_id: UUID | None,
     span_id: UUID | None,
     parent_span_id: UUID | None,
+    blocked_probe_scans: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], int, bool]:
     supplemental_probe_hashes = supplemental_probe_hashes or []
+    blocked_probe_scans = blocked_probe_scans or []
     previous = _json_dict(result.get("autonomy_remediation"))
     previous_attempts = _json_list(previous.get("attempts"))
     attempt_count = int(previous.get("attempt_count") or 0) + 1
@@ -1147,6 +1168,8 @@ def _remediation_patch(
         attempted.append("generate_additional_probe_plan")
     if supplemental_probe_hashes:
         attempted.append("persist_missing_candidate_probes")
+    if blocked_probe_scans:
+        attempted.append("blocked_generated_probe_scanner_findings")
     if selected_action == "run_re_adjudication":
         attempted.append("run_llm_re_adjudication")
     if selected_action == "stage_ephemeral_candidate":
@@ -1202,6 +1225,7 @@ def _remediation_patch(
         "attempted_autonomous_remedies": attempted,
         "contrastive_replays": len(contrastive_replays),
         "supplemental_probe_hashes": supplemental_probe_hashes,
+        "blocked_probe_scans": blocked_probe_scans,
         "updated_at": datetime.now(UTC).isoformat(),
         "trace_id": str(trace_id) if trace_id else None,
         "span_id": str(span_id) if span_id else None,
@@ -1217,6 +1241,10 @@ def _remediation_patch(
             "attempted_autonomous_remedies": attempted,
             "contrastive_replays": contrastive_replays,
             "supplemental_probe_hashes": supplemental_probe_hashes,
+            "blocked_probe_scans": blocked_probe_scans,
+            "reason_codes": (
+                ["probe-scanner-blocked"] if blocked_probe_scans else []
+            ),
             "threshold_deadlock_candidate": threshold_deadlock,
             "recommended_action": recommended_action,
             "attempts": [*previous_attempts[-9:], attempt],

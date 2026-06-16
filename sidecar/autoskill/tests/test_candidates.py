@@ -1,4 +1,6 @@
 import asyncio
+import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -7,10 +9,13 @@ from autoskill.db.candidates import (
     CandidatePersistResult,
     CandidateReviewRecord,
     NullCandidateStore,
+    _persist_evaluation_gate,
+    _persist_probe_plan,
 )
 from autoskill.db.retrieval import RetrievalCandidate
 from autoskill.services.candidates import propose_candidate_skills
 from autoskill.services.opportunity import mine_opportunities
+from autoskill.services.probes import ProbePlan
 from autoskill.tests.test_opportunity import (
     MemoryOpportunityEvidenceStore,
     MemoryOpportunityRetrievalStore,
@@ -38,6 +43,35 @@ class MemoryCandidateStore:
             candidates=[],
             evolution_transaction_id=evolution_transaction_id,
         )
+
+
+class FakeCandidateProbeConnection:
+    def __init__(self) -> None:
+        self.inserts: list[dict[str, object]] = []
+
+    async def execute(self, _query: str, *args: object) -> str:
+        self.inserts.append(
+            {
+                "workspace_id": args[0],
+                "probe_hash": args[1],
+                "kind": args[2],
+                "maturity": args[3],
+                "spec": json.loads(str(args[4])),
+                "expected": json.loads(str(args[5])),
+            }
+        )
+        return "INSERT 1"
+
+
+class FakeCandidateEvaluationConnection:
+    def __init__(self) -> None:
+        self.result: dict[str, object] = {}
+        self.status: str | None = None
+
+    async def execute(self, _query: str, *args: object) -> str:
+        self.status = str(args[2])
+        self.result = json.loads(str(args[3]))
+        return "INSERT 1"
 
 
 def test_candidate_proposal_builds_propose_only_skillir() -> None:
@@ -80,6 +114,82 @@ def test_candidate_proposal_builds_propose_only_skillir() -> None:
         "adversarial",
     ]
     assert "Do not write files" in proposal["skillir"]["never"][0]
+
+
+def test_candidate_probe_persistence_blocks_scanner_failed_generated_probe() -> None:
+    evidence = MemoryOpportunityEvidenceStore(
+        [
+            evidence_record("message_received", "repair pdf table extraction"),
+            evidence_record("message_received", "repair pdf table extraction"),
+        ]
+    )
+    retrieval = MemoryOpportunityRetrievalStore([])
+
+    async def build_proposal():
+        opportunities = await mine_opportunities(
+            evidence,
+            retrieval,
+            workspace_key="dev-01",
+            min_support=2,
+        )
+        return propose_candidate_skills(opportunities).proposals[0]
+
+    proposal = asyncio.run(build_proposal())
+    blocked_probe = ProbePlan(
+        probe_hash="blocked-probe-hash",
+        kind="adversarial",
+        maturity="observed",
+        spec={
+            "schema": "autoskill.probe.v1",
+            "candidate_slug": proposal.candidate_slug,
+            "checks": ["redacted unsafe generated probe text omitted"],
+        },
+        expected={"status": "pass"},
+        scanner_findings=[
+            {
+                "severity": "critical",
+                "code": "prompt_injection",
+                "message": "redacted",
+            }
+        ],
+    )
+    proposal = replace(proposal, probe_plan=[*proposal.probe_plan[:1], blocked_probe])
+    workspace_id = uuid4()
+    skill_version_id = uuid4()
+    probe_conn = FakeCandidateProbeConnection()
+    evaluation_conn = FakeCandidateEvaluationConnection()
+
+    async def run() -> list[str]:
+        probe_hashes = await _persist_probe_plan(
+            probe_conn,
+            workspace_id,
+            skill_version_id,
+            proposal,
+        )
+        await _persist_evaluation_gate(
+            evaluation_conn,
+            workspace_id=workspace_id,
+            skill_version_id=skill_version_id,
+            proposal=proposal,
+            probe_hashes=probe_hashes,
+            scanner_status="passed",
+        )
+        return probe_hashes
+
+    probe_hashes = asyncio.run(run())
+
+    assert probe_hashes == [proposal.probe_plan[0].probe_hash]
+    assert [insert["probe_hash"] for insert in probe_conn.inserts] == probe_hashes
+    assert evaluation_conn.status == "blocked"
+    assert evaluation_conn.result["probe_hashes"] == probe_hashes
+    assert evaluation_conn.result["reason_codes"] == ["probe-scanner-blocked"]
+    blocked_scan = evaluation_conn.result["blocked_probe_scans"][0]  # type: ignore[index]
+    assert blocked_scan["probe_hash"] == "blocked-probe-hash"
+    assert blocked_scan["status"] == "blocked"
+    assert blocked_scan["blocking_findings"] == [
+        {"severity": "critical", "code": "prompt_injection"}
+    ]
+    assert "redacted unsafe generated probe text omitted" not in json.dumps(blocked_scan)
 
 
 def test_candidate_proposal_skips_duplicate_active_match() -> None:

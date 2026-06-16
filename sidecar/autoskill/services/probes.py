@@ -7,6 +7,8 @@ from autoskill.core.hashing import sha256_json
 from autoskill.core.skillir import SkillIR
 from autoskill.services.scanner import scan_text
 
+BLOCKING_PROBE_SCAN_SEVERITIES = {"error", "critical"}
+
 
 @dataclass(frozen=True)
 class ProbePlan:
@@ -20,7 +22,7 @@ class ProbePlan:
     @property
     def ok(self) -> bool:
         return not any(
-            finding["severity"] in {"error", "critical"}
+            finding["severity"] in BLOCKING_PROBE_SCAN_SEVERITIES
             for finding in self.scanner_findings
         )
 
@@ -33,6 +35,28 @@ class ProbePlan:
             "expected": self.expected,
             "scanner_findings": self.scanner_findings,
         }
+
+
+def probe_scan_envelope(probe: ProbePlan) -> dict[str, Any]:
+    blocking_findings = [
+        {
+            "severity": str(finding.get("severity") or ""),
+            "code": str(finding.get("code") or ""),
+        }
+        for finding in probe.scanner_findings
+        if finding.get("severity") in BLOCKING_PROBE_SCAN_SEVERITIES
+    ]
+    return {
+        "schema": "autoskill.probe_scan_envelope.v1",
+        "probe_hash": probe.probe_hash,
+        "kind": probe.kind,
+        "status": "passed" if probe.ok else "blocked",
+        "finding_count": len(probe.scanner_findings),
+        "blocking_findings": blocking_findings,
+        "reason_codes": (
+            ["probe-scanner-blocked"] if blocking_findings else []
+        ),
+    }
 
 
 def plan_candidate_probes(skill: SkillIR) -> list[ProbePlan]:

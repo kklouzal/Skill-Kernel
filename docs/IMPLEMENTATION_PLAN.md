@@ -1,5 +1,17 @@
 # SkillKernel Implementation Plan
 
+2026-06-16 update: generated candidate probes now fail closed before they can
+become proposal-gate evaluation material. Candidate persistence and fallback
+`run_more_probes` expansion both honor `ProbePlan.ok`, skip generated probes
+with blocking scanner findings (`error`/`critical`), and record content-safe
+probe scan envelopes containing only probe hash, kind, status, reason codes,
+and finding codes/severities. Clean generated probes still persist through the
+existing inactive probe/evaluation flow. This advances unified Section 23.4
+and Part V probe/evaluation assurance. Validation passed with focused probe
+tests (`5 passed, 46 deselected`), touched-file Ruff, touched-file compileall,
+diff hygiene, parent full `uv run pytest`, and conformance report. Next:
+review/commit and CI confirmation.
+
 2026-06-15 update: Observatory `verify_audit_chain` operator actions now check
 the audit store before accepting non-dry-run verification requests. The handler
 normalizes and clamps caller-provided verification limits, calls

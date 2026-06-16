@@ -16,6 +16,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-16: Generated candidate probes now honor the Section 23.4 / Part V
+  assurance that probes are scanned before becoming evaluation material.
+  Candidate persistence and fallback `run_more_probes` expansion skip
+  scanner-blocked generated probes (`error`/`critical` via `ProbePlan.ok`) and
+  preserve only content-safe probe scan envelopes with hash, kind, status,
+  reason codes, and finding codes/severities. Clean generated probes continue
+  to persist normally. Focused validation passed with `uv run pytest
+  sidecar/autoskill/tests/test_candidates.py
+  sidecar/autoskill/tests/test_evaluator.py -q -k 'probe'` (`5 passed, 46
+  deselected`), touched-file Ruff, touched-file compileall, diff hygiene,
+  parent full `uv run pytest`, and conformance report. Next gate:
+  review/commit and CI confirmation.
+
 - 2026-06-15: Observatory `verify_audit_chain` actions now perform an actual
   content-safe audit-chain verification before acceptance when not a dry run.
   The action clamps caller-provided limits, calls the workspace audit store,

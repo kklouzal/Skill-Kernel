@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
+import autoskill.db.evaluations as evaluations_db
 from autoskill.api.app import EvaluationRunRequest, create_app
 from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.evaluations import (
@@ -30,6 +31,7 @@ from autoskill.services.evaluator import (
     detect_threshold_deadlocks,
     evaluate_proposal_gate,
 )
+from autoskill.services.probes import ProbePlan
 
 
 def skill_ir() -> dict[str, object]:
@@ -1624,9 +1626,10 @@ def test_fallback_probe_expansion_persists_missing_candidate_probes() -> None:
             current_probe_hashes=[],
         )
 
-    added = asyncio.run(run())
+    result = asyncio.run(run())
 
-    assert len(added) == 4
+    assert len(result.added_probe_hashes) == 4
+    assert result.blocked_probe_scans == []
     assert {insert["kind"] for insert in conn.inserts} == {
         "target",
         "no_skill_control",
@@ -1639,6 +1642,107 @@ def test_fallback_probe_expansion_persists_missing_candidate_probes() -> None:
     assert {
         insert["spec"]["remediation_action"] for insert in conn.inserts
     } == {"run_more_probes"}
+
+
+def test_fallback_probe_expansion_blocks_scanner_failed_generated_probe(monkeypatch) -> None:
+    class FakeProbeConnection:
+        def __init__(self) -> None:
+            self.inserts: list[dict[str, object]] = []
+
+        async def execute(self, _query: str, *args: object) -> str:
+            self.inserts.append(
+                {
+                    "workspace_id": args[0],
+                    "probe_hash": args[1],
+                    "kind": args[2],
+                    "maturity": args[3],
+                    "spec": json.loads(str(args[4])),
+                    "expected": json.loads(str(args[5])),
+                }
+            )
+            return "INSERT 1"
+
+    clean_probe = ProbePlan(
+        probe_hash="clean-probe-hash",
+        kind="target",
+        maturity="observed",
+        spec={"schema": "autoskill.probe.v1", "checks": ["traceability"]},
+        expected={"status": "pass"},
+        scanner_findings=[],
+    )
+    blocked_probe = ProbePlan(
+        probe_hash="blocked-probe-hash",
+        kind="adversarial",
+        maturity="observed",
+        spec={
+            "schema": "autoskill.probe.v1",
+            "checks": ["redacted unsafe generated probe text omitted"],
+        },
+        expected={"status": "pass"},
+        scanner_findings=[
+            {
+                "severity": "error",
+                "code": "credential_exfiltration",
+                "message": "redacted",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        evaluations_db,
+        "plan_candidate_probes",
+        lambda _skill: [clean_probe, blocked_probe],
+    )
+    conn = FakeProbeConnection()
+
+    async def run():
+        candidate_skillir = {
+            **skill_ir(),
+            "name": "autoskill-message-received-repair",
+            "description": "Repair repeated message received workflow.",
+            "outputs": ["A repaired message-received workflow proposal."],
+            "effects": ["Records an inactive autoskill candidate only."],
+        }
+        return await _upsert_missing_candidate_probes(
+            conn,
+            workspace_id=uuid4(),
+            skill_version_id=uuid4(),
+            skill_ir=candidate_skillir,
+            current_probe_hashes=[],
+        )
+
+    result = asyncio.run(run())
+    remediation, _attempt_count, _threshold_deadlock = _remediation_patch(
+        {"reason_codes": ["intervention-required"]},
+        selected_action="run_more_probes",
+        contrastive_replays=[],
+        supplemental_probe_hashes=result.added_probe_hashes,
+        blocked_probe_scans=result.blocked_probe_scans,
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
+    )
+
+    assert result.added_probe_hashes == ["clean-probe-hash"]
+    assert [insert["probe_hash"] for insert in conn.inserts] == ["clean-probe-hash"]
+    assert result.blocked_probe_scans == [
+        {
+            "schema": "autoskill.probe_scan_envelope.v1",
+            "probe_hash": "blocked-probe-hash",
+            "kind": "adversarial",
+            "status": "blocked",
+            "finding_count": 1,
+            "blocking_findings": [
+                {"severity": "error", "code": "credential_exfiltration"}
+            ],
+            "reason_codes": ["probe-scanner-blocked"],
+        }
+    ]
+    assert remediation["reason_codes"] == ["probe-scanner-blocked"]
+    assert remediation["blocked_probe_scans"] == result.blocked_probe_scans
+    assert "blocked_generated_probe_scanner_findings" in remediation[
+        "attempted_autonomous_remedies"
+    ]
+    assert "redacted unsafe generated probe text omitted" not in json.dumps(remediation)
 
 
 class MemoryEvaluationStore:
