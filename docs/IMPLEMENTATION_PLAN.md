@@ -10,7 +10,9 @@ string scope in the result before preserving existing compatibility recording.
 This advances unified Sections 23.6 and 2.14. Validation passed with focused
 executor/profile proposal-gate pytest coverage, touched-file Ruff, touched-file
 compileall, diff hygiene, parent full `uv run pytest`, and conformance report.
-Next: review/commit and CI confirmation.
+GitHub Actions run `27599034494` passed for commit `ea27344`. Next: continue
+the next narrow production-hardening slice under TaskFlow/`codex-worker`
+authority.
 
 2026-06-16 update: generated candidate probes now fail closed before they can
 become proposal-gate evaluation material. Candidate persistence and fallback

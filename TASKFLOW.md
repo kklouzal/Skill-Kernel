@@ -25,8 +25,10 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   skill-profile compatibility recording. This advances unified Sections 23.6
   and 2.14 for executor-profile-aware evaluation. Focused validation passed
   with executor/profile proposal-gate pytest coverage, touched-file Ruff,
-  touched-file compileall, diff hygiene, parent full `uv run pytest`, and
-  conformance report. Next gate: review/commit and CI confirmation.
+  touched-file compileall, diff hygiene, parent full `uv run pytest`,
+  conformance report, and GitHub Actions run `27599034494` for commit
+  `ea27344`. Next gate: continue the next narrow production-hardening slice
+  under TaskFlow/`codex-worker` authority.
 
 - 2026-06-16: Generated candidate probes now honor the Section 23.4 / Part V
   assurance that probes are scanned before becoming evaluation material.
