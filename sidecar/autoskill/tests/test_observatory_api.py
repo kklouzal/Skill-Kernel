@@ -1274,6 +1274,18 @@ def test_observatory_health_deployment_fingerprint_defaults_to_local(
         assert fingerprint["revision"] == "local"
         assert fingerprint["image_source"] == "local"
         assert fingerprint["source"] == "environment"
+        assert ready.object["static_assets"] == {
+            "schema_version": "skillkernel.observatory.static-assets.v1",
+            "available": True,
+            "health": "available",
+            "reason_code": None,
+            "source": "container_bundle",
+            "configured_static_root": False,
+            "content_policy": {
+                "raw_available": False,
+                "host_paths_returned": False,
+            },
+        }
     finally:
         get_settings.cache_clear()
 
@@ -2124,6 +2136,19 @@ def test_observatory_readiness_reports_missing_declared_static_root(
     config, ready = asyncio.run(run())
 
     assert config.config["static_available"] is False
+    assert ready.object["static_assets"] == {
+        "schema_version": "skillkernel.observatory.static-assets.v1",
+        "available": False,
+        "health": "unavailable",
+        "reason_code": "frontend-serving-unavailable",
+        "source": "configured_static_root",
+        "configured_static_root": True,
+        "content_policy": {
+            "raw_available": False,
+            "host_paths_returned": False,
+        },
+    }
+    assert str(missing_static_root) not in json.dumps(ready.object["static_assets"])
     assert "frontend_serving" in ready.object["data_quality"]["missing_signals"]
     assert any(
         "frontend-serving-unavailable" in issue["reason_codes"]

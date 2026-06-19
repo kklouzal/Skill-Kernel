@@ -16,6 +16,18 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-19: Observatory readiness now exposes a first-class,
+  content-safe `static_assets` object on `/admin/api/v1/health/ready`.
+  The signal reports bundled versus configured static-root source,
+  availability, health, reason code, and an explicit no-host-path/no-raw
+  content policy without leaking filesystem paths. This advances the
+  unified Container health and readiness contract requiring static asset
+  availability to be an Observatory readiness condition. Focused
+  Observatory readiness tests, touched-file Ruff, touched-file compileall,
+  full `uv run pytest`, conformance report, and diff hygiene passed. Next
+  gate: continue the next narrow production-hardening slice under
+  TaskFlow/`codex-worker` authority.
+
 - 2026-06-16: Proposal-gate evaluation now carries optional executor-profile
   scope through the deterministic evaluator fixture, per-probe result JSON,
   evaluator-level `evaluation_scope`, adapter context/artifacts/trace, and

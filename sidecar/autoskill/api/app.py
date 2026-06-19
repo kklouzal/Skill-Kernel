@@ -2276,6 +2276,24 @@ def _admin_static_available() -> bool:
     return (Path(static_root) / "index.html").is_file()
 
 
+def _admin_static_asset_health() -> dict[str, object]:
+    static_root = os.environ.get("SKILLKERNEL_OBSERVATORY_STATIC_ROOT")
+    available = _admin_static_available()
+    source = "configured_static_root" if static_root else "container_bundle"
+    return {
+        "schema_version": "skillkernel.observatory.static-assets.v1",
+        "available": available,
+        "health": "available" if available else "unavailable",
+        "reason_code": None if available else "frontend-serving-unavailable",
+        "source": source,
+        "configured_static_root": bool(static_root),
+        "content_policy": {
+            "raw_available": False,
+            "host_paths_returned": False,
+        },
+    }
+
+
 def _admin_base_path() -> str:
     value = get_settings().web_admin_base_path.strip() or "/admin"
     if not value.startswith("/"):
@@ -11828,6 +11846,7 @@ def create_app(
                 "ready": snapshot["global_health"] not in {"blocked", "offline"},
                 "global_health": snapshot["global_health"],
                 "deployment_fingerprint": _deployment_fingerprint("skillkernel-observatory"),
+                "static_assets": _admin_static_asset_health(),
                 "core_reachability": snapshot["core_reachability"],
                 "live_stream_health": live_stream_health,
                 "data_quality": snapshot["data_quality"],
