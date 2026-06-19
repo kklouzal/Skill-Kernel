@@ -4428,6 +4428,12 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   sidecar/autoskill/tests/test_observatory_api.py` passed; `uv run python -m
   compileall -q sidecar/autoskill/api/app.py
   sidecar/autoskill/db/evaluations.py
-  sidecar/autoskill/tests/test_observatory_api.py` passed. Next gate: parent
-  should run the broader Observatory/API suite plus acceptance/conformance
-  reports before commit.
+  sidecar/autoskill/tests/test_observatory_api.py` passed.
+- Parent heartbeat verification 2026-06-19T09:36Z: broader Observatory/API
+  suite passed (`uv run pytest sidecar/autoskill/tests/test_observatory_api.py
+  -q` -> `75 passed`); focused ruff/compileall and `git diff --check`
+  passed. Runtime services were found stopped, then `postgres`, `core`,
+  `observatory`, `worker-scheduler`, `worker-embedding`, and
+  `worker-maintenance` were restarted with Docker Compose; core/observatory
+  containers are healthy and `uv run python scripts/autoskill_readiness.py
+  --json` reports `ready=true` with no blockers or warnings.
