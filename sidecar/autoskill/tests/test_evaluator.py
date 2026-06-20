@@ -9,6 +9,7 @@ import autoskill.db.evaluations as evaluations_db
 from autoskill.api.app import EvaluationRunRequest, create_app
 from autoskill.db.autonomy import NullAutonomyControlStore
 from autoskill.db.evaluations import (
+    RESCHEDULED_REMEDIATION_STATUSES,
     AsyncpgEvaluationStore,
     EvaluationFallbackRemediationResult,
     EvaluationReviewRecord,
@@ -1696,6 +1697,7 @@ def test_fallback_remediation_staged_trial_is_not_threshold_deadlock() -> None:
     assert threshold_deadlock is False
     assert remediation["status"] == "ephemeral_candidate_staged"
     assert remediation["threshold_deadlock_candidate"] is False
+    assert remediation["status"] in RESCHEDULED_REMEDIATION_STATUSES
 
 
 def test_fallback_remediation_auto_reject_is_terminal_autonomous_exit() -> None:

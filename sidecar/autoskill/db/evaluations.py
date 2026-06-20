@@ -30,6 +30,7 @@ RESCHEDULED_REMEDIATION_STATUSES = {
     "rescheduled_for_contrastive_replay",
     "rescheduled_for_re_adjudication",
     "rescheduled_for_additional_probes",
+    "ephemeral_candidate_staged",
 }
 
 
