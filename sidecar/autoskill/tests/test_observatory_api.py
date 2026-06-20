@@ -84,6 +84,44 @@ from fastapi import HTTPException, Response
 from starlette.routing import Mount
 
 
+async def _asgi_get_response(app, path: str, *, headers: dict[str, str] | None = None):
+    response: dict[str, object] = {"status": None, "headers": [], "body": b""}
+    encoded_headers = [
+        (key.lower().encode(), value.encode()) for key, value in (headers or {}).items()
+    ]
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.4"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "headers": encoded_headers,
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+    }
+    received = False
+
+    async def receive():
+        nonlocal received
+        if received:
+            return {"type": "http.disconnect"}
+        received = True
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        if message["type"] == "http.response.start":
+            response["status"] = message["status"]
+            response["headers"] = message.get("headers", [])
+        elif message["type"] == "http.response.body":
+            response["body"] += message.get("body", b"")
+
+    await app(scope, receive, send)
+    return response
+
+
 class MemoryAuditStore:
     def __init__(self) -> None:
         self.records: list[AuditRecord] = []
@@ -6482,3 +6520,40 @@ def test_observatory_admin_token_is_enforced(monkeypatch) -> None:
     assert response.config["principal"]["auth_configured"] is True
 
     get_settings.cache_clear()
+
+
+def test_observatory_readiness_route_requires_configured_admin_token(monkeypatch) -> None:
+    monkeypatch.setenv("SKILLKERNEL_ADMIN_TOKEN", "admin-token")
+    get_settings.cache_clear()
+    try:
+        app = create_app(audit_store=MemoryAuditStore())
+
+        async def run():
+            live = await _asgi_get_response(app, "/admin/api/v1/health/live")
+            missing = await _asgi_get_response(app, "/admin/api/v1/health/ready")
+            wrong = await _asgi_get_response(
+                app,
+                "/admin/api/v1/health/ready",
+                headers={"Authorization": "Bearer wrong-token"},
+            )
+            authorized = await _asgi_get_response(
+                app,
+                "/admin/api/v1/health/ready",
+                headers={"Authorization": "Bearer admin-token"},
+            )
+            return live, missing, wrong, authorized
+
+        live, missing, wrong, authorized = asyncio.run(run())
+
+        assert live["status"] == 200
+        assert missing["status"] == 401
+        assert wrong["status"] == 401
+        assert authorized["status"] == 200
+        ready = json.loads(authorized["body"])
+        assert ready["object"]["schema_version"] == "skillkernel.observatory.ready.v1"
+        assert ready["object"]["static_assets"]["content_policy"] == {
+            "raw_available": False,
+            "host_paths_returned": False,
+        }
+    finally:
+        get_settings.cache_clear()

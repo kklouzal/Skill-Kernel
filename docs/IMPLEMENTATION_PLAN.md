@@ -1,5 +1,17 @@
 # SkillKernel Implementation Plan
 
+2026-06-20 update: Observatory readiness authentication conformance now has a
+route-level ASGI regression for the unified Section 12.1 admin API contract.
+The test proves `/admin/api/v1/health/live` remains compatible with
+unauthenticated liveness while `/admin/api/v1/health/ready` rejects missing or
+wrong bearer tokens and accepts the configured admin token. The authorized
+readiness response also keeps the content-safe static-assets policy assertion,
+so this locks the deployed header-binding behavior without adding dependencies
+or changing runtime authority. Focused Observatory auth/readiness tests,
+touched-file Ruff, touched-file compileall, full `uv run pytest`, and diff
+hygiene passed. Next: continue the next narrow production-hardening slice under
+TaskFlow/`codex-worker` authority.
+
 2026-06-16 update: proposal-gate evaluation results now make executor-profile
 scope explicit without breaking callers that do not have a profile. The
 deterministic evaluator threads optional `executor_profile_id` through its

@@ -16,6 +16,18 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-20: Observatory readiness authentication conformance now has a
+  dependency-free ASGI route regression proving the unified Section 12.1
+  contract that `/admin/api/v1/health/live` may remain unauthenticated while
+  `/admin/api/v1/health/ready` is authenticated readiness when an admin token
+  is configured. The focused test exercises deployed header binding rather
+  than direct endpoint calls, rejects missing/wrong bearer tokens, accepts the
+  configured token, and preserves the content-safe static-assets policy
+  assertions on the authorized response. Focused Observatory auth/readiness
+  tests, touched-file Ruff, touched-file compileall, full `uv run pytest`,
+  and diff hygiene passed. Next gate: continue the next narrow
+  production-hardening slice under TaskFlow/`codex-worker` authority.
+
 - 2026-06-19: Observatory readiness now exposes a first-class,
   content-safe `static_assets` object on `/admin/api/v1/health/ready`.
   The signal reports bundled versus configured static-root source,
