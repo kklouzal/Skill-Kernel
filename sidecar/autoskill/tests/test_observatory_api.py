@@ -1247,6 +1247,18 @@ def test_observatory_collection_routes_return_bounded_content_safe_envelopes() -
     }.issubset(playbook_ids)
     assert ready.object["schema_version"] == "skillkernel.observatory.ready.v1"
     assert ready.object["ready"] is False
+    assert ready.object["api_serving"] == {
+        "schema_version": "skillkernel.observatory.api-serving.v1",
+        "available": True,
+        "health": "available",
+        "reason_code": None,
+        "source": "observatory_container_api",
+        "content_policy": {
+            "raw_available": False,
+            "headers_returned": False,
+            "request_payloads_returned": False,
+        },
+    }
 
 
 def test_observatory_health_reports_content_safe_deployment_fingerprint(
@@ -6551,6 +6563,18 @@ def test_observatory_readiness_route_requires_configured_admin_token(monkeypatch
         assert authorized["status"] == 200
         ready = json.loads(authorized["body"])
         assert ready["object"]["schema_version"] == "skillkernel.observatory.ready.v1"
+        assert ready["object"]["api_serving"] == {
+            "schema_version": "skillkernel.observatory.api-serving.v1",
+            "available": True,
+            "health": "available",
+            "reason_code": None,
+            "source": "observatory_container_api",
+            "content_policy": {
+                "raw_available": False,
+                "headers_returned": False,
+                "request_payloads_returned": False,
+            },
+        }
         assert ready["object"]["static_assets"]["content_policy"] == {
             "raw_available": False,
             "host_paths_returned": False,

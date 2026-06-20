@@ -2294,6 +2294,21 @@ def _admin_static_asset_health() -> dict[str, object]:
     }
 
 
+def _admin_api_serving_health() -> dict[str, object]:
+    return {
+        "schema_version": "skillkernel.observatory.api-serving.v1",
+        "available": True,
+        "health": "available",
+        "reason_code": None,
+        "source": "observatory_container_api",
+        "content_policy": {
+            "raw_available": False,
+            "headers_returned": False,
+            "request_payloads_returned": False,
+        },
+    }
+
+
 def _admin_base_path() -> str:
     value = get_settings().web_admin_base_path.strip() or "/admin"
     if not value.startswith("/"):
@@ -11846,6 +11861,7 @@ def create_app(
                 "ready": snapshot["global_health"] not in {"blocked", "offline"},
                 "global_health": snapshot["global_health"],
                 "deployment_fingerprint": _deployment_fingerprint("skillkernel-observatory"),
+                "api_serving": _admin_api_serving_health(),
                 "static_assets": _admin_static_asset_health(),
                 "core_reachability": snapshot["core_reachability"],
                 "live_stream_health": live_stream_health,

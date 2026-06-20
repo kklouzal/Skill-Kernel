@@ -28,6 +28,18 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   and diff hygiene passed. Next gate: continue the next narrow
   production-hardening slice under TaskFlow/`codex-worker` authority.
 
+- 2026-06-20: Observatory readiness now reports an explicit content-safe
+  `api_serving` object on `/admin/api/v1/health/ready`, making the unified
+  Container health and readiness contract's Observatory API serving condition
+  first-class instead of implied by a successful response. The signal reports
+  availability, health, reason code, source, and a no-raw/no-header/no-request-
+  payload content policy; focused direct-route and authenticated ASGI
+  readiness tests prove the object is present without leaking auth headers,
+  request payloads, raw evidence, prompts, or skill text. Focused Observatory
+  readiness tests, touched-file Ruff, touched-file compileall, and diff
+  hygiene passed. Next gate: continue the next narrow production-hardening
+  slice under TaskFlow/`codex-worker` authority.
+
 - 2026-06-19: Observatory readiness now exposes a first-class,
   content-safe `static_assets` object on `/admin/api/v1/health/ready`.
   The signal reports bundled versus configured static-root source,
