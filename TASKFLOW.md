@@ -16,6 +16,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-20: Commit `035c8ea` (`Fix no-op remediation reschedule status`)
+  closes the no-op fallback remediation deadlock follow-up. `no_op_reschedule`
+  outcomes without hard invariant failures now map to
+  `rescheduled_for_re_adjudication`, reset the version to pending/planned, and
+  queue bounded re-adjudication plus `evaluations.run`; hard invariant
+  failures remain non-rescheduling. Worker handoff validation passed with Ruff
+  on the touched files, focused fallback remediation/threshold-deadlock pytest,
+  compileall, and diff hygiene; the repo had no tracked dirty files and the
+  existing untracked backup files were preserved. Next gate: rebuild/redeploy
+  SkillKernel at `035c8ea`, rerun live `evaluations.remediate_fallbacks`
+  against shared Postgres, and verify Observatory/shared DB intervention rows
+  move out of the no-op/LLM-unavailable deadlock.
+
 - 2026-06-20: Observatory readiness authentication conformance now has a
   dependency-free ASGI route regression proving the unified Section 12.1
   contract that `/admin/api/v1/health/live` may remain unauthenticated while
