@@ -4461,3 +4461,15 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
   `worker-maintenance` were restarted with Docker Compose; core/observatory
   containers are healthy and `uv run python scripts/autoskill_readiness.py
   --json` reports `ready=true` with no blockers or warnings.
+
+## Live Gate Deadlock Remediation - 2026-06-20T15:55Z
+
+- Context: After redeploying current SkillKernel, Observatory still showed many skills as `ephemeral_candidate` / `no-version` and gates as `needs_intervention` with `collect_more_evidence` / `threshold_deadlock_candidate`.
+- Repo/commit: `/Warehouse/SkillKernel`, committed `87fc333` (`Fix ephemeral candidate gate rescheduling`) after worker review. Change added `ephemeral_candidate_staged` to rescheduled remediation statuses and regression coverage.
+- Validation before deploy: `uv run ruff check sidecar/autoskill/db/evaluations.py sidecar/autoskill/tests/test_evaluator.py`; `uv run pytest sidecar/autoskill/tests/test_evaluator.py -k 'fallback_remediation or threshold_deadlock'`; `uv run pytest sidecar/autoskill/tests/test_worker.py -k 'remediates_fallbacks or fallback'`; `uv run pytest sidecar/autoskill/tests/test_evaluator.py`.
+- Deployment: Rebuilt/redeployed compose stack with `SKILLKERNEL_BUILD_SHA=87fc333...`; core/observatory health endpoints responded OK.
+- Important correction: live containers are pointed at shared Postgres `172.16.8.20:5432/autoskill`; local `skillkernel-postgres-1` is not the live DB for Observatory/worker state.
+- Real live DB evidence for workspace `dev-01`: 75 `skills.lifecycle_state=ephemeral_candidate`; `skill_versions` includes 75 rows `(version=1, scanner_status=passed, evaluator_status=needs_intervention)` and 1 row `(version=2, passed/needs_intervention)`.
+- Remediation jobs against shared DB: `evaluations.remediate_fallbacks` jobs were enqueued and succeeded, but did not clear intervention state.
+- Remaining blocker: `admin_autonomy_decision_status` aggregate is dominated by `fallback_needs_more_evidence / no_op_reschedule / llm_unavailable / redacted_derivative / intervention-required`, plus `threshold_deadlock_candidate / collect_more_evidence`. This means remediation is still terminal/no-op for at least the no-op-reschedule path.
+- Active child slice: `skillkernel_noop_reschedule_fix` assigned to `codex-worker` to make `fallback_needs_more_evidence + no_op_reschedule` actionable or explicitly blocked without masquerading as progress. Do not declare pipeline healthy until this is reviewed, tested, committed, rebuilt, and live remediation changes the shared DB state.

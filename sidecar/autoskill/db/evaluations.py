@@ -31,6 +31,7 @@ RESCHEDULED_REMEDIATION_STATUSES = {
     "rescheduled_for_re_adjudication",
     "rescheduled_for_additional_probes",
     "ephemeral_candidate_staged",
+    "no_op_rescheduled",
 }
 
 
@@ -1206,11 +1207,11 @@ def _remediation_patch(
         status = "scope_reduction_recorded"
     elif selected_action == "auto_reject":
         status = "auto_rejected"
-    elif selected_action == "no_op_reschedule":
-        status = "no_op_rescheduled"
     hard_failures = _json_dict(result.get("autonomy_assurance")).get(
         "hard_invariant_failures"
     )
+    if selected_action == "no_op_reschedule" and not hard_failures:
+        status = "no_op_rescheduled"
     threshold_deadlock = (
         selected_action not in {"auto_reject", "stage_ephemeral_candidate", "stage_canary"}
         and not contrastive_replays
