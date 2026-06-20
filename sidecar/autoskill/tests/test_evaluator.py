@@ -1531,6 +1531,65 @@ def test_fallback_remediation_reschedules_re_adjudication_before_deadlock() -> N
     assert "run_llm_re_adjudication" in remediation["attempted_autonomous_remedies"]
 
 
+def test_fallback_remediation_reschedules_no_op_llm_unavailable_fallback() -> None:
+    result = {
+        "reason_codes": ["intervention-required"],
+        "autonomy_assurance": {
+            "hard_invariant_failures": [],
+            "soft_threshold_misses": ["intervention-required"],
+            "calibration_support_status": "llm_unavailable",
+            "evidence_mode": "redacted_derivative",
+        },
+        "autonomy_fallback": {
+            "selected_action": "no_op_reschedule",
+            "soft_threshold_state": "fallback_needs_more_evidence",
+            "confidence_band": "low",
+            "evidence_fidelity": "redacted_derivative",
+            "calibration_support_status": "llm_unavailable",
+            "deterministic_checks": {"hard_invariants_passed": True},
+        },
+    }
+
+    remediation, attempt_count, threshold_deadlock = _remediation_patch(
+        result,
+        selected_action="no_op_reschedule",
+        contrastive_replays=[],
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
+    )
+
+    assert attempt_count == 1
+    assert threshold_deadlock is False
+    assert remediation["status"] == "rescheduled_for_re_adjudication"
+    assert remediation["status"] in RESCHEDULED_REMEDIATION_STATUSES
+    assert "no_op_reschedule" in remediation["attempted_autonomous_remedies"]
+
+
+def test_fallback_remediation_does_not_reschedule_no_op_hard_failure() -> None:
+    result = {
+        "reason_codes": ["intervention-required"],
+        "autonomy_assurance": {
+            "hard_invariant_failures": ["scanner-policy-failed"],
+            "soft_threshold_misses": ["intervention-required"],
+        },
+    }
+
+    remediation, attempt_count, threshold_deadlock = _remediation_patch(
+        result,
+        selected_action="no_op_reschedule",
+        contrastive_replays=[],
+        trace_id=None,
+        span_id=None,
+        parent_span_id=None,
+    )
+
+    assert attempt_count == 1
+    assert threshold_deadlock is False
+    assert remediation["status"] == "waiting_for_contrastive_evidence"
+    assert remediation["status"] not in RESCHEDULED_REMEDIATION_STATUSES
+
+
 def test_fallback_remediation_reschedules_more_probe_action() -> None:
     remediation, attempt_count, threshold_deadlock = _remediation_patch(
         {"reason_codes": ["intervention-required"]},

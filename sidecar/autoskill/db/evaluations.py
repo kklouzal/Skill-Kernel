@@ -1211,7 +1211,7 @@ def _remediation_patch(
         "hard_invariant_failures"
     )
     if selected_action == "no_op_reschedule" and not hard_failures:
-        status = "no_op_rescheduled"
+        status = "rescheduled_for_re_adjudication"
     threshold_deadlock = (
         selected_action not in {"auto_reject", "stage_ephemeral_candidate", "stage_canary"}
         and not contrastive_replays
