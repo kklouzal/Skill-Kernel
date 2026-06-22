@@ -2065,6 +2065,7 @@ def test_observatory_readiness_reports_known_storage_and_read_model_contract(
         storage = ready.object["storage_plane_readiness"]
         read_model_contract = ready.object["read_model_contract"]
         read_model_freshness = ready.object["read_model_freshness"]
+        browser_visible_self_health = ready.object["browser_visible_self_health"]
         assert ready.object["ready"] is True
         assert storage == {
             "schema_version": "skillkernel.observatory.storage-plane-readiness.v1",
@@ -2108,12 +2109,40 @@ def test_observatory_readiness_reports_known_storage_and_read_model_contract(
             "raw_payloads_returned": False,
             "connection_strings_returned": False,
         }
+        assert browser_visible_self_health == {
+            "schema_version": (
+                "skillkernel.observatory.browser-visible-self-health.v1"
+            ),
+            "known": True,
+            "populated": True,
+            "health": "populated",
+            "reason_code": None,
+            "object_type": "component",
+            "object_id": "observatory_admin",
+            "diagnostic_health": "unknown",
+            "diagnostic_reason_codes": ["missing-required-signal"],
+            "source": "observatory_snapshot.object_microscope",
+            "content_policy": {
+                "raw_available": False,
+                "raw_payloads_returned": False,
+                "prompts_returned": False,
+                "skill_text_returned": False,
+                "connection_strings_returned": False,
+            },
+        }
         rendered = json.dumps(
-            [storage, read_model_contract, read_model_freshness],
+            [
+                storage,
+                read_model_contract,
+                read_model_freshness,
+                browser_visible_self_health,
+            ],
             sort_keys=True,
         )
         assert "postgresql://example" not in rendered
         assert "/Warehouse" not in rendered
+        assert "prompt text" not in rendered
+        assert "skill text" not in rendered
     finally:
         get_settings.cache_clear()
 
@@ -2263,12 +2292,39 @@ def test_observatory_readiness_fails_closed_when_self_health_read_model_missing(
         ready = asyncio.run(route.endpoint(authorization="Bearer control-token"))
 
         self_health = ready.object["self_health"]
+        browser_visible_self_health = ready.object["browser_visible_self_health"]
         assert ready.object["ready"] is False
         assert self_health["object_type"] == "component"
         assert self_health["object_id"] == "observatory_admin"
         assert self_health["diagnostics"]["health"] == "unknown"
         assert self_health["diagnostics"]["reason_codes"] == ["read-model-missing"]
         assert self_health["content_policy"]["raw_available"] is False
+        assert browser_visible_self_health == {
+            "schema_version": (
+                "skillkernel.observatory.browser-visible-self-health.v1"
+            ),
+            "known": True,
+            "populated": False,
+            "health": "missing",
+            "reason_code": "browser_visible_self_health_missing",
+            "object_type": "component",
+            "object_id": "observatory_admin",
+            "diagnostic_health": "unknown",
+            "diagnostic_reason_codes": ["read-model-missing"],
+            "source": "observatory_snapshot.object_microscope",
+            "content_policy": {
+                "raw_available": False,
+                "raw_payloads_returned": False,
+                "prompts_returned": False,
+                "skill_text_returned": False,
+                "connection_strings_returned": False,
+            },
+        }
+        rendered = json.dumps(browser_visible_self_health, sort_keys=True)
+        assert "postgresql://example" not in rendered
+        assert "secret" not in rendered
+        assert "prompt" in rendered
+        assert "skill_text" in rendered
     finally:
         get_settings.cache_clear()
 

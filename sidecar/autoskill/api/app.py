@@ -2316,7 +2316,7 @@ def _observatory_ready_from_checks(
     static_assets: dict[str, object],
     live_stream_health: dict[str, object],
     read_model_freshness: dict[str, object],
-    self_health: dict[str, object],
+    browser_visible_self_health: dict[str, object],
 ) -> bool:
     core_reachability = snapshot.get("core_reachability")
     if not isinstance(core_reachability, dict):
@@ -2338,21 +2338,48 @@ def _observatory_ready_from_checks(
         and read_model_freshness.get("health") != "degraded",
         bool(live_stream_health.get("available"))
         and live_stream_health.get("health") == "available",
-        _observatory_self_health_populated(self_health),
+        bool(browser_visible_self_health.get("populated")),
     )
     return all(required_checks)
 
 
-def _observatory_self_health_populated(self_health: dict[str, object]) -> bool:
+def _browser_visible_self_health_readiness_detail(
+    self_health: dict[str, object],
+) -> dict[str, object]:
     diagnostics = self_health.get("diagnostics")
     if not isinstance(diagnostics, dict):
-        return False
-    reason_codes = {str(code) for code in diagnostics.get("reason_codes") or []}
-    return (
+        diagnostics = {}
+    reason_codes = sorted({str(code) for code in diagnostics.get("reason_codes") or []})
+    populated = (
         self_health.get("object_type") == "component"
         and self_health.get("object_id") == "observatory_admin"
         and "read-model-missing" not in reason_codes
     )
+    return {
+        "schema_version": "skillkernel.observatory.browser-visible-self-health.v1",
+        "known": True,
+        "populated": populated,
+        "health": "populated" if populated else "missing",
+        "reason_code": None if populated else "browser_visible_self_health_missing",
+        "object_type": (
+            str(self_health.get("object_type")) if self_health.get("object_type") else None
+        ),
+        "object_id": (
+            str(self_health.get("object_id")) if self_health.get("object_id") else None
+        ),
+        "diagnostic_health": (
+            str(diagnostics.get("health")) if diagnostics.get("health") else None
+        ),
+        "diagnostic_reason_codes": reason_codes,
+        "source": "observatory_snapshot.object_microscope",
+        "content_policy": {
+            "raw_available": False,
+            "raw_payloads_returned": False,
+            "prompts_returned": False,
+            "skill_text_returned": False,
+            "connection_strings_returned": False,
+        },
+    }
 
 
 def _read_model_freshness_readiness_detail(
@@ -12009,6 +12036,9 @@ def create_app(
             object_type="component",
             object_id="observatory_admin",
         )
+        browser_visible_self_health = _browser_visible_self_health_readiness_detail(
+            self_health
+        )
         return ObservatoryObjectResponse(
             object={
                 "schema_version": "skillkernel.observatory.ready.v1",
@@ -12018,7 +12048,7 @@ def create_app(
                     static_assets=static_assets,
                     live_stream_health=live_stream_health,
                     read_model_freshness=read_model_freshness,
-                    self_health=self_health,
+                    browser_visible_self_health=browser_visible_self_health,
                 ),
                 "global_health": snapshot["global_health"],
                 "deployment_fingerprint": _deployment_fingerprint("skillkernel-observatory"),
@@ -12029,6 +12059,7 @@ def create_app(
                 "read_model_contract": snapshot["read_model_contract"],
                 "read_model_freshness": read_model_freshness,
                 "live_stream_health": live_stream_health,
+                "browser_visible_self_health": browser_visible_self_health,
                 "data_quality": snapshot["data_quality"],
                 "issues": snapshot["issue_board"],
                 "self_health": self_health,

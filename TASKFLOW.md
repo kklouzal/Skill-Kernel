@@ -17,6 +17,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 ## Current State
 
 - 2026-06-22: Observatory readiness now exposes first-class, content-safe
+  `browser_visible_self_health` on `/admin/api/v1/health/ready` and uses that
+  readiness envelope for the unified Section 12.1 browser-visible self-health
+  gate. The signal reports whether the Observatory admin microscope is
+  populated, preserves diagnostic health/reason codes, returns an explicit
+  `browser_visible_self_health_missing` reason when the self-health read model
+  is absent, and asserts that raw payloads, prompts, skill text, connection
+  strings, and other sensitive content are not returned. This keeps the
+  existing diagnostic `self_health` object available while making the
+  acceptance gate independently machine-checkable and fail-closed. Focused
+  readiness tests, touched-file Ruff, touched-file compileall, full
+  `uv run pytest`, and diff hygiene passed. Next gate: continue the next
+  narrow production-hardening slice under TaskFlow/`codex-worker` authority.
+
+- 2026-06-22: Observatory readiness now exposes first-class, content-safe
   `read_model_freshness` on `/admin/api/v1/health/ready` and fails closed when
   read models are beyond the configured degraded staleness threshold. The
   signal reports known/fresh/stale/degraded state, age, configured thresholds,
