@@ -16,6 +16,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-22: Observatory readiness top-level `ready` now fails closed from the
+  explicit content-safe readiness objects it returns instead of only trusting
+  aggregate snapshot health. `/admin/api/v1/health/ready` requires API serving,
+  static assets, Core reachability, storage-plane readiness, read-model
+  contract compatibility, and available/non-degraded live stream health before
+  advertising `ready=true`; degraded sequence gaps, unavailable live outbox,
+  missing static assets, or uninitialized storage remain diagnosable in their
+  existing objects but no longer produce a false-ready response. This advances
+  unified Part III split-container fake-health prevention and Observatory
+  self-health/readiness truthfulness. Focused readiness tests, touched-file
+  Ruff, touched-file compileall, full `uv run pytest`, and diff hygiene passed.
+  Next gate: continue the next narrow production-hardening slice under
+  TaskFlow/`codex-worker` authority.
+
 - 2026-06-22: Observatory readiness now reports explicit content-safe
   `storage_plane_readiness` and `read_model_contract` objects on
   `/admin/api/v1/health/ready`. The fields are sourced from the existing

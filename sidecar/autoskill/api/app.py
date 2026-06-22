@@ -2309,6 +2309,35 @@ def _admin_api_serving_health() -> dict[str, object]:
     }
 
 
+def _observatory_ready_from_checks(
+    snapshot: dict[str, object],
+    *,
+    api_serving: dict[str, object],
+    static_assets: dict[str, object],
+    live_stream_health: dict[str, object],
+) -> bool:
+    core_reachability = snapshot.get("core_reachability")
+    if not isinstance(core_reachability, dict):
+        core_reachability = {}
+    storage_plane = snapshot.get("storage_plane_readiness")
+    if not isinstance(storage_plane, dict):
+        storage_plane = {}
+    read_model_contract = snapshot.get("read_model_contract")
+    if not isinstance(read_model_contract, dict):
+        read_model_contract = {}
+    required_checks = (
+        snapshot.get("global_health") not in {"blocked", "offline"},
+        bool(api_serving.get("available")),
+        bool(static_assets.get("available")),
+        bool(core_reachability.get("reachable")),
+        bool(storage_plane.get("ready")),
+        bool(read_model_contract.get("compatible")),
+        bool(live_stream_health.get("available"))
+        and live_stream_health.get("health") == "available",
+    )
+    return all(required_checks)
+
+
 def _admin_base_path() -> str:
     value = get_settings().web_admin_base_path.strip() or "/admin"
     if not value.startswith("/"):
@@ -11912,14 +11941,21 @@ def create_app(
             window_minutes=window_minutes,
         )
         live_stream_health = await _observatory_live_stream_health(snapshot)
+        api_serving = _admin_api_serving_health()
+        static_assets = _admin_static_asset_health()
         return ObservatoryObjectResponse(
             object={
                 "schema_version": "skillkernel.observatory.ready.v1",
-                "ready": snapshot["global_health"] not in {"blocked", "offline"},
+                "ready": _observatory_ready_from_checks(
+                    snapshot,
+                    api_serving=api_serving,
+                    static_assets=static_assets,
+                    live_stream_health=live_stream_health,
+                ),
                 "global_health": snapshot["global_health"],
                 "deployment_fingerprint": _deployment_fingerprint("skillkernel-observatory"),
-                "api_serving": _admin_api_serving_health(),
-                "static_assets": _admin_static_asset_health(),
+                "api_serving": api_serving,
+                "static_assets": static_assets,
                 "core_reachability": snapshot["core_reachability"],
                 "storage_plane_readiness": snapshot["storage_plane_readiness"],
                 "read_model_contract": snapshot["read_model_contract"],

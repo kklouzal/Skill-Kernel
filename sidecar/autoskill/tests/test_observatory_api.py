@@ -2013,7 +2013,7 @@ def test_observatory_readiness_reports_known_core_reachable(
 
         core = ready.object["core_reachability"]
         live_stream = ready.object["live_stream_health"]
-        assert ready.object["ready"] is True
+        assert ready.object["ready"] is False
         assert core["known"] is True
         assert core["reachable"] is True
         assert core["health"] == "reachable"
@@ -2063,6 +2063,7 @@ def test_observatory_readiness_reports_known_storage_and_read_model_contract(
 
         storage = ready.object["storage_plane_readiness"]
         read_model_contract = ready.object["read_model_contract"]
+        assert ready.object["ready"] is True
         assert storage == {
             "schema_version": "skillkernel.observatory.storage-plane-readiness.v1",
             "known": True,
@@ -2118,6 +2119,7 @@ def test_observatory_readiness_reports_uninitialized_storage_state(
 
         storage = ready.object["storage_plane_readiness"]
         read_model_contract = ready.object["read_model_contract"]
+        assert ready.object["ready"] is False
         assert storage["known"] is True
         assert storage["ready"] is False
         assert storage["health"] == "unready"
@@ -2156,7 +2158,7 @@ def test_observatory_readiness_reports_degraded_live_stream_reason_code(
         ready = asyncio.run(route.endpoint(authorization="Bearer control-token"))
 
         live_stream = ready.object["live_stream_health"]
-        assert ready.object["ready"] is True
+        assert ready.object["ready"] is False
         assert live_stream["available"] is False
         assert live_stream["health"] == "degraded"
         assert live_stream["reason_code"] == "live-event-outbox-unavailable"
@@ -2216,6 +2218,7 @@ def test_observatory_readiness_reports_sequence_gap_degraded_reason_code(
         ready = asyncio.run(route.endpoint(authorization="Bearer control-token"))
 
         live_stream = ready.object["live_stream_health"]
+        assert ready.object["ready"] is False
         assert live_stream["available"] is True
         assert live_stream["health"] == "degraded"
         assert live_stream["reason_code"] == "sequence-gap-detected"
@@ -2299,6 +2302,7 @@ def test_observatory_readiness_reports_missing_declared_static_root(
     config, ready = asyncio.run(run())
 
     assert config.config["static_available"] is False
+    assert ready.object["ready"] is False
     assert ready.object["static_assets"] == {
         "schema_version": "skillkernel.observatory.static-assets.v1",
         "available": False,
