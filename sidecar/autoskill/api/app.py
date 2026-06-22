@@ -2315,6 +2315,7 @@ def _observatory_ready_from_checks(
     api_serving: dict[str, object],
     static_assets: dict[str, object],
     live_stream_health: dict[str, object],
+    read_model_freshness: dict[str, object],
 ) -> bool:
     core_reachability = snapshot.get("core_reachability")
     if not isinstance(core_reachability, dict):
@@ -2332,10 +2333,55 @@ def _observatory_ready_from_checks(
         bool(core_reachability.get("reachable")),
         bool(storage_plane.get("ready")),
         bool(read_model_contract.get("compatible")),
+        bool(read_model_freshness.get("known"))
+        and read_model_freshness.get("health") != "degraded",
         bool(live_stream_health.get("available"))
         and live_stream_health.get("health") == "available",
     )
     return all(required_checks)
+
+
+def _read_model_freshness_readiness_detail(
+    snapshot: dict[str, object],
+) -> dict[str, object]:
+    data_quality = snapshot.get("data_quality")
+    if not isinstance(data_quality, dict):
+        data_quality = {}
+    age_value = data_quality.get("read_model_age_seconds")
+    known = isinstance(age_value, int | float)
+    age_seconds = int(age_value) if known else None
+    settings = get_settings()
+    warning_threshold = int(settings.web_admin_telemetry_staleness_warning_seconds)
+    degraded_threshold = int(settings.web_admin_telemetry_staleness_degraded_seconds)
+    stale = bool(data_quality.get("stale")) if known else False
+    if not known:
+        health = "unknown"
+        reason_code = "read-model-freshness-unknown"
+    elif age_seconds is not None and age_seconds > degraded_threshold:
+        health = "degraded"
+        reason_code = "read-model-freshness-degraded"
+    elif stale or (age_seconds is not None and age_seconds > warning_threshold):
+        health = "stale"
+        reason_code = "telemetry-stale"
+    else:
+        health = "fresh"
+        reason_code = None
+    return {
+        "schema_version": "skillkernel.observatory.read-model-freshness.v1",
+        "known": known,
+        "health": health,
+        "reason_code": reason_code,
+        "age_seconds": age_seconds,
+        "warning_threshold_seconds": warning_threshold,
+        "degraded_threshold_seconds": degraded_threshold,
+        "stale": stale,
+        "source": "observatory_snapshot.data_quality",
+        "content_policy": {
+            "raw_rows_returned": False,
+            "raw_payloads_returned": False,
+            "connection_strings_returned": False,
+        },
+    }
 
 
 def _admin_base_path() -> str:
@@ -11943,6 +11989,7 @@ def create_app(
         live_stream_health = await _observatory_live_stream_health(snapshot)
         api_serving = _admin_api_serving_health()
         static_assets = _admin_static_asset_health()
+        read_model_freshness = _read_model_freshness_readiness_detail(snapshot)
         return ObservatoryObjectResponse(
             object={
                 "schema_version": "skillkernel.observatory.ready.v1",
@@ -11951,6 +11998,7 @@ def create_app(
                     api_serving=api_serving,
                     static_assets=static_assets,
                     live_stream_health=live_stream_health,
+                    read_model_freshness=read_model_freshness,
                 ),
                 "global_health": snapshot["global_health"],
                 "deployment_fingerprint": _deployment_fingerprint("skillkernel-observatory"),
@@ -11959,6 +12007,7 @@ def create_app(
                 "core_reachability": snapshot["core_reachability"],
                 "storage_plane_readiness": snapshot["storage_plane_readiness"],
                 "read_model_contract": snapshot["read_model_contract"],
+                "read_model_freshness": read_model_freshness,
                 "live_stream_health": live_stream_health,
                 "data_quality": snapshot["data_quality"],
                 "issues": snapshot["issue_board"],

@@ -593,13 +593,14 @@ class MemoryReadyStorageJobStore(MemoryCoreReachabilityJobStore):
 
 
 class CaptureObservabilityStore:
-    def __init__(self) -> None:
+    def __init__(self, *, captured_at: datetime | None = None) -> None:
+        self.captured_at = captured_at
         self.operator_metric_calls: list[dict[str, object]] = []
 
     async def operator_metrics(self, **kwargs):
         self.operator_metric_calls.append(kwargs)
         return {
-            "captured_at": datetime.now(UTC).isoformat(),
+            "captured_at": (self.captured_at or datetime.now(UTC)).isoformat(),
             "metrics": {},
             "dashboards": {},
         }
@@ -2063,6 +2064,7 @@ def test_observatory_readiness_reports_known_storage_and_read_model_contract(
 
         storage = ready.object["storage_plane_readiness"]
         read_model_contract = ready.object["read_model_contract"]
+        read_model_freshness = ready.object["read_model_freshness"]
         assert ready.object["ready"] is True
         assert storage == {
             "schema_version": "skillkernel.observatory.storage-plane-readiness.v1",
@@ -2093,9 +2095,63 @@ def test_observatory_readiness_reports_known_storage_and_read_model_contract(
         )
         assert read_model_contract["schema_contract"] == "0001_autoskill_schema"
         assert read_model_contract["missing_catalogs"] == []
-        rendered = json.dumps([storage, read_model_contract], sort_keys=True)
+        assert read_model_freshness["schema_version"] == (
+            "skillkernel.observatory.read-model-freshness.v1"
+        )
+        assert read_model_freshness["known"] is True
+        assert read_model_freshness["health"] == "fresh"
+        assert read_model_freshness["reason_code"] is None
+        assert read_model_freshness["age_seconds"] >= 0
+        assert read_model_freshness["source"] == "observatory_snapshot.data_quality"
+        assert read_model_freshness["content_policy"] == {
+            "raw_rows_returned": False,
+            "raw_payloads_returned": False,
+            "connection_strings_returned": False,
+        }
+        rendered = json.dumps(
+            [storage, read_model_contract, read_model_freshness],
+            sort_keys=True,
+        )
         assert "postgresql://example" not in rendered
         assert "/Warehouse" not in rendered
+    finally:
+        get_settings.cache_clear()
+
+
+def test_observatory_readiness_degrades_on_stale_read_model_freshness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    get_settings.cache_clear()
+    try:
+        app = create_app(
+            job_store=MemoryReadyStorageJobStore(),
+            audit_store=MemoryAuditStore(),
+            observability_store=CaptureObservabilityStore(
+                captured_at=datetime.now(UTC) - timedelta(hours=2)
+            ),
+            observatory_admin_store=NullObservatoryAdminStore(),
+        )
+        route = _routes(app)[("/admin/api/v1/health/ready", "GET")]
+
+        ready = asyncio.run(route.endpoint(authorization="Bearer control-token"))
+
+        read_model_freshness = ready.object["read_model_freshness"]
+        assert ready.object["ready"] is False
+        assert read_model_freshness["known"] is True
+        assert read_model_freshness["health"] == "degraded"
+        assert read_model_freshness["reason_code"] == "read-model-freshness-degraded"
+        assert read_model_freshness["age_seconds"] > (
+            read_model_freshness["degraded_threshold_seconds"]
+        )
+        assert ready.object["data_quality"]["stale"] is True
+        rendered = json.dumps(read_model_freshness, sort_keys=True)
+        assert "postgresql://example" not in rendered
+        assert "raw" in rendered
+        assert "secret" not in rendered
+        assert "prompt" not in rendered
     finally:
         get_settings.cache_clear()
 

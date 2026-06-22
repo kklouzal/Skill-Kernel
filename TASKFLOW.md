@@ -16,6 +16,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-22: Observatory readiness now exposes first-class, content-safe
+  `read_model_freshness` on `/admin/api/v1/health/ready` and fails closed when
+  read models are beyond the configured degraded staleness threshold. The
+  signal reports known/fresh/stale/degraded state, age, configured thresholds,
+  reason code, source, and no-raw/no-connection-string content policy without
+  adding database access or returning raw rows. This advances unified Section
+  12.1's requirement that Observatory readiness know read-model freshness even
+  when stale and prevents severely stale diagnostics from advertising
+  `ready=true`. Focused Observatory readiness tests, touched-file Ruff,
+  touched-file compileall, full `uv run pytest`, and diff hygiene passed. Next
+  gate: continue the next narrow production-hardening slice under
+  TaskFlow/`codex-worker` authority.
+
 - 2026-06-22: Observatory readiness top-level `ready` now fails closed from the
   explicit content-safe readiness objects it returns instead of only trusting
   aggregate snapshot health. `/admin/api/v1/health/ready` requires API serving,
