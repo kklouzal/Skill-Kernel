@@ -47,12 +47,12 @@ The current repository implements the following product surfaces.
 | Core API | FastAPI `/v1` health, readiness, deployment fingerprint, ingest, raw evidence, memory quarantine, control-flow, runtime context hints, profiles, topology, evidence, candidates, evaluations, writer, rollback, retrieval, embeddings, jobs, schedules, workers, traces, metrics, and audit endpoints. |
 | Worker model | Durable worker pools for scheduler, ingest, backfill, embedding, retrieval, analysis, LLM generation, scanner, evaluation, filesystem, and maintenance work. |
 | Retrieval and broker | Body index documents, lexical indexes, pgvector embeddings, retrieval logs/events, runtime broker policy versions, context artifacts, token ledgers, compile runs, budget events, and broker replay episodes. |
-| Skill governance | SkillIR and SkillGraphIR primitives, deterministic compiler, scanner, evaluator/probes, autonomy-assurance fallback records, threshold-deadlock detection, candidate proposals, topology proposal/trial/apply records, proposal review, lifecycle state, canary/freeze, provenance traversal, revocation, staged writer apply, and rollback. |
-| Safety controls | Redaction-before-store/embed defaults, raw-vault access logging, memory quarantine, control-flow events, harmful-capability and prompt-injection scanner classes, action-attribution checks, forbidden hidden markdown, generated skill network/shell defaults off, and admin raw-content defaults off. |
+| Skill governance | SkillIR and SkillGraphIR primitives, deterministic compiler, scanner, evaluator/probes, executor-profile-scoped proposal gates, generated-probe scanner blocking, autonomy-assurance fallback records, threshold-deadlock detection, candidate proposals, topology proposal/trial/apply records, effect-disclosure composition gates, proposal review, lifecycle state, canary/freeze, provenance traversal, revocation, staged writer apply, and rollback. |
+| Safety controls | Redaction-before-store/embed defaults, raw-vault access logging, memory quarantine, control-flow events, harmful-capability and prompt-injection scanner classes, action-attribution checks, audit hash-chain verification, forbidden hidden markdown, generated skill network/shell defaults off, and admin raw-content defaults off. |
 | Historical/bootstrap import | Source discovery, dry-run inventory, historical import tables, chunking, taint/confidence controls, bootstrap candidate generation, lower trust for stale/summary evidence, and stage-only external-skill import review. |
 | Model and embedding profiles | Operator-selected OpenAI-compatible text and embedding endpoints, profile records, qualification runs, active embedding selection, profile-qualified queued embedding generation, content-safe embedding traces, and production embedding validation API. |
-| Observatory | Split web/API container, React UI, 30-station assembly-line map, subsystem workcells, station cockpit, issue board, search, skills/topology views, gates/autonomy views, content-safe autonomy/evidence read models, threshold-deadlock diagnostics, trace replay, broker replay corpus, storage diagnostics, deployment fingerprint health output, live WebSocket/SSE updates, action gateway, CSRF/auth handling, generated API client, and deterministic UI fixture catalog. |
-| Operations | Deployment readiness and deployment-fingerprint endpoints, backup/restore scripts, acceptance/readiness/conformance/traceability reports, deterministic scanner red-team runner, replay-corpus tooling, activation-context smoke tooling, and Docker/GHCR packaging workflow. |
+| Observatory | Split web/API container, React UI, 30-station assembly-line map, subsystem workcells, station cockpit, issue board, search, skills/topology views, gates/autonomy views, content-safe autonomy/evidence read models, threshold-deadlock diagnostics, trace replay, broker replay corpus, storage diagnostics, readiness envelope for API/static/storage/live-stream health, deployment fingerprint output, live WebSocket/SSE updates, action gateway, CSRF/auth handling, generated API client, and deterministic UI fixture catalog. |
+| Operations | Deployment readiness and deployment-fingerprint endpoints, backup/restore scripts, acceptance/readiness/conformance/traceability reports, deterministic scanner red-team runner, replay-corpus tooling, activation-context smoke tooling, storage/executor-profile readiness smoke tooling, and Docker/GHCR packaging workflow. |
 
 ## Architecture at a glance
 
@@ -186,6 +186,19 @@ docker compose -f compose/compose.example.yml up --build
 Core defaults to `127.0.0.1:8765`. Observatory defaults to
 `127.0.0.1:8757/admin/`.
 
+Before exposing a stack beyond localhost, use both readiness layers instead of
+treating container startup as success:
+
+- `GET /v1/health/ready` reports Core protocol/deployment readiness, schema and
+  read-model contract versions, scheduler/ingest/scanner dependencies, and
+  text/embedding profile readiness or explicit degradation state.
+- `GET /admin/api/v1/health/live` is the unauthenticated Observatory liveness
+  check for the split web/API container.
+- `GET /admin/api/v1/health/ready` requires the Observatory admin token and
+  summarizes API serving, declared static assets, Core reachability, storage
+  plane readiness, read-model contract, live-stream health, data-quality signals,
+  and active issues.
+
 For LLM-backed candidate generation, evaluation support, and embedding
 generation, configure operator-supplied OpenAI-compatible endpoints with:
 
@@ -317,6 +330,11 @@ traversal, topology admission, deployment readiness, activation-context, and
 Observatory-live smokes against disposable `pgvector/pgvector:pg17`, plugin
 syntax/tests, Observatory build, Docker image build tests, and GHCR publication
 for the split Core and Observatory images on configured refs.
+
+The Python suite also exercises operator-facing gates that back these claims:
+Observatory static/ready/storage/live-stream health paths, audit hash-chain
+verification, executor-profile-scoped proposal gates, scanner-blocked generated
+probe expansion, and topology effect-disclosure checks.
 
 ## Security and privacy posture
 
