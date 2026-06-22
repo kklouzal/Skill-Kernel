@@ -2316,6 +2316,7 @@ def _observatory_ready_from_checks(
     static_assets: dict[str, object],
     live_stream_health: dict[str, object],
     read_model_freshness: dict[str, object],
+    self_health: dict[str, object],
 ) -> bool:
     core_reachability = snapshot.get("core_reachability")
     if not isinstance(core_reachability, dict):
@@ -2337,8 +2338,21 @@ def _observatory_ready_from_checks(
         and read_model_freshness.get("health") != "degraded",
         bool(live_stream_health.get("available"))
         and live_stream_health.get("health") == "available",
+        _observatory_self_health_populated(self_health),
     )
     return all(required_checks)
+
+
+def _observatory_self_health_populated(self_health: dict[str, object]) -> bool:
+    diagnostics = self_health.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return False
+    reason_codes = {str(code) for code in diagnostics.get("reason_codes") or []}
+    return (
+        self_health.get("object_type") == "component"
+        and self_health.get("object_id") == "observatory_admin"
+        and "read-model-missing" not in reason_codes
+    )
 
 
 def _read_model_freshness_readiness_detail(
@@ -11990,6 +12004,11 @@ def create_app(
         api_serving = _admin_api_serving_health()
         static_assets = _admin_static_asset_health()
         read_model_freshness = _read_model_freshness_readiness_detail(snapshot)
+        self_health = object_microscope(
+            snapshot,
+            object_type="component",
+            object_id="observatory_admin",
+        )
         return ObservatoryObjectResponse(
             object={
                 "schema_version": "skillkernel.observatory.ready.v1",
@@ -11999,6 +12018,7 @@ def create_app(
                     static_assets=static_assets,
                     live_stream_health=live_stream_health,
                     read_model_freshness=read_model_freshness,
+                    self_health=self_health,
                 ),
                 "global_health": snapshot["global_health"],
                 "deployment_fingerprint": _deployment_fingerprint("skillkernel-observatory"),
@@ -12011,11 +12031,7 @@ def create_app(
                 "live_stream_health": live_stream_health,
                 "data_quality": snapshot["data_quality"],
                 "issues": snapshot["issue_board"],
-                "self_health": object_microscope(
-                    snapshot,
-                    object_type="component",
-                    object_id="observatory_admin",
-                ),
+                "self_health": self_health,
             }
         )
 

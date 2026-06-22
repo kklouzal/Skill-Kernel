@@ -2228,6 +2228,51 @@ def test_observatory_readiness_reports_degraded_live_stream_reason_code(
         get_settings.cache_clear()
 
 
+def test_observatory_readiness_fails_closed_when_self_health_read_model_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    get_settings.cache_clear()
+    original_builder = app_module.build_observatory_snapshot
+
+    def snapshot_without_self_health(**kwargs):
+        snapshot = original_builder(**kwargs)
+        snapshot["pipeline"]["stations"] = [
+            station
+            for station in snapshot["pipeline"]["stations"]
+            if station["component_id"] != "observatory_admin"
+        ]
+        return snapshot
+
+    monkeypatch.setattr(
+        app_module,
+        "build_observatory_snapshot",
+        snapshot_without_self_health,
+    )
+    try:
+        app = create_app(
+            job_store=MemoryReadyStorageJobStore(),
+            audit_store=MemoryAuditStore(),
+            observability_store=CaptureObservabilityStore(),
+            observatory_admin_store=NullObservatoryAdminStore(),
+        )
+        route = _routes(app)[("/admin/api/v1/health/ready", "GET")]
+
+        ready = asyncio.run(route.endpoint(authorization="Bearer control-token"))
+
+        self_health = ready.object["self_health"]
+        assert ready.object["ready"] is False
+        assert self_health["object_type"] == "component"
+        assert self_health["object_id"] == "observatory_admin"
+        assert self_health["diagnostics"]["health"] == "unknown"
+        assert self_health["diagnostics"]["reason_codes"] == ["read-model-missing"]
+        assert self_health["content_policy"]["raw_available"] is False
+    finally:
+        get_settings.cache_clear()
+
+
 def test_observatory_readiness_reports_sequence_gap_degraded_reason_code(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

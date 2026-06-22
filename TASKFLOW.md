@@ -4526,3 +4526,21 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 - Remediation jobs against shared DB: `evaluations.remediate_fallbacks` jobs were enqueued and succeeded, but did not clear intervention state.
 - Remaining blocker: `admin_autonomy_decision_status` aggregate is dominated by `fallback_needs_more_evidence / no_op_reschedule / llm_unavailable / redacted_derivative / intervention-required`, plus `threshold_deadlock_candidate / collect_more_evidence`. This means remediation is still terminal/no-op for at least the no-op-reschedule path.
 - Active child slice: `skillkernel_noop_reschedule_fix` assigned to `codex-worker` to make `fallback_needs_more_evidence + no_op_reschedule` actionable or explicitly blocked without masquerading as progress. Do not declare pipeline healthy until this is reviewed, tested, committed, rebuilt, and live remediation changes the shared DB state.
+
+## Observatory Self-Health Readiness Contract - 2026-06-22T18:58Z
+
+- Spec item: Unified implementation specification Section "Container health and
+  readiness contract" requires Observatory readiness to include
+  browser-visible self-health, alongside static assets, API serving, storage
+  state, read-model freshness, live-stream health, and Core reachability.
+- Status: narrow fail-closed readiness check added. `/admin/api/v1/health/ready`
+  now resolves the Observatory self-health microscope once, returns that
+  content-safe object in the response, and reports `ready=false` if the
+  browser-visible `observatory_admin` component read model is missing instead
+  of treating the rest of the readiness checks as sufficient.
+- Files changed: `sidecar/autoskill/api/app.py`,
+  `sidecar/autoskill/tests/test_observatory_api.py`, and `TASKFLOW.md`.
+- Validation: `uv run pytest sidecar/autoskill/tests/test_observatory_api.py -q
+  -k 'observatory_readiness'` passed (`11 passed, 69 deselected`); touched-file
+  Ruff and compileall passed; `git diff --check` passed; full `uv run pytest
+  -q` passed (`571 passed, 2 skipped`).
