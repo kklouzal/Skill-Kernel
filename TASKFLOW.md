@@ -16,6 +16,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-22: Observatory readiness now reports explicit content-safe
+  `storage_plane_readiness` and `read_model_contract` objects on
+  `/admin/api/v1/health/ready`. The fields are sourced from the existing
+  storage-plane readiness primitive, distinguish ready versus uninitialized
+  schema/read-model states, include reason codes and schema/contract versions,
+  and assert that raw rows, connection strings, and host paths are not returned.
+  This advances unified Section 12.1 Observatory readiness requirements for
+  Postgres reachability and schema/read-model contract state being known,
+  including uninitialized states. Focused readiness tests, touched-file Ruff,
+  touched-file compileall, full `uv run pytest`, and diff hygiene passed. Next
+  gate: continue the next narrow production-hardening slice under
+  TaskFlow/`codex-worker` authority.
+
 - 2026-06-20: Commit `035c8ea` (`Fix no-op remediation reschedule status`)
   closes the no-op fallback remediation deadlock follow-up. `no_op_reschedule`
   outcomes without hard invariant failures now map to

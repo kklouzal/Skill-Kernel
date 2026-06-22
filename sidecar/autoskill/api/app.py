@@ -2667,6 +2667,53 @@ def _read_model_contract_readiness_detail(storage_readiness: Any) -> dict[str, o
     }
 
 
+def _storage_plane_readiness_detail(storage_readiness: Any) -> dict[str, object]:
+    reachable = bool(getattr(storage_readiness, "reachable", False))
+    ready = bool(getattr(storage_readiness, "ready", False))
+    all_missing_tables = list(getattr(storage_readiness, "missing_tables", []))
+    missing_tables = [str(table) for table in all_missing_tables[:25]]
+    if ready:
+        reason_code = None
+    elif not reachable:
+        reason_code = "storage_plane_uninitialized"
+    elif missing_tables:
+        reason_code = "storage_plane_catalog_missing"
+    elif getattr(storage_readiness, "migration_version", None) != getattr(
+        storage_readiness, "schema_contract", None
+    ):
+        reason_code = "migration_required"
+    else:
+        reason_code = "storage_plane_unready"
+    return {
+        "schema_version": "skillkernel.observatory.storage-plane-readiness.v1",
+        "known": True,
+        "ready": ready,
+        "health": "ready" if ready else "unready",
+        "reason_code": reason_code,
+        "reachable": reachable,
+        "pgvector_available": bool(
+            getattr(storage_readiness, "pgvector_available", False)
+        ),
+        "schema_present": bool(getattr(storage_readiness, "schema_present", False)),
+        "required_tables_present": bool(
+            getattr(storage_readiness, "required_tables_present", False)
+        ),
+        "migration_marker_present": bool(
+            getattr(storage_readiness, "migration_marker_present", False)
+        ),
+        "migration_version": getattr(storage_readiness, "migration_version", None),
+        "schema_contract": getattr(storage_readiness, "schema_contract", None),
+        "missing_table_count": len(all_missing_tables),
+        "missing_tables": missing_tables,
+        "error_type": getattr(storage_readiness, "error_type", None),
+        "content_policy": {
+            "raw_rows_returned": False,
+            "connection_strings_returned": False,
+            "host_paths_returned": False,
+        },
+    }
+
+
 def _parse_qualification_expires_at(value: object) -> datetime | None:
     if not value:
         return None
@@ -6556,6 +6603,13 @@ def create_app(
                 worker_health_payload
             ),
         }
+        storage_readiness = await jobs.storage_plane_readiness(
+            schema_contract=SCHEMA_MIGRATION_VERSION,
+        )
+        storage_plane_readiness = _storage_plane_readiness_detail(storage_readiness)
+        read_model_contract_readiness = _read_model_contract_readiness_detail(
+            storage_readiness
+        )
         metrics_snapshot = await observability.operator_metrics(
             workspace_key=effective_workspace_id,
             window_minutes=bounded_window,
@@ -6566,7 +6620,7 @@ def create_app(
             limit=max(1, min(audit_limit, 10_000)),
         )
         static_available = _admin_static_available()
-        return build_observatory_snapshot(
+        snapshot = build_observatory_snapshot(
             settings=settings,
             status=status_payload,
             operator_metrics=metrics_snapshot,
@@ -6576,6 +6630,9 @@ def create_app(
             workspace_id=effective_workspace_id,
             window_minutes=bounded_window,
         )
+        snapshot["storage_plane_readiness"] = storage_plane_readiness
+        snapshot["read_model_contract"] = read_model_contract_readiness
+        return snapshot
 
     def _missing_read_model(
         object_type: str,
@@ -11864,6 +11921,8 @@ def create_app(
                 "api_serving": _admin_api_serving_health(),
                 "static_assets": _admin_static_asset_health(),
                 "core_reachability": snapshot["core_reachability"],
+                "storage_plane_readiness": snapshot["storage_plane_readiness"],
+                "read_model_contract": snapshot["read_model_contract"],
                 "live_stream_health": live_stream_health,
                 "data_quality": snapshot["data_quality"],
                 "issues": snapshot["issue_board"],

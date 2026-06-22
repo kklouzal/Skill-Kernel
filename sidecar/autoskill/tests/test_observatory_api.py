@@ -47,6 +47,7 @@ from autoskill.db.jobs import (
     JobQueueSummary,
     JobRecord,
     NullJobStore,
+    StoragePlaneReadiness,
     WorkerHeartbeatRecord,
 )
 from autoskill.db.lifecycle import CanaryResultRecord, NullLifecycleStore
@@ -528,7 +529,7 @@ class MemoryEvidenceStore:
         return records[:limit]
 
 
-class MemorySummaryJobStore:
+class MemorySummaryJobStore(NullJobStore):
     def __init__(self) -> None:
         self.summary_calls: list[str | None] = []
         self.heartbeat_calls = 0
@@ -571,6 +572,24 @@ class MemoryCoreReachabilityJobStore(NullJobStore):
 
     async def list_worker_heartbeats(self, **_kwargs):
         return self.heartbeats
+
+
+class MemoryReadyStorageJobStore(MemoryCoreReachabilityJobStore):
+    async def storage_plane_readiness(
+        self,
+        *,
+        schema_contract: str,
+    ) -> StoragePlaneReadiness:
+        return StoragePlaneReadiness(
+            reachable=True,
+            pgvector_available=True,
+            schema_present=True,
+            required_tables_present=True,
+            migration_marker_present=True,
+            migration_version=schema_contract,
+            schema_contract=schema_contract,
+            missing_tables=[],
+        )
 
 
 class CaptureObservabilityStore:
@@ -2020,6 +2039,100 @@ def test_observatory_readiness_reports_known_core_reachable(
         assert live_stream["cursor_seq"] == 0
         assert live_stream["content_policy"]["raw_available"] is False
         assert live_stream["content_policy"]["payloads_returned"] is False
+    finally:
+        get_settings.cache_clear()
+
+
+def test_observatory_readiness_reports_known_storage_and_read_model_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    get_settings.cache_clear()
+    try:
+        app = create_app(
+            job_store=MemoryReadyStorageJobStore(),
+            audit_store=MemoryAuditStore(),
+            observability_store=CaptureObservabilityStore(),
+            observatory_admin_store=NullObservatoryAdminStore(),
+        )
+        route = _routes(app)[("/admin/api/v1/health/ready", "GET")]
+
+        ready = asyncio.run(route.endpoint(authorization="Bearer control-token"))
+
+        storage = ready.object["storage_plane_readiness"]
+        read_model_contract = ready.object["read_model_contract"]
+        assert storage == {
+            "schema_version": "skillkernel.observatory.storage-plane-readiness.v1",
+            "known": True,
+            "ready": True,
+            "health": "ready",
+            "reason_code": None,
+            "reachable": True,
+            "pgvector_available": True,
+            "schema_present": True,
+            "required_tables_present": True,
+            "migration_marker_present": True,
+            "migration_version": "0001_autoskill_schema",
+            "schema_contract": "0001_autoskill_schema",
+            "missing_table_count": 0,
+            "missing_tables": [],
+            "error_type": None,
+            "content_policy": {
+                "raw_rows_returned": False,
+                "connection_strings_returned": False,
+                "host_paths_returned": False,
+            },
+        }
+        assert read_model_contract["compatible"] is True
+        assert read_model_contract["reason_code"] == "read_model_contract_compatible"
+        assert read_model_contract["schema_migration_version"] == (
+            "0001_autoskill_schema"
+        )
+        assert read_model_contract["schema_contract"] == "0001_autoskill_schema"
+        assert read_model_contract["missing_catalogs"] == []
+        rendered = json.dumps([storage, read_model_contract], sort_keys=True)
+        assert "postgresql://example" not in rendered
+        assert "/Warehouse" not in rendered
+    finally:
+        get_settings.cache_clear()
+
+
+def test_observatory_readiness_reports_uninitialized_storage_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    get_settings.cache_clear()
+    try:
+        app = create_app(
+            job_store=MemoryCoreReachabilityJobStore(),
+            audit_store=MemoryAuditStore(),
+            observability_store=CaptureObservabilityStore(),
+            observatory_admin_store=NullObservatoryAdminStore(),
+        )
+        route = _routes(app)[("/admin/api/v1/health/ready", "GET")]
+
+        ready = asyncio.run(route.endpoint(authorization="Bearer control-token"))
+
+        storage = ready.object["storage_plane_readiness"]
+        read_model_contract = ready.object["read_model_contract"]
+        assert storage["known"] is True
+        assert storage["ready"] is False
+        assert storage["health"] == "unready"
+        assert storage["reason_code"] == "storage_plane_uninitialized"
+        assert storage["missing_table_count"] > 0
+        assert storage["content_policy"] == {
+            "raw_rows_returned": False,
+            "connection_strings_returned": False,
+            "host_paths_returned": False,
+        }
+        assert read_model_contract["compatible"] is False
+        assert read_model_contract["reason_code"] == "read_model_contract_missing"
+        assert read_model_contract["missing_catalogs"]
+        rendered = json.dumps([storage, read_model_contract], sort_keys=True)
+        assert "postgresql://example" not in rendered
     finally:
         get_settings.cache_clear()
 
