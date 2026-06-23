@@ -2550,6 +2550,56 @@ def _observatory_action_risk_tier(action: str, *, dry_run: bool) -> str:
     return "low"
 
 
+CORE_COMPATIBILITY_GUARDED_OBSERVATORY_ACTIONS = {
+    "retry_job",
+    "cancel_job",
+    "pause_schedule",
+    "resume_schedule",
+    "historical_import",
+    "quarantine_candidate",
+    "freeze_skill",
+    "unfreeze_skill",
+    "rollback_skill",
+    "rollback_transaction",
+    "rerun_evaluation",
+    "rescan_scanner",
+    "calibrate_broker",
+    "qualify_model_profile",
+    "qualify_embedding_profile",
+    "refresh_read_models",
+    "revoke_source",
+}
+
+
+def _observatory_core_compatibility_action_blockers(
+    *,
+    action: str,
+    dry_run: bool,
+    snapshot: dict[str, object],
+) -> list[str]:
+    if dry_run or action not in CORE_COMPATIBILITY_GUARDED_OBSERVATORY_ACTIONS:
+        return []
+    blockers: list[str] = []
+    core_reachability = snapshot.get("core_reachability")
+    if not isinstance(core_reachability, dict) or not core_reachability.get("reachable"):
+        blockers.append("core_unreachable")
+    read_model_contract = snapshot.get("read_model_contract")
+    if not isinstance(read_model_contract, dict) or not read_model_contract.get(
+        "compatible"
+    ):
+        reason_code = (
+            read_model_contract.get("reason_code")
+            if isinstance(read_model_contract, dict)
+            else None
+        )
+        blockers.append(
+            str(reason_code)
+            if isinstance(reason_code, str) and reason_code
+            else "read_model_contract_incompatible"
+        )
+    return blockers
+
+
 def _action_attribution_check_receipt(record: Any | None) -> dict[str, object] | None:
     if record is None:
         return None
@@ -11195,6 +11245,23 @@ def create_app(
         ):
             accepted = False
             reason_codes = ["confirmation-required"]
+        if (
+            accepted
+            and not request.dry_run
+            and request.action in CORE_COMPATIBILITY_GUARDED_OBSERVATORY_ACTIONS
+        ):
+            compatibility_snapshot = await _observatory_snapshot(
+                workspace_id=request.workspace_id,
+                window_minutes=60,
+            )
+            compatibility_blockers = _observatory_core_compatibility_action_blockers(
+                action=request.action,
+                dry_run=request.dry_run,
+                snapshot=compatibility_snapshot,
+            )
+            if compatibility_blockers:
+                accepted = False
+                reason_codes = compatibility_blockers
         if accepted and request.action == "verify_audit_chain" and not request.dry_run:
             requested_limit = (
                 request.metadata.get("audit_limit")

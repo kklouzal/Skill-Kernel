@@ -6674,6 +6674,50 @@ def test_observatory_action_requires_audit_reason_before_recording() -> None:
     assert audit_store.records == []
 
 
+def test_observatory_core_guarded_action_blocks_when_core_unreachable() -> None:
+    audit_store = MemoryAuditStore()
+    attribution_store = NullAttributionStore()
+    observatory_admin = NullObservatoryAdminStore()
+    app = create_app(
+        audit_store=audit_store,
+        attribution_store=attribution_store,
+        observatory_admin_store=observatory_admin,
+    )
+    route = _routes(app)[("/admin/api/v1/actions", "POST")]
+
+    async def run():
+        return await route.endpoint(
+            http_request=None,
+            request=ObservatoryActionRequest(
+                workspace_id="dev-01",
+                action="refresh_read_models",
+                idempotency_key="obs-refresh-read-models-core-unreachable",
+                reason="operator requested read model refresh",
+                dry_run=False,
+            ),
+        )
+
+    response = asyncio.run(run())
+
+    assert response.receipt["accepted"] is False
+    assert response.receipt["policy"]["allowed"] is False
+    assert response.receipt["policy"]["reason_codes"] == [
+        "core_unreachable",
+        "read_model_contract_missing",
+    ]
+    assert observatory_admin.actions[0].result == "rejected"
+    assert observatory_admin.actions[0].request_payload_redacted["reason_codes"] == [
+        "core_unreachable",
+        "read_model_contract_missing",
+    ]
+    assert attribution_store.checks[0].verdict == "blocked"
+    assert attribution_store.checks[0].metrics["reason_codes"] == [
+        "core_unreachable",
+        "read_model_contract_missing",
+    ]
+    assert audit_store.records[0].details["accepted"] is False
+
+
 def test_observatory_raw_reveal_action_fails_closed_by_default() -> None:
     observatory_admin = NullObservatoryAdminStore()
     autonomy = NullAutonomyControlStore()

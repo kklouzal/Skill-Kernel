@@ -16,6 +16,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-23: Observatory guarded action recording now fails closed for
+  Core-dependent non-dry-run actions when the browser-safe readiness snapshot
+  reports Core unreachable or the read-model contract incompatible/missing.
+  Local audit/read-only actions remain available, confirmation failures keep
+  their existing policy accounting precedence, and rejected guarded actions are
+  still audited with attribution checks and content-safe reason codes. This
+  advances the unified inter-container compatibility rule that Observatory
+  refuses guarded actions when Core is unreachable or contract-incompatible.
+  Focused Observatory action tests, touched-file Ruff, touched-file
+  compileall, full `uv run pytest`, and diff hygiene passed. Next gate:
+  exercise the guarded-action block in a split-container smoke where Core is
+  deliberately stopped and Observatory remains read-only.
+
 - 2026-06-23: Core inter-container compatibility handshake responses now
   carry explicit `plugin_ingest_policy` and
   `observatory_guarded_action_policy` fields on `/v1/version`,
