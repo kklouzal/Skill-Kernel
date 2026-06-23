@@ -1,0 +1,51 @@
+{
+  "audit_record_actions": [
+    "observatory.refresh_read_models",
+    "observatory.verify_audit_chain"
+  ],
+  "audit_verify_calls": [
+    {
+      "limit": 1000,
+      "workspace_key": "dev-01"
+    },
+    {
+      "limit": 25,
+      "workspace_key": "dev-01"
+    }
+  ],
+  "core_container_running": false,
+  "core_guarded_action": {
+    "accepted": false,
+    "action": "refresh_read_models",
+    "allowed": false,
+    "attribution_verdict": "blocked",
+    "audit_result": "rejected",
+    "live_event_type": "observatory_self_health_changed",
+    "reason_codes": [
+      "core_unreachable",
+      "read_model_contract_missing"
+    ]
+  },
+  "local_audit_action": {
+    "accepted": true,
+    "action": "verify_audit_chain",
+    "allowed": true,
+    "audit_chain_verification": {
+      "attempted": true,
+      "chain_valid": true,
+      "limit": 25,
+      "raw_audit_details_returned": false,
+      "schema_version": "skillkernel.observatory.audit-chain-verification.v1"
+    },
+    "audit_result": "accepted",
+    "live_event_type": "audit_record_appended",
+    "reason_codes": []
+  },
+  "observatory_admin_audit_results": [
+    "rejected",
+    "accepted"
+  ],
+  "ok": true,
+  "schema": "skillkernel.guard-action-core-unreachable-smoke.v1",
+  "source_changes": false
+}

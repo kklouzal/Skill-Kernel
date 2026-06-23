@@ -16,6 +16,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-23: Guarded-action Core-unreachable smoke passed in the canonical
+  SkillKernel checkout. No Core/Observatory containers or relevant ports were
+  running, so validation used the focused Observatory ASGI/test path.
+  Core-dependent `refresh_read_models` was rejected with
+  `core_unreachable`/`read_model_contract_missing` and audited as rejected;
+  local `verify_audit_chain` remained accepted/read-only with content-safe
+  audit verification. Focused pytest, receipt probe, and diff hygiene passed.
+  Artifacts:
+  `artifacts/guarded-action-core-unreachable-smoke-20260623T153726Z.log` and
+  `artifacts/guarded-action-core-unreachable-receipts-20260623T153843Z.json`.
+  Next safe step: optionally run the same gate against actual split Docker
+  containers with Observatory up and Core stopped once that runtime topology is
+  available.
+
 - 2026-06-23: Observatory Core-dependent guarded-action dry-runs now use the
   same browser-safe compatibility preflight as non-dry-run action requests.
   When Core is unreachable or the read-model contract is missing/incompatible,
