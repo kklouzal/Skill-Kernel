@@ -2015,6 +2015,7 @@ def test_observatory_readiness_reports_known_core_reachable(
         core = ready.object["core_reachability"]
         live_stream = ready.object["live_stream_health"]
         assert ready.object["ready"] is False
+        assert core["schema_version"] == "skillkernel.observatory.core-reachability.v1"
         assert core["known"] is True
         assert core["reachable"] is True
         assert core["health"] == "reachable"
@@ -2022,6 +2023,12 @@ def test_observatory_readiness_reports_known_core_reachable(
         assert core["ready_worker_ids"] == ["scheduler-ready-1"]
         assert core["last_core_heartbeat_at"] is not None
         assert core["disabled_action_reasons"] == []
+        assert core["content_policy"] == {
+            "raw_payloads_returned": False,
+            "connection_strings_returned": False,
+            "host_paths_returned": False,
+            "worker_metadata_returned": False,
+        }
         assert "core_unreachable" not in ready.object["data_quality"]["issues"]
         assert all(
             "core_unreachable" not in issue["reason_codes"]
@@ -2040,6 +2047,88 @@ def test_observatory_readiness_reports_known_core_reachable(
         assert live_stream["cursor_seq"] == 0
         assert live_stream["content_policy"]["raw_available"] is False
         assert live_stream["content_policy"]["payloads_returned"] is False
+    finally:
+        get_settings.cache_clear()
+
+
+def test_observatory_readiness_sanitizes_core_reachability_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    get_settings.cache_clear()
+
+    def unsafe_core_reachability(_worker_health):
+        return {
+            "known": True,
+            "reachable": False,
+            "source": "postgresql://reader:secret@example/skillkernel",
+            "scheduler_worker_count": 1,
+            "ready_worker_ids": [
+                "scheduler-ready-1",
+                "/Warehouse/private-worker",
+                "token secret worker",
+            ],
+            "last_core_heartbeat_at": "not a timestamp with secret",
+            "disabled_action_reasons": [
+                "core_unreachable",
+                "postgresql://reader:secret@example/skillkernel",
+                "/Warehouse/private-reason",
+            ],
+        }
+
+    monkeypatch.setattr(
+        app_module,
+        "_core_reachability_from_worker_health",
+        unsafe_core_reachability,
+    )
+    try:
+        app = create_app(
+            job_store=MemoryReadyStorageJobStore(),
+            audit_store=MemoryAuditStore(),
+            observability_store=CaptureObservabilityStore(),
+            observatory_admin_store=NullObservatoryAdminStore(),
+        )
+        route = _routes(app)[("/admin/api/v1/health/ready", "GET")]
+
+        ready = asyncio.run(route.endpoint(authorization="Bearer control-token"))
+
+        core = ready.object["core_reachability"]
+        assert ready.object["ready"] is False
+        assert core == {
+            "schema_version": "skillkernel.observatory.core-reachability.v1",
+            "known": True,
+            "reachable": False,
+            "health": "unreachable",
+            "reason_code": "core_unreachable",
+            "source": "worker_health.scheduler_worker_heartbeat",
+            "last_core_heartbeat_at": None,
+            "scheduler_worker_count": 1,
+            "ready_worker_ids": ["scheduler-ready-1"],
+            "disabled_action_reasons": ["core_unreachable"],
+            "content_policy": {
+                "raw_payloads_returned": False,
+                "connection_strings_returned": False,
+                "host_paths_returned": False,
+                "worker_metadata_returned": False,
+            },
+        }
+        issue = next(
+            issue
+            for issue in ready.object["issues"]
+            if "core_unreachable" in issue["reason_codes"]
+        )
+        assert issue["diagnostics"]["source"] == (
+            "worker_health.scheduler_worker_heartbeat"
+        )
+        assert issue["diagnostics"]["last_core_heartbeat_at"] is None
+        assert issue["diagnostics"]["ready_worker_ids"] == ["scheduler-ready-1"]
+        rendered = json.dumps(ready.object, sort_keys=True)
+        assert "postgresql://reader:secret@example/skillkernel" not in rendered
+        assert "/Warehouse/private" not in rendered
+        assert "token secret worker" not in rendered
+        assert "not a timestamp with secret" not in rendered
     finally:
         get_settings.cache_clear()
 

@@ -16,6 +16,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-23: Observatory readiness now exposes `core_reachability` as an
+  explicit content-safe readiness contract with schema version and no-raw/no-
+  connection-string/no-host-path/no-worker-metadata policy flags. Core
+  reachability still fails closed when scheduler workers are unavailable, but
+  readiness and issue-board diagnostics now clamp source, heartbeat timestamp,
+  ready worker IDs, and disabled action reasons to safe bounded values instead
+  of echoing arbitrary status strings. This advances unified Section 12.1's
+  requirement that Core reachability be known, not assumed, while preserving
+  browser-safe diagnostics. Focused readiness tests, touched-file Ruff,
+  touched-file compileall, and diff hygiene passed. Next gate: continue the
+  next narrow production-hardening slice under TaskFlow/`codex-worker`
+  authority.
+
 - 2026-06-22: Observatory readiness now exposes first-class, content-safe
   `browser_visible_self_health` on `/admin/api/v1/health/ready` and uses that
   readiness envelope for the unified Section 12.1 browser-visible self-health

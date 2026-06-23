@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -9,6 +10,8 @@ from autoskill.services.embedding_generation import embedding_provider_policy
 
 OBSERVATORY_SCHEMA_VERSION = "skillkernel.observatory.v1"
 LIVE_SCHEMA_VERSION = "skillkernel.observatory.live.v1"
+CORE_REACHABILITY_SOURCE = "worker_health.scheduler_worker_heartbeat"
+SAFE_DIAGNOSTIC_TOKEN = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 
 HEALTH_ORDER = {
     "healthy": 0,
@@ -1903,24 +1906,61 @@ def _core_reachability(status: dict[str, Any]) -> dict[str, Any]:
     known = bool(core.get("known"))
     reachable = bool(core.get("reachable")) if known else False
     reason_code = None if reachable else "core_unreachable"
-    disabled_action_reasons = list(core.get("disabled_action_reasons") or [])
+    disabled_action_reasons = [
+        reason
+        for item in list(core.get("disabled_action_reasons") or [])
+        if (reason := _safe_diagnostic_token(item)) is not None
+    ]
     if reason_code and reason_code not in disabled_action_reasons:
         disabled_action_reasons.append(reason_code)
     return {
+        "schema_version": "skillkernel.observatory.core-reachability.v1",
         "known": known,
         "reachable": reachable,
         "health": "reachable" if reachable else ("unreachable" if known else "unknown"),
         "reason_code": reason_code,
-        "source": str(core.get("source") or "worker_health.scheduler_worker_heartbeat"),
-        "last_core_heartbeat_at": core.get("last_core_heartbeat_at"),
+        "source": (
+            str(core.get("source"))
+            if core.get("source") == CORE_REACHABILITY_SOURCE
+            else CORE_REACHABILITY_SOURCE
+        ),
+        "last_core_heartbeat_at": _safe_iso_timestamp(
+            core.get("last_core_heartbeat_at")
+        ),
         "scheduler_worker_count": int(core.get("scheduler_worker_count") or 0),
         "ready_worker_ids": [
-            str(worker_id) for worker_id in list(core.get("ready_worker_ids") or [])[:10]
+            worker_id
+            for item in list(core.get("ready_worker_ids") or [])[:10]
+            if (worker_id := _safe_diagnostic_token(item)) is not None
         ],
         "disabled_action_reasons": sorted(
             {str(item) for item in disabled_action_reasons}
         ),
+        "content_policy": {
+            "raw_payloads_returned": False,
+            "connection_strings_returned": False,
+            "host_paths_returned": False,
+            "worker_metadata_returned": False,
+        },
     }
+
+
+def _safe_diagnostic_token(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if not SAFE_DIAGNOSTIC_TOKEN.fullmatch(value):
+        return None
+    return value
+
+
+def _safe_iso_timestamp(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return value
 
 
 def _read_model_age_seconds(
