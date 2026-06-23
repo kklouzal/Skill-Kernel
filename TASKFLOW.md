@@ -16,6 +16,20 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-23: Observatory container healthchecks now support authenticated
+  readiness probes without leaking configured admin tokens to arbitrary
+  non-loopback health URLs. When an operator points
+  `SKILLKERNEL_OBSERVATORY_HEALTH_URL` at the local authenticated
+  `/admin/api/v1/health/ready` route, the healthcheck sends the configured
+  `SKILLKERNEL_ADMIN_TOKEN`/`AUTOSKILL_WEB_ADMIN_TOKEN`; an explicit
+  `SKILLKERNEL_OBSERVATORY_HEALTH_BEARER_TOKEN` remains available for
+  non-default deployments. This closes a split-container deployability gap
+  opened by authenticated readiness: production containers can probe the real
+  readiness contract instead of falling back to liveness or failing with 401.
+  Focused operator-script tests, touched-file Ruff, touched-file compileall,
+  full `uv run pytest`, and diff hygiene passed. Next gate: continue the next
+  narrow production-hardening slice under TaskFlow/`codex-worker` authority.
+
 - 2026-06-23: Observatory readiness now exposes `core_reachability` as an
   explicit content-safe readiness contract with schema version and no-raw/no-
   connection-string/no-host-path/no-worker-metadata policy flags. Core

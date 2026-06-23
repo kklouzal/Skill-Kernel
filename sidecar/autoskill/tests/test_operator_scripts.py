@@ -10,11 +10,22 @@ from types import ModuleType
 import pytest
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[3] / "scripts"
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _load_script(name: str) -> ModuleType:
     sys.path.insert(0, str(SCRIPT_ROOT))
     spec = importlib.util.spec_from_file_location(name, SCRIPT_ROOT / f"{name}.py")
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_repo_file(name: str, path: str) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -247,3 +258,62 @@ def test_admin_token_script_discovers_repo_root_from_nested_cwd(tmp_path: Path) 
     (repo / "scripts" / "autoskill_admin_token.py").write_text("", encoding="utf-8")
 
     assert admin_token._repo_root(nested) == repo
+
+
+def test_observatory_healthcheck_sends_admin_token_to_local_ready_route(monkeypatch) -> None:
+    healthcheck = _load_repo_file(
+        "observatory_healthcheck",
+        "containers/observatory/healthcheck.py",
+    )
+
+    monkeypatch.setenv(
+        "SKILLKERNEL_OBSERVATORY_HEALTH_URL",
+        "http://127.0.0.1:8757/admin/api/v1/health/ready",
+    )
+    monkeypatch.setenv("SKILLKERNEL_ADMIN_TOKEN", "admin-token")
+    monkeypatch.setattr(sys, "argv", ["healthcheck.py", "observatory"])
+
+    class FakeResponse:
+        status = 200
+
+    class FakeConnection:
+        request_headers: dict[str, str] | None = None
+
+        def __init__(self, host: str, port: int | None, timeout: int) -> None:
+            self.host = host
+            self.port = port
+            self.timeout = timeout
+
+        def request(self, method: str, path: str, headers: dict[str, str]) -> None:
+            assert method == "GET"
+            assert path == "/admin/api/v1/health/ready"
+            FakeConnection.request_headers = headers
+
+        def getresponse(self) -> FakeResponse:
+            return FakeResponse()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(healthcheck, "HTTPConnection", FakeConnection)
+
+    assert healthcheck.main() == 0
+    assert FakeConnection.request_headers == {"Authorization": "Bearer admin-token"}
+
+
+def test_observatory_healthcheck_does_not_send_admin_token_to_remote_url(monkeypatch) -> None:
+    healthcheck = _load_repo_file(
+        "observatory_healthcheck_remote",
+        "containers/observatory/healthcheck.py",
+    )
+
+    monkeypatch.setenv(
+        "SKILLKERNEL_OBSERVATORY_HEALTH_URL",
+        "https://observatory.example.invalid/admin/api/v1/health/ready",
+    )
+    monkeypatch.setenv("SKILLKERNEL_ADMIN_TOKEN", "admin-token")
+
+    assert healthcheck._healthcheck_headers(
+        "observatory.example.invalid",
+        "/admin/api/v1/health/ready",
+    ) == {}
