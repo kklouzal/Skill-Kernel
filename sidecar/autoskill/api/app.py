@@ -325,6 +325,8 @@ class CoreProtocolResponse(BaseModel):
     degraded_features: list[str]
     generated_at: str
     deployment_fingerprint: dict[str, str]
+    plugin_ingest_policy: dict[str, object]
+    observatory_guarded_action_policy: dict[str, object]
 
 
 class CoreCapabilitiesResponse(CoreProtocolResponse):
@@ -379,6 +381,26 @@ def _core_protocol_payload() -> dict[str, object]:
             service="skillkernel-core",
             generated_at=generated_at,
         ),
+        "plugin_ingest_policy": {
+            "privileged_raw_conversation_evidence_allowed": False,
+            "requires_expected_api_contract_version": API_CONTRACT_VERSION,
+            "requires_auth_mode": "bearer",
+            "requires_raw_vault_policy_version": "skillkernel.raw-vault-policy.v1",
+            "requires_redaction_policy_version": "skillkernel.redaction-policy.v1",
+            "failure_reason_code": "plugin_core_handshake_required",
+        },
+        "observatory_guarded_action_policy": {
+            "guarded_actions_require_core_compatible": True,
+            "refuse_when_core_unreachable": True,
+            "refuse_when_api_contract_incompatible": True,
+            "refuse_when_read_model_contract_incompatible": True,
+            "read_only_historical_views_allowed_when_incompatible": True,
+            "failure_reason_codes": [
+                "core_unreachable",
+                "api_contract_incompatible",
+                "read_model_contract_incompatible",
+            ],
+        },
     }
 
 

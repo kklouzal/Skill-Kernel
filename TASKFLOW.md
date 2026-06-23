@@ -16,6 +16,19 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-23: Core inter-container compatibility handshake responses now
+  carry explicit `plugin_ingest_policy` and
+  `observatory_guarded_action_policy` fields on `/v1/version`,
+  `/v1/capabilities`, `/v1/read-model-contract`, and `/v1/health/ready`.
+  This makes the unified Section 12.1/compatibility requirement
+  machine-checkable: the OpenClaw plugin can refuse privileged raw evidence
+  unless the expected API/auth/raw-vault/redaction policy handshake is present,
+  and Observatory can refuse guarded actions when Core is unreachable or
+  contract-incompatible while preserving read-only historical views. Focused
+  compatibility tests, touched-file Ruff, touched-file compileall, full
+  `uv run pytest`, and diff hygiene passed. Next gate: continue the next
+  narrow production-hardening slice under TaskFlow/`codex-worker` authority.
+
 - 2026-06-23: Observatory container healthchecks now support authenticated
   readiness probes without leaking configured admin tokens to arbitrary
   non-loopback health URLs. When an operator points

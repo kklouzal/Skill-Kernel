@@ -109,6 +109,29 @@ def test_core_compatibility_handshake_endpoints_report_contract(monkeypatch) -> 
     assert version.deployment_fingerprint["revision"] == "local"
     assert version.deployment_fingerprint["image_source"] == "local"
     assert version.deployment_fingerprint["source"] == "environment"
+    expected_plugin_ingest_policy = {
+        "privileged_raw_conversation_evidence_allowed": False,
+        "requires_expected_api_contract_version": "skillkernel.api.v1",
+        "requires_auth_mode": "bearer",
+        "requires_raw_vault_policy_version": "skillkernel.raw-vault-policy.v1",
+        "requires_redaction_policy_version": "skillkernel.redaction-policy.v1",
+        "failure_reason_code": "plugin_core_handshake_required",
+    }
+    expected_guarded_action_policy = {
+        "guarded_actions_require_core_compatible": True,
+        "refuse_when_core_unreachable": True,
+        "refuse_when_api_contract_incompatible": True,
+        "refuse_when_read_model_contract_incompatible": True,
+        "read_only_historical_views_allowed_when_incompatible": True,
+        "failure_reason_codes": [
+            "core_unreachable",
+            "api_contract_incompatible",
+            "read_model_contract_incompatible",
+        ],
+    }
+    for response in (version, capabilities, contract, ready):
+        assert response.plugin_ingest_policy == expected_plugin_ingest_policy
+        assert response.observatory_guarded_action_policy == expected_guarded_action_policy
     assert capabilities.capabilities["ingest_contract"] == {
         "path": "/v1/ingest/events",
         "method": "POST",

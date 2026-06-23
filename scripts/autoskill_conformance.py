@@ -617,6 +617,8 @@ def _check_inter_container_compatibility() -> StaticCheck:
         "read_model_contract_version",
         "minimum_supported_observatory_version",
         "maximum_tested_observatory_version",
+        "plugin_ingest_policy",
+        "observatory_guarded_action_policy",
     ):
         if field not in app:
             details.append(f"missing compatibility response field: {field}")
