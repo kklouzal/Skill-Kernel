@@ -16,6 +16,17 @@ Phase 10/11 v16 coherence closure and production-hardening buildout.
 
 ## Current State
 
+- 2026-06-23: Observatory Core-dependent guarded-action dry-runs now use the
+  same browser-safe compatibility preflight as non-dry-run action requests.
+  When Core is unreachable or the read-model contract is missing/incompatible,
+  the dry-run records an audited non-mutating rejected receipt with the
+  content-safe `core_unreachable`/read-model reason codes instead of implying
+  the action would be allowed. Local audit/read-only actions and existing
+  confirmation precedence remain unchanged. Focused Observatory action tests,
+  touched-file Ruff, touched-file compileall, and diff hygiene passed. Next
+  gate: exercise the guarded-action block in a split-container smoke where
+  Core is deliberately stopped and Observatory remains read-only.
+
 - 2026-06-23: Observatory guarded action recording now fails closed for
   Core-dependent non-dry-run actions when the browser-safe readiness snapshot
   reports Core unreachable or the read-model contract incompatible/missing.

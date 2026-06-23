@@ -2574,10 +2574,9 @@ CORE_COMPATIBILITY_GUARDED_OBSERVATORY_ACTIONS = {
 def _observatory_core_compatibility_action_blockers(
     *,
     action: str,
-    dry_run: bool,
     snapshot: dict[str, object],
 ) -> list[str]:
-    if dry_run or action not in CORE_COMPATIBILITY_GUARDED_OBSERVATORY_ACTIONS:
+    if action not in CORE_COMPATIBILITY_GUARDED_OBSERVATORY_ACTIONS:
         return []
     blockers: list[str] = []
     core_reachability = snapshot.get("core_reachability")
@@ -11247,7 +11246,6 @@ def create_app(
             reason_codes = ["confirmation-required"]
         if (
             accepted
-            and not request.dry_run
             and request.action in CORE_COMPATIBILITY_GUARDED_OBSERVATORY_ACTIONS
         ):
             compatibility_snapshot = await _observatory_snapshot(
@@ -11256,7 +11254,6 @@ def create_app(
             )
             compatibility_blockers = _observatory_core_compatibility_action_blockers(
                 action=request.action,
-                dry_run=request.dry_run,
                 snapshot=compatibility_snapshot,
             )
             if compatibility_blockers:
