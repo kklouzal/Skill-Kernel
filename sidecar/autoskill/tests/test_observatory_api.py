@@ -7036,3 +7036,37 @@ def test_observatory_readiness_route_requires_configured_admin_token(monkeypatch
         }
     finally:
         get_settings.cache_clear()
+
+
+def test_observatory_readiness_fails_closed_when_self_health_is_blocked() -> None:
+    from autoskill.api import app as app_module
+
+    browser_visible_self_health = app_module._browser_visible_self_health_readiness_detail(
+        {
+            "object_type": "component",
+            "object_id": "observatory_admin",
+            "diagnostics": {
+                "health": "blocked",
+                "reason_codes": ["observatory-admin-self-health-blocked"],
+            },
+        }
+    )
+
+    assert browser_visible_self_health["populated"] is False
+    assert browser_visible_self_health["health"] == "blocked"
+    assert browser_visible_self_health["reason_code"] == (
+        "browser_visible_self_health_blocked"
+    )
+    assert app_module._is_observatory_readiness_ready(
+        {
+            "global_health": "healthy",
+            "core_reachability": {"reachable": True},
+            "storage_plane_readiness": {"ready": True},
+            "read_model_contract": {"compatible": True},
+        },
+        api_serving={"available": True},
+        static_assets={"available": True},
+        live_stream_health={"available": True, "health": "available"},
+        read_model_freshness={"known": True, "health": "fresh"},
+        browser_visible_self_health=browser_visible_self_health,
+    ) is False

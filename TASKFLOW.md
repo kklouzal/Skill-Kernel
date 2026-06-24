@@ -1,5 +1,13 @@
 # SkillKernel TaskFlow Ledger
 
+
+## Observatory Self-Health Blocked Readiness Fail-Closed - 2026-06-24T23:10Z
+
+- Spec item: Observatory readiness must include browser-visible self-health and must not report ready when that self-health read model is present but explicitly blocked/unhealthy.
+- Status: narrow fail-closed contract tightened. Browser-visible Observatory self-health now treats explicit blocked/unhealthy self-health reason codes as readiness blockers instead of counting mere object presence as populated.
+- Files changed: `sidecar/autoskill/api/app.py`, `sidecar/autoskill/tests/test_observatory_api.py`, and `TASKFLOW.md`.
+- Validation: focused Observatory readiness pytest slice passed; touched-file Ruff and compileall passed; `git diff --check` passed; full `uv run pytest -q` passed.
+
 Managed durable work item: `skillkernel-autoskill-v1`
 
 Goal: implement SkillKernel / OpenClaw AutoSkill Manager against the unified implementation specification until production acceptance criteria are satisfied.

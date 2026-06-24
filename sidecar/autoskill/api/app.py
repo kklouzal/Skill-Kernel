@@ -2372,17 +2372,39 @@ def _browser_visible_self_health_readiness_detail(
     if not isinstance(diagnostics, dict):
         diagnostics = {}
     reason_codes = sorted({str(code) for code in diagnostics.get("reason_codes") or []})
+    missing = "read-model-missing" in reason_codes
+    blocked = any(
+        code
+        in {
+            "observatory-admin-self-health-blocked",
+            "observatory-admin-unhealthy",
+            "self-health-blocked",
+        }
+        for code in reason_codes
+    )
     populated = (
         self_health.get("object_type") == "component"
         and self_health.get("object_id") == "observatory_admin"
-        and "read-model-missing" not in reason_codes
+        and not missing
+        and not blocked
     )
+    health = "populated"
+    reason_code = None
+    if missing:
+        health = "missing"
+        reason_code = "browser_visible_self_health_missing"
+    elif blocked:
+        health = "blocked"
+        reason_code = "browser_visible_self_health_blocked"
+    elif not populated:
+        health = "missing"
+        reason_code = "browser_visible_self_health_missing"
     return {
         "schema_version": "skillkernel.observatory.browser-visible-self-health.v1",
         "known": True,
         "populated": populated,
-        "health": "populated" if populated else "missing",
-        "reason_code": None if populated else "browser_visible_self_health_missing",
+        "health": health,
+        "reason_code": reason_code,
         "object_type": (
             str(self_health.get("object_type")) if self_health.get("object_type") else None
         ),
