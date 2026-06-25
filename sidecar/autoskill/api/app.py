@@ -2365,6 +2365,25 @@ def _observatory_ready_from_checks(
     return all(required_checks)
 
 
+def _is_observatory_readiness_ready(
+    snapshot: dict[str, object],
+    *,
+    api_serving: dict[str, object],
+    static_assets: dict[str, object],
+    live_stream_health: dict[str, object],
+    read_model_freshness: dict[str, object],
+    browser_visible_self_health: dict[str, object],
+) -> bool:
+    return _observatory_ready_from_checks(
+        snapshot,
+        api_serving=api_serving,
+        static_assets=static_assets,
+        live_stream_health=live_stream_health,
+        read_model_freshness=read_model_freshness,
+        browser_visible_self_health=browser_visible_self_health,
+    )
+
+
 def _browser_visible_self_health_readiness_detail(
     self_health: dict[str, object],
 ) -> dict[str, object]:
