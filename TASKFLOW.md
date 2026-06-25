@@ -8,6 +8,14 @@
 - Files changed: `sidecar/autoskill/api/app.py`, `sidecar/autoskill/tests/test_observatory_api.py`, and `TASKFLOW.md`.
 - Validation: focused Observatory readiness pytest slice passed; touched-file Ruff and compileall passed; `git diff --check` passed; full `uv run pytest -q` passed.
 
+
+## Core Reachability Helper Readiness Contract - 2026-06-25T09:45Z
+
+- Spec item: Observatory readiness requires Core reachability to be known, browser-safe, and explicitly reason-coded before guarded Core-dependent actions are allowed.
+- Status: narrow contract tightened. The worker-health Core reachability helper now emits the complete browser-safe readiness envelope itself, including schema version, health, reason code, and no-raw/no-secret content policy, so all callers inherit the same fail-closed contract.
+- Files changed: `sidecar/autoskill/api/app.py`, `sidecar/autoskill/tests/test_observatory_api.py`, and `TASKFLOW.md`.
+- Validation: focused Observatory readiness/guarded-action pytest slice passed; touched-file Ruff and compileall passed; full `uv run pytest -q` passed; `git diff --check` passed.
+
 Managed durable work item: `skillkernel-autoskill-v1`
 
 Goal: implement SkillKernel / OpenClaw AutoSkill Manager against the unified implementation specification until production acceptance criteria are satisfied.

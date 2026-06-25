@@ -7070,3 +7070,26 @@ def test_observatory_readiness_fails_closed_when_self_health_is_blocked() -> Non
         read_model_freshness={"known": True, "health": "fresh"},
         browser_visible_self_health=browser_visible_self_health,
     ) is False
+
+
+def test_core_reachability_helper_returns_complete_fail_closed_contract() -> None:
+    core = app_module._core_reachability_from_worker_health({"workers": []})
+
+    assert core == {
+        "schema_version": "skillkernel.observatory.core-reachability.v1",
+        "known": True,
+        "reachable": False,
+        "health": "unreachable",
+        "reason_code": "core_unreachable",
+        "source": "worker_health.scheduler_worker_heartbeat",
+        "scheduler_worker_count": 0,
+        "ready_worker_ids": [],
+        "last_core_heartbeat_at": None,
+        "disabled_action_reasons": ["core_unreachable"],
+        "content_policy": {
+            "raw_payloads_returned": False,
+            "connection_strings_returned": False,
+            "host_paths_returned": False,
+            "worker_metadata_returned": False,
+        },
+    }

@@ -2839,8 +2839,11 @@ def _core_reachability_from_worker_health(
     ]
     reachable = bool(ready_workers)
     return {
+        "schema_version": "skillkernel.observatory.core-reachability.v1",
         "known": True,
         "reachable": reachable,
+        "health": "reachable" if reachable else "unreachable",
+        "reason_code": None if reachable else "core_unreachable",
         "source": "worker_health.scheduler_worker_heartbeat",
         "scheduler_worker_count": len(workers),
         "ready_worker_ids": [
@@ -2850,6 +2853,12 @@ def _core_reachability_from_worker_health(
         ],
         "last_core_heartbeat_at": max(last_seen_values) if last_seen_values else None,
         "disabled_action_reasons": [] if reachable else ["core_unreachable"],
+        "content_policy": {
+            "raw_payloads_returned": False,
+            "connection_strings_returned": False,
+            "host_paths_returned": False,
+            "worker_metadata_returned": False,
+        },
     }
 
 
