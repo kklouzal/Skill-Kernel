@@ -2346,6 +2346,55 @@ def test_observatory_readiness_reports_degraded_live_stream_reason_code(
         get_settings.cache_clear()
 
 
+def test_observatory_browser_visible_self_health_redacts_unsafe_reason_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTOSKILL_DATABASE_URL", "postgresql://example/skillkernel")
+    monkeypatch.setenv("AUTOSKILL_CONTROL_TOKEN", "control-token")
+    monkeypatch.setenv("AUTOSKILL_INGEST_TOKEN", "ingest-token")
+    get_settings.cache_clear()
+
+    def unsafe_self_health(*args, **kwargs):
+        return {
+            "object_type": "component",
+            "object_id": "observatory_admin",
+            "diagnostics": {
+                "health": "unknown",
+                "reason_codes": [
+                    "missing-required-signal",
+                    "postgresql://reader:secret@example/skillkernel",
+                    "/Warehouse/private/token secret worker",
+                    "UPPERCASE_UNSAFE",
+                ],
+            },
+        }
+
+    monkeypatch.setattr(app_module, "object_microscope", unsafe_self_health)
+    try:
+        app = create_app(
+            job_store=MemoryReadyStorageJobStore(),
+            audit_store=MemoryAuditStore(),
+            observability_store=CaptureObservabilityStore(),
+            observatory_admin_store=NullObservatoryAdminStore(),
+        )
+        route = _routes(app)[("/admin/api/v1/health/ready", "GET")]
+
+        ready = asyncio.run(route.endpoint(authorization="Bearer control-token"))
+
+        browser_visible_self_health = ready.object["browser_visible_self_health"]
+        assert browser_visible_self_health["diagnostic_reason_codes"] == [
+            "missing-required-signal",
+            "unsafe-diagnostic-code-redacted",
+        ]
+        rendered = json.dumps(browser_visible_self_health, sort_keys=True)
+        assert "postgresql://reader:secret@example/skillkernel" not in rendered
+        assert "/Warehouse/private" not in rendered
+        assert "token secret worker" not in rendered
+        assert "UPPERCASE_UNSAFE" not in rendered
+    finally:
+        get_settings.cache_clear()
+
+
 def test_observatory_readiness_fails_closed_when_self_health_read_model_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

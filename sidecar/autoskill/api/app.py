@@ -2384,13 +2384,30 @@ def _is_observatory_readiness_ready(
     )
 
 
+def _browser_safe_reason_codes(value: object) -> list[str]:
+    if not isinstance(value, list | tuple | set):
+        return []
+    safe_codes: set[str] = set()
+    for code in value:
+        code_text = str(code)
+        if (
+            code_text
+            and len(code_text) <= 80
+            and all(char.islower() or char.isdigit() or char in {"-", "_"} for char in code_text)
+        ):
+            safe_codes.add(code_text)
+        else:
+            safe_codes.add("unsafe-diagnostic-code-redacted")
+    return sorted(safe_codes)
+
+
 def _browser_visible_self_health_readiness_detail(
     self_health: dict[str, object],
 ) -> dict[str, object]:
     diagnostics = self_health.get("diagnostics")
     if not isinstance(diagnostics, dict):
         diagnostics = {}
-    reason_codes = sorted({str(code) for code in diagnostics.get("reason_codes") or []})
+    reason_codes = _browser_safe_reason_codes(diagnostics.get("reason_codes"))
     missing = "read-model-missing" in reason_codes
     blocked = any(
         code
