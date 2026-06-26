@@ -899,6 +899,11 @@ def test_deployment_readiness_blocks_when_storage_plane_schema_not_observable(
     assert "storage_plane_schema_ready" in response.blockers
     assert response.checks["storage_plane_schema_ready"] == {
         "status": "blocked",
+        "schema_version": "skillkernel.observatory.storage-plane-readiness.v1",
+        "known": True,
+        "ready": False,
+        "health": "unready",
+        "reason_code": "storage_plane_uninitialized",
         "reachable": False,
         "pgvector_available": False,
         "schema_present": False,
@@ -906,8 +911,14 @@ def test_deployment_readiness_blocks_when_storage_plane_schema_not_observable(
         "migration_marker_present": False,
         "migration_version": None,
         "schema_contract": "0001_autoskill_schema",
+        "missing_table_count": 1,
         "missing_tables": ["autoskill.worker_heartbeats"],
         "error_type": "storage_probe_unavailable",
+        "content_policy": {
+            "raw_rows_returned": False,
+            "connection_strings_returned": False,
+            "host_paths_returned": False,
+        },
     }
     assert response.checks["read_model_contract_compatible"] == {
         "status": "blocked",
@@ -922,6 +933,66 @@ def test_deployment_readiness_blocks_when_storage_plane_schema_not_observable(
             "autoskill.admin_subsystem_catalog",
         ],
         "missing_catalogs": [],
+    }
+
+    get_settings.cache_clear()
+
+
+def test_deployment_readiness_redacts_unsafe_storage_diagnostics(monkeypatch) -> None:
+    _configure_deployment_readiness_env(monkeypatch)
+
+    class UnsafeStorageReadinessJobStore(MemoryReadinessJobStore):
+        async def storage_plane_readiness(
+            self,
+            *,
+            schema_contract: str,
+        ) -> StoragePlaneReadiness:
+            return StoragePlaneReadiness(
+                reachable=True,
+                pgvector_available=True,
+                schema_present=True,
+                required_tables_present=False,
+                migration_marker_present=True,
+                migration_version=schema_contract,
+                schema_contract=schema_contract,
+                missing_tables=[
+                    "autoskill.worker_heartbeats",
+                    "Autoskill.Secrets\npassword=super-secret",
+                ],
+                error_type="OperationalError: postgresql://user:pass@db/skillkernel",
+            )
+
+    app = create_app(
+        job_store=UnsafeStorageReadinessJobStore({}),
+        profile_store=MemoryReadinessProfileStore(),
+        broker_policy_store=NullBrokerPolicyStore(),
+    )
+    route = next(route for route in app.routes if route.path == "/v1/deployment/readiness")
+
+    async def run():
+        return await route.endpoint(
+            authorization="Bearer control-token",
+            workspace_id="dev-01",
+            replay_tag="production",
+        )
+
+    response = asyncio.run(run())
+    storage = response.checks["storage_plane_schema_ready"]
+
+    assert storage["status"] == "blocked"
+    assert storage["reason_code"] == "storage_plane_catalog_missing"
+    assert storage["missing_table_count"] == 2
+    assert storage["missing_tables"] == [
+        "autoskill.worker_heartbeats",
+        "unsafe-diagnostic-token-redacted",
+    ]
+    assert storage["error_type"] == "unsafe-diagnostic-token-redacted"
+    assert "super-secret" not in str(storage)
+    assert "postgresql://" not in str(storage)
+    assert storage["content_policy"] == {
+        "raw_rows_returned": False,
+        "connection_strings_returned": False,
+        "host_paths_returned": False,
     }
 
     get_settings.cache_clear()

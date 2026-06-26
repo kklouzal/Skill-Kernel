@@ -2921,11 +2921,29 @@ def _read_model_contract_readiness_detail(storage_readiness: Any) -> dict[str, o
     }
 
 
+def _browser_safe_diagnostic_token(value: object) -> str:
+    token = str(value)
+    if (
+        token
+        and len(token) <= 120
+        and all(
+            char.islower()
+            or char.isdigit()
+            or char in {"-", "_", "."}
+            for char in token
+        )
+    ):
+        return token
+    return "unsafe-diagnostic-token-redacted"
+
+
 def _storage_plane_readiness_detail(storage_readiness: Any) -> dict[str, object]:
     reachable = bool(getattr(storage_readiness, "reachable", False))
     ready = bool(getattr(storage_readiness, "ready", False))
     all_missing_tables = list(getattr(storage_readiness, "missing_tables", []))
-    missing_tables = [str(table) for table in all_missing_tables[:25]]
+    missing_tables = [
+        _browser_safe_diagnostic_token(table) for table in all_missing_tables[:25]
+    ]
     if ready:
         reason_code = None
     elif not reachable:
@@ -2959,7 +2977,11 @@ def _storage_plane_readiness_detail(storage_readiness: Any) -> dict[str, object]
         "schema_contract": getattr(storage_readiness, "schema_contract", None),
         "missing_table_count": len(all_missing_tables),
         "missing_tables": missing_tables,
-        "error_type": getattr(storage_readiness, "error_type", None),
+        "error_type": (
+            _browser_safe_diagnostic_token(error_type)
+            if (error_type := getattr(storage_readiness, "error_type", None))
+            else None
+        ),
         "content_policy": {
             "raw_rows_returned": False,
             "connection_strings_returned": False,
@@ -3298,7 +3320,7 @@ async def _deployment_readiness_report(
         warnings,
         "storage_plane_schema_ready",
         passed=storage_readiness.ready,
-        detail=storage_readiness.to_json(),
+        detail=_storage_plane_readiness_detail(storage_readiness),
     )
     read_model_contract_detail = _read_model_contract_readiness_detail(
         storage_readiness
