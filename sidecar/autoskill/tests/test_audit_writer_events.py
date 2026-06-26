@@ -1200,6 +1200,64 @@ def test_writer_apply_api_defers_when_activation_window_unavailable(
     ]
 
 
+def test_writer_apply_api_redacts_activation_window_diagnostics(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    staging_root = workspace_root / ".autoskill" / "staging"
+    staged = stage_compiled_skill(
+        staging_root,
+        staging_id=uuid4(),
+        skill_version_id=uuid4(),
+        slug="redacted-api-skill",
+        compiled_skill_md="# Deferred\n\n## WHEN\n- Deferred.\n",
+    )
+    governance = MemoryWriterGovernance()
+    activation_window = MemoryActivationWindow(
+        allowed=False,
+        reason="/Warehouse/SkillKernel/.env token=secret",
+        extras={
+            "exception": "could not read /Warehouse/SkillKernel/.env token=secret",
+            "database_url": "postgresql://user:secret@localhost/autoskill",
+            "manifest_relative_path": staged.manifest_relative_path,
+        },
+    )
+    app = create_app(
+        governance_store=governance,
+        activation_window_store=activation_window,
+        writer_workspace_root=workspace_root,
+    )
+    apply_route = next(route for route in app.routes if route.path == "/v1/writer/apply")
+
+    async def run():
+        return await apply_route.endpoint(
+            request=WriterApplyRequest(
+                evolution_transaction_id=uuid4(),
+                manifest_relative_path=staged.manifest_relative_path,
+                workspace_id="dev-01",
+            )
+        )
+
+    with pytest.raises(Exception) as raised:
+        asyncio.run(run())
+
+    assert getattr(raised.value, "status_code", None) == 409
+    window = raised.value.detail["activation_window"]
+    assert window["allowed"] is False
+    assert window["reason"] == "unsafe-diagnostic-token-redacted"
+    assert window["redacted_key_count"] == 3
+    assert window["content_policy"] == {
+        "raw_payloads_returned": False,
+        "host_paths_returned": False,
+        "exception_strings_returned": False,
+        "secret_values_returned": False,
+    }
+    serialized = json.dumps(raised.value.detail)
+    assert "/Warehouse" not in serialized
+    assert "postgresql://" not in serialized
+    assert "token=secret" not in serialized
+
+
 def test_writer_rejects_manifest_target_outside_active_root(tmp_path: Path) -> None:
     staging_root = tmp_path / "staging"
     workspace_root = tmp_path / "workspace"
@@ -1458,9 +1516,16 @@ class MemoryActivationGate:
 
 
 class MemoryActivationWindow:
-    def __init__(self, *, allowed: bool, reason: str = "safe") -> None:
+    def __init__(
+        self,
+        *,
+        allowed: bool,
+        reason: str = "safe",
+        extras: dict[str, object] | None = None,
+    ) -> None:
         self.allowed = allowed
         self.reason = reason
+        self.extras = extras or {}
         self.calls: list[dict[str, object]] = []
 
     async def check_activation_window(
@@ -1483,4 +1548,5 @@ class MemoryActivationWindow:
             "allowed": self.allowed,
             "reason": self.reason,
             "policy": "next-session-or-idle",
+            **self.extras,
         }

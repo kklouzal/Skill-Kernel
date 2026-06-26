@@ -4232,8 +4232,31 @@ async def _call_activation_window_store(
                 "allowed": bool(getattr(result, "allowed", False)),
                 "reason": str(getattr(result, "reason", "")),
             }
-    window["allowed"] = bool(window.get("allowed", False))
-    return window
+    return _browser_safe_activation_window_detail(window)
+
+
+def _browser_safe_activation_window_detail(window: dict[str, object]) -> dict[str, object]:
+    safe: dict[str, object] = {
+        "allowed": bool(window.get("allowed")),
+        "content_policy": {
+            "raw_payloads_returned": False,
+            "host_paths_returned": False,
+            "exception_strings_returned": False,
+            "secret_values_returned": False,
+        },
+    }
+    for key in ("reason", "status", "policy"):
+        value = window.get(key)
+        if value is None:
+            continue
+        safe[key] = _browser_safe_diagnostic_token(value)
+    deferred_until = window.get("deferred_until")
+    if isinstance(deferred_until, str | int | float) or deferred_until is None:
+        safe["deferred_until"] = deferred_until
+    unsafe_key_count = max(0, len(window) - len({"allowed", "reason", "status", "policy", "deferred_until"} & set(window)))
+    if unsafe_key_count:
+        safe["redacted_key_count"] = unsafe_key_count
+    return safe
 
 
 def _json_object(payload: object) -> dict[str, object]:
